@@ -2,7 +2,7 @@ import std:themes/default as *
 
 const left_offset: Number = 72
 
-fn movable!(guide: Object) -> Object
+fn movable!(guide: Placement) -> Placed<Text>
   let result = text!("Move me")
   ~ result.left == guide.right + left_offset
   ~ result.top == guide.bottom - 24
