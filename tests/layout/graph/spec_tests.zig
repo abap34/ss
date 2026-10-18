@@ -171,10 +171,6 @@ fn setRenderKind(state: *core.DocumentState, node_id: model.NodeId, case_name: [
     try setEnumField(state, node_id, "render_kind", "RenderKind", case_name);
 }
 
-fn setMathAlign(state: *core.DocumentState, node_id: model.NodeId, case_name: []const u8) !void {
-    try setEnumField(state, node_id, "math_align", "Align", case_name);
-}
-
 fn setLayoutWrap(state: *core.DocumentState, node_id: model.NodeId, case_name: []const u8) !void {
     try setRecordEnumField(state, node_id, "layout", "wrap", "WrapMode", case_name);
 }
@@ -2790,38 +2786,23 @@ test "layout metrics use the markdown block gap after a heading" {
     try expectFloat(12, relaxed_height - compact_height);
 }
 
-test "render policy: math alignment applies to markdown and vector math" {
+test "render policy: math alignment is read from each content style" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
-    var state_layout = LayoutFixture.init(&state);
-    defer state_layout.deinit();
-
     const page = try state.addPage("Page");
     const text_object = try state.makeObject(page, "body", null, .text, .text, "$$x^2$$");
-    try setMathAlign(&state, text_object, "left");
-
+    try setRecordPathValue(&state, text_object, "text", &.{ "math", "align" }, .{ .enum_case = .{ .enum_name = "Align", .case_name = "left" } });
     const resolved_text = core.render_policy.resolve(&state, state.getNode(text_object).?);
     try testing.expectEqual(core.render_policy.HorizontalAlign.left, resolved_text.text.?.math_align);
 
     const invalid_text_object = try state.makeObject(page, "body", null, .text, .text, "$$z^2$$");
-    try setMathAlign(&state, invalid_text_object, "sideways");
-    const resolved_invalid_text = core.render_policy.resolve(&state, state.getNode(invalid_text_object).?);
-    try testing.expectEqual(core.render_policy.HorizontalAlign.center, resolved_invalid_text.text.?.math_align);
+    try setRecordPathValue(&state, invalid_text_object, "text", &.{ "math", "align" }, .{ .string = "sideways" });
+    const resolved_invalid = core.render_policy.resolve(&state, state.getNode(invalid_text_object).?);
+    try testing.expectEqual(core.render_policy.HorizontalAlign.center, resolved_invalid.text.?.math_align);
 
-    try setMathAlign(&state, state.graph.document_id, "right");
-    const document_text_object = try state.makeObject(page, "body", null, .text, .text, "$$a^2$$");
-    const resolved_document_text = core.render_policy.resolve(&state, state.getNode(document_text_object).?);
-    try testing.expectEqual(core.render_policy.HorizontalAlign.right, resolved_document_text.text.?.math_align);
-
-    try setMathAlign(&state, page, "left");
-    const page_text_object = try state.makeObject(page, "body", null, .text, .text, "$$b^2$$");
-    const resolved_page_text = core.render_policy.resolve(&state, state.getNode(page_text_object).?);
-    try testing.expectEqual(core.render_policy.HorizontalAlign.left, resolved_page_text.text.?.math_align);
-
-    const latex_object = try state.makeObject(page, "latex", null, .asset, .latex, "$\\int_0^1 x^2 \\, dx$");
+    const latex_object = try state.makeObject(page, "latex", null, .asset, .latex, "$x^2$");
     try setRenderKind(&state, latex_object, "latex");
-    try setMathAlign(&state, latex_object, "right");
-
+    try setRecordPathValue(&state, latex_object, "latex", &.{"align"}, .{ .enum_case = .{ .enum_name = "Align", .case_name = "right" } });
     const resolved_latex = core.render_policy.resolve(&state, state.getNode(latex_object).?);
     try testing.expectEqual(core.render_policy.HorizontalAlign.right, resolved_latex.latex.?.horizontal_align);
 }

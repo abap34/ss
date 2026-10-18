@@ -4,7 +4,6 @@ const Allocator = std.mem.Allocator;
 
 pub const max_batch_entries: usize = 1024;
 pub const max_batch_source_bytes: usize = 4 * 1024 * 1024;
-pub const preamble_read_limit: usize = 4 * 1024 * 1024;
 pub const metrics_read_limit: usize = 1024 * 1024;
 
 pub const FragmentKind = enum {
@@ -53,6 +52,7 @@ pub fn documentSource(
         \\
     );
     try out.appendSlice(allocator, preamble);
+    if (preamble.len != 0 and preamble[preamble.len - 1] != '\n') try out.append(allocator, '\n');
     try out.appendSlice(allocator,
         \\ \pagestyle{empty}
         \\ \begin{document}

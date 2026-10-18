@@ -447,59 +447,6 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
                 },
             };
         },
-        .extend_render_env => blk: {
-            var target = try ctx.evalExprValue(call.args.items[0]);
-            const op = try ctx.evalStringArg(call, 1);
-            const key = try ctx.evalStringArg(call, 2);
-            var raw_value = try ctx.evalExprValue(call.args.items[3]);
-            defer raw_value.deinit(ctx.state.allocator);
-            const value = switch (raw_value) {
-                .string => |text| text,
-                .enum_case => |case| case.case_name,
-                else => {
-                    target.deinit(ctx.state.allocator);
-                    return error.ExpectedStringArgument;
-                },
-            };
-            if (!core.render_env.isSupported(op, key)) {
-                try ctx.emitDiagnosticReport(.@"error", "InvalidRenderEnv: supported render environment operations are add latex.preamble, add latex.preamble.file, and set latex.engine");
-                break :blk target;
-            }
-            if (core.render_env.isLatexPreambleFileKey(key) and !core.render_env.isValidLatexPreambleFilePath(value)) {
-                try ctx.emitDiagnosticReport(.@"error", "InvalidRenderEnv: empty LaTeX preamble file path");
-                break :blk target;
-            }
-            if (core.render_env.isLatexEngineKey(key) and !core.render_env.isValidLatexEngine(value)) {
-                try ctx.emitDiagnosticReport(.@"error", "InvalidRenderEnv: LaTeX engine must be pdflatex or lualatex");
-                break :blk target;
-            }
-            break :blk switch (target) {
-                .document => |id| blk2: {
-                    try ctx.extendRenderEnv(id, op, key, value);
-                    break :blk2 .{ .document = id };
-                },
-                .page => |id| blk2: {
-                    try ctx.extendRenderEnv(id, op, key, value);
-                    break :blk2 .{ .page = id };
-                },
-                .object => |id| blk2: {
-                    try ctx.extendRenderEnv(id, op, key, value);
-                    break :blk2 .{ .object = id };
-                },
-                .selection => |sel| blk2: {
-                    if (sel.item_tag != .object) {
-                        target.deinit(ctx.state.allocator);
-                        return error.InvalidSelectionItemType;
-                    }
-                    for (sel.ids.items) |id| try ctx.extendRenderEnv(id, op, key, value);
-                    break :blk2 target;
-                },
-                else => {
-                    target.deinit(ctx.state.allocator);
-                    return error.InvalidValueTag;
-                },
-            };
-        },
         .constrain_on => blk: {
             var page_value = try ctx.evalExprValue(call.args.items[0]);
             defer page_value.deinit(ctx.state.allocator);

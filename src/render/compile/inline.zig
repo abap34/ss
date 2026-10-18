@@ -20,8 +20,8 @@ const Size = artifacts.Size;
 pub const Context = struct {
     assets: artifacts.Context,
     text_cache: ?*render_text.Cache = null,
-    latex_preamble: []const core.render_env.LatexPreambleEntry = &.{},
-    latex_engine: core.render_env.LatexEngine = .pdflatex,
+    latex_preamble: []const u8 = &.{},
+    latex_engine: core.latex_config.LatexEngine = .pdflatex,
 };
 
 pub const InlineContent = union(enum) {

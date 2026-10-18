@@ -28,16 +28,14 @@ const previousPath = process.env.PATH;
 let watch;
 const source = String.raw`import std:themes/default as *
 import std:math as formulas
+const config: LatexConfig = LatexConfig { preamble = readlines("preamble.tex") }
 page dependencies
-let formula = latex!("$\ProbeText$", formulas::LatexBlockStyle {}, LatexConfig { preamble = readlines("preamble.tex") })
+let formula = latex!("$\ProbeText$", formulas::LatexBlockStyle {}, config)
 ~ formula.left == page.left + 60
 ~ formula.top == page.top - 120
-let inline = text!("Inline $\ProbeText$")
+let inline = text!("Inline $\ProbeText$", default_text_style, config)
 ~ inline.left == formula.left
 ~ inline.top == formula.bottom - 50
-end
-document
-latex_preamble_file("preamble.tex")
 end
 `;
 const first = path.join(outside, "first.tex");

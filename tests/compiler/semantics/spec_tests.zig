@@ -1205,45 +1205,44 @@ test "compiler semantics: dynamically built text survives lowering" {
     , "hello world");
 }
 
-test "compiler semantics: math alignment uses typed properties" {
+test "compiler semantics: math alignment belongs to typed input styles" {
     try buildSource(
         \\import std:themes/default as *
         \\import std:math as formulas
         \\
         \\page ok
-        \\  let body = body_obj("$$x^2$$")
-        \\  body.math_align = Align.left
+        \\  let body = text!("$$x^2$$", default_text_style with { text.math.align = Align.left })
         \\  let formula = latex!("$x^2 + y^2 = z^2$", formulas::LatexBlockStyle {} with { latex.align = Align.right })
         \\end
         \\
     );
 }
 
-test "compiler semantics: LaTeX preamble helpers extend scoped render environment" {
-    try expectDumpContains(
-        \\import std:themes/default as *
-        \\
-        \\document
-        \\latex_engine(LatexEngine.lualatex)
-        \\latex_preamble("doc preamble")
-        \\latex_preamble_file("tex/preamble.tex")
+test "compiler semantics: LaTeX configuration is an explicit immutable input" {
+    try buildSource(
+        \\import std:math as formulas
+        \\const config: formulas::LatexConfig = formulas::LatexConfig { engine = formulas::LatexEngine.lualatex preamble = "Shared" }
+        \\page first
+        \\  let value = formulas::latex!("$x$", formulas::LatexBlockStyle {}, config)
+        \\  let words = text!("Inline $x$", default_text_style, config)
         \\end
-        \\
-        \\page ok
-        \\  page_latex_engine(LatexEngine.pdflatex)
-        \\  page_latex_preamble("page preamble")
-        \\  page_latex_preamble_file("tex/page.tex")
-        \\  latex("$x$")
+        \\page second
+        \\  let value = formulas::latex!("$x$", formulas::LatexBlockStyle {}, config with { preamble = "Local" })
         \\end
-        \\
-    , &.{
-        "\"engine\":\"lualatex\"",
-        "\"engine\":\"pdflatex\"",
-        "\"source\":\"text\",\"value\":\"doc preamble\"",
-        "\"source\":\"file\",\"value\":\"tex/preamble.tex\"",
-        "\"source\":\"text\",\"value\":\"page preamble\"",
-        "\"source\":\"file\",\"value\":\"tex/page.tex\"",
-    });
+    );
+    for ([_][]const u8{
+        "latex_engine(LatexEngine.lualatex)",
+        "page_latex_engine(LatexEngine.pdflatex)",
+        "latex_preamble(\"text\")",
+        "page_latex_preamble(\"text\")",
+        "latex_preamble_file(\"preamble.tex\")",
+        "page_latex_preamble_file(\"preamble.tex\")",
+        "extend_render_env(docctx(), \"add\", \"latex.preamble\", \"text\")",
+    }) |call| {
+        const source = try std.fmt.allocPrint(testing.allocator, "page example\n{s}\nend", .{call});
+        defer testing.allocator.free(source);
+        try expectDiagnostic(source, "bytes:", "UnknownFunction");
+    }
 }
 
 test "compiler semantics: enum cases type function parameters" {
@@ -3128,77 +3127,48 @@ test "compiler semantics: object field defaults are statically typed" {
 
 test "compiler semantics: document page and selection properties are typed" {
     try expectObjectContent(
-        \\import std:themes/default as *
-        \\
         \\document
-        \\  docctx().math_align = Align.left
+        \\  docctx().layout_h = LayoutPolicy.center
         \\end
-        \\
         \\page ok
-        \\  body_obj!(prop(docctx(), "math_align", "missing"))
+        \\  text!(prop(docctx(), "layout_h", "missing"))
         \\  body_obj!("body")
         \\  objs_here("body").layout.wrap = WrapMode.off
         \\end
-        \\
-    , "left");
-
+    , "center");
     try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
         \\document
-        \\  docctx().math_align = "left"
+        \\  docctx().layout_h = "left"
         \\end
-        \\
-        \\page bad
-        \\end
-        \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'math_align' expects Align, got String");
-
+    , "case.ss:bytes:", "InvalidFieldValue: field 'layout_h' expects LayoutPolicy, got String");
     try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
         \\page bad
         \\  body_obj!("body")
         \\  objs_here("body").layout.wrap = "off"
         \\end
-        \\
     , "case.ss:bytes:", "InvalidFieldValue: field 'layout.wrap' expects WrapMode, got String");
 }
 
-test "compiler semantics: document math alignment uses a typed property" {
-    try expectObjectContent(
-        \\import std:themes/default as *
-        \\
-        \\document
-        \\  docctx().math_align = Align.left
-        \\end
-        \\
-        \\page ok
-        \\  body_obj!(prop(docctx(), "math_align", "missing"))
-        \\end
-        \\
-    , "left");
+test "compiler semantics: document and page settings exclude presentation styles" {
+    for ([_][]const u8{ "docctx()", "pagectx()" }) |target| {
+        for ([_][]const u8{ "math_align", "logo_path", "logo_scale", "code_theme_plain_color", "code_theme_keyword_color", "code_theme_fill", "code_theme_stroke" }) |field| {
+            const source = try std.fmt.allocPrint(testing.allocator, "page example\nlet removed = {s}.{s}\nend", .{ target, field });
+            defer testing.allocator.free(source);
+            try expectDiagnostic(source, "bytes:", "UnknownField");
+        }
+    }
 }
 
 test "compiler semantics: math alignment rejects unknown literals" {
     try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
         \\page bad
-        \\  let body = body_obj("$$x^2$$")
-        \\  body.math_align = "sideways"
+        \\  text!("$$x^2$$", default_text_style with { text.math.align = "sideways" })
         \\end
-        \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'math_align' expects Align, got String");
-
+    , "case.ss:bytes:", "TypeMismatch: expected Align, got String");
     try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
         \\page bad
-        \\  let body = body_obj("$$x^2$$")
-        \\  body.math_align = Align.sideways
+        \\  text!("$$x^2$$", default_text_style with { text.math.align = Align.sideways })
         \\end
-        \\
     , "case.ss:bytes:", "UnknownEnumCase: enum 'Align' has no case 'sideways'");
 }
 

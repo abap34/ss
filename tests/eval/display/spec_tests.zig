@@ -1252,8 +1252,6 @@ test "native latex display: immutable body and configuration survive reuse and d
     const roots = state.placementRootsOf(state.graph.page_order.items[0]);
     const parent = state.placementRootsOf(state.graph.page_order.items[1])[0];
     const child = state.childrenOf(parent).?[0];
-    // Mutable legacy configuration cannot change immutable display inputs.
-    try state.extendRenderEnv(state.graph.document_id, "add", "latex.preamble", "Legacy preamble");
     for ([_]core.NodeId{ roots[0], roots[1], child }, 0..) |id, index| {
         const node = state.getNode(id).?;
         try testing.expectEqual(core.native_display.Kind.latex, node.placement.?.display.native);
@@ -1270,9 +1268,8 @@ test "native latex display: immutable body and configuration survive reuse and d
         try testing.expect(prepared.markdown_doc == null);
         try testing.expectEqual(@as(usize, 1), prepared.asset_deps.len);
         try testing.expectEqualStrings(prepared.content, prepared.asset_deps[0].source);
-        try testing.expectEqual(if (index == 1) core.render_env.LatexEngine.lualatex else .pdflatex, prepared.latex_engine);
-        try testing.expectEqual(@as(usize, 1), prepared.latex_preamble.len);
-        try testing.expectEqualStrings(if (index == 1) "Other preamble" else "Custom preamble", prepared.latex_preamble[0].value);
+        try testing.expectEqual(if (index == 1) core.latex_config.LatexEngine.lualatex else .pdflatex, prepared.latex_engine);
+        try testing.expectEqualStrings(if (index == 1) "Other preamble" else "Custom preamble", prepared.latex_preamble);
     }
 }
 
@@ -1325,12 +1322,11 @@ test "math display: public constructors preserve source, configuration and typed
         defer prepared.deinit(testing.allocator);
         try testing.expectEqualStrings(if (index == 2) "$\\displaystyle y^2\n$" else "$\\displaystyle x^2\n$", prepared.content);
         try testing.expectEqual(core.markdown.ParseMode.none, prepared.parse_mode);
-        try testing.expectEqual(if (index == 1) core.render_env.LatexEngine.lualatex else .pdflatex, prepared.latex_engine);
+        try testing.expectEqual(if (index == 1) core.latex_config.LatexEngine.lualatex else .pdflatex, prepared.latex_engine);
         if (index == 2) {
             try testing.expectEqual(@as(usize, 0), prepared.latex_preamble.len);
         } else {
-            try testing.expectEqual(@as(usize, 1), prepared.latex_preamble.len);
-            try testing.expectEqualStrings(if (index == 1) "Other preamble" else "Original preamble", prepared.latex_preamble[0].value);
+            try testing.expectEqualStrings(if (index == 1) "Other preamble" else "Original preamble", prepared.latex_preamble);
         }
     }
     try testing.expect(state.childrenOf(roots[0]).?[0] != state.childrenOf(wrapped).?[0]);
@@ -1882,9 +1878,6 @@ test "native text display: public constructors preserve explicit TeX configurati
         \\const config: LatexConfig = LatexConfig { engine = LatexEngine.lualatex preamble = "explicit" }
         \\const original: words::Text = words::text("**Shared**", default_text_style, config)
         \\const changed: words::Text = original with { config.preamble = "changed" style.text.size = 31 }
-        \\document
-        \\  latex_preamble("ambient")
-        \\end
         \\page main
         \\  let first: Placed<words::Text> = place!(original)
         \\  let second: Placed<words::Text> = place!(changed)
@@ -1903,11 +1896,9 @@ test "native text display: public constructors preserve explicit TeX configurati
         try testing.expect(node.role == null);
         try testing.expectEqual(@as(usize, 0), node.fields.items.len);
         try testing.expectEqual(size, core.render_policy.resolve(&state, node).text.?.font_size);
-        var env = try core.render_env.resolveForNode(testing.allocator, &state, node);
-        defer env.deinit(testing.allocator);
-        try testing.expectEqual(if (preamble.len == 0) core.render_env.LatexEngine.pdflatex else .lualatex, env.latex_engine);
-        try testing.expectEqual(@as(usize, if (preamble.len == 0) 0 else 1), env.latex_preamble.items.len);
-        if (preamble.len != 0) try testing.expectEqualStrings(preamble, env.latex_preamble.items[0].value);
+        const config_value = try core.latex_config.forNode(node);
+        try testing.expectEqual(if (preamble.len == 0) core.latex_config.LatexEngine.pdflatex else .lualatex, config_value.engine);
+        try testing.expectEqualStrings(preamble, config_value.preamble);
     }
 }
 

@@ -63,9 +63,6 @@ fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, state: *core.Docu
         try item.nullField("inline_lines");
     }
     try writeFields(allocator, &item, node.fields.items);
-    var render_env = try core.render_env.resolveForNode(allocator, state, &node);
-    defer render_env.deinit(allocator);
-    try writeRenderEnv(&item, render_env);
     try item.optionalIntField("page_index", node.page_index);
     try utils.err.writeOriginField(&item, "origin", node.origin);
     const frame = layouts.nodeFrame(node.id) orelse core.Frame{};
@@ -152,22 +149,6 @@ fn writeFields(allocator: std.mem.Allocator, object: *json.Object, fields: anyty
         try out.stringField(field.key, text);
     }
     try out.end();
-}
-
-fn writeRenderEnv(object: *json.Object, env: core.render_env.Resolved) !void {
-    var root = try object.objectField("render_env");
-    var latex = try root.objectField("latex");
-    try latex.enumTagField("engine", env.latex_engine);
-    var preamble = try latex.arrayField("preamble");
-    for (env.latex_preamble.items) |entry| {
-        var item = try preamble.objectItem();
-        try item.enumTagField("source", entry.source);
-        try item.stringField("value", entry.value);
-        try item.end();
-    }
-    try preamble.end();
-    try latex.end();
-    try root.end();
 }
 
 fn writeInlineLines(object: *json.Object, key: []const u8, lines: []const core.markdown.Line) !void {

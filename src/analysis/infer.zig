@@ -1075,7 +1075,6 @@ fn inferPrimitiveCallInfo(
         switch (descriptor.op) {
             .prop, .has_prop, .prop_eq => try validateKnownPropertyKeyCall(state.?, call, sema, origin, argument_infos),
             .set_prop => try validateSetPropCall(state.?, call, sema, origin, argument_infos),
-            .extend_render_env => try validateExtendRenderEnvCall(state.?, call, env, origin, argument_infos),
             else => {},
         }
     }
@@ -1598,70 +1597,6 @@ fn validateSetPropCall(
 
     try addUserReport(state, origin, "UnknownField", "unknown field: {s}", .{key});
     return error.InvalidType;
-}
-
-fn validateExtendRenderEnvCall(
-    state: *core.DocumentState,
-    call: ast.CallExpr,
-    env: *const TypeEnv,
-    origin: core.SourceOrigin,
-    argument_infos: []const TypeInfo,
-) !void {
-    if (call.args.items.len < 4) return;
-    const target_info = argument_infos[0];
-    if (target_info.hole != null) return;
-    if (!isPropertyTarget(target_info)) {
-        const actual_label = try typeInfoLabelAlloc(state.allocator, target_info);
-        defer state.allocator.free(actual_label);
-        try addUserReport(
-            state,
-            origin,
-            "InvalidRenderEnv",
-            "extend_render_env target must be Document, Page, Object, or Selection<Object>; got {s}",
-            .{actual_label},
-        );
-        return error.InvalidType;
-    }
-
-    const op = resolveStringLiteral(env, call.args.items[1]);
-    const key = resolveStringLiteral(env, call.args.items[2]);
-    if (op) |literal| {
-        if (!std.mem.eql(u8, literal, core.render_env.OpAdd) and
-            !std.mem.eql(u8, literal, core.render_env.OpSet))
-        {
-            try addUserReport(state, origin, "InvalidRenderEnv", "unsupported render environment op: {s}", .{literal});
-            return error.InvalidType;
-        }
-    }
-    if (key) |literal| {
-        if (!std.mem.eql(u8, literal, core.render_env.KeyLatexPreamble) and
-            !std.mem.eql(u8, literal, core.render_env.KeyLatexPreambleFile) and
-            !std.mem.eql(u8, literal, core.render_env.KeyLatexEngine))
-        {
-            try addUserReport(state, origin, "InvalidRenderEnv", "unsupported render environment key: {s}", .{literal});
-            return error.InvalidType;
-        }
-    }
-    if (op != null and key != null and !core.render_env.isSupported(op.?, key.?)) {
-        try addUserReport(state, origin, "InvalidRenderEnv", "unsupported render environment operation", .{});
-        return error.InvalidType;
-    }
-    if (key != null and core.render_env.isLatexPreambleFileKey(key.?)) {
-        if (resolveStringLiteral(env, call.args.items[3])) |path| {
-            if (!core.render_env.isValidLatexPreambleFilePath(path)) {
-                try addUserReport(state, origin, "InvalidRenderEnv", "empty LaTeX preamble file path", .{});
-                return error.InvalidType;
-            }
-        }
-    }
-    if (key != null and core.render_env.isLatexEngineKey(key.?)) {
-        if (resolveStringLiteral(env, call.args.items[3])) |engine| {
-            if (!core.render_env.isValidLatexEngine(engine)) {
-                try addUserReport(state, origin, "InvalidRenderEnv", "LaTeX engine must be pdflatex or lualatex", .{});
-                return error.InvalidType;
-            }
-        }
-    }
 }
 
 fn fieldTypeForTarget(sema: *const SemanticEnv, target_info: TypeInfo, key: []const u8) ?Type {

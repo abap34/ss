@@ -11,8 +11,7 @@ const external_process = @import("external_process.zig");
 const native_artifact_cache_version = @import("cache_versions.zig").native_artifacts;
 const hashString = fingerprint.hashString;
 const Allocator = std.mem.Allocator;
-const LatexPreambleEntry = core.render_env.LatexPreambleEntry;
-const LatexEngine = core.render_env.LatexEngine;
+const LatexEngine = core.latex_config.LatexEngine;
 const LatexFragmentKind = latex_document.FragmentKind;
 const NativePdfError = error{ ImageDecodeFailed, AssetConversionFailed, InvalidPdfCache, InvalidFontAwesomeIcon };
 const command_failure_output_limit: usize = 1600;
@@ -63,11 +62,11 @@ pub const BatchEntry = struct {
     out: []const u8,
 };
 
-pub fn renderLatexBatch(ctx: Context, entries: []const BatchEntry, preamble: []const LatexPreambleEntry, engine: LatexEngine) !void {
+pub fn renderLatexBatch(ctx: Context, entries: []const BatchEntry, preamble: []const u8, engine: LatexEngine) !void {
     if (entries.len == 0) return;
     const document_entries = try latexDocumentEntries(ctx.allocator, entries);
     defer ctx.allocator.free(document_entries);
-    const tex = try latexDocumentSource(ctx, preamble, document_entries);
+    const tex = try latex_document.documentSource(ctx.allocator, preamble, document_entries);
     defer ctx.allocator.free(tex);
     var generated = try compileLatexDocument(ctx, entries[0].out, engine, tex);
     defer generated.deinit();
@@ -390,7 +389,7 @@ pub fn resolveAssetPath(ctx: Context, rel_path: []const u8) ![]u8 {
 pub fn renderLatexToPdf(
     ctx: Context,
     source: []const u8,
-    preamble: []const LatexPreambleEntry,
+    preamble: []const u8,
     engine: LatexEngine,
     kind: LatexFragmentKind,
 ) !LatexAsset {
@@ -398,7 +397,7 @@ pub fn renderLatexToPdf(
     defer ctx.allocator.free(reference_path);
     if (try cachedLatexReference(ctx, reference_path)) |asset| return asset;
     const document_entries = [_]latex_document.Entry{.{ .source = source, .kind = kind }};
-    const tex = try latexDocumentSource(ctx, preamble, &document_entries);
+    const tex = try latex_document.documentSource(ctx.allocator, preamble, &document_entries);
     defer ctx.allocator.free(tex);
     var generated = try compileLatexDocument(ctx, reference_path, engine, tex);
     defer generated.deinit();
@@ -472,62 +471,10 @@ fn readLatexMetrics(
     };
 }
 
-fn latexDocumentSource(
-    ctx: Context,
-    preamble: []const LatexPreambleEntry,
-    entries: []const latex_document.Entry,
-) ![]u8 {
-    const preamble_lines = try latexPreambleLines(ctx, preamble);
-    defer ctx.allocator.free(preamble_lines);
-    return latex_document.documentSource(ctx.allocator, preamble_lines, entries);
-}
-
-fn latexPreambleLines(ctx: Context, preamble: []const LatexPreambleEntry) ![]const u8 {
-    const allocator = ctx.allocator;
-    var out = std.ArrayList(u8).empty;
-    errdefer out.deinit(allocator);
-    for (preamble) |entry| {
-        const text = switch (entry.source) {
-            .text => entry.value,
-            .file => try readLatexPreambleFile(ctx, entry.value),
-        };
-        defer if (entry.source == .file) allocator.free(text);
-        if (std.mem.trim(u8, text, " \t\r\n").len == 0) continue;
-        try out.append(allocator, '\n');
-        try out.appendSlice(allocator, text);
-        if (text[text.len - 1] != '\n') try out.append(allocator, '\n');
-    }
-    return try out.toOwnedSlice(allocator);
-}
-
-fn readLatexPreambleFile(ctx: Context, path: []const u8) ![]const u8 {
-    const resolved = try resolveAssetPath(ctx, path);
-    defer ctx.allocator.free(resolved);
-    return utils.fs.readFileAllocLimited(
-        ctx.io,
-        ctx.allocator,
-        resolved,
-        .limited(latex_document.preamble_read_limit),
-    ) catch |err| {
-        if (err == error.Canceled or err == error.OutOfMemory) return err;
-        if (ctx.failure) |target| {
-            var reason_buf: [256]u8 = undefined;
-            const message = try std.fmt.allocPrint(
-                ctx.allocator,
-                "LaTeX preamble '{s}' could not be read (resolved to '{s}'): {s}",
-                .{ path, resolved, utils.err.formatErrorReason(&reason_buf, err) },
-            );
-            defer ctx.allocator.free(message);
-            try target.record(message);
-        }
-        return err;
-    };
-}
-
 pub fn cachedLatexPath(
     ctx: Context,
     source: []const u8,
-    preamble: []const LatexPreambleEntry,
+    preamble: []const u8,
     engine: LatexEngine,
     kind: LatexFragmentKind,
     extension: []const u8,
@@ -539,20 +486,7 @@ pub fn cachedLatexPath(
         .asset_base_dir = ctx.asset_base_dir,
         .cache_dir = ctx.cache_dir,
         .resource_cache = ctx.resource_cache,
-    }, source, preamble, engine, @tagName(kind)) catch |err| {
-        if (err == error.Canceled or err == error.OutOfMemory) return err;
-        recordLatexPreambleFingerprintFailure(ctx, preamble);
-        return err;
-    };
-}
-
-pub fn recordLatexPreambleFingerprintFailure(ctx: Context, preamble: []const LatexPreambleEntry) void {
-    if (ctx.failure == null) return;
-    for (preamble) |entry| {
-        if (entry.source != .file) continue;
-        const text = readLatexPreambleFile(ctx, entry.value) catch return;
-        ctx.allocator.free(text);
-    }
+    }, source, preamble, engine, @tagName(kind));
 }
 
 pub fn cachedIconPath(ctx: Context, source: []const u8, extension: []const u8) ![]u8 {

@@ -11,7 +11,6 @@ const c = pdf_ffi.c;
 const Color = core.render_policy.Color;
 const FontFace = core.font.Face;
 const HorizontalAlign = core.render_policy.HorizontalAlign;
-const LatexPreambleEntry = core.render_env.LatexPreambleEntry;
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
@@ -28,8 +27,8 @@ pub const Command = struct {
     link_id: ?[]const u8,
     parse_mode: []const u8,
     render: core.render_policy.ResolvedRender,
-    latex_preamble: []const LatexPreambleEntry,
-    latex_engine: core.render_env.LatexEngine,
+    latex_preamble: []const u8,
+    latex_engine: core.latex_config.LatexEngine,
     latex_kind: []const u8,
     asset_deps: []const core.prepared.AssetDependency = &.{},
 };
@@ -118,17 +117,10 @@ pub fn latexArtifactKey(
     ctx: Context,
     cache_version: []const u8,
     source: []const u8,
-    preamble: []const LatexPreambleEntry,
-    engine: core.render_env.LatexEngine,
+    preamble: []const u8,
+    engine: core.latex_config.LatexEngine,
     kind: []const u8,
 ) !u64 {
-    var files = std.StringHashMap(File).init(ctx.allocator);
-    defer {
-        var keys = files.keyIterator();
-        while (keys.next()) |key| ctx.allocator.free(key.*);
-        files.deinit();
-    }
-
     var hasher = std.hash.Wyhash.init(0);
     hashString(&hasher, cache_version);
     hashString(&hasher, "latex");
@@ -138,7 +130,7 @@ pub fn latexArtifactKey(
     hashString(&hasher, @tagName(engine));
     hashString(&hasher, kind);
     hashString(&hasher, source);
-    try hashLatexPreamble(ctx, &files, &hasher, preamble);
+    hashString(&hasher, preamble);
     return hasher.final();
 }
 
@@ -149,7 +141,7 @@ fn hashCommand(ctx: Context, files: *std.StringHashMap(File), hasher: *std.hash.
     hashString(hasher, command.parse_mode);
     if (command.render.kind == .latex or command.render.kind == .text) {
         hashString(hasher, @tagName(command.latex_engine));
-        try hashLatexPreamble(ctx, files, hasher, command.latex_preamble);
+        hashString(hasher, command.latex_preamble);
     }
     for (command.asset_deps) |dependency| {
         switch (dependency.kind) {
@@ -186,12 +178,12 @@ fn hashCommand(ctx: Context, files: *std.StringHashMap(File), hasher: *std.hash.
     }
 }
 
-pub fn latexReferencePath(ctx: Context, source: []const u8, preamble: []const LatexPreambleEntry, engine: core.render_env.LatexEngine, kind: []const u8) ![]u8 {
+pub fn latexReferencePath(ctx: Context, source: []const u8, preamble: []const u8, engine: core.latex_config.LatexEngine, kind: []const u8) ![]u8 {
     const key = try latexArtifactKey(ctx, cache_versions.native_artifacts, source, preamble, engine, kind);
     return std.fmt.allocPrint(ctx.allocator, "{s}/latex-{x}.ref", .{ ctx.cache_dir, key });
 }
 
-fn hashLatexInputs(ctx: Context, files: *std.StringHashMap(File), hasher: *std.hash.Wyhash, source: []const u8, preamble: []const LatexPreambleEntry, engine: core.render_env.LatexEngine, kind: []const u8) !void {
+fn hashLatexInputs(ctx: Context, files: *std.StringHashMap(File), hasher: *std.hash.Wyhash, source: []const u8, preamble: []const u8, engine: core.latex_config.LatexEngine, kind: []const u8) !void {
     const path = try latexReferencePath(ctx, source, preamble, engine, kind);
     defer ctx.allocator.free(path);
     const contents = utils.fs.readFileAllocLimited(ctx.io, ctx.allocator, path, .limited(utils.render_cache.LatexReference.read_limit)) catch |err| switch (err) {
@@ -226,21 +218,6 @@ fn hashHighlightLanguages(ctx: Context, files: *std.StringHashMap(File), hasher:
             hashBool(hasher, fingerprint.present);
             hashU64(hasher, fingerprint.digest);
         }
-    }
-}
-
-fn hashLatexPreamble(ctx: Context, files: *std.StringHashMap(File), hasher: *std.hash.Wyhash, preamble: []const LatexPreambleEntry) !void {
-    hashUsize(hasher, preamble.len);
-    for (preamble) |entry| {
-        hashString(hasher, @tagName(entry.source));
-        hashString(hasher, entry.value);
-        if (entry.source != .file) continue;
-        const source = try resolveAssetPath(ctx, entry.value);
-        defer ctx.allocator.free(source);
-        hashLogicalAssetPath(ctx, hasher, source);
-        const fingerprint = try fileFingerprint(ctx, files, source);
-        hashBool(hasher, fingerprint.present);
-        hashU64(hasher, fingerprint.digest);
     }
 }
 

@@ -30,12 +30,6 @@ import std:math as {
   math!,
   latex,
   latex!,
-  latex_engine,
-  page_latex_engine,
-  latex_preamble,
-  page_latex_preamble,
-  latex_preamble_file,
-  page_latex_preamble_file,
 }
 import std:assets as {
   Image,

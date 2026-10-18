@@ -19,6 +19,15 @@ test "render LaTeX spec: one document builder emits mixed fragments in order" {
     try testing.expect(std.mem.indexOf(u8, source, "$\\displaystyle\\mathstrut a + b$") != null);
 }
 
+test "render LaTeX spec: preamble comments end before generated commands" {
+    for ([_][]const u8{ "% final comment", "% final comment\n" }) |preamble| {
+        const source = try latex.documentSource(testing.allocator, preamble, &.{.{ .source = "x", .kind = .inline_math }});
+        defer testing.allocator.free(source);
+        try testing.expect(std.mem.indexOf(u8, source, "% final comment\n \\pagestyle{empty}") != null);
+        try testing.expectEqual(@as(usize, 1), std.mem.count(u8, source, "% final comment\n"));
+    }
+}
+
 test "render LaTeX spec: metric records distinguish bodies from measured mathematics" {
     const entries = [_]latex.Entry{
         .{ .source = "x", .kind = .inline_math },

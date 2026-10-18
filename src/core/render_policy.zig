@@ -406,7 +406,7 @@ fn resolveText(state: anytype, node: *const Node, kind: RenderKind) ?TextPaint {
         .inline_math_spacing = nonNegativeRecordFloatProperty(state, node, "text", &.{ "math", "inline_spacing" }) orelse 0,
         .display_math_gap = nonNegativeRecordFloatProperty(state, node, "text", &.{ "math", "display_gap" }) orelse 0.2,
         .display_math_fit = parseEnum(MathFit, fields.read(state.allocator, state, node, "text", &.{ "math", "display_fit" }, .text)) orelse .none,
-        .math_align = inheritedTextHorizontalAlign(state, node) orelse .center,
+        .math_align = parseRecordHorizontalAlign(state, node, "text", &.{ "math", "align" }) orelse .center,
         .emoji_spacing = nonNegativeRecordFloatProperty(state, node, "text", &.{"emoji_spacing"}) orelse 0,
         .markdown_block_gap = nonNegativeRecordFloatProperty(state, node, "text", &.{ "markdown", "block_gap" }) orelse 0,
         .markdown_list_inset = nonNegativeRecordFloatProperty(state, node, "text", &.{ "markdown", "list", "inset" }) orelse 0,
@@ -416,20 +416,20 @@ fn resolveText(state: anytype, node: *const Node, kind: RenderKind) ?TextPaint {
         .markdown_code_pad_x = nonNegativeRecordFloatProperty(state, node, "text", &.{ "markdown", "code", "chrome", "pad_x" }) orelse 0,
         .markdown_code_pad_y = nonNegativeRecordFloatProperty(state, node, "text", &.{ "markdown", "code", "chrome", "pad_y" }) orelse 0,
         .markdown_code_highlight_fill = parseRecordColorProperty(state, node, "text", &.{ "markdown", "code", "highlight_fill" }),
-        .markdown_code_fill = themedRecordColorProperty(state, node, "text", &.{ "markdown", "code", "chrome", "fill" }, "code_theme_fill"),
-        .markdown_code_stroke = themedRecordColorProperty(state, node, "text", &.{ "markdown", "code", "chrome", "stroke" }, "code_theme_stroke"),
+        .markdown_code_fill = parseRecordColorProperty(state, node, "text", &.{ "markdown", "code", "chrome", "fill" }),
+        .markdown_code_stroke = parseRecordColorProperty(state, node, "text", &.{ "markdown", "code", "chrome", "stroke" }),
         .markdown_code_line_width = nonNegativeRecordFloatProperty(state, node, "text", &.{ "markdown", "code", "chrome", "line_width" }) orelse 0,
         .markdown_code_radius = nonNegativeRecordFloatProperty(state, node, "text", &.{ "markdown", "code", "chrome", "radius" }) orelse 0,
-        .markdown_code_plain_color = themedRecordColorProperty(state, node, "text", &.{ "markdown", "code", "colors", "plain" }, "code_theme_plain_color"),
-        .markdown_code_keyword_color = themedRecordColorProperty(state, node, "text", &.{ "markdown", "code", "colors", "keyword" }, "code_theme_keyword_color"),
-        .markdown_code_function_color = themedRecordColorProperty(state, node, "text", &.{ "markdown", "code", "colors", "function" }, "code_theme_function_color"),
-        .markdown_code_type_color = themedRecordColorProperty(state, node, "text", &.{ "markdown", "code", "colors", "type_name" }, "code_theme_type_color"),
-        .markdown_code_constant_color = themedRecordColorProperty(state, node, "text", &.{ "markdown", "code", "colors", "constant" }, "code_theme_constant_color"),
-        .markdown_code_number_color = themedRecordColorProperty(state, node, "text", &.{ "markdown", "code", "colors", "number" }, "code_theme_number_color"),
-        .markdown_code_variable_color = themedRecordColorProperty(state, node, "text", &.{ "markdown", "code", "colors", "variable" }, "code_theme_variable_color"),
-        .markdown_code_operator_color = themedRecordColorProperty(state, node, "text", &.{ "markdown", "code", "colors", "operator" }, "code_theme_operator_color"),
-        .markdown_code_comment_color = themedRecordColorProperty(state, node, "text", &.{ "markdown", "code", "colors", "comment" }, "code_theme_comment_color"),
-        .markdown_code_string_color = themedRecordColorProperty(state, node, "text", &.{ "markdown", "code", "colors", "string" }, "code_theme_string_color"),
+        .markdown_code_plain_color = parseRecordColorProperty(state, node, "text", &.{ "markdown", "code", "colors", "plain" }),
+        .markdown_code_keyword_color = parseRecordColorProperty(state, node, "text", &.{ "markdown", "code", "colors", "keyword" }),
+        .markdown_code_function_color = parseRecordColorProperty(state, node, "text", &.{ "markdown", "code", "colors", "function" }),
+        .markdown_code_type_color = parseRecordColorProperty(state, node, "text", &.{ "markdown", "code", "colors", "type_name" }),
+        .markdown_code_constant_color = parseRecordColorProperty(state, node, "text", &.{ "markdown", "code", "colors", "constant" }),
+        .markdown_code_number_color = parseRecordColorProperty(state, node, "text", &.{ "markdown", "code", "colors", "number" }),
+        .markdown_code_variable_color = parseRecordColorProperty(state, node, "text", &.{ "markdown", "code", "colors", "variable" }),
+        .markdown_code_operator_color = parseRecordColorProperty(state, node, "text", &.{ "markdown", "code", "colors", "operator" }),
+        .markdown_code_comment_color = parseRecordColorProperty(state, node, "text", &.{ "markdown", "code", "colors", "comment" }),
+        .markdown_code_string_color = parseRecordColorProperty(state, node, "text", &.{ "markdown", "code", "colors", "string" }),
         .markdown_table_cell_pad_x = nonNegativeRecordFloatProperty(state, node, "text", &.{ "markdown", "table", "cell_pad_x" }) orelse @max(@as(f32, 6.0), text_metrics.font_size * 0.55),
         .markdown_table_cell_pad_y = nonNegativeRecordFloatProperty(state, node, "text", &.{ "markdown", "table", "cell_pad_y" }) orelse @max(@as(f32, 4.0), text_metrics.font_size * 0.32),
         .markdown_table_border = parseRecordColorProperty(state, node, "text", &.{ "markdown", "table", "border" }),
@@ -505,7 +505,7 @@ fn resolveLatex(state: anytype, node: *const Node, kind: RenderKind) ?LatexPaint
     return .{
         .min_height = positiveRecordFloatProperty(state, node, "latex", &.{"min_height"}) orelse default_latex_min_height,
         .scale = positiveRecordFloatProperty(state, node, "latex", &.{"scale"}) orelse 1,
-        .horizontal_align = inheritedLatexHorizontalAlign(state, node) orelse .center,
+        .horizontal_align = parseRecordHorizontalAlign(state, node, "latex", &.{"align"}) orelse .center,
     };
 }
 
@@ -548,19 +548,19 @@ fn resolvedPdfPageBox(state: anytype, node: *const Node) PdfPageBox {
 
 fn resolveCode(state: anytype, node: *const Node, kind: RenderKind) ?CodePaint {
     if (kind != .code) return null;
-    const plain = themedRecordColorProperty(state, node, "code", &.{"plain"}, "code_theme_plain_color") orelse parseRecordColorProperty(state, node, "text", &.{"color"}) orelse FALLBACK_TEXT_COLOR;
+    const plain = parseRecordColorProperty(state, node, "code", &.{"plain"}) orelse parseRecordColorProperty(state, node, "text", &.{"color"}) orelse FALLBACK_TEXT_COLOR;
     return .{
         .language = fields.read(state.allocator, state, node, "language", &.{}, .text),
         .plain = plain,
-        .keyword = themedRecordColorProperty(state, node, "code", &.{"keyword"}, "code_theme_keyword_color") orelse plain,
-        .function = themedRecordColorProperty(state, node, "code", &.{"function"}, "code_theme_function_color") orelse plain,
-        .type = themedRecordColorProperty(state, node, "code", &.{"type_name"}, "code_theme_type_color") orelse plain,
-        .constant = themedRecordColorProperty(state, node, "code", &.{"constant"}, "code_theme_constant_color") orelse plain,
-        .number = themedRecordColorProperty(state, node, "code", &.{"number"}, "code_theme_number_color") orelse plain,
-        .variable = themedRecordColorProperty(state, node, "code", &.{"variable"}, "code_theme_variable_color") orelse plain,
-        .operator = themedRecordColorProperty(state, node, "code", &.{"operator"}, "code_theme_operator_color") orelse plain,
-        .comment = themedRecordColorProperty(state, node, "code", &.{"comment"}, "code_theme_comment_color") orelse plain,
-        .string = themedRecordColorProperty(state, node, "code", &.{"string"}, "code_theme_string_color") orelse plain,
+        .keyword = parseRecordColorProperty(state, node, "code", &.{"keyword"}) orelse plain,
+        .function = parseRecordColorProperty(state, node, "code", &.{"function"}) orelse plain,
+        .type = parseRecordColorProperty(state, node, "code", &.{"type_name"}) orelse plain,
+        .constant = parseRecordColorProperty(state, node, "code", &.{"constant"}) orelse plain,
+        .number = parseRecordColorProperty(state, node, "code", &.{"number"}) orelse plain,
+        .variable = parseRecordColorProperty(state, node, "code", &.{"variable"}) orelse plain,
+        .operator = parseRecordColorProperty(state, node, "code", &.{"operator"}) orelse plain,
+        .comment = parseRecordColorProperty(state, node, "code", &.{"comment"}) orelse plain,
+        .string = parseRecordColorProperty(state, node, "code", &.{"string"}) orelse plain,
     };
 }
 
@@ -903,17 +903,8 @@ fn parseDashPattern(value: []const u8) DashPattern {
     return result;
 }
 
-fn inheritedTextHorizontalAlign(state: anytype, node: *const Node) ?HorizontalAlign {
-    if (explicitRecordHorizontalAlign(node, "text", &.{ "math", "align" })) |value| return value;
-    if (inheritedHorizontalAlignProperty(state, node, "math_align")) |value| return value;
-    const value = fields.read(state.allocator, state, node, "text", &.{ "math", "align" }, .text) orelse return null;
-    return parseHorizontalAlign(value);
-}
-
-fn inheritedLatexHorizontalAlign(state: anytype, node: *const Node) ?HorizontalAlign {
-    if (explicitRecordHorizontalAlign(node, "latex", &.{"align"})) |value| return value;
-    if (inheritedHorizontalAlignProperty(state, node, "math_align")) |value| return value;
-    const value = fields.read(state.allocator, state, node, "latex", &.{"align"}, .text) orelse return null;
+fn parseRecordHorizontalAlign(state: anytype, node: *const Node, key: []const u8, path: []const []const u8) ?HorizontalAlign {
+    const value = fields.read(state.allocator, state, node, key, path, .text) orelse return null;
     return parseHorizontalAlign(value);
 }
 
@@ -930,43 +921,6 @@ fn explicitRecordFloatProperty(node: *const Node, record_key: []const u8, path: 
     };
 }
 
-fn explicitRecordHorizontalAlign(node: *const Node, record_key: []const u8, path: []const []const u8) ?HorizontalAlign {
-    const value = explicitPathValue(node, record_key, path) orelse return null;
-    return switch (value) {
-        .enum_case => |case| parseHorizontalAlign(case.case_name),
-        .string => |text| parseHorizontalAlign(text),
-        else => null,
-    };
-}
-
-fn themedRecordColorProperty(state: anytype, node: *const Node, record_key: []const u8, path: []const []const u8, theme_key: []const u8) ?Color {
-    if (node.placement) |placement| {
-        if (placement.display == .native) return parseRecordColorProperty(state, node, record_key, path);
-    }
-    if (explicitRecordColorProperty(node, record_key, path)) |color| return color;
-    if (node.kind == .object) {
-        if (state.parentPageOf(node.id)) |page_id| {
-            if (state.getNode(page_id)) |page| {
-                if (explicitColorProperty(page, theme_key)) |color| return color;
-            }
-        }
-    }
-    if (node.kind == .object or node.kind == .page) {
-        if (state.getNode(state.graph.document_id)) |document| {
-            if (explicitColorProperty(document, theme_key)) |color| return color;
-        }
-    }
-    return parseRecordColorProperty(state, node, record_key, path);
-}
-
-fn explicitRecordColorProperty(node: *const Node, record_key: []const u8, path: []const []const u8) ?Color {
-    const value = explicitPathValue(node, record_key, path) orelse return null;
-    return switch (value) {
-        .string => |text| parseColor(text),
-        else => null,
-    };
-}
-
 fn parseRenderKindProperty(state: anytype, node: *const Node) ?RenderKind {
     const value = fields.read(state.allocator, state, node, "render_kind", &.{}, .text) orelse return null;
     return parseRenderKind(value);
@@ -976,73 +930,12 @@ fn parseRenderKind(value: []const u8) ?RenderKind {
     return std.meta.stringToEnum(RenderKind, value);
 }
 
-fn parseHorizontalAlignProperty(state: anytype, node: *const Node, key: []const u8) ?HorizontalAlign {
-    const value = fields.read(state.allocator, state, node, key, &.{}, .text) orelse return null;
-    return parseHorizontalAlign(value);
-}
-
-fn inheritedHorizontalAlignProperty(state: anytype, node: *const Node, key: []const u8) ?HorizontalAlign {
-    if (explicitHorizontalAlignProperty(node, key)) |value| return value;
-    if (node.kind == .object) {
-        if (state.parentPageOf(node.id)) |page_id| {
-            if (state.getNode(page_id)) |page| {
-                if (explicitHorizontalAlignProperty(page, key)) |value| return value;
-            }
-        }
-    }
-    if (node.kind == .object or node.kind == .page) {
-        if (state.getNode(state.graph.document_id)) |document| {
-            if (explicitHorizontalAlignProperty(document, key)) |value| return value;
-        }
-    }
-    return parseHorizontalAlignProperty(state, node, key);
-}
-
-fn inheritedPositiveFloatProperty(state: anytype, node: *const Node, key: []const u8) ?f32 {
-    if (explicitPositiveFloatProperty(node, key)) |value| return value;
-    if (node.kind == .object) {
-        if (state.parentPageOf(node.id)) |page_id| {
-            if (state.getNode(page_id)) |page| {
-                if (explicitPositiveFloatProperty(page, key)) |value| return value;
-            }
-        }
-    }
-    if (node.kind == .object or node.kind == .page) {
-        if (state.getNode(state.graph.document_id)) |document| {
-            if (explicitPositiveFloatProperty(document, key)) |value| return value;
-        }
-    }
-    return positiveFloatProperty(state, node, key);
-}
-
-fn explicitPositiveFloatProperty(node: *const Node, key: []const u8) ?f32 {
-    const value = model.nodeField(node, key) orelse return null;
-    return switch (value) {
-        .number => |number| if (number > 0) @floatCast(number) else null,
-        else => null,
-    };
-}
-
-fn explicitHorizontalAlignProperty(node: *const Node, key: []const u8) ?HorizontalAlign {
-    const value = model.nodeField(node, key) orelse return null;
-    return switch (value) {
-        .enum_case => |case| parseHorizontalAlign(case.case_name),
-        .string => |text| parseHorizontalAlign(text),
-        else => null,
-    };
-}
-
 fn parseHorizontalAlign(value: []const u8) ?HorizontalAlign {
     return std.meta.stringToEnum(HorizontalAlign, value);
 }
 
 fn parseFloatProperty(state: anytype, node: *const Node, key: []const u8) ?f32 {
     return fields.read(state.allocator, state, node, key, &.{}, .number);
-}
-
-fn positiveFloatProperty(state: anytype, node: *const Node, key: []const u8) ?f32 {
-    const value = parseFloatProperty(state, node, key) orelse return null;
-    return if (value > 0) value else null;
 }
 
 fn nonNegativeFloatProperty(state: anytype, node: *const Node, key: []const u8) ?f32 {
@@ -1059,31 +952,6 @@ fn parseIntProperty(state: anytype, node: *const Node, key: []const u8) ?u32 {
 fn parseColorProperty(state: anytype, node: *const Node, key: []const u8) ?Color {
     const value = fields.read(state.allocator, state, node, key, &.{}, .text) orelse return null;
     return parseColor(value);
-}
-
-fn themedColorProperty(state: anytype, node: *const Node, key: []const u8, theme_key: []const u8) ?Color {
-    if (explicitColorProperty(node, key)) |color| return color;
-    if (node.kind == .object) {
-        if (state.parentPageOf(node.id)) |page_id| {
-            if (state.getNode(page_id)) |page| {
-                if (explicitColorProperty(page, theme_key)) |color| return color;
-            }
-        }
-    }
-    if (node.kind == .object or node.kind == .page) {
-        if (state.getNode(state.graph.document_id)) |document| {
-            if (explicitColorProperty(document, theme_key)) |color| return color;
-        }
-    }
-    return parseColorProperty(state, node, key);
-}
-
-fn explicitColorProperty(node: *const Node, key: []const u8) ?Color {
-    const value = model.nodeField(node, key) orelse return null;
-    return switch (value) {
-        .string => |text| parseColor(text),
-        else => null,
-    };
 }
 
 fn parseColor(value: []const u8) ?Color {

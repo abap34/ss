@@ -2,7 +2,7 @@ const std = @import("std");
 const model = @import("model");
 const DocumentState = @import("document_state.zig").DocumentState;
 const markdown = @import("markdown.zig");
-const render_env = @import("render_env.zig");
+const latex_config = @import("latex_config.zig");
 const render_policy = @import("render_policy.zig");
 const partition = @import("../layout/partition.zig");
 const fields = @import("fields.zig");
@@ -28,8 +28,8 @@ pub const PreparedObject = struct {
     markdown_doc: ?markdown.MarkdownDocument = null,
     text_layout: ?markdown.TextLayout = null,
     asset_deps: []AssetDependency = &.{},
-    latex_preamble: []const render_env.LatexPreambleEntry,
-    latex_engine: render_env.LatexEngine,
+    latex_preamble: []const u8,
+    latex_engine: latex_config.LatexEngine,
     origin: ?model.SourceOrigin,
     payload_kind: ?model.PayloadKind,
     attached: bool,
@@ -176,20 +176,13 @@ fn recordFileInputs(state: *DocumentState, object: *const PreparedObject) !void 
         },
         else => {},
     }
-    var uses_latex = object.render.kind == .latex;
     for (object.asset_deps) |dependency| {
         switch (dependency.kind) {
             .vector_pdf, .raster_asset => try inputs.record(state.asset_base_dir, dependency.source, .file),
-            .inline_math, .display_math, .latex_body => uses_latex = true,
-            .icon => {},
+            .inline_math, .display_math, .latex_body, .icon => {},
         }
     }
-    if (uses_latex) {
-        for (object.latex_preamble) |entry| {
-            if (entry.source == .file) try inputs.record(state.asset_base_dir, entry.value, .file);
-        }
-        // Artifact preparation records the files actually opened by TeX.
-    }
+    // Artifact preparation records the files actually opened by TeX.
 }
 
 pub fn prepareObjectWithRender(
@@ -203,8 +196,7 @@ pub fn prepareObjectWithRender(
         .native, .expanded, .group => {},
     };
     const semantics = try resolveSemantics(state, node);
-    var env = try render_env.resolveForNode(allocator, state, node);
-    defer env.deinit(allocator);
+    const config = try latex_config.forNode(node);
     const uses_asset_content = switch (node.payload_kind orelse .text) {
         .image_ref, .pdf_ref => true,
         else => false,
@@ -273,7 +265,7 @@ pub fn prepareObjectWithRender(
             allocator.free(asset_dep_slice);
         }
     }
-    const latex_preamble = try cloneLatexPreambleEntries(allocator, env.latex_preamble.items);
+    const latex_preamble = try allocator.dupe(u8, config.preamble);
     var latex_preamble_transferred = false;
     errdefer if (!latex_preamble_transferred) allocator.free(latex_preamble);
     asset_deps_transferred = true;
@@ -291,7 +283,7 @@ pub fn prepareObjectWithRender(
         .text_layout = text_layout,
         .asset_deps = asset_dep_slice,
         .latex_preamble = latex_preamble,
-        .latex_engine = env.latex_engine,
+        .latex_engine = config.engine,
         .origin = node.origin,
         .payload_kind = node.payload_kind,
         .attached = node.attached,
@@ -451,12 +443,6 @@ fn displayMathSource(allocator: std.mem.Allocator, runs: []const markdown.Run) !
     }
     const trimmed = std.mem.trim(u8, joined.items, " \t\r\n");
     return try allocator.dupe(u8, trimmed);
-}
-
-fn cloneLatexPreambleEntries(allocator: std.mem.Allocator, preamble: []const render_env.LatexPreambleEntry) ![]const render_env.LatexPreambleEntry {
-    const cloned = try allocator.alloc(render_env.LatexPreambleEntry, preamble.len);
-    @memcpy(cloned, preamble);
-    return cloned;
 }
 
 fn nodeStringField(node: *const model.Node, key: []const u8) ?[]const u8 {
