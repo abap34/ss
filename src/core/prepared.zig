@@ -303,7 +303,7 @@ fn resolveSemantics(state: *DocumentState, node: *const model.Node) !ObjectSeman
     defer slot.deinit(state.allocator);
     const record = switch (slot.value) {
         .record => |value| value,
-        else => return invalidSemantics(state, node, "semantics must be a SemanticStyle record"),
+        else => return invalidSemantics(state, node, "semantics must be a TextSemantics value"),
     };
     const role_name = if (record.field("role")) |value| switch (value) {
         .enum_case => |role| role.case_name,

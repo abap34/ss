@@ -29,32 +29,32 @@ fn objectSemantic(ir: *const render.Ir, index: usize) *const render.SemanticNode
     return ir.semantics.find(ir.pages[0].reading_order[index]).?;
 }
 
-test "standard constructors and custom roles resolve typed semantic attributes into IR" {
+test "typed headings and user displays preserve semantic attributes without role classes" {
     var state = try document(
-        \\import std:themes/default as *
-        \\import std:internal/classes as { Text }
-        \\type CustomHeading = object {
-        \\  base = Text
-        \\  roles = ["custom-heading"]
-        \\  semantics: SemanticStyle = SemanticStyle { role = SemanticRole.heading, heading_level = 3 }
-        \\}
-        \\type CustomCaption = object {
-        \\  base = Text
-        \\  roles = ["custom-caption"]
-        \\  semantics: SemanticStyle = SemanticStyle { role = SemanticRole.caption }
-        \\}
+        \\type Caption { content: String }
+        \\fn display(self: Placed<Caption>) -> Text
+        \\  return text(self.value.content) with {
+        \\    semantics = TextSemantics { role = SemanticRole.caption }
+        \\  }
+        \\end
         \\page main
-        \\  title_obj!("Title")
-        \\  sub_obj!("Subtitle")
-        \\  code_obj!("source")
-        \\  fig_obj!("diagram")
-        \\  txt_obj!("First\n\n## Second", "custom-heading")
-        \\  txt_obj!("Custom caption", "custom-caption")
+        \\  heading!("Title")
+        \\  heading!("Subtitle", 2)
+        \\  code!("source")
+        \\  place!(text("diagram") with { semantics = TextSemantics { role = SemanticRole.figure } })
+        \\  heading!("First\n\n## Second", 3)
+        \\  place!(Caption { content = "Custom caption" })
         \\  text!("## Markdown heading")
         \\end
     );
     defer state.deinit();
     try evaluate(&state);
+    for (state.graph.nodes.items) |node| {
+        if (node.kind != .object) continue;
+        try testing.expect(node.placement != null);
+        try testing.expect(node.role == null);
+        try testing.expectEqual(@as(usize, 0), node.fields.items.len);
+    }
     var state_layout = LayoutFixture.init(&state);
     defer state_layout.deinit();
     for (state.graph.nodes.items) |node| (try state_layout.frame(node.id)).* = .{ .width = 640, .height = 360 };
@@ -73,11 +73,62 @@ test "standard constructors and custom roles resolve typed semantic attributes i
     for (objectSemantic(&ir, 4).children) |child| try testing.expectEqual(render.SemanticRole.text, ir.semantics.find(child).?.role);
 }
 
+test "text semantic updates are immutable and preserved through typed groups" {
+    var state = try document(
+        \\page main
+        \\  let caption = text("Same content") with { semantics = TextSemantics { role = SemanticRole.caption } }
+        \\  let title = caption with { semantics = TextSemantics { role = SemanticRole.heading heading_level = 4 } }
+        \\  place!(group(caption, group(title, caption)))
+        \\end
+    );
+    defer state.deinit();
+    try evaluate(&state);
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
+    for (state.graph.nodes.items) |node| (try state_layout.frame(node.id)).* = .{ .width = 640, .height = 360 };
+    var prepared = try core.prepared.prepare(testing.allocator, &state);
+    defer prepared.deinit(testing.allocator);
+    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .jobs = 1 });
+    defer ir.deinit(testing.allocator);
+    try ir.validate();
+    try testing.expectEqual(@as(usize, 3), ir.pages[0].reading_order.len);
+    try testing.expectEqual(render.SemanticRole.caption, objectSemantic(&ir, 0).role);
+    try testing.expectEqual(render.SemanticRole.heading, objectSemantic(&ir, 1).role);
+    try testing.expectEqual(@as(?u8, 4), objectSemantic(&ir, 1).heading_level);
+    try testing.expectEqual(render.SemanticRole.caption, objectSemantic(&ir, 2).role);
+}
+
+test "semantic meaning comes from display values rather than user type names" {
+    var state = try document(
+        \\import std:document as doc
+        \\type Heading { content: String }
+        \\fn display(self: Placed<Heading>) -> Text = text(self.value.content)
+        \\page main
+        \\  doc::heading!("Standard", 2)
+        \\  place!(Heading { content = "Custom" })
+        \\end
+    );
+    defer state.deinit();
+    try evaluate(&state);
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
+    for (state.graph.nodes.items) |node| (try state_layout.frame(node.id)).* = .{ .width = 640, .height = 360 };
+    var prepared = try core.prepared.prepare(testing.allocator, &state);
+    defer prepared.deinit(testing.allocator);
+    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .jobs = 1 });
+    defer ir.deinit(testing.allocator);
+    try ir.validate();
+    try testing.expectEqual(@as(usize, 2), ir.pages[0].reading_order.len);
+    try testing.expectEqual(render.SemanticRole.heading, objectSemantic(&ir, 0).role);
+    try testing.expectEqual(@as(?u8, 2), objectSemantic(&ir, 0).heading_level);
+    try testing.expectEqual(render.SemanticRole.paragraph, objectSemantic(&ir, 1).role);
+}
+
 test "semantic-only edits update cached rendering without changing paint" {
     var state = try document(
         \\import std:themes/default as *
         \\page main
-        \\  title_obj!("Same paint")
+        \\  place!(text("Same paint") with { semantics = TextSemantics { role = SemanticRole.heading heading_level = 1 } })
         \\end
     );
     defer state.deinit();
@@ -104,14 +155,8 @@ test "semantic-only edits update cached rendering without changing paint" {
 
 test "semantic attribute types are checked statically and invalid levels are diagnosed during preparation" {
     var wrong_type = try document(
-        \\import std:internal/classes as { Text }
-        \\type Bad = object {
-        \\  base = Text
-        \\  roles = ["bad"]
-        \\  semantics: SemanticStyle = SemanticStyle { heading_level = "three" }
-        \\}
         \\page main
-        \\  txt_obj!("Bad", "bad")
+        \\  place!(text("Bad") with { semantics = TextSemantics { heading_level = "three" } })
         \\end
     );
     defer wrong_type.deinit();
@@ -129,7 +174,21 @@ test "semantic attribute types are checked statically and invalid levels are dia
         "role = SemanticRole.heading, heading_level = 2.5",
         "role = SemanticRole.caption, heading_level = 2",
     }) |fields| {
-        const source = try std.fmt.allocPrint(testing.allocator, "import std:internal/classes as {{ Text }}\ntype Bad = object {{\n base = Text\n roles = [\"bad\"]\n semantics: SemanticStyle = SemanticStyle {{ {s} }}\n }}\npage main\n  txt_obj!(\"Bad\", \"bad\")\nend\n", .{fields});
+        const source = try std.fmt.allocPrint(testing.allocator, "page main\n  place!(text(\"Bad\") with {{ semantics = TextSemantics {{ {s} }} }})\nend\n", .{fields});
+        defer testing.allocator.free(source);
+        var state = try document(source);
+        defer state.deinit();
+        try evaluate(&state);
+        try testing.expectError(error.InvalidSemanticAttributes, core.prepared.prepare(testing.allocator, &state));
+        const diagnostic = state.diagnostics.entries.items[state.diagnostics.entries.items.len - 1];
+        try testing.expectEqualStrings("InvalidSemanticAttributes", diagnostic.code());
+        try testing.expect(diagnostic.origin != null);
+    }
+}
+
+test "standard heading levels are validated through their display output" {
+    for ([_][]const u8{ "0", "7", "1.5" }) |level| {
+        const source = try std.fmt.allocPrint(testing.allocator, "page main\n  heading!(\"Invalid level\", {s})\nend\n", .{level});
         defer testing.allocator.free(source);
         var state = try document(source);
         defer state.deinit();
