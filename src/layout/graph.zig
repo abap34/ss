@@ -899,6 +899,7 @@ pub const NodeSubgraph = struct {
 };
 
 pub fn isGroupNode(node: *const Node) bool {
+    if (node.placement) |placement| return placement.display == .expanded;
     return roleEq(node.role, GroupRole);
 }
 

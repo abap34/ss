@@ -11,7 +11,6 @@ const Node = model.Node;
 const AxisState = model.AxisState;
 const Anchor = model.Anchor;
 const Constraint = model.Constraint;
-const GroupRole = model.GroupRole;
 const ConnectorRole = model.ConnectorRole;
 const roleEq = model.roleEq;
 
@@ -477,6 +476,4 @@ fn groupChildAxisBounds(state: *Workspace, workspace: *const graph.AxisWorkspace
     return .{ graph.anchorValue(state.frame(child.id).*, start_anchor), graph.anchorValue(state.frame(child.id).*, end_anchor) };
 }
 
-pub fn isGroupNode(node: *const Node) bool {
-    return roleEq(node.role, GroupRole);
-}
+pub const isGroupNode = graph.isGroupNode;

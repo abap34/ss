@@ -245,6 +245,7 @@ const Analyzer = struct {
     unknown_properties: ValueFacts,
     display_registrations: std.ArrayList(DisplayRegistration) = .empty,
     display_reads: std.ArrayList(DisplayRead) = .empty,
+    typed_displays: std.ArrayList(struct { plan: usize, receiver: ValueFacts, origin: ?core.SourceOrigin }) = .empty,
 
     fn init(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) Analyzer {
         return .{
@@ -587,6 +588,15 @@ const Analyzer = struct {
             else => {},
         }
         switch (primitive.result_policy) {
+            .placement => {
+                if (call.callee.call_id) |id| if (self.state.displays.call_targets.get(id)) |plan| {
+                    var receiver = ValueFacts.init(self.allocator);
+                    try receiver.putField("value", try args[primitive.result_arg_index].clone(self.allocator));
+                    if (self.require_known_calls) try self.typed_displays.append(self.allocator, .{ .plan = plan, .receiver = try receiver.clone(self.allocator), .origin = self.current_origin });
+                    return receiver;
+                };
+                if (args.len > primitive.result_arg_index) return args[primitive.result_arg_index].clone(self.allocator);
+            },
             .first_arg => if (args.len >= 1) return args[0].clone(self.allocator),
             .target_arg => if (args.len > primitive.result_arg_index) return args[primitive.result_arg_index].clone(self.allocator),
             else => {},
@@ -640,6 +650,18 @@ const Analyzer = struct {
         defer self.checking_display = false;
         self.states.clearRetainingCapacity();
         self.returns.clearRetainingCapacity();
+        for (self.typed_displays.items) |registration| {
+            self.current_origin = registration.origin;
+            var receiver = registration.receiver;
+            for (self.state.displays.plans.items[registration.plan].steps.items) |step| switch (step.target) {
+                .native => {},
+                .function => |key| {
+                    const output = try self.invokeNamed(self.namedLabel(key), key.module_id, self.state.functions.get(key).?, &.{receiver});
+                    receiver = ValueFacts.init(self.allocator);
+                    try receiver.putField("value", output);
+                },
+            };
+        }
         // Materialization invokes every registered display, even when no repr
         // expression occurs in the source. The construction store is now frozen.
         for (self.display_registrations.items) |registration| {

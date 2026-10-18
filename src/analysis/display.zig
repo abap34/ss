@@ -4,22 +4,9 @@ const core = @import("core");
 const infer = @import("infer.zig");
 const SemanticEnv = @import("../language/env.zig").SemanticEnv;
 
-pub const Step = struct {
-    input: ast.Type,
-    target: core.native_display.Target,
-};
-
 /// Each step describes a separate execution unit, not an eager recursive call.
 /// Input types predict the collections produced by expansion before evaluation.
-pub const Plan = struct {
-    allocator: std.mem.Allocator,
-    steps: std.ArrayList(Step) = .empty,
-
-    pub fn deinit(self: *Plan) void {
-        for (self.steps.items) |*step| step.input.deinit(self.allocator);
-        self.steps.deinit(self.allocator);
-    }
-};
+pub const Plan = core.native_display.Plan;
 
 pub fn prepare(
     allocator: std.mem.Allocator,

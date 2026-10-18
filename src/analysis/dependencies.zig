@@ -29,6 +29,7 @@ pub const AccessSummary = struct {
     escaped_objects: std.ArrayList(ObjectIdentity) = .empty,
     display_reads: std.ArrayList(PropertyOwner) = .empty,
     display_definitions: std.ArrayList(DisplayDefinition) = .empty,
+    placements: std.ArrayList(PlacementDefinition) = .empty,
     reads_layout: bool = false,
     writes_layout_input: bool = false,
     places_objects: bool = false,
@@ -37,6 +38,11 @@ pub const AccessSummary = struct {
     pub const DisplayDefinition = struct {
         owner: PropertyOwner,
         reads: *AccessSummary,
+    };
+    pub const PlacementDefinition = struct {
+        call_id: u64,
+        steps: std.ArrayList(AccessSummary),
+        page_scope: ResourceScope,
     };
 
     pub const InvalidSelectionMutation = struct {
@@ -54,6 +60,11 @@ pub const AccessSummary = struct {
     }
 
     pub fn deinit(self: *AccessSummary) void {
+        for (self.placements.items) |*placement| {
+            for (placement.steps.items) |*step| step.deinit();
+            placement.steps.deinit(self.allocator);
+        }
+        self.placements.deinit(self.allocator);
         for (self.display_definitions.items) |definition| {
             definition.reads.deinit();
             self.allocator.destroy(definition.reads);
@@ -93,6 +104,7 @@ pub const AccessSummary = struct {
     }
 
     pub fn merge(self: *AccessSummary, other: AccessSummary) !void {
+        for (other.placements.items) |placement| try self.addPlacement(placement);
         for (other.escaped_objects.items) |identity| try self.addEscapedObject(identity);
         try self.display_reads.appendSlice(self.allocator, other.display_reads.items);
         for (other.display_definitions.items) |definition| try self.addDisplayDefinition(definition.owner, definition.reads.*);
@@ -115,12 +127,17 @@ pub const AccessSummary = struct {
             }
         }
         for (self.display_definitions.items) |definition| if (definition.reads.hasConcreteMembershipScope()) return true;
+        for (self.placements.items) |placement| {
+            if (placement.page_scope != .any) return true;
+            for (placement.steps.items) |step| if (step.hasConcreteMembershipScope()) return true;
+        }
         return false;
     }
 
     pub fn clone(self: AccessSummary, allocator: std.mem.Allocator) std.mem.Allocator.Error!AccessSummary {
         var copied = AccessSummary.init(allocator);
         errdefer copied.deinit();
+        for (self.placements.items) |placement| try copied.addPlacement(placement);
         try copied.reads.ensureTotalCapacity(allocator, @intCast(self.reads.items.len));
         try copied.writes.ensureTotalCapacity(allocator, @intCast(self.writes.items.len));
         try copied.selection_reads.ensureTotalCapacity(allocator, @intCast(self.selection_reads.items.len));
@@ -135,6 +152,24 @@ pub const AccessSummary = struct {
         copied.places_objects = self.places_objects;
         copied.invalid_selection_mutation = self.invalid_selection_mutation;
         return copied;
+    }
+
+    fn addPlacement(self: *AccessSummary, definition: PlacementDefinition) std.mem.Allocator.Error!void {
+        for (self.placements.items) |*existing| {
+            if (existing.call_id != definition.call_id) continue;
+            std.debug.assert(existing.steps.items.len == definition.steps.items.len);
+            for (existing.steps.items, definition.steps.items) |*step, other| try step.merge(other);
+            if (!resourceScopeEql(existing.page_scope, definition.page_scope)) existing.page_scope = .any;
+            return;
+        }
+        var copied = std.ArrayList(AccessSummary).empty;
+        errdefer {
+            for (copied.items) |*step| step.deinit();
+            copied.deinit(self.allocator);
+        }
+        try copied.ensureTotalCapacity(self.allocator, definition.steps.items.len);
+        for (definition.steps.items) |step| copied.appendAssumeCapacity(try step.clone(self.allocator));
+        try self.placements.append(self.allocator, .{ .call_id = definition.call_id, .steps = copied, .page_scope = definition.page_scope });
     }
 };
 
@@ -238,6 +273,10 @@ pub fn appendResource(
             try out.appendSlice(allocator, "Objects(");
             try out.appendSlice(allocator, "role=");
             try appendOptionalNameOrAny(allocator, out, role_name.role);
+            if (role_name.input_type) |ty| {
+                try out.appendSlice(allocator, ", type=");
+                try ty.formatInto(allocator, out);
+            }
             try out.appendSlice(allocator, ", owner=");
             try appendPropertyOwner(allocator, out, .{ .object = role_name.owner }, options);
             try out.appendSlice(allocator, ", page=");
@@ -470,7 +509,7 @@ const CallbackArgBinding = struct {
 // Immutable value facts carry callable candidates and object identities through
 // records and captures. Storage lives until the owning analyzer is destroyed.
 const max_value_fact_depth = 128;
-const max_effect_analysis_depth = 256;
+const max_effect_analysis_depth = 128;
 const ValueFacts = struct {
     id: usize = 0,
     candidates: []const Callable = &.{},
@@ -1115,7 +1154,7 @@ pub const Analyzer = struct {
                     .primitive => |primitive| break :blk try self.primitiveValueFacts(call, primitive),
                     .unknown => break :blk .{},
                     .function => |named| switch (named.decl.result_type.kind) {
-                        .function, .record, .optional, .any, .page => {},
+                        .function, .record, .optional, .any, .placed, .placement, .page => {},
                         .object => {
                             const role = try self.objectRoleCall(call);
                             if (role != null and !std.mem.eql(u8, role.?, core.GroupRole)) {
@@ -1160,7 +1199,14 @@ pub const Analyzer = struct {
                 result.children = children;
             },
             .place_on => if (call.args.items.len > 1) {
-                result = try self.valueFacts(call.args.items[1]);
+                const input = try self.valueFacts(call.args.items[1]);
+                if (self.sema.state != null and call.callee.call_id != null and self.sema.state.?.displays.call_targets.contains(call.callee.call_id.?)) {
+                    result = try self.newValueFacts(&.{}, &.{
+                        .{ .name = "value", .value = input },
+                        .{ .name = "page", .value = try self.valueFacts(call.args.items[0]) },
+                    });
+                    result = try self.withPropertyTarget(result, PropertyTarget.freshObject(null));
+                } else result = input;
             },
             .set_prop, .set_content, .set_repr, .require_asset_exists, .extend_render_env => if (call.args.items.len > 0) {
                 result = try self.valueFacts(call.args.items[0]);
@@ -1314,7 +1360,7 @@ pub const Analyzer = struct {
                 .named => |named| blk: {
                     // Scalar results contain neither callables nor object identities.
                     switch (named.decl.result_type.kind) {
-                        .function, .record, .optional, .any, .object, .page, .document, .selection => {},
+                        .function, .record, .optional, .any, .object, .placed, .placement, .page, .document, .selection => {},
                         else => break :blk ValueFacts{},
                     }
                     const already_visiting = self.visiting.contains(named.key);
@@ -1495,8 +1541,9 @@ pub const Analyzer = struct {
     fn argumentFacts(self: *Analyzer, args: []const ast.Expr) anyerror!std.ArrayList(CallArgFacts) {
         var facts = std.ArrayList(CallArgFacts).empty;
         errdefer self.deinitCallArgFacts(&facts);
+        try facts.ensureTotalCapacity(self.allocator, args.len);
         for (args) |arg| {
-            try facts.append(self.allocator, try self.analyzeCallArgFacts(arg));
+            facts.appendAssumeCapacity(try self.analyzeCallArgFacts(arg));
         }
         return facts;
     }
@@ -1504,9 +1551,10 @@ pub const Analyzer = struct {
     fn collectCallArgFactsSkipping(self: *Analyzer, call: ast.CallExpr, skip_index: usize) anyerror!std.ArrayList(IndexedCallArgFacts) {
         var facts = std.ArrayList(IndexedCallArgFacts).empty;
         errdefer self.deinitIndexedCallArgFacts(&facts);
+        try facts.ensureTotalCapacity(self.allocator, call.args.items.len);
         for (call.args.items, 0..) |arg, index| {
             if (index == skip_index) continue;
-            try facts.append(self.allocator, .{
+            facts.appendAssumeCapacity(.{
                 .index = index,
                 .facts = try self.analyzeCallArgFacts(arg),
             });
@@ -2003,6 +2051,11 @@ pub const Analyzer = struct {
         if (primitiveNeedsArgFacts(descriptor.op)) {
             var arg_facts = try self.collectCallArgFacts(call);
             defer self.deinitCallArgFacts(&arg_facts);
+            if (descriptor.op == .place_on) {
+                if (self.sema.state) |state| if (call.callee.call_id) |id| {
+                    if (state.displays.call_targets.get(id)) |plan| return self.typedPlacementCall(id, state.displays.plans.items[plan], arg_facts.items);
+                };
+            }
             return try self.primitiveCallWithFacts(descriptor, arg_facts.items);
         }
 
@@ -2026,6 +2079,42 @@ pub const Analyzer = struct {
             },
             else => {},
         }
+        return summary;
+    }
+
+    fn typedPlacementCall(self: *Analyzer, call_id: u64, plan: core.native_display.Plan, args: []const CallArgFacts) anyerror!AccessSummary {
+        var summary = try self.callArgFactsSummary(args);
+        errdefer summary.deinit();
+        const page_scope = args[0].values.page_scope;
+        try summary.addWrite(.{ .objects = .{ .input_type = plan.steps.items[0].input, .page_scope = page_scope } });
+        summary.places_objects = true;
+        summary.writes_layout_input = true;
+        var steps = std.ArrayList(AccessSummary).empty;
+        defer {
+            for (steps.items) |*step| step.deinit();
+            steps.deinit(self.allocator);
+        }
+        try steps.ensureTotalCapacity(self.allocator, plan.steps.items.len);
+        var input = args[1].values;
+        for (plan.steps.items) |step| {
+            switch (step.target) {
+                .native => steps.appendAssumeCapacity(AccessSummary.init(self.allocator)),
+                .function => |key| {
+                    const state = self.sema.state.?;
+                    const function = try self.newValueFacts(&.{.{ .named = .{ .key = key, .module_id = key.module_id, .decl = state.functions.get(key).? } }}, &.{});
+                    const receiver = try self.newValueFacts(&.{}, &.{
+                        .{ .name = "value", .value = input },
+                        .{ .name = "page", .value = args[0].values },
+                        .{ .name = "document", .value = try self.withPropertyTarget(.{}, PropertyTarget.document()) },
+                    });
+                    var argument = CallArgFacts{ .summary = AccessSummary.init(self.allocator), .values = receiver };
+                    defer argument.deinit();
+                    steps.appendAssumeCapacity(try self.invokeValueFacts(function, &.{argument}));
+                    input = try self.returnedValueFacts(function, &.{argument});
+                },
+            }
+        }
+        try summary.addPlacement(.{ .call_id = call_id, .steps = steps, .page_scope = page_scope });
         return summary;
     }
 
@@ -2611,6 +2700,10 @@ fn appendResourceKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), reso
         .objects => |role_name| {
             try out.append(allocator, 'o');
             try appendOptionalBytesKey(allocator, out, role_name.role);
+            if (role_name.input_type) |ty| {
+                try out.append(allocator, 't');
+                try appendTypeKey(allocator, out, ty);
+            } else try out.append(allocator, '*');
             try appendPropertyOwnerKey(allocator, out, .{ .object = role_name.owner });
             try appendResourceScopeKey(allocator, out, role_name.page_scope);
         },
@@ -2618,6 +2711,44 @@ fn appendResourceKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), reso
             try out.append(allocator, 'p');
             try appendPropertyOwnerKey(allocator, out, property.owner);
             try appendPropertyKeyKey(allocator, out, property.key);
+        },
+    }
+}
+
+// Encode the full identity rather than a display name or a hash: names from
+// different modules and nested generic arguments must not share a cache entry.
+fn appendTypeKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), ty: ast.Type) anyerror!void {
+    try appendKeyBytes(allocator, out, @tagName(ty.kind));
+    try appendKeyInt(allocator, out, ty.arguments.len);
+    for (ty.arguments) |arg| try appendTypeKey(allocator, out, arg);
+    switch (ty.kind) {
+        .hole => {
+            try out.append(allocator, if (ty.hole_id != null) 's' else 'n');
+            if (ty.hole_id) |id| try appendKeyInt(allocator, out, id);
+        },
+        .parameter => {
+            try out.append(allocator, if (ty.parameter_id != null) 's' else 'n');
+            if (ty.parameter_id) |id| {
+                try appendKeyInt(allocator, out, id.module_id);
+                try appendKeyInt(allocator, out, id.declaration_start);
+                try appendKeyInt(allocator, out, id.index);
+            }
+        },
+        .function => {
+            try appendKeyInt(allocator, out, ty.fn_params.len);
+            for (ty.fn_params) |param| try appendTypeKey(allocator, out, param);
+            try out.append(allocator, if (ty.fn_result != null) 's' else 'n');
+            if (ty.fn_result) |result| try appendTypeKey(allocator, out, result.*);
+        },
+        .optional => {
+            try out.append(allocator, if (ty.optional_child != null) 's' else 'n');
+            if (ty.optional_child) |child| try appendTypeKey(allocator, out, child.*);
+        },
+        else => {
+            try out.append(allocator, if (ty.nominal_module_id != null) 's' else 'n');
+            if (ty.nominal_module_id) |id| try appendKeyInt(allocator, out, id);
+            try appendOptionalBytesKey(allocator, out, ty.class_name);
+            try appendOptionalBytesKey(allocator, out, ty.enum_name);
         },
     }
 }

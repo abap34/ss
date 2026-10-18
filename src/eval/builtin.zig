@@ -449,7 +449,10 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
         },
         .place_on => blk: {
             const page_id = try evalPageArg(ctx, call, 0);
-            const object_id = try ctx.evalObjectArg(call, 1);
+            var value = try ctx.evalExprValue(call.args.items[1]);
+            defer value.deinit(ctx.state.allocator);
+            if (value == .record) break :blk .{ .object = try ctx.registerPlacement(page_id, value, call.callee.call_id) };
+            const object_id = if (value == .object) value.object else return error.ExpectedObject;
             try ctx.placeObjectOnPage(page_id, object_id);
             break :blk .{ .object = object_id };
         },

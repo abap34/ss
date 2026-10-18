@@ -321,6 +321,7 @@ pub const DocumentState = struct {
     functions: FunctionMap,
     instantiations: @import("function_instances.zig").Store,
     type_instances: @import("type_instances.zig").Store,
+    displays: @import("native_display.zig").Store,
     next_expression_id: u64 = 0,
     graph: DocumentGraph,
     constraints: DocumentConstraints,
@@ -357,6 +358,7 @@ pub const DocumentState = struct {
             .functions = FunctionMap.init(allocator),
             .instantiations = .init(allocator),
             .type_instances = .init(allocator),
+            .displays = .init(allocator),
             .graph = .init(allocator),
             .constraints = .{},
             .source_map = .init(allocator),
@@ -440,6 +442,7 @@ pub const DocumentState = struct {
         self.allocator.destroy(self.declaration_index);
         self.instantiations.deinit();
         self.type_instances.deinit();
+        self.displays.deinit();
         switch (inputs) {
             .borrowed => {
                 self.modules.entries.deinit(self.allocator);

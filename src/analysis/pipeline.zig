@@ -176,7 +176,7 @@ fn analyzeDocumentStateSemantics(
 
     try checkDocumentDeclarations(allocator, state, &sema);
     try checkDocumentBodies(&inference_context, allocator, state, &sema);
-    if (state.instantiations.entries.items.len != 0 or state.type_instances.entries.items.len != 0) {
+    if (state.instantiations.entries.items.len != 0 or state.type_instances.entries.items.len != 0 or state.displays.plans.items.len != 0) {
         try calls.checkFunctionCallGraph(allocator, state, &sema);
         try checkPlacementEffectDeclarations(allocator, state, &sema);
     }
@@ -262,9 +262,11 @@ fn addDependencyQueryDiagnostics(allocator: std.mem.Allocator, state: *core.Docu
             defer summary.deinit();
             var scheduled = false;
             for (graph.units.items) |unit| {
+                if (unit.kind == .display) continue;
                 if (unit.module_id != module_id or unit.span.start != target.stmt.span.start or unit.span.end != target.stmt.span.end) continue;
                 summary = try unit.summary.clone(allocator);
                 scope = switch (unit.kind) {
+                    .display => unreachable,
                     .document_statement => .{ .document = module_id },
                     .page_statement => |page| .{ .page = page.page_id },
                 };

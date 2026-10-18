@@ -8,6 +8,41 @@ pub const Target = union(enum) {
     native: Kind,
 };
 
+pub const Step = struct { input: ast.Type, target: Target };
+
+pub const Plan = struct {
+    allocator: std.mem.Allocator,
+    steps: std.ArrayList(Step) = .empty,
+
+    pub fn deinit(self: *Plan) void {
+        for (self.steps.items) |*step| step.input.deinit(self.allocator);
+        self.steps.deinit(self.allocator);
+    }
+};
+
+pub const Store = struct {
+    allocator: std.mem.Allocator,
+    plans: std.ArrayList(Plan) = .empty,
+    call_targets: std.AutoHashMap(u64, usize),
+
+    pub fn init(allocator: std.mem.Allocator) Store {
+        return .{ .allocator = allocator, .call_targets = .init(allocator) };
+    }
+
+    pub fn deinit(self: *Store) void {
+        for (self.plans.items) |*plan| plan.deinit();
+        self.plans.deinit(self.allocator);
+        self.call_targets.deinit();
+    }
+
+    pub fn find(self: *const Store, input: ast.Type) ?usize {
+        for (self.plans.items, 0..) |plan, index| {
+            if (ast.Type.eql(plan.steps.items[0].input, input)) return index;
+        }
+        return null;
+    }
+};
+
 fn isLibraryType(state: anytype, ty: ast.Type, spec: []const u8, name: []const u8) bool {
     if (ty.kind != .record or ty.arguments.len != 0) return false;
     const id = ty.nominalId() orelse return false;
