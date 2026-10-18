@@ -1181,7 +1181,11 @@ fn appendAbsoluteFallbackConstraints(
         if (axisPositionKnown(axis_state)) continue;
         if (hasFallbackTargetConstraint(constraints.items, child_id, workspace.axis)) continue;
         const node = state.source.getNode(child_id) orelse return error.UnknownNode;
-        if (groups.isGroupNode(node)) continue;
+        // Split children can all depend on their frame for vertical alignment.
+        // Seed that frame so an anchored outer group can measure and translate
+        // its complete subtree instead of waiting on unpositioned children.
+        if (groups.isGroupNode(node) and
+            !(workspace.axis == .vertical and workspace.graph.hasSplitChildren(child_id))) continue;
 
         if (hasHardPositionTargetConstraint(workspace, child_id, workspace.axis)) {
             const root = components.findConst(index);

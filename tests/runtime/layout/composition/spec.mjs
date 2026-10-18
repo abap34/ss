@@ -32,7 +32,7 @@ const failures = [];
 for (const test of [
   testAuthoredPlacementOrder, testNestedPlacedObjects, testNestedUnplacedObjectsAndOrdinaryGroup,
   testIntermediateBinding, testOrdinaryGroupInference, testNestedOrdinaryGroupBounds,
-  testUnplacedComposition, testNaturalWidths, testEqualFrames, testMeasuredSplitFlow, testMeasuredNestedConstraintUpdate, testHorizontalSplitWidths, testVerticalSplitWidths, testEqualChains, testEqualEvaluation, testEqualEditorUpdates, testSameDirectionBinaryGroups,
+  testUnplacedComposition, testNaturalWidths, testEqualFrames, testNestedSplitPlacement, testMeasuredSplitFlow, testMeasuredNestedConstraintUpdate, testHorizontalSplitWidths, testVerticalSplitWidths, testEqualChains, testEqualEvaluation, testEqualEditorUpdates, testSameDirectionBinaryGroups,
   testSharedObjects, testConstraintUpdate, testInferredGroupConstraintUpdate,
   testExplicitGap, testOperandEvaluation, testFixedStdlibResolution, testImportedFunctionComposition,
   testInvalidOperands, testConflictsAndMixedDirections, testHorizontalPolicyVariants,
@@ -282,18 +282,16 @@ let c = text("Third item")`;
     ["horizontal-grouped", "(a |=| b) |=| c"], ["vertical-grouped", "a /=/ (b /=/ c)"],
     ["horizontal-natural-child", "a |=| (b // c)"], ["vertical-natural-child", "(a || b) /=/ c"],
   ]) {
-    for (const padded of [false, true]) {
-      const { dump } = await dumpSource(`equal-${name}-${padded}`, `${prelude}
+    for (const spacing of [24, 48]) {
+      const { dump } = await dumpSource(`equal-${name}-${spacing}`, `${prelude}
 page equal
 vflow(LayoutPolicy.center)
 ${leaves}
-let g = ${expression}
+let g = place!((${expression}) with { gap = ${spacing} })
 ~ g.width == 1000
 ~ g.height == 400
 ~ g.left == page.left + 100
 ~ g.top == page.top - 100
-${padded ? "g.chrome.pad_x = 12\ng.chrome.pad_y = 8" : ""}
-place_on!(pagectx(), g)
 end
 `);
       const g = groupNodes(dump).find((item) => dump.placement_roots.some((entry) => entry.roots.includes(item.id)));
@@ -307,25 +305,17 @@ end
 
   for (const operator of ["|=|", "/=/"]) {
     const horizontal = operator === "|=|";
-    const baseline = `${prelude}
+    const split = await dumpSource(`natural-split-${horizontal}`, `${prelude}
 page natural
 vflow(LayoutPolicy.top)
-let a = text("Short")
-let b = text("A longer line for natural measurement")
-${horizontal ? "~ b.left == a.right + 32" : "~ b.left == a.left\n~ b.top == a.bottom - 32"}
-let g = group(a, b)
-${horizontal ? 'set_prop(g, "align_children_y", true)' : ""}
-g.chrome.pad_x = 12
-g.chrome.pad_y = 8
-place_on!(pagectx(), g)
+let g = place!(text("Short") ${operator} text("A longer line for natural measurement"))
 end
-`;
-    const split = await dumpSource(`natural-split-${horizontal}`, baseline.replace("group(a, b)", `a ${operator} b`).replace('set_prop(g, "align_children_y", true)', ""));
+`);
     const after = groupNodes(split.dump)[0];
-    assertClose(after.width, 1136, "implicit outer width");
+    assertClose(after.width, 1088, "implicit outer width");
     const children = split.dump.contains.find((entry) => entry.parent === after.id)?.children;
     const contentHeight = Math.max(...split.dump.nodes.filter((item) => children.includes(item.id)).map((item) => item.height));
-    assertClose(after.height, horizontal ? contentHeight + 16 : 2 * contentHeight + gap + 16, "implicit outer height fits final-width contents");
+    assertClose(after.height, horizontal ? contentHeight : 2 * contentHeight + gap, "implicit outer height fits final-width contents");
     assertSplitTree(split.dump, after);
   }
 
@@ -333,12 +323,11 @@ end
 page edges
 let a = text("Short")
 let b = text("${"Words need to wrap inside their assigned column. ".repeat(8)}")
-let g = a |=| b
+let g = place!(a |=| b)
 ~ g.left == page.left + 100
 ~ g.right == page.left + 900
 ~ g.bottom == page.bottom + 100
 ~ g.top == page.bottom + 600
-place_on!(pagectx(), g)
 end
 `);
   const g = groupNodes(dump)[0];
@@ -347,33 +336,31 @@ end
   assert(node(dump, "Short").height < dump.nodes.find((item) => item.content?.startsWith("Words need")).height, "text was not measured at the split width");
   assertSplitTree(dump, g);
 
-  for (const [name, expression, dimensions] of [
-    ["width-conflict", "a |=| b", "~ a.width == 100\n~ b.width == 200"],
-    ["height-conflict", "a /=/ b", "~ a.height == 100\n~ b.height == 200"],
-    ["insufficient-space", "a |=| b", "~ g.width == 20"],
+  for (const [name, operator, dimensions] of [
+    ["width-conflict", "|=|", "~ a.width == 100\n~ b.width == 200"],
+    ["height-conflict", "/=/", "~ a.height == 100\n~ b.height == 200"],
+    ["insufficient-space", "|=|", "~ g.width == 20"],
   ]) {
     await expectFailure(name, `${prelude}
 page conflict
-let a = text("A")
-let b = text("B")
-let g = ${expression}
+let g = place!(text("A") ${operator} text("B"))
+let a = first(children(g))
+let b = first(children(g) - selection(a))
 ${dimensions}
-place_on!(pagectx(), g)
 end
 `, name === "insufficient-space" ? "NegativeFrameSize" : "ConstraintConflict");
   }
 
   const updated = await dumpSource("equal-horizontal-update", `${prelude}
 page update
-let a = text("A")
-let b = text("B")
-let g = a |=| b
+let g = place!(text("A") |=| text("B"))
+let a = first(children(g))
+let b = first(children(g) - selection(a))
 ~ g.width == 800
 ~ g.height == 300
 ~ g.left == page.left + 80
 ~ g.top == page.top - 100
 ~!~ b.left == page.left + 900
-place_on!(pagectx(), g)
 end
 `);
   const right = node(updated.dump, "B");
@@ -388,9 +375,12 @@ end
     const { dump } = await dumpSource(`equal-first-update-${index}`, `import std:themes/default as *
 page update
 vflow(LayoutPolicy.${policy})
-let a = text!("Move me")
-let b = text!("Guide")
-a ${operator} b
+let g = place!(text("Move me") ${operator} text("Guide"))
+~ g.left == page.left + 80
+~ g.top == page.top - 100
+~ g.width == 800
+~ g.height == 300
+let a = first(children(g))
 ~!~ a.left == page.left + 97
 ~!~ a.top == page.top - ${offset}
 end
@@ -400,10 +390,20 @@ end
     assertClose(first.x, 97, "first cell horizontal update");
     assertClose(top(first), 720 - offset, "first cell vertical update");
     if (operator === "|=|") {
-      assertClose(second.x, first.x + first.width + gap, "remaining horizontal adjacency");
+      assertClose(second.x, 496, "unchanged second column boundary");
       assertClose(policy === "top" ? top(second) : centerY(second), policy === "top" ? top(first) : centerY(first), "remaining sibling alignment");
-    } else assertClose(top(second), first.y - gap, "remaining vertical adjacency");
+    } else assertClose(top(second), 454, "unchanged second row boundary");
     assert(dump.diagnostics.length === 0, `first cell update diagnostics: ${JSON.stringify(dump.diagnostics)}`);
+  }
+
+  for (const operator of ["||", "//", "|=|", "/=/"]) {
+    await expectFailure(`placed-operands-${operator.replaceAll("/", "v").replaceAll("|", "h")}`, `${prelude}
+page invalid
+let a = text!("Already placed")
+let b = text!("Also placed")
+place!(a ${operator} b)
+end
+`, "TypeMismatch");
   }
 
   await expectFailure("negative-split-gap", `import std:text as { Text }
@@ -414,6 +414,30 @@ let b = Text { content = "B" }
 place!((a |=| b) with { gap = -1 })
 end
 `, "InvalidGroupSplit");
+}
+
+async function testNestedSplitPlacement() {
+  for (const policy of ["top", "center"]) {
+    for (const fixedWidth of [false, true]) {
+      for (const positioned of [false, true]) {
+        const { dump } = await dumpSource(`nested-split-${policy}-${fixedWidth}-${positioned}`, `page nested
+vflow(LayoutPolicy.${policy})
+let g = place!(group(text("Short"), text("Second line") |=| text("Third")))
+${fixedWidth ? "let inner = first(select<Group<Text, Text>>(g))\n~ inner.width == 400" : ""}
+${positioned ? "~ g.left == page.left + 96\n~ g.top == page.top - 80" : ""}
+end
+`);
+        const rootId = dump.placement_roots[0].roots[0];
+        const outer = groupNodes(dump).find(item => item.id === rootId);
+        const inner = groupNodes(dump).find(item => item.id !== rootId);
+        assertClose(outer.x, 96, "nested group page inset");
+        if (positioned) assertClose(top(outer), 640, "nested group explicit top");
+        if (fixedWidth) assertClose(inner.width, 400, "nested group explicit width");
+        assertSplitTree(dump, inner);
+        assert(dump.diagnostics.length === 0, `nested group diagnostics: ${JSON.stringify(dump.diagnostics)}`);
+      }
+    }
+  }
 }
 
 async function testMeasuredSplitFlow() {
@@ -485,24 +509,22 @@ end
 
 async function testHorizontalSplitWidths() {
   for (const [name, constraints, width, left] of [
-    ["default", "", 1136, 72],
-    ["width", "~ g.width == 600", 600, 72],
+    ["default", "", 1088, 96],
+    ["width", "~ g.width == 600", 600, 96],
     ["width-position", "~ g.width == 600\n~ g.left == page.left + 200", 600, 200],
     ["edges", "~ g.left == page.left + 120\n~ g.right == page.right - 200", 960, 120],
-    ["left", "~ g.left == page.left + 200", 1008, 200],
-    ["right", "~ g.right == page.right - 200", 1008, 72],
-    ["center", "~ g.center_x == page.center_x - 100", 936, 72],
-    ["margins", "g.layout = LayoutStyle { x = 120, right_inset = 180 }", 980, 120],
-    ["padding", "g.chrome.pad_x = 12", 1136, 72],
-    ["updated-width", "~ g.width == 600\n~!~ g.width == 700", 700, 72],
+    ["left", "~ g.left == page.left + 200", 984, 200],
+    ["right", "~ g.right == page.right - 200", 984, 96],
+    ["center", "~ g.center_x == page.center_x - 100", 888, 96],
+    ["margins", "~ g.left == page.left + 120\n~ g.right == page.right - 180", 980, 120],
+    ["updated-width", "~ g.width == 600\n~!~ g.width == 700", 700, 96],
   ]) {
     const { dump } = await dumpSource(`horizontal-width-${name}`, `${prelude}
 page example
 let a = text("Short")
 let b = text("Second line")
-let g = a |=| b
+let g = place!(a |=| b)
 ${constraints}
-place_on!(pagectx(), g)
 end
 `);
     const g = groupNodes(dump)[0];
@@ -538,8 +560,8 @@ end
   }
 
   for (const [name, expression, width] of [
-    ["horizontal-parent", "a |=| (b |=| c)", 1136],
-    ["vertical-parent", "a /=/ (b |=| c)", 1136],
+    ["horizontal-parent", "a |=| (b |=| c)", 1088],
+    ["vertical-parent", "a /=/ (b |=| c)", 1088],
     ["ordinary-parent", "group(a, b |=| c)", null],
     ["natural-parent", "a || (b |=| c)", null],
   ]) {
@@ -548,8 +570,7 @@ page example
 let a = text("Short")
 let b = text("Second line")
 let c = text("Third")
-let g = ${expression}
-place_on!(pagectx(), g)
+let g = place!(${expression})
 end
 `);
     const rootId = dump.placement_roots.flatMap((entry) => entry.roots)[0];
@@ -559,7 +580,7 @@ end
       assertClose(outer.width, width, `${name} outer width`);
       assertSplitTree(dump, outer);
     } else {
-      assert(inner.width < 1136, `${name} nested split used the page width`);
+      assert(inner.width < 1088, `${name} nested split used the page width`);
       assertSplitTree(dump, inner);
     }
     assert(dump.diagnostics.length === 0, `${name} nested diagnostics: ${JSON.stringify(dump.diagnostics)}`);
@@ -655,20 +676,23 @@ end
 }
 
 function assertSplitTree(dump, g) {
-  const axis = g.fields.split_axis;
+  const input = g.placement?.input;
+  const axis = input?.kind === "group"
+    ? ({ equal_horizontal: "horizontal", equal_vertical: "vertical" }[input.composition])
+    : g.fields.split_axis;
   if (!axis || axis === "none") return;
   const children = dump.contains.find((entry) => entry.parent === g.id).children.map((id) => dump.nodes.find((item) => item.id === id));
   assert(children.length >= 2, "split lost containment");
-  const px = g.render.chrome.pad_x;
-  const py = g.render.chrome.pad_y;
-  const spacing = Number(g.fields.split_gap ?? gap);
+  const px = input ? 0 : g.render.chrome.pad_x;
+  const py = input ? 0 : g.render.chrome.pad_y;
+  const spacing = input ? input.gap : Number(g.fields.split_gap ?? gap);
   const horizontal = axis === "horizontal";
   const extent = ((horizontal ? g.width - 2 * px : g.height - 2 * py) - (children.length - 1) * spacing) / children.length;
   for (const [index, child] of children.entries()) {
     assertClose(horizontal ? child.width : child.height, extent, `equal extent ${index}`);
     assertClose(horizontal ? child.x : top(child), horizontal ? g.x + px + index * (extent + spacing) : top(g) - py - index * (extent + spacing), `cell position ${index}`);
   }
-  for (const child of children.filter((item) => item.role === "group")) {
+  for (const child of children.filter((item) => item.role === "group" || item.placement?.input.kind === "group")) {
     assertClose(axis === "horizontal" ? child.height : child.width, axis === "horizontal" ? g.height - 2 * py : g.width - 2 * px, "nested group cross-axis extent");
     assertSplitTree(dump, child);
   }
@@ -729,35 +753,32 @@ end
 }
 
 async function testEqualEvaluation() {
-  const { dump } = await dumpSource("equal-evaluation-shadowing", `import std:internal/objects as objects
-fn hsplit(items: Selection<Object>) -> Object
-  return new("Wrong hsplit", "body", "text")
-end
-fn vsplit(items: Selection<Object>) -> Object
-  return new("Wrong vsplit", "body", "text")
-end
-fn group(a: Object, b: Object) -> Object
-  return a
-end
-fn composition_objects(a: Object, b: Object) -> Object
-  return a
-end
-fn composition_append(a: Object, b: Object) -> Object
-  return a
-end
-fn mark!(label: String) -> Object
-  return objects::place!(new(label, "body", "text"))
+  const { dump } = await dumpSource("equal-evaluation-shadowing", `import std:layout as layout
+fn hsplit(items: Selection<Placed<Text>>) -> Text = text("Wrong hsplit")
+fn vsplit(items: Selection<Placed<Text>>) -> Text = text("Wrong vsplit")
+fn group(a: Text, b: Text) -> Text = a
+fn composition_objects(a: Text, b: Text) -> Text = a
+fn composition_append(a: Text, b: Text) -> Text = a
+fn mark(label: String) -> Text
+  report_warning(label)
+  return text(label)
 end
 page evaluation
-let g = mark!("A") |=| (mark!("B") /=/ mark!("C")) |=| mark!("D")
+let g = layout::place!(mark("A") |=| (mark("B") /=/ mark("C")) |=| mark("D"))
 ~ g.width == 1100
 ~ g.height == 400
 end
 `);
-  const order = dump.placement_roots.flatMap((entry) => entry.roots).map((id) => dump.nodes.find((item) => item.id === id)?.content);
-  assert(JSON.stringify(order) === JSON.stringify(["A", "B", "C", "D"]), `equal operands evaluated out of order: ${order}`);
-  assert(!dump.nodes.some((item) => item.content?.startsWith("Wrong")), "local function captured equal syntax");
-  assert(groupNodes(dump).length === 0, "equal composition implicitly placed a group");
+  const order = dump.diagnostics.filter(item => item.code === "UserReport").map(item => item.message);
+  assert(JSON.stringify(order) === JSON.stringify(["A", "B", "C", "D"]), `equal operands were not evaluated once in order: ${order}`);
+  assert(!dump.nodes.some(item => item.content?.startsWith("Wrong")), "local function captured equal syntax");
+  const roots = dump.placement_roots.flatMap(entry => entry.roots);
+  assert(roots.length === 1, "equal composition did not place a single root");
+  const groups = dump.nodes.filter(item => item.placement?.input.kind === "group");
+  assert(groups.length === 2, "equal composition lost its nested group");
+  for (const label of ["A", "B", "C", "D"]) {
+    assert(dump.nodes.filter(item => item.content === label).length === 1, `operand ${label} produced duplicate placements`);
+  }
   assertClose(node(dump, "A").width, (1100 - 2 * gap) / 3, "equal syntax was shadowed");
   assertClose(node(dump, "B").height, (400 - gap) / 2, "nested equal syntax was shadowed");
 }
@@ -942,18 +963,14 @@ end
 }
 
 async function testFixedStdlibResolution() {
-  const { dump } = await dumpSource("shadowing", `import std:internal/objects as layout
-fn hjoin(a: Object, b: Object) -> Object
-  return a
-end
-fn vjoin(a: Object, b: Object) -> Object
-  return a
-end
+  const { dump } = await dumpSource("shadowing", `import std:layout as layout
+fn hjoin(a: Text, b: Text) -> Text = a
+fn vjoin(a: Text, b: Text) -> Text = a
 page fixed
-let a = layout::place!(new("A", "body", "text"))
-let b = layout::place!(new("B", "body", "text"))
-let c = layout::place!(new("C", "body", "text"))
-a || (b // c)
+let a = text("A")
+let b = text("B")
+let c = text("C")
+layout::place!(a || (b // c))
 end
 `);
   const a = node(dump, "A");
@@ -1289,7 +1306,7 @@ function node(dump, content) {
 }
 
 function groupNodes(dump) {
-  return dump.nodes.filter((item) => item.kind === "object" && item.role === "group");
+  return dump.nodes.filter((item) => item.kind === "object" && (item.role === "group" || item.placement?.input.kind === "group"));
 }
 
 function relation(constraints, target, targetAnchor, source, sourceAnchor, offset) {
