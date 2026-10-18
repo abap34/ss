@@ -2,7 +2,6 @@ const std = @import("std");
 const core = @import("core");
 const ast = @import("ast");
 const declarations = @import("../language/declarations.zig");
-const language_names = @import("../language/names.zig");
 const semantic_env = @import("../language/env.zig");
 const module_index = @import("module_index.zig");
 const calls = @import("calls.zig");
@@ -11,7 +10,6 @@ const dependencies = @import("dependencies.zig");
 const fields = @import("fields.zig");
 const infer = @import("infer.zig");
 const analysis_index = @import("index.zig");
-const registry = @import("../language/registry.zig");
 const execution = @import("execution.zig");
 const semantics = @import("semantics.zig");
 const syntax = @import("../syntax/parse.zig");
@@ -19,9 +17,6 @@ const syntax_hole = @import("../syntax/hole.zig");
 const type_defs = @import("../language/type_defs.zig");
 const utils = @import("utils");
 const SemanticEnv = semantic_env.SemanticEnv;
-
-const FunctionBoolMap = std.HashMap(core.FunctionKey, bool, core.FunctionKeyContext, std.hash_map.default_max_load_percentage);
-const FunctionVisitSet = std.HashMap(core.FunctionKey, void, core.FunctionKeyContext, std.hash_map.default_max_load_percentage);
 
 pub const BuildDocumentStateOptions = struct {
     parse_holes: ?syntax_hole.Result = null,
@@ -179,9 +174,6 @@ fn analyzeDocumentStateSemantics(
     try checkDocumentBodies(&inference_context, allocator, state, &sema);
     // Effects of overloaded constructors require the checked argument types.
     try calls.checkFunctionCallGraph(allocator, state, &sema);
-    if (state.instantiations.entries.items.len != 0 or state.type_instances.entries.items.len != 0 or state.displays.plans.items.len != 0) {
-        try checkPlacementEffectDeclarations(allocator, state, &sema);
-    }
     return declaration_index;
 }
 
@@ -204,11 +196,6 @@ fn checkDocumentDeclarations(allocator: std.mem.Allocator, state: *core.Document
             try fields.checkObjectDeclarations(allocator, state, sema);
         }
         try checker.checkPageNamesUnique(allocator, state);
-        {
-            const placement_effects_start = utils.measure_profile.start();
-            defer utils.measure_profile.recordAnalysis(.semantics_placement_effects, placement_effects_start);
-            try checkPlacementEffectDeclarations(allocator, state, sema);
-        }
     }
 }
 
@@ -371,249 +358,6 @@ fn updateDependencyQueryTarget(
         else => {},
     }
 }
-
-fn checkPlacementEffectDeclarations(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) !void {
-    var analyzer = PlacementEffectAnalyzer.init(allocator, sema);
-    defer analyzer.deinit();
-    var it = state.functions.iterator();
-    while (it.next()) |entry| {
-        try state.checkAnalysisCanceled();
-        const func = entry.value_ptr.*;
-        // Display bodies have a stricter read-only contract checked by the call
-        // analyzer; suggesting a placing name would not make a display valid.
-        if (func.isDisplay() or dependencies.callableNamePlacesObjects(func.name)) continue;
-        const module_id = entry.key_ptr.module_id;
-        if (!try analyzer.functionBody(entry.key_ptr.*, module_id, func)) continue;
-        const origin = state.sourceOrigin(module_id, func.span);
-
-        try state.addValidationDiagnostic(.@"error", null, null, origin, .{
-            .user_report = .{ .code = "PlacementEffect", .message = try std.fmt.allocPrint(state.allocator, "function '{s}' calls a placing operation and must end with '!'", .{func.name}) },
-        });
-        return error.DiagnosticsFailed;
-    }
-}
-
-const PlacementEffectAnalyzer = struct {
-    allocator: std.mem.Allocator,
-    root_sema: SemanticEnv,
-    function_memo: FunctionBoolMap,
-    function_visiting: FunctionVisitSet,
-    const_memo: FunctionBoolMap,
-    const_visiting: FunctionVisitSet,
-    record_visiting: std.AutoHashMap(*const ast.RecordDecl, void),
-
-    fn init(allocator: std.mem.Allocator, sema: *const SemanticEnv) PlacementEffectAnalyzer {
-        return .{
-            .allocator = allocator,
-            .root_sema = sema.*,
-            .function_memo = FunctionBoolMap.init(allocator),
-            .function_visiting = FunctionVisitSet.init(allocator),
-            .const_memo = FunctionBoolMap.init(allocator),
-            .const_visiting = FunctionVisitSet.init(allocator),
-            .record_visiting = .init(allocator),
-        };
-    }
-
-    fn deinit(self: *PlacementEffectAnalyzer) void {
-        self.record_visiting.deinit();
-        self.const_visiting.deinit();
-        self.const_memo.deinit();
-        self.function_visiting.deinit();
-        self.function_memo.deinit();
-    }
-
-    fn functionBody(
-        self: *PlacementEffectAnalyzer,
-        key: core.FunctionKey,
-        module_id: core.SourceModuleId,
-        func: ast.FunctionDecl,
-    ) !bool {
-        if (self.function_memo.get(key)) |cached| return cached;
-        if (self.function_visiting.contains(key)) return false;
-        try self.function_visiting.put(key, {});
-        defer _ = self.function_visiting.remove(key);
-
-        var locals = std.StringHashMap(void).init(self.allocator);
-        defer locals.deinit();
-        for (func.params.items) |param| try locals.put(param.name, {});
-        const sema = self.root_sema.forModule(module_id);
-        const places_objects = try self.statements(&sema, &locals, func.statements.items);
-        try self.function_memo.put(key, places_objects);
-        return places_objects;
-    }
-
-    fn constValue(
-        self: *PlacementEffectAnalyzer,
-        resolved: semantic_env.ResolvedConst,
-    ) !bool {
-        if (self.const_memo.get(resolved.key)) |cached| return cached;
-        if (self.const_visiting.contains(resolved.key)) return false;
-        try self.const_visiting.put(resolved.key, {});
-        defer _ = self.const_visiting.remove(resolved.key);
-
-        var locals = std.StringHashMap(void).init(self.allocator);
-        defer locals.deinit();
-        const const_sema = self.root_sema.forModule(resolved.module_id);
-        const places_objects = try self.expr(&const_sema, &locals, resolved.decl.value);
-        try self.const_memo.put(resolved.key, places_objects);
-        return places_objects;
-    }
-
-    fn statements(
-        self: *PlacementEffectAnalyzer,
-        sema: *const SemanticEnv,
-        locals: *std.StringHashMap(void),
-        statements_list: []const ast.Statement,
-    ) anyerror!bool {
-        for (statements_list) |stmt| {
-            if (try self.statement(sema, locals, stmt)) return true;
-        }
-        return false;
-    }
-
-    fn statement(
-        self: *PlacementEffectAnalyzer,
-        sema: *const SemanticEnv,
-        locals: *std.StringHashMap(void),
-        stmt: ast.Statement,
-    ) anyerror!bool {
-        return switch (stmt.kind) {
-            .hole, .return_void => false,
-            .let_binding => |binding| blk: {
-                if (try self.expr(sema, locals, binding.expr)) break :blk true;
-                if (!language_names.isDiscardBindingName(binding.name)) try locals.put(binding.name, {});
-                break :blk false;
-            },
-            .return_expr => |return_value| try self.expr(sema, locals, return_value),
-            .property_set => |property_set| (try self.expr(sema, locals, property_set.target)) or
-                (try self.expr(sema, locals, property_set.value)),
-            .expr_stmt => |expression| try self.expr(sema, locals, expression),
-            .constrain => |constraint| if (constraint.offset) |offset| try self.expr(sema, locals, offset) else false,
-            .if_stmt => |if_stmt| blk: {
-                if (try self.expr(sema, locals, if_stmt.condition)) break :blk true;
-                var then_locals = try locals.clone();
-                defer then_locals.deinit();
-                if (try self.statements(sema, &then_locals, if_stmt.then_statements.items)) break :blk true;
-                var else_locals = try locals.clone();
-                defer else_locals.deinit();
-                break :blk try self.statements(sema, &else_locals, if_stmt.else_statements.items);
-            },
-        };
-    }
-
-    fn expr(
-        self: *PlacementEffectAnalyzer,
-        sema: *const SemanticEnv,
-        locals: *const std.StringHashMap(void),
-        value: ast.Expr,
-    ) anyerror!bool {
-        return switch (value) {
-            .hole,
-            .string,
-            .color,
-            .number,
-            .boolean,
-            .none,
-            .enum_case,
-            => false,
-            .ident => |ident| blk: {
-                if (locals.contains(ident.name)) break :blk false;
-                const resolved = sema.resolvedConst(ident.reference()) orelse break :blk false;
-                break :blk try self.constValue(resolved);
-            },
-            .lambda => |lambda| blk: {
-                var lambda_locals = try locals.clone();
-                defer lambda_locals.deinit();
-                for (lambda.params.items) |param| try lambda_locals.put(param.name, {});
-                break :blk try self.expr(sema, &lambda_locals, lambda.body.*);
-            },
-            .record => |record| blk: {
-                for (record.fields.items) |field| {
-                    if (try self.expr(sema, locals, field.value)) break :blk true;
-                }
-                if (sema.recordConstruction(record)) |definition| {
-                    if (definition.decl.type_params.items.len != 0 or self.record_visiting.contains(definition.decl)) break :blk false;
-                    try self.record_visiting.put(definition.decl, {});
-                    defer _ = self.record_visiting.remove(definition.decl);
-                    const default_sema = sema.forModule(definition.module_id);
-                    var default_locals = std.StringHashMap(void).init(self.allocator);
-                    defer default_locals.deinit();
-                    for (definition.decl.fields.items) |field| {
-                        if (record.hasField(field.name)) continue;
-                        if (field.default_value) |default| if (try self.expr(&default_sema, &default_locals, default.*)) break :blk true;
-                    }
-                }
-                break :blk false;
-            },
-            .record_update => |update| blk: {
-                if (try self.expr(sema, locals, update.target.*)) break :blk true;
-                for (update.fields.items) |field| {
-                    if (try self.expr(sema, locals, field.value)) break :blk true;
-                }
-                break :blk false;
-            },
-            .apply => |apply| blk: {
-                if (try self.expr(sema, locals, apply.callee.*)) break :blk true;
-                break :blk try self.exprList(sema, locals, apply.args.items);
-            },
-            .member => |member| try self.expr(sema, locals, member.target.*),
-            .optional_check => |check| try self.expr(sema, locals, check.target.*),
-            .coalesce => |coalesce| (try self.expr(sema, locals, coalesce.target.*)) or
-                (try self.expr(sema, locals, coalesce.fallback.*)),
-            .call => |call_expr| try self.call(sema, locals, call_expr),
-        };
-    }
-
-    fn exprList(
-        self: *PlacementEffectAnalyzer,
-        sema: *const SemanticEnv,
-        locals: *const std.StringHashMap(void),
-        expressions: []const ast.Expr,
-    ) anyerror!bool {
-        for (expressions) |expr_value| {
-            if (try self.expr(sema, locals, expr_value)) return true;
-        }
-        return false;
-    }
-
-    fn call(
-        self: *PlacementEffectAnalyzer,
-        sema: *const SemanticEnv,
-        locals: *const std.StringHashMap(void),
-        call_expr: ast.CallExpr,
-    ) anyerror!bool {
-        if (try self.exprList(sema, locals, call_expr.args.items)) return true;
-        return switch (try sema.resolveValue(void, call_expr.callee, if (locals.contains(call_expr.callee.name)) {} else null)) {
-            .local, .unknown => false,
-            .constant => |resolved| try self.constValue(resolved),
-            .primitive => |primitive| primitive.places_objects or
-                try self.primitiveCallback(sema, locals, call_expr, primitive),
-            .function => |resolved| blk: {
-                break :blk try self.functionBody(resolved.key, resolved.module_id, resolved.decl);
-            },
-        };
-    }
-
-    fn primitiveCallback(
-        self: *PlacementEffectAnalyzer,
-        sema: *const SemanticEnv,
-        locals: *const std.StringHashMap(void),
-        call_expr: ast.CallExpr,
-        primitive: registry.PrimitiveDescriptor,
-    ) !bool {
-        const callback = primitive.callback orelse return false;
-        if (call_expr.args.items.len <= callback.function_arg_index) return false;
-        const callback_expr = call_expr.args.items[callback.function_arg_index];
-        return switch (callback_expr) {
-            .ident => |ident| blk: {
-                if (locals.contains(ident.name)) break :blk false;
-                const resolved = sema.resolvedFunction(ident.reference()) orelse break :blk false;
-                break :blk try self.functionBody(resolved.key, resolved.module_id, resolved.decl);
-            },
-            else => false,
-        };
-    }
-};
 
 pub fn buildDocumentState(
     allocator: std.mem.Allocator,

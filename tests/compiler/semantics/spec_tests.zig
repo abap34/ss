@@ -5532,46 +5532,31 @@ test "compiler semantics: paired placement functions desugar through existing ch
     , "case.ss:bytes:", "PlacementEffect: function 'bad' calls a placing operation and must end with '!'");
 }
 
-test "compiler semantics: placement effect is detected through primitive calls and lambdas" {
-    try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\fn bad(page_value: Page) -> Object
-        \\  return place_on!(page_value, new("bad", "body", "text"))
+test "compiler semantics: constructing a function value has no placement effect" {
+    try buildSource(
+        \\import std:text/content as native
+        \\fn delayed() -> Page -> Placed<native::Text>
+        \\  return (target: Page) |-> place_on!(target, native::Text { content = "Visible" })
         \\end
-        \\
-        \\page ok
+        \\type Action { run: Page -> Placed<native::Text> = (target: Page) |-> place_on!(target, native::Text { content = "Default" }) }
+        \\fn value() -> Action = Action {}
+        \\page main
+        \\  let action = delayed()
+        \\  let unused = value()
+        \\  action(pagectx())
         \\end
-        \\
-    , "case.ss:bytes:", "PlacementEffect: function 'bad' calls a placing operation and must end with '!'");
-
-    try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\fn bad() -> Page -> Object
-        \\  return (page_value: Page) |-> place_on!(page_value, new("bad", "body", "text"))
-        \\end
-        \\
-        \\page ok
-        \\end
-        \\
-    , "case.ss:bytes:", "PlacementEffect: function 'bad' calls a placing operation and must end with '!'");
+    );
 }
 
-test "compiler semantics: placement effect follows constant function values" {
-    try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\const delayed_place: Page -> Object = (page_value: Page) |-> place_on!(page_value, new("bad", "body", "text"))
-        \\
-        \\fn bad() -> Page -> Object
-        \\  return delayed_place
+test "compiler semantics: returning a constant function value has no placement effect" {
+    try buildSource(
+        \\import std:text/content as native
+        \\const delayed_place: Page -> Placed<native::Text> = (target: Page) |-> place_on!(target, native::Text { content = "Visible" })
+        \\fn delayed() -> Page -> Placed<native::Text> = delayed_place
+        \\page main
+        \\  delayed()(pagectx())
         \\end
-        \\
-        \\page ok
-        \\end
-        \\
-    , "case.ss:bytes:", "PlacementEffect: function 'bad' calls a placing operation and must end with '!'");
+    );
 }
 
 test "compiler semantics: placement effect follows named primitive callbacks" {
@@ -8458,4 +8443,162 @@ test "compiler semantics: qualified values cannot bypass display purity" {
         \\  docctx().footer_text = "Changed"
         \\end
     , "lib/bad.ss:bytes:", "ImpureDisplayFunction");
+}
+
+test "compiler semantics: placement effects follow invoked function values and defaults" {
+    for ([_][]const u8{
+        \\fn bad(target: Page) -> Placed<native::Text>
+        \\  return ((target: Page) |-> place_on!(target, native::Text { content = "Bad" }))(target)
+        \\end
+        ,
+        \\const action: Page -> Placed<native::Text> = (target: Page) |-> place_on!(target, native::Text { content = "Bad" })
+        \\fn bad(target: Page) -> Placed<native::Text> = action(target)
+        ,
+        \\type Action { run: Page -> Placed<native::Text> }
+        \\fn bad(target: Page) -> Placed<native::Text>
+        \\  let action = Action { run = (target: Page) |-> place_on!(target, native::Text { content = "Bad" }) }
+        \\  return action.run(target)
+        \\end
+        ,
+        \\fn emit!(target: Page) -> Placed<native::Text> = place_on!(target, native::Text { content = "Bad" })
+        \\fn bad(target: Page) -> Placed<native::Text> = emit!(target)
+        ,
+        \\fn bad(target: Page, value: Placed<native::Text> = place_on!(target, native::Text { content = "Bad" })) -> Placed<native::Text> = value
+        ,
+        \\fn apply<T>(action: Page -> T, target: Page) -> T = action(target)
+        \\fn bad(target: Page) -> Placed<native::Text> = apply((target: Page) |-> place_on!(target, native::Text { content = "Bad" }), target)
+        ,
+    }) |declarations| {
+        const source = try std.fmt.allocPrint(testing.allocator, "import std:text/content as native\n{s}\npage main\nbad(pagectx())\nend\n", .{declarations});
+        defer testing.allocator.free(source);
+        try expectDiagnostic(source, "case.ss:bytes:", "PlacementEffect: function 'bad' calls a placing operation and must end with '!'");
+    }
+}
+
+test "compiler semantics: higher order functions forward placement effects from their arguments" {
+    try buildSource(
+        \\import std:text/content as native
+        \\fn execute(action: Page -> Placed<native::Text>, target: Page) -> Placed<native::Text> = action(target)
+        \\page main
+        \\  execute((target: Page) |-> place_on!(target, native::Text { content = "Visible" }), pagectx())
+        \\end
+    );
+    try buildSource(
+        \\import std:text/content as native
+        \\fn execute!(action: Page -> Placed<native::Text>, target: Page) -> Placed<native::Text> = action(target)
+        \\page main
+        \\  execute!((target: Page) |-> place_on!(target, native::Text { content = "Visible" }), pagectx())
+        \\end
+    );
+}
+
+test "compiler semantics: display may construct an unused placing callback" {
+    try buildSource(
+        \\import std:text/content as native
+        \\type Badge {}
+        \\fn delayed() -> Page -> Placed<native::Text> = (target: Page) |-> place_on!(target, native::Text { content = "Unused" })
+        \\fn display(self: Placed<Badge>) -> native::Text
+        \\  let action = delayed()
+        \\  return native::Text { content = "Visible" }
+        \\end
+        \\page main
+        \\  place_on!(pagectx(), Badge {})
+        \\end
+    );
+}
+
+test "compiler semantics: placement effects follow callback fields and returned callbacks" {
+    try buildSource(
+        \\type Action { run: (() -> Action) -> Action }
+        \\fn helper(make: () -> Action) -> Action = make()
+        \\fn supplier() -> Action = Action { run = helper }
+        \\fn invoke(make: () -> Action) -> Action
+        \\  let action: (() -> Action) -> Action = helper
+        \\  return action(make)
+        \\end
+        \\page main
+        \\  let result = invoke(supplier)
+        \\end
+    );
+    try buildSource(
+        \\import std:text/content as native
+        \\type Action { run: Page -> Placed<native::Text> }
+        \\fn execute(action: Action, target: Page) -> Placed<native::Text> = action.run(target)
+        \\fn forward(action: Page -> Placed<native::Text>, target: Page) -> Placed<native::Text>
+        \\  return execute(Action { run = (target: Page) |-> action(target) }, target)
+        \\end
+        \\fn factory() -> Page -> Placed<native::Text> = (target: Page) |-> place_on!(target, native::Text { content = "Visible" })
+        \\fn create(make: () -> Page -> Placed<native::Text>, target: Page) -> Placed<native::Text> = make()(target)
+        \\page main
+        \\  forward(factory(), pagectx())
+        \\  create(factory, pagectx())
+        \\end
+    );
+    try expectDiagnostic(
+        \\import std:text/content as native
+        \\type Action { run: Page -> Placed<native::Text> }
+        \\fn execute(action: Action, target: Page) -> Placed<native::Text> = action.run(target)
+        \\fn bad(target: Page) -> Placed<native::Text>
+        \\  return execute(Action { run = (target: Page) |-> place_on!(target, native::Text { content = "Bad" }) }, target)
+        \\end
+        \\page main
+        \\  bad(pagectx())
+        \\end
+    , "case.ss:bytes:", "PlacementEffect: function 'bad' calls a placing operation and must end with '!'");
+}
+
+test "compiler semantics: forwarded effects remain visible to callers and displays" {
+    const declarations =
+        \\import std:text/content as native
+        \\const action: Page -> Placed<native::Text> = (target: Page) |-> place_on!(target, native::Text { content = "Bad" })
+        \\fn execute(run: Page -> Placed<native::Text>, target: Page) -> Placed<native::Text> = run(target)
+        \\fn warmup!(target: Page) -> Placed<native::Text> = execute(action, target)
+        \\
+    ;
+    const bad_source = try std.mem.concat(testing.allocator, u8, &.{
+        declarations,
+        \\fn bad(target: Page) -> Placed<native::Text> = execute(action, target)
+        \\page main
+        \\  warmup!(pagectx())
+        \\  bad(pagectx())
+        \\end
+    });
+    defer testing.allocator.free(bad_source);
+    try expectDiagnostic(bad_source, "case.ss:bytes:", "PlacementEffect: function 'bad' calls a placing operation and must end with '!'");
+    const display_source = try std.mem.concat(testing.allocator, u8, &.{
+        declarations,
+        \\type Badge {}
+        \\fn display(self: Placed<Badge>) -> native::Text
+        \\  execute(action, self.page)
+        \\  return native::Text { content = "Visible" }
+        \\end
+        \\page main
+        \\  warmup!(pagectx())
+        \\  place_on!(pagectx(), Badge {})
+        \\end
+    });
+    defer testing.allocator.free(display_source);
+    try expectDiagnostic(display_source, "case.ss:bytes:", "ImpureDisplayFunction");
+}
+
+test "compiler semantics: marked function defaults can place and recursive defaults are rejected" {
+    try buildSource(
+        \\import std:text/content as native
+        \\fn value!(target: Page, value: Placed<native::Text> = place_on!(target, native::Text { content = "Visible" })) -> Placed<native::Text> = value
+        \\page main
+        \\  value!(pagectx())
+        \\end
+    );
+    try buildSource(
+        \\fn value(value: Number = value(0)) -> Number = value
+        \\page main
+        \\  value()
+        \\end
+    );
+    try expectDiagnostic(
+        \\fn recursive(value: Number = recursive()) -> Number = value
+        \\page main
+        \\  recursive()
+        \\end
+    , "case.ss:bytes:", "RecursiveFunction");
 }
