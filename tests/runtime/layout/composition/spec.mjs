@@ -1,44 +1,47 @@
 #!/usr/bin/env node
+import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { assert, root, ssBin, withLspClient } from "../../harness.mjs";
+import { root, ssBin, withLspClient } from "../../harness.mjs";
 import { editorSnapshot } from "../../editor/support.mjs";
 
 const outputRoot = path.join(root, ".ss-cache", "tests", "layout-composition");
 await mkdir(outputRoot, { recursive: true });
 const output = await mkdtemp(path.join(outputRoot, "run-"));
 const gap = 32;
+const groupSpacingAfter = 24;
 const constraintTolerance = 0.01;
 let caseCount = 0;
 
 const prelude = `import std:prelude as *
 
-fn box(label: String, width: Number, height: Number) -> Object
-  let item = new(label, "body", "text")
-  ~ item.width == width
-  ~ item.height == height
-  return item
+type Box { label: String width: Number height: Number }
+fn box(label: String, width: Number, height: Number) -> Box
+  return Box { label = label width = width height = height }
+end
+fn display(self: Placed<Box>) -> PathShape
+  return rectangle(self.value.width, self.value.height)
 end
 `;
 const boxes = `let a = box("A", 120, 80)
 let b = box("B", 180, 60)
 let c = box("C", 90, 50)`;
-const anchor = `~ a.left == page.left + 80
-~ a.top == page.top - 80`;
+const anchor = `~ placed.left == page.left + 80
+~ placed.top == page.top - 80`;
 
 const failures = [];
 for (const test of [
-  testAuthoredPlacementOrder, testNestedPlacedObjects, testNestedUnplacedObjectsAndOrdinaryGroup,
-  testIntermediateBinding, testOrdinaryGroupInference, testNestedOrdinaryGroupBounds,
-  testUnplacedComposition, testNaturalWidths, testEqualFrames, testNestedSplitPlacement, testMeasuredSplitFlow, testMeasuredNestedConstraintUpdate, testHorizontalSplitWidths, testVerticalSplitWidths, testEqualChains, testEqualEvaluation, testEqualEditorUpdates, testSameDirectionBinaryGroups,
-  testSharedObjects, testConstraintUpdate, testInferredGroupConstraintUpdate,
+  testAuthoredPlacementOrder, testNestedUnplacedObjectsAndOrdinaryGroup,
+  testIntermediateBinding, testUnusedCompositionValues, testNestedOrdinaryGroupBounds,
+  testNaturalWidths, testEqualFrames, testNestedSplitPlacement, testMeasuredSplitFlow, testMeasuredNestedConstraintUpdate, testHorizontalSplitWidths, testVerticalSplitWidths, testEqualChains, testEqualEvaluation, testEqualEditorUpdates, testSameDirectionBinaryGroups,
+  testSharedValues, testConstraintUpdate, testPlacedGroupConstraintUpdate,
   testExplicitGap, testOperandEvaluation, testFixedStdlibResolution, testImportedFunctionComposition,
   testInvalidOperands, testConflictsAndMixedDirections, testHorizontalPolicyVariants,
   testHorizontalPolicyInheritance, testNestedHorizontalPolicy, testPolicyAfterPagePlacement,
   testExplicitVerticalPositionPriority, testDefaultAlignmentUpdates, testCenteredChainAndVerticalComposition,
-  testOrdinaryGroupPolicyIsolation, testFixedRightDoesNotMoveLeft, testFixture,
+  testFixedRightDoesNotMoveLeft, testFixture,
 ]) {
   try { await test(); } catch (error) {
     failures.push(test.name);
@@ -65,208 +68,108 @@ end
   assert(roots.indexOf(first.id) < roots.indexOf(second.id), "placement roots lost authored order");
 }
 
-async function testNestedPlacedObjects() {
-  const { dump, source } = await dumpSource("placed", `${prelude}
-page placed
+async function testNestedUnplacedObjectsAndOrdinaryGroup() {
+  const { dump, source } = await dumpSource("nested-values", `${prelude}
+page main
 vflow(LayoutPolicy.top)
 ${boxes}
-place_on!(pagectx(), a)
-place_on!(pagectx(), b)
-place_on!(pagectx(), c)
+let placed = place!(a || (b // c))
 ${anchor}
-a || (b // c)
 end
 `);
   assertNestedFrames(dump);
-  assertNoDiagnostic(dump, "UnplacedObject");
-  assert(groupNodes(dump).length === 0, "composition implicitly attached a group");
-  const roots = dump.placement_roots.flatMap((entry) => entry.roots);
-  assert(roots.length === 3, `composition changed existing placement roots: ${roots}`);
+  assert.equal(dump.diagnostics.length, 0);
+  const groups = groupNodes(dump);
+  assert.equal(groups.length, 2);
+  const roots = dump.placement_roots.flatMap(entry => entry.roots);
+  assert.equal(roots.length, 1);
+  const outer = groups.find(item => item.id === roots[0]);
+  assertClose(outer.width, 120 + gap + 180, "outer bounding width");
+  assertClose(outer.height, 60 + gap + 50, "outer bounding height");
   const b = node(dump, "B");
   const c = node(dump, "C");
   const vertical = relation(dump.constraints, c, "top", b, "bottom", -gap);
-  assert(vertical && vertical.role === "position", "vertical composition did not add an ordinary position constraint");
-  assert(vertical.origin?.path?.endsWith("slide.ss"), `composition constraint lost its source file: ${JSON.stringify(vertical)}`);
-  const originText = source.slice(vertical.origin.start, vertical.origin.end);
-  assert(originText.includes("//"), `composition constraint origin does not cover its operator: ${originText}`);
-}
-
-async function testNestedUnplacedObjectsAndOrdinaryGroup() {
-  const { dump } = await dumpSource("unplaced-then-placed", `${prelude}
-page placed
-vflow(LayoutPolicy.top)
-${boxes}
-let combined = a || (b // c)
-place_on!(pagectx(), combined)
-${anchor}
-end
-`);
-  assertNestedFrames(dump);
-  assertNoDiagnostic(dump, "UnplacedObject");
-  const groups = groupNodes(dump);
-  assert(groups.length === 2, `expected two ordinary groups, got ${groups.length}`);
-  const rootId = dump.placement_roots.flatMap((entry) => entry.roots);
-  assert(rootId.length === 1, `placing the returned group should add one placement root: ${rootId}`);
-  const outer = groups.find((item) => item.id === rootId[0]);
-  assert(outer, "composition did not return an ordinary group Object");
-  assertClose(outer.width, 120 + gap + 180, "outer group bounding width");
-  assertClose(outer.height, 60 + gap + 50, "outer group bounding height");
+  assert(vertical && vertical.role === "position");
+  assert(vertical.origin?.path?.endsWith("slide.ss"));
+  assert(source.slice(vertical.origin.start, vertical.origin.end).includes("//"), "composition lost its operator source span");
 }
 
 async function testIntermediateBinding() {
-  const nested = await dumpSource("nested", `${prelude}
-page comparison
+  const variants = [];
+  for (const [name, binding, expression] of [
+    ["nested", "", "a || (b // c)"],
+    ["bound", "let right = b // c", "a || right"],
+  ]) {
+    variants.push((await dumpSource(name, `${prelude}
+page main
+vflow(LayoutPolicy.top)
 ${boxes}
-place_on!(pagectx(), a || (b // c))
+${binding}
+let placed = place!(${expression})
 ${anchor}
 end
-`);
-  const bound = await dumpSource("bound", `${prelude}
-page comparison
-${boxes}
-let right = b // c
-place_on!(pagectx(), a || right)
-${anchor}
-end
-`);
-  for (const label of ["A", "B", "C"]) {
-    for (const field of ["x", "y", "width", "height"]) {
-      assertClose(node(bound.dump, label)[field], node(nested.dump, label)[field], `${label}.${field} changed after introducing a binding`);
-    }
+`)).dump);
+  }
+  for (const label of ["A", "B", "C"]) for (const key of ["x", "y", "width", "height"]) {
+    assertClose(node(variants[0], label)[key], node(variants[1], label)[key], `binding changed ${label}.${key}`);
   }
 }
 
-async function testOrdinaryGroupInference() {
-  const fallbackSource = `${prelude}
-page fallback
-let a = body_obj!("A")
-let b = body_obj!("B")
-`;
-  const plain = await dumpSource("plain-fallback", `${fallbackSource}end\n`);
-  const grouped = await dumpSource("grouped-fallback", `${fallbackSource}group(a, b)\nend\n`);
-  assertNoDiagnostic(grouped.dump, "UnplacedObject");
-  for (const label of ["A", "B"]) {
-    for (const field of ["x", "y", "width", "height"]) {
-      assertClose(node(grouped.dump, label)[field], node(plain.dump, label)[field], `unreferenced group changed fallback ${label}.${field}`);
-    }
-  }
-
-  const inferred = await dumpSource("ordinary-group", `${prelude}
-page groups
+async function testUnusedCompositionValues() {
+  const plain = await dumpSource("unused-plain", "page main\ntext!(\"Visible\")\nend\n");
+  const unused = await dumpSource("unused-values", `${prelude}
+page main
+text!("Visible")
 ${boxes}
-place_on!(pagectx(), a)
-place_on!(pagectx(), b)
-place_on!(pagectx(), c)
-${anchor}
-~ b.left == a.right + 32
-~ b.top == a.top
-let pair = group(a, b)
-pair // c
-end
-`);
-  assertNoDiagnostic(inferred.dump, "UnplacedObject");
-  const a = node(inferred.dump, "A");
-  const c = node(inferred.dump, "C");
-  assertClose(c.x, a.x, "ordinary group left edge");
-  assertClose(top(c), a.y - gap, "ordinary group bottom edge");
-  assert(groupNodes(inferred.dump).length === 0, "ordinary inferred groups became attached");
-
-  const incomplete = await dumpSource("mixed-placement-group", `${prelude}
-page groups
-let a = place_on!(pagectx(), new("A", "body", "text"))
-let b = new("B", "body", "text")
+a || (b // c)
 group(a, b)
 end
 `);
-  assertNoDiagnostic(incomplete.dump, "UnplacedObject");
-  assert(!incomplete.dump.nodes.some((item) => item.content === "B"), "ordinary grouping implicitly placed its unplaced child");
-
-  const separate = await dumpSource("cross-page-group", `${prelude}
-page first
-place_on!(pagectx(), new("A", "first_box", "text"))
-end
-page second
-place_on!(pagectx(), new("B", "second_box", "text"))
-end
-document
-let a = first(objs_all("first_box"))
-let b = first(objs_all("second_box"))
-group(a, b)
-end
-`);
-  assertNoDiagnostic(separate.dump, "UnplacedObject");
-  assert(groupNodes(separate.dump).length === 0, "a cross-page group became attached");
-}
-
-async function testUnplacedComposition() {
-  await expectFailure("unplaced-composition", `${prelude}
-page unplaced
-let a = new("A", "body", "text")
-let b = new("B", "body", "text")
-a || b
-end
-`, "UnownedLayoutObject");
+  assert.equal(groupNodes(unused.dump).length, 0);
+  assert.equal(unused.dump.placement_roots.flatMap(entry => entry.roots).length, 1);
+  assert.equal(unused.dump.nodes.filter(item => item.placement?.input.type?.name === "Box").length, 0);
+  for (const key of ["x", "y", "width", "height"]) assertClose(node(unused.dump, "Visible")[key], node(plain.dump, "Visible")[key], `unused values changed ${key}`);
 }
 
 async function testNestedOrdinaryGroupBounds() {
-  const { dump } = await dumpSource("nested-ordinary-group-bounds", `${prelude}
-page nested_group
+  const { dump } = await dumpSource("nested-bounds", `${prelude}
+page main
 vflow(LayoutPolicy.top)
 ${boxes}
-let d = box("D", 100, 180)
-let e = box("E", 50, 40)
-let f = box("F", 50, 40)
-place_on!(pagectx(), a)
-place_on!(pagectx(), b)
-place_on!(pagectx(), c)
-place_on!(pagectx(), d)
-place_on!(pagectx(), e)
-place_on!(pagectx(), f)
-~ b.left == a.right + 32
-~ b.top == a.top
-~ c.left == a.left
-~ c.top == a.bottom - 32
-let inner = group(a, b)
-let outer = group(inner, c)
-~ d.left == page.left + 80
-~ d.top == page.top - 80
-d || outer
+let placed = place!(box("D", 100, 180) || ((a || b) // c))
+let outer = first(select<Group<Group<Box, Box>, Box>>(placed))
+let e = place!(box("E", 50, 40))
+let f = place!(box("F", 50, 40))
+${anchor}
 ~ e.left == outer.right + 16
 ~ e.top == outer.top
 ~ f.left == outer.left
 ~ f.top == outer.bottom - 16
 end
 `);
-  const a = node(dump, "A");
-  const b = node(dump, "B");
-  const c = node(dump, "C");
-  const d = node(dump, "D");
-  const e = node(dump, "E");
-  const f = node(dump, "F");
-  assertClose(a.x, d.x + d.width + gap, "nested ordinary group left boundary");
-  assertClose(top(a), top(d), "nested ordinary group top boundary");
-  assertClose(b.x, a.x + a.width + gap, "nested ordinary group first row");
-  assertClose(c.x, a.x, "nested ordinary group second row alignment");
-  assertClose(top(c), a.y - gap, "nested ordinary group second row gap");
-  assertClose(e.x, a.x + 120 + gap + 180 + 16, "outer right boundary must include its nested inner group");
-  assertClose(top(e), top(a), "outer top boundary must include its nested inner group");
-  assertClose(f.x, a.x, "outer left boundary must include its nested inner group");
-  assertClose(top(f), top(a) - 80 - gap - 50 - 16, "outer bottom boundary must include both rows");
-  assertNoDiagnostic(dump, "UnplacedObject");
-  assert(groupNodes(dump).length === 0, "nested ordinary group became attached during composition");
+  const a = node(dump, "A"), b = node(dump, "B"), c = node(dump, "C");
+  const d = node(dump, "D"), e = node(dump, "E"), f = node(dump, "F");
+  assertClose(a.x, d.x + d.width + gap, "nested group left boundary");
+  assertClose(top(a), top(d), "nested group top boundary");
+  assertClose(b.x, a.x + a.width + gap, "nested first row");
+  assertClose(c.x, a.x, "nested second row alignment");
+  assertClose(top(c), a.y - gap, "nested second row gap");
+  assertClose(e.x, a.x + 120 + gap + 180 + 16, "outer right includes nested group");
+  assertClose(top(e), top(a), "outer top includes nested group");
+  assertClose(f.x, a.x, "outer left includes nested group");
+  assertClose(top(f), top(a) - 80 - gap - 50 - 16, "outer bottom includes both rows");
+  assert.equal(groupNodes(dump).length, 3);
+  assert.equal(dump.placement_roots.flatMap(entry => entry.roots).length, 3);
+  assert.equal(dump.diagnostics.length, 0);
 }
 
 async function testNaturalWidths() {
-  const { dump } = await dumpSource("natural-widths", `${prelude}
-page natural
-let a = body_obj!("short")
-let b = body_obj!("a considerably longer line")
-a || b
+  const { dump } = await dumpSource("natural-widths", `page main
+place!(text("short") || text("a considerably longer line"))
 end
 `);
-  const a = node(dump, "short");
-  const b = node(dump, "a considerably longer line");
-  assert(b.width > a.width * 2, `composition equalized intrinsic widths: ${a.width}, ${b.width}`);
+  const a = node(dump, "short"), b = node(dump, "a considerably longer line");
+  assert(b.width > a.width * 2, `composition equalized natural widths: ${a.width}, ${b.width}`);
   assertClose(b.x, a.x + a.width + gap, "natural horizontal gap");
   assertClose(centerY(b), centerY(a), "natural center alignment");
 }
@@ -443,68 +346,57 @@ end
 async function testMeasuredSplitFlow() {
   for (const policy of ["center", "top"]) {
     for (const expression of ["a |=| b", "a /=/ b", "a |=| (b /=/ c)", "a /=/ (b |=| c)"]) {
-      const { dump } = await dumpSource(`measured-flow-${policy}-${caseCount}`, `${prelude}
-page measured
+      const { dump } = await dumpSource(`measured-flow-${policy}-${caseCount}`, `page main
 vflow(LayoutPolicy.${policy})
-body_obj!("Before split")
-let a = body_obj("Short")
-let b = body_obj("${"Words wrap at the allocated width. ".repeat(5)}")
-${expression.includes("c") ? 'let c = body_obj("Third")' : ""}
-let g = ${expression}
-g.chrome.pad_x = 12
-g.chrome.pad_y = 8
-g.layout.spacing_after = 32
+text!("Before split")
+let a = text("Short")
+let b = text("${"Words wrap at the allocated width. ".repeat(5)}")
+${expression.includes("c") ? 'let c = text("Third")' : ""}
+let g = place!(${expression})
 ~ g.width == 1000
-place_on!(pagectx(), g)
-body_obj!("After split")
+text!("After split")
 end
 `);
-      const before = node(dump, "Before split");
-      const after = node(dump, "After split");
-      const g = groupNodes(dump).find((item) => dump.placement_roots.some((entry) => entry.roots.includes(item.id)));
-      assertClose(before.y - top(g), 32, "split follows preceding component");
-      assertClose(g.y - top(after), 32, "following component reserves split height");
-      assertClose(g.height, requiredHeight(g), "split uses the minimum height fitting measured contents");
+      const before = node(dump, "Before split"), after = node(dump, "After split");
+      const g = groupNodes(dump).find(item => dump.placement_roots.some(entry => entry.roots.includes(item.id)));
+      assertClose(before.y - top(g), gap, "split follows preceding component");
+      assertClose(g.y - top(after), groupSpacingAfter, "following component reserves split height");
+      assertClose(g.height, requiredHeight(g), "split fits final-width measurements");
       assertSplitTree(dump, g);
       if (policy === "center") assertClose((top(before) + after.y) / 2, 360, "components share page centering");
-      assert(dump.diagnostics.length === 0, `measured split diagnostics: ${JSON.stringify(dump.diagnostics)}`);
+      assert.equal(dump.diagnostics.length, 0);
 
       function requiredHeight(item) {
-        if (item.role !== "group") return item.measurement.logical_bounds.height;
-        const children = dump.contains.find((entry) => entry.parent === item.id).children.map((id) => dump.nodes.find((candidate) => candidate.id === id));
+        const input = item.placement?.input;
+        if (input?.kind !== "group") return item.measurement.logical_bounds.height;
+        const children = item.placement.children.map(id => dump.nodes.find(candidate => candidate.id === id));
         const maximum = Math.max(...children.map(requiredHeight));
-        return item.fields.split_axis === "vertical"
-          ? children.length * maximum + (children.length - 1) * Number(item.fields.split_gap) + 2 * item.render.chrome.pad_y
-          : maximum + 2 * item.render.chrome.pad_y;
+        return input.composition === "equal_vertical" ? children.length * maximum + (children.length - 1) * input.gap : maximum;
       }
     }
   }
 }
 
 async function testMeasuredNestedConstraintUpdate() {
-  const { dump } = await dumpSource("measured-nested-update", `${prelude}
-page updated
-body_obj!("Before split")
-let a = body_obj("Short")
-let b = body_obj("Second line")
-let c = body_obj("Third")
-let inner = b // c
+  const { dump } = await dumpSource("measured-nested-update", `page main
+text!("Before split")
+let g = place!(text("Short") |=| (text("Second line") // text("Third")))
+let items = select<Text>(g)
+let a = first(items)
+let b = first(items - selection(a))
+let c = first(items - selection(a) - selection(b))
 ~!~ c.top == b.bottom - 80
-let g = a |=| inner
-g.layout.spacing_after = 32
 ~ g.width == 1000
-place_on!(pagectx(), g)
-body_obj!("After split")
+text!("After split")
 end
 `);
-  const b = node(dump, "Second line");
-  const c = node(dump, "Third");
-  const outer = groupNodes(dump).find((item) => item.fields.split_axis === "horizontal");
-  assertClose(b.y - top(c), 80, "nested spacing update survives measurement");
-  assertClose(outer.height, b.height + c.height + 80, "outer height accounts for updated child constraints");
-  assertClose(node(dump, "Before split").y - top(outer), 32, "updated split reserves space above");
-  assertClose(outer.y - top(node(dump, "After split")), 32, "updated split reserves space below");
-  assert(dump.diagnostics.length === 0, `updated split diagnostics: ${JSON.stringify(dump.diagnostics)}`);
+  const b = node(dump, "Second line"), c = node(dump, "Third");
+  const outer = groupNodes(dump).find(item => item.placement.input.composition === "equal_horizontal");
+  assertClose(b.y - top(c), 80, "updated nested spacing survives measurement");
+  assertClose(outer.height, b.height + c.height + 80, "outer height includes child update");
+  assertClose(node(dump, "Before split").y - top(outer), gap, "updated split reserves space above");
+  assertClose(outer.y - top(node(dump, "After split")), groupSpacingAfter, "updated split reserves space below");
+  assert.equal(dump.diagnostics.length, 0);
 }
 
 async function testHorizontalSplitWidths() {
@@ -589,167 +481,137 @@ end
 
 async function testVerticalSplitWidths() {
   for (const [name, constraints, width, left] of [
-    ["default", "", 1136, 72],
-    ["width", "~ g.width == 600", 600, 72],
+    ["default", "", 1088, 96],
+    ["width", "~ g.width == 600", 600, 96],
     ["width-position", "~ g.width == 600\n~ g.left == page.left + 200", 600, 200],
     ["edges", "~ g.left == page.left + 120\n~ g.right == page.right - 200", 960, 120],
-    ["left", "~ g.left == page.left + 200", 1008, 200],
-    ["right", "~ g.right == page.right - 200", 1008, 72],
-    ["center", "~ g.center_x == page.center_x - 100", 936, 72],
-    ["margins", "g.layout = LayoutStyle { x = 120, right_inset = 180 }", 980, 120],
-    ["padding", "g.chrome.pad_x = 12", 1136, 72],
-    ["updated-width", "~ g.width == 600\n~!~ g.width == 700", 700, 72],
-    ["positioned-child", "~ a.left == page.left + 200", 1136, 72],
+    ["left", "~ g.left == page.left + 200", 984, 200],
+    ["right", "~ g.right == page.right - 200", 984, 96],
+    ["center", "~ g.center_x == page.center_x - 100", 888, 96],
+    ["margins", "~ g.left == page.left + 120\n~ g.right == page.right - 180", 980, 120],
+    ["updated-width", "~ g.width == 600\n~!~ g.width == 700", 700, 96],
+    ["positioned-child", "~ a.left == page.left + 200", 1088, 96],
   ]) {
-    const { dump } = await dumpSource(`vertical-width-${name}`, `${prelude}
-page example
-let a = body_obj("Short")
-let b = body_obj("Second line")
-let g = a /=/ b
+    const { dump } = await dumpSource(`vertical-width-${name}`, `page main
+let g = place!(text("Short") /=/ text("Second line"))
+let a = first(children(g))
 ${constraints}
-place_on!(pagectx(), g)
 end
 `);
     const g = groupNodes(dump)[0];
     assertClose(g.width, width, `${name} group width`);
     assertClose(g.x, left, `${name} group left`);
-    assert(node(dump, "Short").width < node(dump, "Second line").width, "short text lost its natural width");
+    assert(node(dump, "Short").width < node(dump, "Second line").width, "short text lost natural width");
     if (name === "positioned-child") assertClose(node(dump, "Short").x, 200, "explicit child position");
     assertSplitTree(dump, g);
-    assert(dump.diagnostics.length === 0, `${name} diagnostics: ${JSON.stringify(dump.diagnostics)}`);
+    assert.equal(dump.diagnostics.length, 0);
   }
 
   for (const policy of ["left", "center", "right"]) {
-    const { dump } = await dumpSource(`vertical-width-policy-${policy}`, `${prelude}
-page example
+    const { dump } = await dumpSource(`vertical-width-policy-${policy}`, `page main
 hflow(LayoutPolicy.${policy})
-let a = body_obj("Short")
-let b = body_obj("${"Words wrap within the available row width. ".repeat(12)}")
-let g = a /=/ b
-g.chrome.pad_x = 16
+let g = place!(text("Short") /=/ text("${"Words wrap within the available row width. ".repeat(12)}"))
 ~ g.height == 400
-place_on!(pagectx(), g)
 end
 `);
     const g = groupNodes(dump)[0];
-    const a = node(dump, "Short");
-    const b = dump.nodes.find((item) => item.content?.startsWith("Words wrap"));
-    assertClose(g.x, 72, `${policy} page inset`);
-    assertClose(g.width, 1136, `${policy} page width`);
-    assert(b.width <= g.width - 32 + constraintTolerance, `${policy} wrapped width exceeds available width`);
-    assert(b.x >= g.x + 16 - constraintTolerance && b.x + b.width <= g.x + g.width - 16 + constraintTolerance, `${policy} text outside padded group`);
-    const aligned = (item) => policy === "left" ? item.x : policy === "center" ? item.x + item.width / 2 : item.x + item.width;
+    const a = node(dump, "Short"), b = dump.nodes.find(item => item.content?.startsWith("Words wrap"));
+    assertClose(g.x, 96, `${policy} page inset`);
+    assertClose(g.width, 1088, `${policy} page width`);
+    assert(b.width <= g.width + constraintTolerance);
+    assert(b.x >= g.x - constraintTolerance && b.x + b.width <= g.x + g.width + constraintTolerance);
+    const aligned = item => policy === "left" ? item.x : policy === "center" ? item.x + item.width / 2 : item.x + item.width;
     assertClose(aligned(a), aligned(b), `${policy} text alignment`);
     assertSplitTree(dump, g);
-    assert(dump.diagnostics.length === 0, `${policy} wrapping diagnostics: ${JSON.stringify(dump.diagnostics)}`);
+    assert.equal(dump.diagnostics.length, 0);
   }
 
   for (const [name, expression, width] of [
     ["horizontal-parent", "a |=| (b /=/ c)", 800],
-    ["vertical-parent", "a /=/ (b /=/ c)", 1136],
+    ["vertical-parent", "a /=/ (b /=/ c)", 1088],
     ["ordinary-parent", "group(a, b /=/ c)", null],
     ["natural-parent", "a || (b /=/ c)", null],
   ]) {
-    const { dump } = await dumpSource(`vertical-width-${name}`, `${prelude}
-page example
-let a = body_obj("Short")
-let b = body_obj("Second line")
-let c = body_obj("Third")
-let g = ${expression}
+    const { dump } = await dumpSource(`vertical-width-${name}`, `page main
+let a = text("Short")
+let b = text("Second line")
+let c = text("Third")
+let g = place!(${expression})
 ${name === "horizontal-parent" ? "~ g.width == 800" : ""}
 ${name === "vertical-parent" ? "~ g.height == 400" : ""}
-place_on!(pagectx(), g)
 end
 `);
-    const rootId = dump.placement_roots.flatMap((entry) => entry.roots)[0];
-    const root = groupNodes(dump).find((item) => item.id === rootId);
-    const inner = groupNodes(dump).find((item) => item.id !== rootId);
+    const rootId = dump.placement_roots.flatMap(entry => entry.roots)[0];
+    const outer = groupNodes(dump).find(item => item.id === rootId);
+    const inner = groupNodes(dump).find(item => item.id !== rootId);
     if (width !== null) {
-      assertClose(root.width, width, `${name} root width`);
-      assertSplitTree(dump, root);
+      assertClose(outer.width, width, `${name} root width`);
+      assertSplitTree(dump, outer);
     } else {
       assertClose(inner.width, node(dump, "Second line").width, `${name} nested natural width`);
       assertSplitTree(dump, inner);
     }
-    assert(dump.diagnostics.length === 0, `${name} diagnostics: ${JSON.stringify(dump.diagnostics)}`);
+    assert.equal(dump.diagnostics.length, 0);
   }
 }
 
-function assertSplitTree(dump, g) {
-  const input = g.placement?.input;
-  const axis = input?.kind === "group"
-    ? ({ equal_horizontal: "horizontal", equal_vertical: "vertical" }[input.composition])
-    : g.fields.split_axis;
-  if (!axis || axis === "none") return;
-  const children = dump.contains.find((entry) => entry.parent === g.id).children.map((id) => dump.nodes.find((item) => item.id === id));
+function assertSplitTree(dump, group) {
+  const input = group.placement.input;
+  const axis = { equal_horizontal: "horizontal", equal_vertical: "vertical" }[input.composition];
+  if (!axis) return;
+  const children = group.placement.children.map(id => dump.nodes.find(item => item.id === id));
   assert(children.length >= 2, "split lost containment");
-  const px = input ? 0 : g.render.chrome.pad_x;
-  const py = input ? 0 : g.render.chrome.pad_y;
-  const spacing = input ? input.gap : Number(g.fields.split_gap ?? gap);
   const horizontal = axis === "horizontal";
-  const extent = ((horizontal ? g.width - 2 * px : g.height - 2 * py) - (children.length - 1) * spacing) / children.length;
+  const extent = ((horizontal ? group.width : group.height) - (children.length - 1) * input.gap) / children.length;
   for (const [index, child] of children.entries()) {
     assertClose(horizontal ? child.width : child.height, extent, `equal extent ${index}`);
-    assertClose(horizontal ? child.x : top(child), horizontal ? g.x + px + index * (extent + spacing) : top(g) - py - index * (extent + spacing), `cell position ${index}`);
+    assertClose(horizontal ? child.x : top(child), horizontal ? group.x + index * (extent + input.gap) : top(group) - index * (extent + input.gap), `cell position ${index}`);
   }
-  for (const child of children.filter((item) => item.role === "group" || item.placement?.input.kind === "group")) {
-    assertClose(axis === "horizontal" ? child.height : child.width, axis === "horizontal" ? g.height - 2 * py : g.width - 2 * px, "nested group cross-axis extent");
+  for (const child of children.filter(item => item.placement?.input.kind === "group")) {
+    assertClose(horizontal ? child.height : child.width, horizontal ? group.height : group.width, "nested group cross-axis extent");
     assertSplitTree(dump, child);
   }
 }
 
 async function testEqualChains() {
-  for (const operator of ["|=|", "/=/"]) {
-    for (const count of [3, 4, 5]) {
-      for (const nested of [false, true]) {
-        const operands = Array.from({ length: count }, (_, index) => `body_obj("Item ${index}")`);
-        if (nested) operands[1] = `(body_obj("Nested one") ${operator} body_obj("Nested two") ${operator} body_obj("Nested three"))`;
-        const { dump } = await dumpSource(`equal-chain-${operator === "|=|" ? "h" : "v"}-${count}-${nested}`, `${prelude}
-page chain
+  for (const operator of ["|=|", "/=/"]) for (const count of [3, 4, 5]) for (const nested of [false, true]) {
+    const operands = Array.from({ length: count }, (_, index) => `text("Item ${index}")`);
+    if (nested) operands[1] = `(text("Nested one") ${operator} text("Nested two") ${operator} text("Nested three"))`;
+    const { dump } = await dumpSource(`equal-chain-${operator === "|=|" ? "h" : "v"}-${count}-${nested}`, `page main
 vflow(LayoutPolicy.top)
-let g = ${operands.join(` ${operator} `)}
-g.chrome.pad_x = 11
-g.chrome.pad_y = 7
+let g = place!(${operands.join(` ${operator} `)})
 ~ g.width == 1024
 ~ g.height == 640
 ~ g.left == page.left + 80
 ~ g.top == page.top - 40
-place_on!(pagectx(), g)
 end
 `);
-        const groups = groupNodes(dump);
-        assert(groups.length === (nested ? 2 : 1), "unparenthesized chain created intermediate groups");
-        const rootId = dump.placement_roots.flatMap((entry) => entry.roots)[0];
-        const g = groups.find((item) => item.id === rootId);
-        const children = dump.contains.find((entry) => entry.parent === rootId).children;
-        assert(children.length === count, "chain changed operand count");
-        assertSplitTree(dump, g);
-        assert(dump.constraints.some((item) => item.group_split && item.source_extent_factor !== 0), "n-ary cut lost its extent factor");
-      }
-    }
+    const groups = groupNodes(dump);
+    assert.equal(groups.length, nested ? 2 : 1, "unparenthesized chain created intermediate groups");
+    const rootId = dump.placement_roots.flatMap(entry => entry.roots)[0];
+    const g = groups.find(item => item.id === rootId);
+    assert.equal(g.placement.children.length, count);
+    assertSplitTree(dump, g);
+    assert(dump.constraints.some(item => item.group_split && item.source_extent_factor !== 0));
   }
-  const bound = await dumpSource("equal-bound-group", `${prelude}
-page bound
-let left = body_obj("A") |=| body_obj("B")
-let g = left |=| body_obj("C")
+  const bound = await dumpSource("equal-bound-group", `page main
+let left = text("A") |=| text("B")
+let g = place!(left |=| text("C"))
 ~ g.width == 1000
-place_on!(pagectx(), g)
 end
 `);
-  assert(groupNodes(bound.dump).length === 2, "bound group was flattened");
-  assert(node(bound.dump, "C").width > node(bound.dump, "A").width * 2, "bound group did not receive one half");
-
-  await expectFailure("equal-duplicate", `${prelude}
-page duplicate
-let a = body_obj("A")
-place_on!(pagectx(), a |=| a)
+  assert.equal(groupNodes(bound.dump).length, 2, "bound group was flattened");
+  assert(node(bound.dump, "C").width > node(bound.dump, "A").width * 2);
+  const reused = await dumpSource("equal-reused-value", `page main
+let a = text("A")
+place!(a |=| a)
 end
-`, "InvalidGroupSplit");
-  await expectFailure("group-page-selection", `${prelude}
-document
-group(select(docctx(), "document_pages"))
-end
-`, "TypeMismatch");
+`);
+  const copies = reused.dump.nodes.filter(item => item.content === "A");
+  assert.equal(copies.length, 2);
+  assert.notEqual(copies[0].id, copies[1].id);
+  assertClose(copies[0].width, copies[1].width, "reused values received unequal cells");
+  await expectFailure("group-page-selection", "document\nplace_on!(new_page(docctx(), \"main\"), group(pages(docctx())))\nend\n", "TypeMismatch");
 }
 
 async function testEqualEvaluation() {
@@ -787,15 +649,14 @@ async function testEqualEditorUpdates() {
   const expressions = ["a || b || c", "a |=| b |=| c", "(a |=| b) |=| c", "a /=/ b /=/ c", "a // b // c", "a |=| b |=| c", "a /=/ b /=/ c", "a /=/ b /=/ c", "a // b // c"];
   const sources = expressions.map((expression, index) => `${prelude}
 page editor
-let a = body_obj("Short")
-let b = body_obj("A considerably longer line")
-let c = body_obj("Third")
-let g = ${expression}
+let a = text("Short")
+let b = text("A considerably longer line")
+let c = text("Third")
+let g = place!(${expression})
 ${index < 6 ? "~ g.width == 1000" : index === 7 ? "~ g.width == 600" : ""}
 ~ g.height == 500
 ~ g.left == page.left + 80
 ~ g.top == page.top - 80
-place_on!(pagectx(), g)
 end
 `);
   const expected = [];
@@ -827,7 +688,7 @@ async function testSameDirectionBinaryGroups() {
     const { dump } = await dumpSource(operator === "||" ? "horizontal-chain" : "vertical-chain", `${prelude}
 page chain
 ${boxes}
-place_on!(pagectx(), a ${operator} b ${operator} c)
+let placed = place!(a ${operator} b ${operator} c)
 ${anchor}
 end
 `);
@@ -848,46 +709,47 @@ end
   }
 }
 
-async function testSharedObjects() {
-  const { dump } = await dumpSource("shared", `${prelude}
-page shared
-vflow(LayoutPolicy.top)
+async function testSharedValues() {
+  const { dump } = await dumpSource("shared-values", `${prelude}
+page main
 ${boxes}
-place_on!(pagectx(), a)
-place_on!(pagectx(), b)
-place_on!(pagectx(), c)
-${anchor}
-a || b
-b // c
+let first = place!(a || (b // c))
+let second = place!(b // a)
+~ first.left == page.left + 80
+~ first.top == page.top - 80
+~ second.left == first.right + 80
+~ second.top == first.top
 end
 `);
-  assertNestedFrames(dump);
-  assertNoDiagnostic(dump, "UnplacedObject");
-  assert(dump.nodes.filter((item) => item.content === "B").length === 1, "shared operand was cloned");
-  const b = node(dump, "B");
-  assert(dump.contains.filter((entry) => entry.children.includes(b.id)).length >= 3, "shared operand lost its existing memberships");
+  const roots = dump.placement_roots.flatMap(entry => entry.roots);
+  assert.equal(roots.length, 2);
+  for (const label of ["A", "B"]) {
+    const copies = dump.nodes.filter(item => boxLabel(item) === label);
+    assert.equal(copies.length, 2, `reused ${label} did not receive two placements`);
+    assert.notEqual(copies[0].id, copies[1].id);
+    assert.notEqual(copies[0].placement.parent, copies[1].placement.parent);
+  }
+  assert.equal(dump.diagnostics.length, 0);
 }
 
 async function testConstraintUpdate() {
   const { dump } = await dumpSource("updated", `${prelude}
-page update
-${boxes}
-place_on!(pagectx(), a)
-place_on!(pagectx(), b)
-place_on!(pagectx(), c)
+page main
+let placed = place!(box("A", 120, 80) || box("B", 180, 60))
+let a = first(children(placed))
+let b = first(children(placed) - selection(a))
+let c = place!(box("C", 90, 50))
 ${anchor}
-a || b
 ~!~ b.top == a.bottom - 24
 ~ c.left == page.left + 600
 ~ c.top == page.top - 80
 end
 `);
-  const a = node(dump, "A");
-  const b = node(dump, "B");
+  const a = node(dump, "A"), b = node(dump, "B");
   assertClose(b.x, a.x + a.width + gap, "vertical update changed horizontal composition");
-  assertClose(top(b), a.y - 24, "ordinary update did not replace composition alignment");
-  assert(relation(dump.overridden_constraints, b, "top", a, "top", 0)?.default_alignment, "replaced default alignment candidate was not recorded as overridden");
-  assert(!relation(dump.constraints, b, "top", a, "top", 0), "composition regenerated an overridden constraint");
+  assertClose(top(b), a.y - 24, "update did not replace alignment");
+  assert(relation(dump.overridden_constraints, b, "top", a, "top", 0)?.default_alignment);
+  assert(!relation(dump.constraints, b, "top", a, "top", 0), "overridden alignment was regenerated");
   assertClose(b.width, 180, "position update changed width");
 }
 
@@ -910,56 +772,48 @@ end
   assertClose(top(c), b.y - 12, "inner immutable spacing");
 }
 
-async function testInferredGroupConstraintUpdate() {
-  const { dump } = await dumpSource("inferred-group-update", `${prelude}
-page update_group
+async function testPlacedGroupConstraintUpdate() {
+  const { dump } = await dumpSource("placed-group-update", `${prelude}
+page main
 vflow(LayoutPolicy.top)
-let a = place_on!(pagectx(), box("A", 120, 80))
-let b = place_on!(pagectx(), box("B", 180, 60))
-~ a.left == page.left + 80
-~ a.top == page.top - 80
-let combined = a || b
-~!~ combined.left == page.left + 240
-~!~ combined.top == page.top - 160
+let placed = place!(box("A", 120, 80) || box("B", 180, 60))
+${anchor}
+~!~ placed.left == page.left + 240
+~!~ placed.top == page.top - 160
 end
 `);
-  const a = node(dump, "A");
-  const b = node(dump, "B");
-  const page = dump.nodes.find((item) => item.kind === "page");
-  assertClose(a.x, page.x + 240, "inferred group update did not move the first child horizontally");
-  assertClose(top(a), top(page) - 160, "inferred group update did not move the first child vertically");
-  assertClose(b.x, a.x + a.width + gap, "inferred group update changed the internal horizontal gap");
-  assertClose(top(b), top(a), "inferred group update changed internal top alignment");
-  assertClose(a.width, 120, "inferred group update changed the first width");
-  assertClose(a.height, 80, "inferred group update changed the first height");
-  assertClose(b.width, 180, "inferred group update changed the second width");
-  assertClose(b.height, 60, "inferred group update changed the second height");
-  assert(relation(dump.constraints, b, "left", a, "right", gap), "group update removed an internal horizontal constraint");
-  assert(relation(dump.constraints, b, "top", a, "top", 0)?.default_alignment, "group update removed internal default alignment");
-  assert(groupNodes(dump).length === 0, "updating an inferred group implicitly attached it");
-  const roots = dump.placement_roots.flatMap((entry) => entry.roots);
-  assert(JSON.stringify(roots) === JSON.stringify([a.id, b.id]), `updating an inferred group changed page placement roots: ${roots}`);
-  const updates = dump.constraint_updates.filter((item) => item.active);
-  assert(updates.length === 2 && updates[0].target_node === updates[1].target_node, "the two updates did not target the same inferred group");
-  assert(!dump.nodes.some((item) => item.id === updates[0].target_node), "updated group appeared in attached dump nodes");
-  assertNoDiagnostic(dump, "UnplacedObject");
+  const a = node(dump, "A"), b = node(dump, "B");
+  assertClose(a.x, 240, "group horizontal update");
+  assertClose(top(a), 560, "group vertical update");
+  assertClose(b.x, a.x + a.width + gap, "group update changed internal gap");
+  assertClose(top(b), top(a), "group update changed top alignment");
+  for (const [item, width, height] of [[a, 120, 80], [b, 180, 60]]) {
+    assertClose(item.width, width, "group update changed width");
+    assertClose(item.height, height, "group update changed height");
+  }
+  assert(relation(dump.constraints, b, "left", a, "right", gap));
+  assert(relation(dump.constraints, b, "top", a, "top", 0)?.default_alignment);
+  const groups = groupNodes(dump);
+  assert.equal(groups.length, 1);
+  assert.deepEqual(dump.placement_roots.flatMap(entry => entry.roots), [groups[0].id]);
+  const updates = dump.constraint_updates.filter(item => item.active);
+  assert.equal(updates.length, 2);
+  assert(updates.every(item => item.target_node === groups[0].id));
 }
 
 async function testOperandEvaluation() {
   const { dump } = await dumpSource("evaluation-order", `${prelude}
-fn mark!(label: String) -> Object
-  return place_on!(pagectx(), box(label, 120, 60))
+fn mark(label: String) -> Box
+  report_warning(label)
+  return box(label, 120, 60)
 end
-
-page evaluation
-mark!("A") || (mark!("B") // mark!("C"))
+page main
+place!(mark("A") || (mark("B") // mark("C")))
 end
 `);
-  for (const label of ["A", "B", "C"]) {
-    assert(dump.nodes.filter((item) => item.content === label).length === 1, `operand ${label} was evaluated more than once`);
-  }
-  const placementOrder = dump.placement_roots.flatMap((entry) => entry.roots).map((id) => dump.nodes.find((item) => item.id === id)?.content);
-  assert(JSON.stringify(placementOrder) === JSON.stringify(["A", "B", "C"]), `operands were not evaluated exactly once from left to right: ${JSON.stringify(placementOrder)}`);
+  assert.deepEqual(dump.diagnostics.filter(item => item.code === "UserReport").map(item => item.message), ["A", "B", "C"]);
+  for (const label of ["A", "B", "C"]) assert.equal(dump.nodes.filter(item => boxLabel(item) === label).length, 1);
+  assert.equal(dump.placement_roots.flatMap(entry => entry.roots).length, 1);
 }
 
 async function testFixedStdlibResolution() {
@@ -983,13 +837,13 @@ end
 async function testImportedFunctionComposition() {
   const { dump } = await dumpSource("imported-composition", `import ./component as component
 ${prelude}
-page imported
+page main
 vflow(LayoutPolicy.top)
 ${boxes}
-place_on!(pagectx(), component::combine(a, b, c))
+let placed = place!(component::combine(a, b, c))
 ${anchor}
 end
-`, { "component.ss": `fn combine(a: Object, b: Object, c: Object) -> Object
+`, { "component.ss": `fn combine<T>(a: T, b: T, c: T) -> Group<T, Group<T, T>>
   return a || (b // c)
 end
 ` });
@@ -999,58 +853,40 @@ end
 async function testInvalidOperands() {
   for (const operator of ["||", "//", "|=|", "/=/"]) {
     for (const [name, operand] of [
-      ["number", "1"],
-      ["string", '"wrong"'],
-      ["boolean", "true"],
-      ["page", "pagectx()"],
-      ["selection", 'select(pagectx(), "page_objects_by_role", "body")'],
-      ["optional", "maybe()"],
+      ["number", "1"], ["string", '"wrong"'], ["boolean", "true"],
+      ["page", "pagectx()"], ["selection", "select<Text>(pagectx())"], ["optional", "maybe()"],
     ]) {
-      await expectFailure(`invalid-${operator.replaceAll("/", "v").replaceAll("|", "h")}-${name}`, `${prelude}
-fn maybe() -> Object?
-  return none
-end
-page invalid
-let a = body_obj!("A")
+      await expectFailure(`invalid-${operator.replaceAll("/", "v").replaceAll("|", "h")}-${name}`, `fn maybe() -> Text? = none
+page main
+let a = text("A")
 a ${operator} ${operand}
 end
-`, "TypeMismatch");
+`, "InvalidGroupInput");
     }
   }
 }
 
 async function testConflictsAndMixedDirections() {
   await expectFailure("conflict", `${prelude}
-page conflict
-let a = place_on!(pagectx(), box("A", 120, 80))
-let b = place_on!(pagectx(), box("B", 180, 60))
-a || b
+page main
+let placed = place!(box("A", 120, 80) || box("B", 180, 60))
+let a = first(children(placed))
+let b = first(children(placed) - selection(a))
 ~ b.left == a.right + 64
 end
 `, "ConstraintConflict");
-  await expectFailure("cross-page-composition", `${prelude}
-page first
-place_on!(pagectx(), new("A", "first_box", "text"))
-end
-page second
-place_on!(pagectx(), new("B", "second_box", "text"))
-end
-document
-let a = first(objs_all("first_box"))
-let b = first(objs_all("second_box"))
-a || b
+  await expectFailure("cross-page-constraint", `document
+let first_page = new_page(docctx(), "first")
+let second_page = new_page(docctx(), "second")
+let a = place_on!(first_page, text("A"))
+let b = place_on!(second_page, text("B"))
+first_page ~ b.left == a.right + 32
 end
 `, "CrossPageConstraint");
-  await expectFailure("self-composition", `${prelude}
-page conflict
-let a = place_on!(pagectx(), box("A", 120, 80))
-a || a
-end
-`);
   await expectFailure("mixed-directions", `${prelude}
-page mixed
+page main
 ${boxes}
-place_on!(pagectx(), a || b // c)
+place!(a || b // c)
 end
 `);
 }
@@ -1066,17 +902,17 @@ async function testFixture() {
   caseCount += 1;
 }
 
-function policyPairSource({ documentPolicy, pagePolicy, before = "", after = "", expression = "a || b", fixedLeft = true } = {}) {
+function policyPairSource({ documentPolicy, pagePolicy, before = "", after = "", fixedLeft = true } = {}) {
   return `${prelude}
 ${documentPolicy ? `document\nvflow_doc(LayoutPolicy.${documentPolicy})\nend\n` : ""}
-page policy
+page main
 ${pagePolicy ? `vflow(LayoutPolicy.${pagePolicy})` : ""}
-let a = place_on!(pagectx(), box("A", 120, 80))
-let b = place_on!(pagectx(), box("B", 180, 60))
+let placed = place!(box("A", 120, 80) || box("B", 180, 60))
+let a = first(children(placed))
+let b = first(children(placed) - selection(a))
+${before}
 ~ a.left == page.left + 80
 ${fixedLeft ? "~ a.top == page.top - 80" : ""}
-${before}
-${expression}
 ${after}
 end
 `;
@@ -1101,8 +937,8 @@ async function testHorizontalPolicyVariants() {
   for (const policy of ["top", "top_flow", "center", "center_stack"]) {
     const { dump } = await dumpSource(`policy-${policy}`, policyPairSource({ pagePolicy: policy }));
     assertHorizontalPolicy(dump, policy.startsWith("center"));
-    assert(groupNodes(dump).length === 0, "policy alignment placed an inferred group");
-    assert(dump.placement_roots.flatMap((entry) => entry.roots).length === 2, "policy alignment changed placement roots");
+    assert.equal(groupNodes(dump).length, 1, "policy lost its placed group");
+    assert.equal(dump.placement_roots.flatMap(entry => entry.roots).length, 1, "policy changed placement roots");
   }
 }
 
@@ -1122,53 +958,34 @@ async function testHorizontalPolicyInheritance() {
 }
 
 async function testNestedHorizontalPolicy() {
-  for (const placement of ["children", "combined"]) {
-    const { dump } = await dumpSource(`policy-nested-${placement}`, `${prelude}
-page nested_policy
+  const { dump } = await dumpSource("policy-nested", `${prelude}
+page main
 vflow(LayoutPolicy.center)
 ${boxes}
-${placement === "children" ? "place_on!(pagectx(), a)\nplace_on!(pagectx(), b)\nplace_on!(pagectx(), c)\na || (b // c)" : "place_on!(pagectx(), a || (b // c))"}
+let placed = place!(a || (b // c))
 ${anchor}
 end
 `);
-    const a = node(dump, "A");
-    const b = node(dump, "B");
-    const c = node(dump, "C");
-    assertClose(b.x, a.x + a.width + gap, "centered nested horizontal gap");
-    assertClose(c.x, b.x, "centered nested right-column alignment");
-    assertClose(top(c), b.y - gap, "centered nested vertical gap");
-    assertClose(centerY(a), (top(b) + c.y) / 2, "left operand was not centered against the complete right group");
-    assert(Math.abs(centerY(a) - centerY(b)) > 1, "nested policy aligned with only the first right child");
-    for (const [item, width, height] of [[a, 120, 80], [b, 180, 60], [c, 90, 50]]) {
-      assertClose(item.width, width, "nested policy changed width");
-      assertClose(item.height, height, "nested policy changed height");
-    }
-    const roots = dump.placement_roots.flatMap((entry) => entry.roots);
-    assert(roots.length === (placement === "children" ? 3 : 1), "nested policy changed placement roots");
-    assert(groupNodes(dump).length === (placement === "children" ? 0 : 2), "nested policy changed group attachment");
-    assertNoDiagnostic(dump, "UnplacedObject");
-  }
+  const a = node(dump, "A"), b = node(dump, "B"), c = node(dump, "C");
+  assertClose(b.x, a.x + a.width + gap, "nested horizontal gap");
+  assertClose(c.x, b.x, "nested column alignment");
+  assertClose(top(c), b.y - gap, "nested vertical gap");
+  assertClose(centerY(a), (top(b) + c.y) / 2, "left must center against entire right group");
+  assert(Math.abs(centerY(a) - centerY(b)) > 1);
+  assert.equal(dump.placement_roots.flatMap(entry => entry.roots).length, 1);
+  assert.equal(groupNodes(dump).length, 2);
 }
 
 async function testPolicyAfterPagePlacement() {
-  const { dump } = await dumpSource("policy-after-page-placement", `${prelude}
+  const { dump } = await dumpSource("policy-after-placement", `${prelude}
 document
-let a = new("A", "body", "text")
-let b = new("B", "body", "text")
-let combined = a || b
 let destination = new_page(docctx(), "generated")
-destination ~ constraints(
-  (a.right == a.left + 120),
-  (a.top == a.bottom + 80),
-  (b.right == b.left + 180),
-  (b.top == b.bottom + 60)
-)
+place_on!(destination, box("A", 120, 80) || box("B", 180, 60))
 destination.layout_v = LayoutPolicy.center
-place_on!(destination, combined)
 end
 `);
   assertHorizontalPolicy(dump, true);
-  assert(dump.placement_roots.flatMap((entry) => entry.roots).length === 1, "deferred policy changed explicit group placement");
+  assert.equal(dump.placement_roots.flatMap(entry => entry.roots).length, 1);
 }
 
 async function testExplicitVerticalPositionPriority() {
@@ -1219,53 +1036,31 @@ async function testDefaultAlignmentUpdates() {
 }
 
 async function testCenteredChainAndVerticalComposition() {
-  const { dump } = await dumpSource("policy-centered-chain", `${prelude}
-page chain_policy
+  const { dump } = await dumpSource("centered-chain", `${prelude}
+page main
 vflow(LayoutPolicy.center_stack)
 ${boxes}
-place_on!(pagectx(), a || b || c)
+let placed = place!(a || b || c)
 ${anchor}
 end
 `);
-  const a = node(dump, "A");
-  const b = node(dump, "B");
-  const c = node(dump, "C");
-  assertClose(centerY(b), centerY(a), "first pair in chain did not center");
-  assertClose(centerY(c), centerY(a), "last operand did not center against the preceding group");
+  const a = node(dump, "A"), b = node(dump, "B"), c = node(dump, "C");
+  assertClose(centerY(b), centerY(a), "first pair did not center");
+  assertClose(centerY(c), centerY(a), "last operand did not center against complete group");
   assertClose(b.x, a.x + 120 + gap, "first chain gap");
   assertClose(c.x, b.x + 180 + gap, "second chain gap");
-  assert(groupNodes(dump).length === 2, "center policy flattened the binary groups");
-
-  const vertical = await dumpSource("policy-vertical-unchanged", `${prelude}
-page vertical_policy
+  assert.equal(groupNodes(dump).length, 2);
+  const vertical = await dumpSource("vertical-policy", `${prelude}
+page main
 vflow(LayoutPolicy.center)
-let a = place_on!(pagectx(), box("A", 120, 80))
-let b = place_on!(pagectx(), box("B", 180, 60))
+let placed = place!(box("A", 120, 80) // box("B", 180, 60))
 ${anchor}
-a // b
 end
 `);
-  const upper = node(vertical.dump, "A");
-  const lower = node(vertical.dump, "B");
-  assertClose(lower.x, upper.x, "horizontal policy changed vertical composition left alignment");
-  assertClose(top(lower), upper.y - gap, "horizontal policy changed vertical composition gap");
-  assert(relation(vertical.dump.constraints, lower, "top", upper, "bottom", -gap), "vertical composition lost its ordinary position constraint");
-}
-
-async function testOrdinaryGroupPolicyIsolation() {
-  const sourceOptions = {
-    pagePolicy: "center",
-    before: "~ b.left == a.right + 32",
-  };
-  const plain = await dumpSource("policy-ordinary-plain", policyPairSource({ ...sourceOptions, expression: "" }));
-  const grouped = await dumpSource("policy-ordinary-group", policyPairSource({ ...sourceOptions, expression: "group(a, b)" }));
-  for (const label of ["A", "B"]) {
-    for (const field of ["x", "y", "width", "height"]) {
-      assertClose(node(grouped.dump, label)[field], node(plain.dump, label)[field], `ordinary group changed policy placement ${label}.${field}`);
-    }
-  }
-  assert(Math.abs(centerY(node(grouped.dump, "A")) - centerY(node(grouped.dump, "B"))) > 1, "ordinary horizontal constraints acquired composition alignment");
-  assertNoDiagnostic(grouped.dump, "UnplacedObject");
+  const upper = node(vertical.dump, "A"), lower = node(vertical.dump, "B");
+  assertClose(lower.x, upper.x, "horizontal policy changed vertical alignment");
+  assertClose(top(lower), upper.y - gap, "vertical gap");
+  assert(relation(vertical.dump.constraints, lower, "top", upper, "bottom", -gap));
 }
 
 async function testFixedRightDoesNotMoveLeft() {
@@ -1300,13 +1095,18 @@ function assertNestedFrames(dump, horizontalGap = gap, verticalGap = gap) {
 }
 
 function node(dump, content) {
-  const item = dump.nodes.find((candidate) => candidate.content === content);
-  assert(item, `missing object ${JSON.stringify(content)}`);
-  return item;
+  const found = dump.nodes.find(item => item.content === content || boxLabel(item) === content);
+  assert(found, `missing node ${content}`);
+  return found;
+}
+
+function boxLabel(item) {
+  const input = item.placement?.input;
+  return input?.type?.name === "Box" ? input.fields.find(field => field.name === "label")?.value.value : undefined;
 }
 
 function groupNodes(dump) {
-  return dump.nodes.filter((item) => item.kind === "object" && (item.role === "group" || item.placement?.input.kind === "group"));
+  return dump.nodes.filter(item => item.placement?.input.kind === "group");
 }
 
 function relation(constraints, target, targetAnchor, source, sourceAnchor, offset) {
