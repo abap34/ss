@@ -444,6 +444,18 @@ pub const PageLayoutGraph = struct {
         return false;
     }
 
+    fn hasSplitChildrenOnAxis(self: *const PageLayoutGraph, node_id: NodeId, axis: Axis) bool {
+        for (self.constraints) |constraint| {
+            if (!constraint.group_split or constraint.default_alignment or constraint.role == .size) continue;
+            if (anchorAxis(constraint.target_anchor) != axis) continue;
+            switch (constraint.source) {
+                .page => {},
+                .node => |source| if (source.node_id == node_id) return true,
+            }
+        }
+        return false;
+    }
+
     pub fn hasSplitChildren(self: *const PageLayoutGraph, node_id: NodeId) bool {
         for (self.constraints) |constraint| {
             if (!constraint.group_split or constraint.role == .size) continue;
@@ -789,15 +801,27 @@ pub const ComponentSet = struct {
 
     pub fn axisFallbackRootIndex(self: *const ComponentSet, state: *Workspace, component_root: usize) ?usize {
         var fallback: ?usize = null;
+        var split_frame: ?usize = null;
         for (self.memberIndexes(component_root)) |index| {
             const child_id = self.workspace.nodeAt(index);
             const axis_state = self.workspace.states[index];
             const node = state.source.getNode(child_id) orelse continue;
-            if (isGroupNode(node)) continue;
+            if (isGroupNode(node)) {
+                // Equal cuts position every child relative to their frame. Seed
+                // that frame when it has a width but no horizontal origin;
+                // choosing an arbitrary cell can place earlier cells off-page.
+                if (self.workspace.axis == .horizontal and axis_state.size != null and
+                    axis_state.start == null and axis_state.end == null and axis_state.center == null and
+                    self.workspace.graph.hasSplitChildrenOnAxis(child_id, .horizontal))
+                {
+                    split_frame = index;
+                }
+                continue;
+            }
             if (fallback == null) fallback = index;
             if (axis_state.start == null and !self.workspace.graph.hasTargetConstraint(state, child_id, self.workspace.axis, self.workspace.soft_constraints)) return index;
         }
-        return fallback;
+        return split_frame orelse fallback;
     }
 
     fn unionContainment(self: *ComponentSet, state: *Workspace) !void {
