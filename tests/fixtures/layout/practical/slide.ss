@@ -22,7 +22,7 @@ end
 
 page columns
   vflow(column_policy)
-  head!("A description beside two supporting blocks")
+  heading!("A description beside two supporting blocks")
   let description_content = <<
 ## Collection notes
 
@@ -54,7 +54,7 @@ Each batch produces one compact report with a count and a short explanation.
 end
 
 page matrix
-  head!("Four blocks with nested padding")
+  heading!("Four blocks with nested padding")
   let a = text <<
 ## Observe
 
@@ -93,7 +93,7 @@ Read the result and confirm the next step.
 end
 
 page table_code
-  head!("A wrapped table and a short program")
+  heading!("A wrapped table and a short program")
   let table = text <<
 | stage | observation |
 | --- | --- |
@@ -140,7 +140,7 @@ page flow
 end
 
 page image_caption
-  head!("A diagram with a caption and a side note")
+  heading!("A diagram with a caption and a side note")
   let diagram = image("diagram.svg")
   ~ diagram.width == 640
   let caption = note("Diagram caption: the three invented bars illustrate increasing counts and have no connection to measured data.")
@@ -162,7 +162,7 @@ Each bar uses the same baseline. The caption stays below the complete image.
 end
 
 page cards
-  head!("Three cards inside a movable ordinary group")
+  heading!("Three cards inside a movable ordinary group")
   let a = card("Collect", "Read a small batch of records.")
   let b = card("Transform", "Preserve the order while checking entries.")
   let c = card("Inspect", "Review the resulting report.")

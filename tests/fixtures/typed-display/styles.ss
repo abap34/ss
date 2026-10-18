@@ -1,5 +1,5 @@
 import std:text as typography
-import std:themes/academic as academic
+import std:themes/default as base
 import std:layout/types as layout
 
 fn/! styled(content: String, style: typography::TextBlockStyle) -> typography::Text
@@ -7,7 +7,7 @@ fn/! styled(content: String, style: typography::TextBlockStyle) -> typography::T
 end
 
 page styles
-  let theme = academic::default_theme()
+  let theme = base::default_theme()
   let body = theme.body with {
     text.parse = typography::TextParseMode.block
     text.size = 22

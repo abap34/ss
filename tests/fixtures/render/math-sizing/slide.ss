@@ -1,7 +1,7 @@
 import std:themes/default as *
 
 page integration
-  head! "Monte Carlo integration"
+  heading! "Monte Carlo integration"
   let body = text! <<
 Let $f$ return 1 inside the circle and 0 outside.
 

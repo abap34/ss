@@ -2,17 +2,8 @@ import std:internal/classes
 import std:text/style
 import std:code/style
 import std:assets/style
-import std:components/figure/style
 import std:components/toc/style
-import std:templates/slide/style
-import std:components/callout/style
 import std:text/content as { Text }
-
-type GeneratedStyle {
-  pageno: TextBlockStyle = TextBlockStyle {}
-  footer: TextBlockStyle = TextBlockStyle {}
-  watermark: TextBlockStyle = TextBlockStyle {}
-}
 
 type ThemeOptions {
   font_family: String? = none
@@ -30,16 +21,13 @@ type Theme {
   h4: TextBlockStyle = TextBlockStyle {}
   h5: TextBlockStyle = TextBlockStyle {}
   h6: TextBlockStyle = TextBlockStyle {}
-  head: HeadStyle = HeadStyle {}
   note: TextBlockStyle = TextBlockStyle {}
   byline: TextBlockStyle = TextBlockStyle {}
   label: TextBlockStyle = TextBlockStyle {}
   citation: TextBlockStyle = TextBlockStyle {}
   code: CodeBlockStyle = CodeBlockStyle {}
-  figure: FigureBlockStyle = FigureBlockStyle {}
   image: AssetBlockStyle = AssetBlockStyle {}
   pdf: AssetBlockStyle = AssetBlockStyle {}
+  page_number: TextBlockStyle = TextBlockStyle {}
   toc: TocStyle = TocStyle {}
-  generated: GeneratedStyle = GeneratedStyle {}
-  callout: MarkedCalloutStyle = MarkedCalloutStyle {}
 }

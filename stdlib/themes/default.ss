@@ -24,7 +24,7 @@ fn default_theme(options: ThemeOptions = ThemeOptions {}) -> Theme
       right_inset = 72
     }
   }
-  return Theme {
+  let theme = Theme {
     body = TextBlockStyle {
       text = base_text with {
         parse = TextParseMode.block
@@ -141,20 +141,6 @@ fn default_theme(options: ThemeOptions = ThemeOptions {}) -> Theme
         right_inset = 96
       }
     }
-    head = HeadStyle {
-      title = heading
-      rule = RuleBlockStyle {
-        rule = RuleStyle {
-          stroke = options.accent_color ?? c"0.32,0.50,0.72"
-          line_width = 2.0
-        }
-        layout = LayoutStyle {
-          spacing_after = 48
-        }
-      }
-      top = 56
-      gap = 0
-    }
     note = TextBlockStyle {
       text = base_text with {
         size = 15
@@ -232,28 +218,6 @@ fn default_theme(options: ThemeOptions = ThemeOptions {}) -> Theme
         pad_y = 12
       }
     }
-    figure = FigureBlockStyle {
-      text = base_text with {
-        parse = TextParseMode.block
-        size = 24
-        line_height = 31
-        color = options.text_color ?? c"0.07,0.08,0.10"
-        markdown.bold_color = options.accent_color ?? c"0.05,0.30,0.58"
-      }
-      layout = LayoutStyle {
-        spacing_after = 34
-        x = 102
-        right_inset = 102
-      }
-      chrome = ChromeStyle {
-        fill = c"0.997,0.999,1.000"
-        stroke = c"0.78,0.84,0.92"
-        line_width = 0.9
-        radius = 8
-        pad_x = 16
-        pad_y = 12
-      }
-    }
     image = AssetBlockStyle {
       layout = LayoutStyle {
         spacing_after = 30
@@ -293,88 +257,30 @@ fn default_theme(options: ThemeOptions = ThemeOptions {}) -> Theme
           right_inset = 96
         }
       }
-
     }
-    callout = MarkedCalloutStyle {
+    page_number = TextBlockStyle {
       text = base_text with {
-        size = 24
-        line_height = 31
-        color = options.text_color ?? c"0.07,0.08,0.10"
+        size = 13
+        line_height = 16
+        color = options.muted_color ?? c"0.5,0.5,0.5"
       }
-      target = base_text with {
-        font.weight = 700
-        size = 24
-        line_height = 31
-        color = options.accent_color ?? c"0.04,0.06,0.09"
-      }
-      target_chrome = ChromeStyle {
-        fill = none
-        stroke = none
-        line_width = 0
-        radius = 0
-        pad_x = 0
-        pad_y = 0
-      }
-      callout = CalloutStyle {
-        stroke = options.accent_color ?? c"0.32,0.50,0.72"
-        line_width = 1.6
-        marker_size = 10
-        text = base_text with {
-          size = 17
-          line_height = 25
-          color = options.muted_color ?? c"0.30,0.34,0.40"
-        }
-        chrome = ChromeStyle {
-          fill = none
-          stroke = c"0.72,0.80,0.90"
-          line_width = 1
-          radius = 8
-          pad_x = 18
-          pad_y = 12
-        }
+      layout = LayoutStyle {
+        spacing_after = 0
+        x = 60
+        right_inset = 24
+        wrap = WrapMode.off
+        fit = FitPolicy.error
       }
     }
-    generated = GeneratedStyle {
-      pageno = TextBlockStyle {
-        text = base_text with {
-          size = 13
-          line_height = 16
-          color = options.muted_color ?? c"0.5,0.5,0.5"
-        }
-        layout = LayoutStyle {
-          spacing_after = 0
-          x = 60
-          right_inset = 24
-          wrap = WrapMode.off
-          fit = FitPolicy.error
-        }
-      }
-      footer = TextBlockStyle {
-        text = base_text with {
-          size = 12
-          line_height = 15
-          color = options.muted_color ?? c"0.42,0.42,0.42"
-        }
-        layout = LayoutStyle {
-          spacing_after = 0
-          x = 72
-          right_inset = 160
-          wrap = WrapMode.off
-        }
-      }
-      watermark = TextBlockStyle {
-        text = base_text with {
-          size = 72
-          line_height = 80
-          color = options.muted_color ?? c"0.85,0.85,0.85"
-        }
-        layout = LayoutStyle {
-          spacing_after = 0
-          x = 0
-          right_inset = 0
-          wrap = WrapMode.off
-        }
-      }
+  }
+  return theme with {
+    body.headings = MarkdownHeadingStyles {
+      h1 = MarkdownHeadingStyle { text = theme.h1.text }
+      h2 = MarkdownHeadingStyle { text = theme.h2.text }
+      h3 = MarkdownHeadingStyle { text = theme.h3.text }
+      h4 = MarkdownHeadingStyle { text = theme.h4.text }
+      h5 = MarkdownHeadingStyle { text = theme.h5.text }
+      h6 = MarkdownHeadingStyle { text = theme.h6.text }
     }
   }
 end

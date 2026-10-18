@@ -1,9 +1,6 @@
 ;; Common authoring functions. Implementation callbacks stay in their modules.
 import std:internal/classes
 import std:theme/types
-import std:templates/slide
-import std:components/box
-import std:components/figure
 import std:layout as {
   place!,
   hflow,
@@ -67,33 +64,10 @@ import std:assets as {
   icon,
   icon!,
 }
-import std:components/box as {
-  box,
-  box!,
-  box_parts,
-}
-import std:components/figure as {
-  figure,
-  figure!,
-  figure_parts,
-}
-import std:components/callout as {
-  callout,
-  callout!,
-  callout_parts,
-}
 import std:components/toc as {
   toc,
   toc!,
   Toc,
-}
-import std:templates/slide as {
-  head,
-  head!,
-  annotate,
-  annotate!,
-  cols2,
-  cols2_parts,
 }
 import std:document as {
   Heading,
@@ -106,9 +80,6 @@ import std:document as {
   pageno,
   pageno!,
   pagenos!,
-  footers!,
-  watermark!,
-  logos!,
   need_titles,
   numbered_item,
   numbered_item!,
@@ -206,23 +177,6 @@ import std:graphics/paint as {
   stipple_sparse_fill,
   stipple_fill,
   stipple_dense_fill,
-}
-import std:graphics/connectors as {
-  default_connector_style,
-  connect,
-  connect!,
-  straight_connector,
-  straight_connector!,
-  horizontal_connector,
-  horizontal_connector!,
-  vertical_connector,
-  vertical_connector!,
-  curve_connector,
-  curve_connector!,
-  arrow_connector,
-  arrow_connector!,
-  double_arrow_connector,
-  double_arrow_connector!,
 }
 import std:internal/objects as {
   obj,

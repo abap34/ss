@@ -1,5 +1,5 @@
 page demo
-  let head_item = head! <<
+  let head_item = heading! <<
   Move me
   >>
   ~!~ head_item.left == page.left + 120

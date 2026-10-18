@@ -21,7 +21,7 @@ fn footer_number(page: Page, document: Document) -> String
   return body_page_number(page, document) ++ "/" ++ str(page_count(document) - 1)
 end
 
-const footer: document_api::PageNumber = document_api::pageno(theme.generated.pageno, footer_number)
+const footer: document_api::PageNumber = document_api::pageno(theme.page_number, footer_number)
 
 page cover
   let title = place!(text_api::Text {

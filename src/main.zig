@@ -426,13 +426,13 @@ fn starterSlideTemplate() []const u8 {
     \\import std:themes/default as *
     \\
     \\page title
-    \\title!("Hello, ss")
-    \\subtitle!("Write slides as programs.")
-    \\byline!("ss init")
+    \\text!("Hello, ss", default_theme().h1)
+    \\text!("Write slides as programs.", default_theme().h2)
+    \\text!("ss init", default_theme().byline)
     \\end
     \\
     \\page body
-    \\let title = head! "First slide"
+    \\let title = heading! "First slide"
     \\let body = text! <<
     \\- Edit slide.ss.
     \\- Run `ss render --project . --output deck.pdf`.

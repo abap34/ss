@@ -46,5 +46,11 @@ end
 
 document
 pagenos!()
-footers!("Page anchors and automatic placement")
+foreach(pages(docctx()), (p: Page) |-> add_footer!(p))
+end
+
+fn add_footer!(p: Page) -> Void
+  let footer = place_on!(p, text("Page anchors and automatic placement", TextBlockStyle {} with { text.size = 12 }))
+  p ~ footer.left == p.left + 72
+  p ~ footer.bottom == p.bottom + 20
 end

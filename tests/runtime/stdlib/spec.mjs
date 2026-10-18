@@ -140,7 +140,7 @@ end
     for (const number of numbers) assert.equal(number.role, null);
   }
 
-  for (const name of ['default', 'academic', 'pop']) {
+  for (const name of ['default']) {
     const themed = await dump(`import std:themes/${name} as chosen
  document
  set_theme(chosen::default_theme() with { body.text.size = 27 })
