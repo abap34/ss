@@ -80,6 +80,20 @@ pub fn resolveForNode(allocator: std.mem.Allocator, state: anytype, node: *const
     var env = Resolved.init();
     errdefer env.deinit(allocator);
 
+    if (node.placement) |placement| {
+        if (placement.display == .native and placement.display.native == .latex) {
+            const config = placement.value.record.field("config") orelse return error.InvalidNativeDisplay;
+            if (config != .record) return error.InvalidNativeDisplay;
+            const engine = config.record.field("engine") orelse return error.InvalidNativeDisplay;
+            if (engine != .enum_case) return error.InvalidNativeDisplay;
+            env.latex_engine = LatexEngine.parse(engine.enum_case.case_name) orelse return error.InvalidNativeDisplay;
+            const preamble = config.record.field("preamble") orelse return error.InvalidNativeDisplay;
+            if (preamble != .string) return error.InvalidNativeDisplay;
+            if (preamble.string.len != 0) try env.addLatexPreamble(allocator, .text, preamble.string);
+            return env;
+        }
+    }
+
     if (state.getNode(state.graph.document_id)) |document| {
         try applyNode(allocator, &env, document);
     }

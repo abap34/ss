@@ -91,8 +91,7 @@ const Contract = struct {
     module: []const u8,
     name: []const u8,
     string_fields: []const []const u8,
-    style_module: []const u8,
-    style_name: []const u8,
+    record_fields: []const struct { field: []const u8, module: []const u8, name: []const u8 },
 };
 
 fn contract(kind: Kind) Contract {
@@ -101,29 +100,34 @@ fn contract(kind: Kind) Contract {
             .module = "std:text/content",
             .name = "Text",
             .string_fields = &.{"content"},
-            .style_module = "std:text/style",
-            .style_name = "TextBlockStyle",
+            .record_fields = &.{.{ .field = "style", .module = "std:text/style", .name = "TextBlockStyle" }},
         },
         .image => .{
             .module = "std:assets/content",
             .name = "Image",
             .string_fields = &.{"path"},
-            .style_module = "std:assets/style",
-            .style_name = "AssetBlockStyle",
+            .record_fields = &.{.{ .field = "style", .module = "std:assets/style", .name = "AssetBlockStyle" }},
         },
         .code => .{
             .module = "std:code/content",
             .name = "Code",
             .string_fields = &.{ "source", "language" },
-            .style_module = "std:code/style",
-            .style_name = "CodeBlockStyle",
+            .record_fields = &.{.{ .field = "style", .module = "std:code/style", .name = "CodeBlockStyle" }},
         },
         .pdf => .{
             .module = "std:assets/content",
             .name = "Pdf",
             .string_fields = &.{"path"},
-            .style_module = "std:assets/style",
-            .style_name = "AssetBlockStyle",
+            .record_fields = &.{.{ .field = "style", .module = "std:assets/style", .name = "AssetBlockStyle" }},
+        },
+        .latex => .{
+            .module = "std:math/content",
+            .name = "Latex",
+            .string_fields = &.{"source"},
+            .record_fields = &.{
+                .{ .field = "style", .module = "std:math/style", .name = "LatexBlockStyle" },
+                .{ .field = "config", .module = "std:math/types", .name = "LatexConfig" },
+            },
         },
     };
 }
@@ -147,8 +151,10 @@ pub fn validateType(state: anytype, ty: ast.Type, kind: Kind) !void {
         const field = index.recordField(id, name) orelse return error.InvalidNativeDisplay;
         if (!ast.Type.eql(field.value_type, ast.Type.string)) return error.InvalidNativeDisplay;
     }
-    const style = index.recordField(id, "style") orelse return error.InvalidNativeDisplay;
-    if (!isLibraryType(state, style.value_type, expected.style_module, expected.style_name)) return error.InvalidNativeDisplay;
+    for (expected.record_fields) |record| {
+        const field = index.recordField(id, record.field) orelse return error.InvalidNativeDisplay;
+        if (!isLibraryType(state, field.value_type, record.module, record.name)) return error.InvalidNativeDisplay;
+    }
 }
 
 pub fn validateValue(state: anytype, value: model.Value, kind: Kind) !void {
@@ -162,6 +168,8 @@ pub fn validateValue(state: anytype, value: model.Value, kind: Kind) !void {
         const field = record.field(name) orelse return error.InvalidNativeDisplay;
         if (field != .string) return error.InvalidNativeDisplay;
     }
-    const style = record.field("style") orelse return error.InvalidNativeDisplay;
-    if (style != .record or !isLibraryType(state, style.record.ty, expected.style_module, expected.style_name)) return error.InvalidNativeDisplay;
+    for (expected.record_fields) |expected_record| {
+        const field = record.field(expected_record.field) orelse return error.InvalidNativeDisplay;
+        if (field != .record or !isLibraryType(state, field.record.ty, expected_record.module, expected_record.name)) return error.InvalidNativeDisplay;
+    }
 }

@@ -197,6 +197,7 @@ pub const EvalContext = struct {
                 }
                 const payload_kind: core.PayloadKind = switch (kind) {
                     .text, .code => .text,
+                    .latex => .latex,
                     .image => .image_ref,
                     .pdf => .pdf_ref,
                 };
@@ -213,7 +214,7 @@ pub const EvalContext = struct {
                     }
                 }
                 node.object_kind = switch (kind) {
-                    .text, .code => .text,
+                    .text, .code, .latex => .text,
                     .image, .pdf => .asset,
                 };
                 node.payload_kind = payload_kind;
