@@ -194,7 +194,7 @@ pub fn prepareObjectWithRender(
         if (text_layout) |*layout| layout.deinit(allocator);
     }
     const parse_mode = markdown.parseModeForNode(state, node);
-    const content = if (uses_asset_content) node.content orelse "" else model.nodeDisplayContent(node);
+    const content = if (uses_asset_content) model.nodeContent(node) orelse "" else model.nodeDisplayContent(node);
     switch (render.kind) {
         .text => switch (parse_mode) {
             .none => {},

@@ -80,10 +80,40 @@ fn isLibraryType(state: anytype, ty: ast.Type, spec: []const u8, name: []const u
     return module.kind == .library and std.mem.eql(u8, module.spec, spec) and std.mem.eql(u8, id.name, name);
 }
 
+const Contract = struct {
+    module: []const u8,
+    name: []const u8,
+    content_field: []const u8,
+    style_module: []const u8,
+    style_name: []const u8,
+};
+
+fn contract(kind: Kind) Contract {
+    return switch (kind) {
+        .text => .{
+            .module = "std:text/content",
+            .name = "Text",
+            .content_field = "content",
+            .style_module = "std:text/style",
+            .style_name = "TextBlockStyle",
+        },
+        .image => .{
+            .module = "std:assets/content",
+            .name = "Image",
+            .content_field = "path",
+            .style_module = "std:assets/style",
+            .style_name = "AssetBlockStyle",
+        },
+    };
+}
+
 /// Renderer leaves are identified by their defining module and nominal type,
 /// never by a role, field shape, or an unqualified user-defined name.
 pub fn kindForType(state: anytype, ty: ast.Type) ?Kind {
-    if (isLibraryType(state, ty, "std:text/content", "Text")) return .text;
+    inline for (std.meta.tags(Kind)) |kind| {
+        const expected = contract(kind);
+        if (isLibraryType(state, ty, expected.module, expected.name)) return kind;
+    }
     return null;
 }
 
@@ -91,14 +121,11 @@ pub fn validateType(state: anytype, ty: ast.Type, kind: Kind) !void {
     if (kindForType(state, ty) != kind) return error.InvalidNativeDisplay;
     const id = ty.nominalId().?;
     const index = state.declaration_index;
-    switch (kind) {
-        .text => {
-            const content = index.recordField(id, "content") orelse return error.InvalidNativeDisplay;
-            if (!ast.Type.eql(content.value_type, ast.Type.string)) return error.InvalidNativeDisplay;
-            const style = index.recordField(id, "style") orelse return error.InvalidNativeDisplay;
-            if (!isLibraryType(state, style.value_type, "std:text/style", "TextBlockStyle")) return error.InvalidNativeDisplay;
-        },
-    }
+    const expected = contract(kind);
+    const content = index.recordField(id, expected.content_field) orelse return error.InvalidNativeDisplay;
+    if (!ast.Type.eql(content.value_type, ast.Type.string)) return error.InvalidNativeDisplay;
+    const style = index.recordField(id, "style") orelse return error.InvalidNativeDisplay;
+    if (!isLibraryType(state, style.value_type, expected.style_module, expected.style_name)) return error.InvalidNativeDisplay;
 }
 
 pub fn validateValue(state: anytype, value: model.Value, kind: Kind) !void {
@@ -107,12 +134,9 @@ pub fn validateValue(state: anytype, value: model.Value, kind: Kind) !void {
         else => return error.InvalidNativeDisplay,
     };
     try validateType(state, record.ty, kind);
-    switch (kind) {
-        .text => {
-            const content = record.field("content") orelse return error.InvalidNativeDisplay;
-            if (content != .string) return error.InvalidNativeDisplay;
-            const style = record.field("style") orelse return error.InvalidNativeDisplay;
-            if (style != .record or !isLibraryType(state, style.record.ty, "std:text/style", "TextBlockStyle")) return error.InvalidNativeDisplay;
-        },
-    }
+    const expected = contract(kind);
+    const content = record.field(expected.content_field) orelse return error.InvalidNativeDisplay;
+    if (content != .string) return error.InvalidNativeDisplay;
+    const style = record.field("style") orelse return error.InvalidNativeDisplay;
+    if (style != .record or !isLibraryType(state, style.record.ty, expected.style_module, expected.style_name)) return error.InvalidNativeDisplay;
 }

@@ -384,6 +384,105 @@ test "native text display: a user display reaches Markdown preparation through i
     try testing.expectError(error.DisplayTargetMismatch, evaluation.expandDisplayTarget(child, target));
 }
 
+test "native image display: immutable inputs retain asset styles and independent placements" {
+    var state = try documentWithModules(
+        \\import std:assets as assets
+        \\type Picture { image: assets::Image }
+        \\fn display(self: Placed<Picture>) -> assets::Image = self.value.image
+        \\const picture: assets::Image = assets::Image {
+        \\  path = "tests/fixtures/layout/practical/diagram.svg"
+        \\  style = assets::AssetBlockStyle {} with { asset.scale = 0.5 chrome.pad_x = 8 chrome.pad_y = 6 }
+        \\}
+        \\page first
+        \\  let first = place!(picture)
+        \\  let second = place!(picture with { style.asset.scale = 0.25 })
+        \\end
+        \\page second
+        \\  let wrapped = place!(Picture { image = picture })
+        \\end
+    );
+    defer state.deinit();
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    try testing.expectEqual(@as(usize, 0), state.diagnostics.entries.items.len);
+    const first_page = state.graph.page_order.items[0];
+    const second_page = state.graph.page_order.items[1];
+    const roots = state.placementRootsOf(first_page);
+    try testing.expectEqual(@as(usize, 2), roots.len);
+    const parent = state.placementRootsOf(second_page)[0];
+    const child = state.childrenOf(parent).?[0];
+    for ([_]core.NodeId{ roots[0], roots[1], child }, [_]f32{ 0.5, 0.25, 0.5 }) |id, scale| {
+        const node = state.getNode(id).?;
+        try testing.expectEqual(core.native_display.Kind.image, node.placement.?.display.native);
+        try testing.expectEqual(if (id == child) second_page else first_page, node.placement.?.page_id);
+        try testing.expectEqual(core.ObjectKind.asset, node.object_kind.?);
+        try testing.expectEqual(core.PayloadKind.image_ref, node.payload_kind.?);
+        try testing.expect(node.role == null);
+        try testing.expect(node.content == null);
+        try testing.expectEqual(@as(usize, 0), node.fields.items.len);
+        const paint = core.render_policy.resolve(&state, node);
+        try testing.expectEqual(core.render_policy.RenderKind.raster_asset, paint.kind);
+        try testing.expectEqual(scale, paint.asset.?.scale);
+        try testing.expectEqual(@as(f32, 8), paint.chrome.pad_x);
+        try testing.expectEqual(@as(f32, 6), paint.chrome.pad_y);
+        var prepared = try core.prepared.prepareObject(testing.allocator, &state, node);
+        defer prepared.deinit(testing.allocator);
+        try testing.expectEqualStrings("tests/fixtures/layout/practical/diagram.svg", prepared.content);
+        try testing.expectEqual(@as(usize, 1), prepared.asset_deps.len);
+        try testing.expectEqualStrings(prepared.content, prepared.asset_deps[0].source);
+        try testing.expect(prepared.markdown_doc == null);
+        try testing.expect(prepared.text_layout == null);
+    }
+    try testing.expectEqual(parent, state.getNode(child).?.placement.?.parent_id);
+    var selected = try state.selectTypedPlacements(testing.allocator, .{ .document = state.graph.document_id }, state.getNode(child).?.placement.?.value.record.ty);
+    defer selected.deinit(testing.allocator);
+    try testing.expectEqualSlices(core.NodeId, &.{ roots[0], roots[1], child }, selected.ids.items);
+}
+
+test "native image display: local names and incomplete inputs cannot impersonate renderer types" {
+    var state = try documentWithModules(
+        \\import std:assets as assets
+        \\type Image { path: String }
+    );
+    defer state.deinit();
+    try compiler.analysis.analyzeDocumentState(testing.allocator, &state);
+    const local = Type.recordType("Image").inModule(0);
+    try testing.expect(core.native_display.kindForType(&state, local) == null);
+    try testing.expectError(error.InvalidType, prepareTarget(&state, local));
+    const native_module = state.moduleByPathOrSpec("std:assets/content").?;
+    const native_type = Type.recordType("Image").inModule(native_module.id);
+    try testing.expectEqual(core.native_display.Kind.image, (try prepareTarget(&state, native_type)).native);
+    var value = core.Value{ .record = .init(native_type) };
+    defer value.deinit(testing.allocator);
+    try value.record.fields.append(testing.allocator, .{ .name = "path", .value = .{ .string = "Missing style" } });
+    try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, .image));
+    try value.record.fields.append(testing.allocator, .{ .name = "style", .value = .{ .record = .init(Type.recordType("AssetBlockStyle").inModule(0)) } });
+    try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, .image));
+}
+
+test "native image display: missing assets report their placement and page before rendering" {
+    var state = try documentWithModules(
+        \\import std:assets as assets
+        \\page first
+        \\  let missing = place!(assets::Image { path = "tests/fixtures/typed-display/absent-image.png" })
+        \\end
+    );
+    defer state.deinit();
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const page = state.graph.page_order.items[0];
+    const root = state.placementRootsOf(page)[0];
+    try testing.expectEqual(@as(usize, 1), state.diagnostics.entries.items.len);
+    const diagnostic = state.diagnostics.entries.items[0];
+    try testing.expectEqualStrings("AssetNotFound", diagnostic.code());
+    try testing.expectEqual(page, diagnostic.page_id.?);
+    try testing.expectEqual(root, diagnostic.node_id.?);
+    try testing.expect(diagnostic.origin != null);
+    try testing.expectEqualStrings("tests/fixtures/typed-display/absent-image.png", diagnostic.data.asset_not_found.requested_path);
+}
+
 test "native text display: nominal identity and complete input are required" {
     var state = try documentWithModules(
         \\import std:text/content as native

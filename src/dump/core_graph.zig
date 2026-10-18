@@ -17,8 +17,8 @@ pub fn writeNodesField(allocator: std.mem.Allocator, root: *json.Object, state: 
 fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, state: *core.DocumentState, node: core.Node, layouts: *const core.layout.Document) !void {
     const render = core.render_policy.resolve(state, &node);
     const display_content = core.nodeDisplayContent(&node);
-    const native_content = if (node.placement) |placement| placement.display == .native else false;
-    const has_display_content = native_content or display_content.len != 0 or node.content != null or node.display_content != null;
+    const content = core.nodeContent(&node);
+    const has_display_content = content != null or node.display_content != null;
     const should_parse_blocks = core.markdown.shouldParseBlocksNode(state, &node) and has_display_content;
     const should_parse_inline = core.markdown.shouldParseInlineNode(state, &node) and has_display_content and !should_parse_blocks;
 
@@ -50,7 +50,7 @@ fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, state: *core.Docu
     try item.optionalStringField("role", node.role);
     try item.optionalEnumTagField("object_kind", node.object_kind);
     try item.optionalEnumTagField("payload_kind", node.payload_kind);
-    try item.optionalStringField("content", if (native_content) display_content else node.content);
+    try item.optionalStringField("content", content);
     try writePlacement(&item, state, &node);
     if (node.display_content != null) {
         try item.stringField("display_content", display_content);

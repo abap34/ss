@@ -1,5 +1,6 @@
-import std:internal/classes
-import std:text/style
+import std:layout/types as { LayoutStyle }
+import std:assets/types as { AssetStyle }
+import std:graphics/paint/types as { ChromeStyle }
 
 type AssetBlockStyle {
   layout: LayoutStyle = LayoutStyle {}
