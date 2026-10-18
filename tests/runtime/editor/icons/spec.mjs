@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { assert, withLspClient } from "../../harness.mjs";
-import { applyProtocolEdits, previewBounds } from "../support.mjs";
+import { applyProtocolEdits, previewBounds, requestEdit } from "../support.mjs";
 
 const project = await mkdtemp(path.join(os.tmpdir(), "ss-editor-icons-"));
 try {
@@ -132,7 +132,9 @@ end
     );
     source = applyProtocolEdits(source, insertion.workspaceEdit?.changes?.[uri] ?? []);
     assert(
-      source.includes('let icon_item = icon!("fa-solid:star", 72, 80, c"#f59e0b")') &&
+      source.includes('let icon_item = icon!("fa-solid:star", AssetBlockStyle {} with { asset.tint = c"#f59e0b" })') &&
+        source.includes("~!~ icon_item.width == 72") &&
+        source.includes("~!~ icon_item.height == 80") &&
         source.includes("~!~ icon_item.left == page.left + 120") &&
         source.includes("~!~ icon_item.top == page.top - 140"),
       `icon insertion emitted unexpected source: ${source}`,
@@ -172,6 +174,41 @@ end
       color: "#2563eb",
     });
     assert(stale.status === "stale", `a stale icon insertion was accepted: ${JSON.stringify(stale)}`);
+
+    const resizedBounds = { ...bounds, x: 200, y: 100 };
+    const resize = await requestEdit(client, uri, after, editing, bounds, resizedBounds, "absolute", page.id);
+    assert(resize.status === "ok", `typed icon resize failed: ${JSON.stringify(resize)}`);
+    source = applyProtocolEdits(source, resize.workspaceEdit?.changes?.[uri] ?? []);
+    assert(source.includes('asset.tint = c"#f59e0b"'), "resizing changed the immutable icon style");
+    diagnosticsPromise = client.waitForDiagnostics(uri);
+    client.changeDocument({ uri, version: 3, text: source });
+    assert((await diagnosticsPromise).params.diagnostics.length === 0, "resized icon produced diagnostics");
+    const resized = await client.request("ss/editorSnapshot", {
+      textDocument: { uri }, baseSnapshotId: after.snapshot_id,
+    });
+    const target = resized.editing.find(item => item.binding === "icon_item");
+    assert(target, "resized icon lost its editing target");
+    const actual = previewBounds(resized, target.node_id);
+    for (const key of ["x", "y", "width", "height"]) {
+      assert(Math.abs(actual[key] - resizedBounds[key]) < 0.1, `resized icon ${key}: ${actual[key]}`);
+    }
+    const wider = { ...actual, width: 108 };
+    const widthEdit = await requestEdit(client, uri, resized, target, actual, wider, "width", page.id);
+    assert(widthEdit.status === "ok", `typed icon width edit failed: ${JSON.stringify(widthEdit)}`);
+    source = applyProtocolEdits(source, widthEdit.workspaceEdit?.changes?.[uri] ?? []);
+    assert(source.includes("~!~ icon_item.width == 108"), `icon width constraint was not updated: ${source}`);
+    diagnosticsPromise = client.waitForDiagnostics(uri);
+    client.changeDocument({ uri, version: 4, text: source });
+    assert((await diagnosticsPromise).params.diagnostics.length === 0, "width-edited icon produced diagnostics");
+    const final = await client.request("ss/editorSnapshot", {
+      textDocument: { uri }, baseSnapshotId: resized.snapshot_id,
+    });
+    const finalTarget = final.editing.find(item => item.binding === "icon_item");
+    assert(finalTarget, "width-edited icon lost its editing target");
+    const finalBounds = previewBounds(final, finalTarget.node_id);
+    for (const key of ["x", "y", "width", "height"]) {
+      assert(Math.abs(finalBounds[key] - wider[key]) < 0.1, `width-edited icon ${key}: ${finalBounds[key]}`);
+    }
   });
 } finally {
   await rm(project, { recursive: true, force: true });

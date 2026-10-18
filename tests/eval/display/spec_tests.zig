@@ -1792,5 +1792,72 @@ test "native icon display: catalog names are validated without treating them as 
         var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
         defer graph.deinit();
         try testing.expectError(error.InvalidFontAwesomeIcon, compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io }));
+        try testing.expectEqual(@as(usize, 1), state.diagnostics.entries.items.len);
+        const diagnostic = state.diagnostics.entries.items[0];
+        try testing.expectEqualStrings("InvalidFontAwesomeIcon", diagnostic.code());
+        try testing.expectEqual(state.graph.page_order.items[0], diagnostic.page_id.?);
+        try testing.expectEqual(state.placementRootsOf(diagnostic.page_id.?)[0], diagnostic.node_id.?);
+        try testing.expect(diagnostic.origin != null);
+    }
+}
+
+
+test "asset constructors: unused values neither allocate objects nor read assets" {
+    var state = try documentWithModules(
+        \\import std:assets as assets
+        \\const missing: assets::Image = assets::image("absent-image.svg")
+        \\const sheet: assets::Pdf = assets::pdf("absent-sheet.pdf")
+        \\const unknown: assets::Icon = assets::icon("fa-solid:not-an-icon")
+        \\page unused
+        \\  let copies = group(missing, sheet, unknown)
+        \\end
+    );
+    defer state.deinit();
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    const FileInputs = std.meta.Child(std.meta.Child(@TypeOf(state.file_inputs)));
+    var inputs = FileInputs.init(testing.allocator);
+    defer inputs.deinit();
+    state.file_inputs = &inputs;
+    defer state.file_inputs = null;
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    try testing.expectEqual(@as(usize, 0), state.diagnostics.entries.items.len);
+    try testing.expectEqual(@as(usize, 2), state.nodeCount());
+    try testing.expectEqual(@as(usize, 0), inputs.items().len);
+}
+
+test "asset constructors: reused paths retain their source through helpers and display preparation" {
+    const source =
+        \\import std:assets as assets
+        \\fn picture(path: String) -> assets::Image = assets::image(path)
+        \\const path: String = "absent-public-image.svg"
+        \\const reusable: assets::Image = picture(path)
+        \\page first
+        \\  let first = place!(reusable)
+        \\end
+        \\page second
+        \\  let second = place!(reusable)
+        \\end
+    ;
+    var state = try documentWithModules(source);
+    defer state.deinit();
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    try testing.expectEqual(@as(usize, 2), state.diagnostics.entries.items.len);
+    const start = std.mem.indexOf(u8, source, "absent-public-image.svg").?;
+    for (state.graph.page_order.items, state.diagnostics.entries.items) |page, diagnostic| {
+        const id = state.placementRootsOf(page)[0];
+        try testing.expectEqual(page, diagnostic.page_id.?);
+        try testing.expectEqual(id, diagnostic.node_id.?);
+        try testing.expectEqualStrings("AssetNotFound", diagnostic.code());
+        try testing.expectEqual(start, diagnostic.origin.?.span.?.start);
+        const node = state.getNode(id).?;
+        try testing.expect(node.content == null);
+        var prepared = try core.prepared.prepareObject(testing.allocator, &state, node);
+        defer prepared.deinit(testing.allocator);
+        const origin = core.ContentProvenance.originForSpan(prepared.content_provenance, 0, prepared.content.len).?;
+        try testing.expectEqual(start, origin.span.?.start);
+        try testing.expectEqual(start + prepared.content.len, origin.span.?.end);
     }
 }

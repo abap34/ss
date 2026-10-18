@@ -259,7 +259,7 @@ test "shape insertion emits the stdlib speech bubble constructor" {
     ) != null);
 }
 
-test "icon insertion emits a canonical object and absolute placement" {
+test "icon insertion emits a typed constructor with size and position constraints" {
     const allocator = std.testing.allocator;
     const source =
         \\page Example
@@ -281,7 +281,9 @@ test "icon insertion emits a canonical object and absolute placement" {
     defer allocator.free(updated);
     try std.testing.expectEqualStrings(
         \\page Example
-        \\  let star_icon = icon!("fa-solid:star", 72, 80, c"#2563eb")
+        \\  let star_icon = icon!("fa-solid:star", AssetBlockStyle {} with { asset.tint = c"#2563eb" })
+        \\  ~!~ star_icon.width == 72
+        \\  ~!~ star_icon.height == 80
         \\  ~!~ star_icon.left == page.left + 24
         \\  ~!~ star_icon.top == page.top - 36
         \\end

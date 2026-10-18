@@ -1,5 +1,4 @@
-import std:assets/style as { AssetBlockStyle }
-import std:assets/types as { AssetStyle }
+import std:assets/style as { AssetBlockStyle, default_icon_style }
 
 type Image {
   path: String
@@ -13,5 +12,5 @@ type Pdf {
 
 type Icon {
   source: String
-  style: AssetBlockStyle = AssetBlockStyle { asset = AssetStyle { tint = c"#374151" } }
+  style: AssetBlockStyle = default_icon_style
 }

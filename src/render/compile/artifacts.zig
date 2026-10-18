@@ -94,7 +94,6 @@ pub fn pdfAssetSize(ctx: Context, source: []const u8, asset: ?core.render_policy
     var resource = render_resources.readResource(ctx.allocator, ctx.io, kind, source, ctx.resource_cache) catch |err| {
         if (err == error.InvalidPdfResource) {
             try recordQpdfFailure(ctx, "read PDF page geometry");
-            return error.ImageDecodeFailed;
         }
         return err;
     };

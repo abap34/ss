@@ -201,7 +201,7 @@ async function testPublishedEditorResources() {
   try {
     const slide = path.join(project, "slide.ss");
     const uri = pathToFileURL(slide).toString();
-    const source = (index) => `import std:themes/default as *\npage main\nimage!("image-${index}.svg", 1)\nend\n`;
+    const source = (index) => `import std:themes/default as *\npage main\nimage!("image-${index}.svg")\nend\n`;
     for (let index = 0; index < 7; index += 1) {
       await writeFile(path.join(project, `image-${index}.svg`),
         `<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><!--${"x".repeat(700 * 1024)}--><rect width="120" height="80" fill="rgb(${index * 30},20,30)"/></svg>`);

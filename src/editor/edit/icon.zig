@@ -40,13 +40,19 @@ pub fn insert(
     try text.appendSlice(allocator, binding);
     try text.appendSlice(allocator, " = icon!(\"");
     try text.appendSlice(allocator, icon_source);
-    try text.appendSlice(allocator, "\", ");
-    try text.appendSlice(allocator, width);
-    try text.appendSlice(allocator, ", ");
-    try text.appendSlice(allocator, height);
-    try text.appendSlice(allocator, ", c\"");
+    try text.appendSlice(allocator, "\", AssetBlockStyle {} with { asset.tint = c\"");
     try text.appendSlice(allocator, color);
-    try text.appendSlice(allocator, "\")\n");
+    try text.appendSlice(allocator, "\" })\n");
+    for ([_][]const u8{ "width", "height" }, [_][]const u8{ width, height }) |dimension, value| {
+        try text.appendSlice(allocator, indent);
+        try text.appendSlice(allocator, "~!~ ");
+        try text.appendSlice(allocator, binding);
+        try text.append(allocator, '.');
+        try text.appendSlice(allocator, dimension);
+        try text.appendSlice(allocator, " == ");
+        try text.appendSlice(allocator, value);
+        try text.append(allocator, '\n');
+    }
     try relation.appendNumeric(allocator, &text, true, indent, binding, "left", "page", "left", bounds.x);
     try text.append(allocator, '\n');
     try relation.appendNumeric(allocator, &text, true, indent, binding, "top", "page", "top", -bounds.y);

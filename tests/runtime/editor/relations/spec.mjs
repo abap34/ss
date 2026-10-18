@@ -288,15 +288,15 @@ async function testRelativeEditsCompleteMovedAxes() {
       },
       { name: `composition-left-${operator}`, body: `item ${operator} guide`, fixGuide: false },
     ]),
-    ...["||", "|=|"].map((operator) => ({
-      name: `image-${operator}`,
-      body: `guide ${operator} item`,
-      item: 'let item = image!("figure.svg", 0.9)',
+    {
+      name: "image-reference",
+      body: '~ guide.left == page.left + 100\n~ guide.top == page.top - 180\n~ item.left == guide.right + 32\n~ item.top == guide.top',
+      item: 'let item = image!("figure.svg", AssetBlockStyle {} with { asset.scale = 0.9 })',
       guide: 'let guide = text!("A sufficiently wide guide for this image")',
       header: 'head! "Monte Carlo"',
       policy: 'hflow(LayoutPolicy.center)',
       fixGuide: false,
-    })),
+    },
     {
       name: "centered-reference-chain",
       body: 'let bridge = text!("Bridge")\n~ bridge.left == guide.right + 24\n~ bridge.top == guide.top\n~ item.left == bridge.right + 32\n~ item.top == bridge.top',
@@ -335,7 +335,7 @@ end
         assert(initialProblems.length === 0, `${scenario.name}: initial diagnostics ${JSON.stringify(initialProblems)}`);
         let snapshot = await editorSnapshot(client, uri);
         let updated = source;
-        const guideBefore = scenario.name === "image-||" || scenario.name === "centered-reference-chain"
+        const guideBefore = scenario.name === "image-reference" || scenario.name === "centered-reference-chain"
           ? previewBounds(snapshot, editingTarget(snapshot, "guide").node_id)
           : null;
         for (let step = 0; step < 2; step += 1) {

@@ -259,10 +259,11 @@ pub fn prepareObjectWithRender(
     errdefer if (!latex_preamble_transferred) allocator.free(latex_preamble);
     asset_deps_transferred = true;
     latex_preamble_transferred = true;
+    const provenance = if (uses_asset_content) node.content_provenance.items else model.nodeDisplayContentProvenance(node);
     return .{
         .node_id = node.id,
         .content = content,
-        .content_provenance = if (uses_asset_content) node.content_provenance.items else model.nodeDisplayContentProvenance(node),
+        .content_provenance = if (provenance.len == 0) state.stringProvenance(content) else provenance,
         .link_id = nodeStringField(node, "link_id"),
         .render = render,
         .semantics = semantics,

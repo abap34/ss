@@ -79,6 +79,8 @@ try {
   const wrongFormat = run("render", "--quiet", "wrong-format.ss", "--output", "wrong-format.pdf");
   assert.notEqual(wrongFormat.status, 0);
   assert.match(wrongFormat.stderr, /RenderFailed: PDF asset:/);
+  assert.match(wrongFormat.stderr, /InvalidPdfResource:/);
+  assert.match(wrongFormat.stderr, /use image! for images and pdf! for PDF files/);
   assert.match(wrongFormat.stderr, /failed to read PDF page geometry/);
   assert.doesNotMatch(wrongFormat.stderr, /panic:/);
 

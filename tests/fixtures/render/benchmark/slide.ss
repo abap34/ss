@@ -93,7 +93,7 @@ end
 
 page vector_asset
 let heading = h1!("Explicit SVG resource")
-let asset = image!("asset.svg", 0.72)
+let asset = image!("asset.svg", AssetBlockStyle {} with { asset.scale = 0.72 })
 ~ heading.left == page.left + 88
 ~ heading.top == page.top - 64
 ~ asset.left == page.left + 184
@@ -102,7 +102,7 @@ end
 
 page raster_asset
 let heading = h1!("Raster resource")
-let asset = image!("asset.png", 0.45)
+let asset = image!("asset.png", AssetBlockStyle {} with { asset.scale = 0.45 })
 ~ heading.left == page.left + 88
 ~ heading.top == page.top - 64
 ~ asset.left == page.left + 360
@@ -111,7 +111,7 @@ end
 
 page pdf_asset
 let heading = h1!("Embedded PDF page")
-let asset = pdf!("asset.pdf", 0.62, 2)
+let asset = pdf!("asset.pdf", AssetBlockStyle {} with { asset.scale = 0.62 asset.pdf_page = 2 })
 ~ heading.left == page.left + 88
 ~ heading.top == page.top - 64
 ~ asset.left == page.left + 356
@@ -125,7 +125,7 @@ The last page repeats the common workload with **styled text**，$x_i + y_i = z_
 and a compact external vector resource．Repeated resources also exercise digest-based
 deduplication and cache lookup．
 >>
-let asset = image!("asset.svg", 0.35)
+let asset = image!("asset.svg", AssetBlockStyle {} with { asset.scale = 0.35 })
 ~ heading.left == page.left + 88
 ~ heading.top == page.top - 64
 ~ body.left == page.left + 104
