@@ -10,8 +10,5 @@
 (type_declaration
   name: (type_identifier) @name) @definition.type
 
-(object_extension
-  target: (type_identifier) @name) @definition.type
-
 (object_field
   name: (identifier) @name) @definition.field

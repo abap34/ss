@@ -2549,36 +2549,6 @@
     }
   },
   {
-    "type": "object_extension",
-    "named": true,
-    "fields": {
-      "target": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "qualified_type_identifier",
-            "named": true
-          },
-          {
-            "type": "type_identifier",
-            "named": true
-          }
-        ]
-      }
-    },
-    "children": {
-      "multiple": true,
-      "required": false,
-      "types": [
-        {
-          "type": "object_member",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
     "type": "object_field",
     "named": true,
     "fields": {
@@ -2695,26 +2665,6 @@
     }
   },
   {
-    "type": "object_implements",
-    "named": true,
-    "fields": {
-      "type": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "qualified_type_identifier",
-            "named": true
-          },
-          {
-            "type": "type_identifier",
-            "named": true
-          }
-        ]
-      }
-    }
-  },
-  {
     "type": "object_member",
     "named": true,
     "fields": {},
@@ -2728,10 +2678,6 @@
         },
         {
           "type": "object_field",
-          "named": true
-        },
-        {
-          "type": "object_implements",
           "named": true
         },
         {
@@ -3583,10 +3529,6 @@
           "named": true
         },
         {
-          "type": "object_extension",
-          "named": true
-        },
-        {
           "type": "page_declaration",
           "named": true
         },
@@ -4337,10 +4279,6 @@
     "named": false
   },
   {
-    "type": "extend",
-    "named": false
-  },
-  {
     "type": "false",
     "named": false
   },
@@ -4362,10 +4300,6 @@
   },
   {
     "type": "if",
-    "named": false
-  },
-  {
-    "type": "implements",
     "named": false
   },
   {
@@ -4394,11 +4328,11 @@
   },
   {
     "type": "number",
-    "named": true
+    "named": false
   },
   {
     "type": "number",
-    "named": false
+    "named": true
   },
   {
     "type": "object",
@@ -4426,11 +4360,11 @@
   },
   {
     "type": "string",
-    "named": false
+    "named": true
   },
   {
     "type": "string",
-    "named": true
+    "named": false
   },
   {
     "type": "then",

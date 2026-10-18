@@ -43,7 +43,6 @@ module.exports = grammar({
       $.function_declaration,
       $.type_declaration,
       $.enum_declaration,
-      $.object_extension,
       $.document_block,
       $.page_declaration,
     ),
@@ -127,19 +126,9 @@ module.exports = grammar({
 
     type_body: $ => seq("{", repeat($._terminator), repeat($.object_field), "}"),
 
-    object_member: $ => choice($.object_base, $.object_implements, $.object_roles, $.object_field),
+    object_member: $ => choice($.object_base, $.object_roles, $.object_field),
     object_base: $ => seq("base", "=", field("type", $._type_name), optional($._terminator)),
-    object_implements: $ => seq("implements", "=", field("type", $._type_name), optional($._terminator)),
     object_roles: $ => seq("roles", "=", field("value", $.list_expression), optional($._terminator)),
-
-    object_extension: $ => seq(
-      "extend",
-      field("target", $._type_name),
-      "{",
-      repeat($._terminator),
-      repeat($.object_member),
-      "}",
-    ),
 
     object_field: $ => seq(field("name", $.identifier), ":", field("type", $.type), optional(seq("=", $._expression)), optional($._terminator)),
 

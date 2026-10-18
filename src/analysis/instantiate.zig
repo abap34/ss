@@ -14,7 +14,7 @@ pub const Transform = struct {
             try self.ty(&decl.value_type);
             try self.expr(&decl.value);
         }
-        inline for (.{ value.records.items, value.objects.items, value.object_extensions.items }) |decls| {
+        inline for (.{ value.records.items, value.objects.items }) |decls| {
             for (decls) |*decl| for (decl.fields.items) |*field| {
                 try self.ty(&field.value_type);
                 if (field.default_value) |default| try self.expr(default);

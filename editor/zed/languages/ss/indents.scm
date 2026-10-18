@@ -23,9 +23,6 @@
   (enum_declaration
     "{" @start.enum
     "}" @end)
-  (object_extension
-    "extend" @start.extend
-    "}" @end)
   (value_update_expression
     "{" @start.update
     "}" @end)

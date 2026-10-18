@@ -163,3 +163,35 @@ test "dump preserves callback and document references without evaluating them ag
     try testing.expectEqualStrings("function", (try field(function, "kind")).string);
     try testing.expect((try field(function, "closure")) == .integer);
 }
+
+test "dump preserves absent defaults explicit none and immutable updates in placement inputs" {
+    var state = try evaluate(
+        \\type Label { optional_label: String? = none }
+        \\fn display(self: Placed<Label>) -> Text = text(self.value.optional_label ?? "Missing")
+        \\page main
+        \\  let original = Label { optional_label = "Present" }
+        \\  place!(Label {})
+        \\  place!(Label { optional_label = none })
+        \\  place!(original with { optional_label = none })
+        \\  place!(original)
+        \\end
+    );
+    defer state.deinit();
+    const layouts = core.layout.Document{};
+    const text = try compiler.dump.toOwnedString(testing.allocator, &state, &layouts);
+    defer testing.allocator.free(text);
+    var parsed = try json.parseValue(testing.allocator, text, .{});
+    defer parsed.deinit();
+    const roots = state.placementRootsOf(state.graph.page_order.items[0]);
+    try testing.expectEqual(@as(usize, 4), roots.len);
+    for (roots, 0..) |id, i| {
+        const placement = try field(try nodeById(parsed.value, id), "placement");
+        const label = try inputField(try field(placement, "input"), "optional_label");
+        if (i < 3) {
+            try testing.expectEqualStrings("none", (try field(label, "kind")).string);
+        } else {
+            try testing.expectEqualStrings("string", (try field(label, "kind")).string);
+            try testing.expectEqualStrings("Present", (try field(label, "value")).string);
+        }
+    }
+}

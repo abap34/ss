@@ -68,10 +68,8 @@ test "captures: every declaration and statement boundary collects lambdas with a
         \\type Config {
         \\  callback: Number -> Number = (x: Number) |-> x
         \\}
-        \\type Item = object {
+        \\type Item {
         \\  callback: Number -> Number = (x: Number) |-> x
-        \\}
-        \\extend Item {
         \\  extra: Number -> Number = (x: Number) |-> x
         \\}
         \\const function: Number -> Number = (x: Number) |-> x

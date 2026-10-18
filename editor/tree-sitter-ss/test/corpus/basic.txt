@@ -16,10 +16,6 @@ type Hero = object {
   title: string = "Intro"
 }
 
-extend Hero {
-  subtitle: string = ""
-}
-
 page "Intro"
   let title = h1("Hello")
   let subtitle = default::h2("Sub")
@@ -73,14 +69,6 @@ end
           type: (type
             (primary_type))
           (string)))))
-  (object_extension
-    target: (type_identifier)
-    (object_member
-      (object_field
-        name: (identifier)
-        type: (type
-          (primary_type))
-        (string))))
   (page_declaration
     name: (string)
     (let_statement

@@ -301,11 +301,6 @@ fn indexModule(index: *DeclarationIndex, module: anytype) !void {
         try appendRoles(index, module.id, .{ .module_id = module.id, .name = decl.name }, decl.roles.items);
         try appendFields(index, module.id, .{ .module_id = module.id, .name = decl.name }, decl.fields.items);
     }
-
-    for (module.syntax.object_extensions.items) |extension| {
-        try appendRoles(index, module.id, .{ .module_id = extension.target_module_id orelse module.id, .name = localName(extension.target) }, extension.roles.items);
-        try appendFields(index, module.id, .{ .module_id = extension.target_module_id orelse module.id, .name = localName(extension.target) }, extension.fields.items);
-    }
 }
 
 fn appendRecordFields(index: *DeclarationIndex, module_id: u32, record_name: []const u8, fields: []const ast.ObjectFieldDecl) !void {

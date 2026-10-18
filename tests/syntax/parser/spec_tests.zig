@@ -1045,16 +1045,9 @@ test "syntax spec: recovering blocks propagate every allocation failure" {
 
 test "syntax spec: failed object declarations release parsed ownership" {
     try expectParseErrorWithoutLeaks(error.ExpectedChar, "type Theme\n");
-    try expectParseErrorWithoutLeaks(error.ExpectedChar, "extend Widget\n");
     try expectParseErrorWithoutLeaks(error.ExpectedTypeAnnotation,
         \\type Theme {
         \\  label
-        \\}
-        \\
-    );
-    try expectParseErrorWithoutLeaks(error.ExpectedIdentifier,
-        \\extend Widget {
-        \\  base = Parent
         \\}
         \\
     );
@@ -1084,19 +1077,6 @@ test "syntax spec: object declarations survive every allocation failure" {
         parseAndDeinitSource,
         .{
             \\type Theme {
-            \\  handler: Selection<(Page -> Object)?> = build
-            \\}
-            \\
-        },
-    );
-    try allocation_testing.checkAllAllocationFailures(
-        testing.allocator,
-        parseAndDeinitSource,
-        .{
-            \\extend Card {
-            \\  implements = OldProtocol
-            \\  implements = NewProtocol
-            \\  roles = ["extended", "panel"]
             \\  handler: Selection<(Page -> Object)?> = build
             \\}
             \\
@@ -1160,11 +1140,6 @@ test "syntax spec: expression parsing survives every allocation failure" {
         \\}
         \\type Theme {
         \\  body: String = "body"
-        \\}
-        \\extend Card {
-        \\  implements = Base
-        \\  roles = ["extended"]
-        \\  detail: String = "detail"
         \\}
         \\const default_tone: String = "soft"
         \\fn choose(callback: (Page -> Object)?, tone: String = "soft") -> Object
@@ -2675,13 +2650,11 @@ test "syntax spec: ordinary types coexist with legacy object declarations during
         \\type Padding { x: Number = 12 y: Number = 8 }
         \\type Card = object { padding: Padding = Padding {} }
         \\enum Mode { light dark }
-        \\extend Card { label: String = "Card" }
     );
     defer parsed.deinit();
     try testing.expectEqual(@as(usize, 1), parsed.module.records.items.len);
     try testing.expectEqual(@as(usize, 1), parsed.module.objects.items.len);
     try testing.expectEqual(@as(usize, 1), parsed.module.types.items.len);
-    try testing.expectEqual(@as(usize, 1), parsed.module.object_extensions.items.len);
     try testing.expectEqualStrings("Padding", parsed.module.records.items[0].name);
     try testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{
         "type Padding { x: Number = 12 }\n",
@@ -2858,4 +2831,25 @@ test "syntax spec: qualified values parse standalone with members and updates" {
     try testing.expectEqualStrings("library::optional", statements[2].kind.let_binding.expr.coalesce.target.ident.name);
     try testing.expectEqualStrings("library::format", statements[3].kind.let_binding.expr.ident.name);
     try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source});
+}
+
+test "syntax spec: removed extension syntax is rejected and its names are ordinary identifiers" {
+    try expectParseErrorWithoutLeaks(error.ExpectedKeyword, "extend Card { label: String = \"Card\" }\n");
+    try expectParseErrorWithoutLeaks(error.ExpectedKeyword, "extend library::Card { implements = Contract }\n");
+    try expectParseErrorWithoutLeaks(error.ExpectedTypeAnnotation, "type Card { implements = Contract }\n");
+    var parsed = try parse(
+        \\type Card { implements: String = "contract" }
+        \\fn extend(value: Number) -> Number = value
+        \\page main
+        \\  let implements = extend(1)
+        \\end
+    );
+    defer parsed.deinit();
+    try testing.expectEqualStrings("extend", parsed.module.functions.items[0].name);
+    try testing.expectEqualStrings("implements", parsed.module.records.items[0].fields.items[0].name);
+    var recovered = try parseRecovering("extend Card { label: String }\npage main\nend\n");
+    defer recovered.deinit();
+    try testing.expect(recovered.result.holes.diagnostics.len > 0);
+    try testing.expectEqual(@as(usize, 1), recovered.result.module.pages.items.len);
+    try testing.expectEqualStrings("main", recovered.result.module.pages.items[0].name);
 }
