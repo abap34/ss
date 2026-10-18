@@ -966,7 +966,6 @@ test "compiler semantics: stdlib theme components build when imported by theme a
         \\  subtitle!("Subhead")
         \\  text!("Body")
         \\  latex!("$x^2$")
-        \\  figure!(rectangle(200, 100), "Figure")
         \\  image!("image.svg")
         \\  pdf!("doc.pdf")
         \\  code!("print('x')", "python")

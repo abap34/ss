@@ -609,10 +609,9 @@ async function testPageSpaceFillForcesFullDisplay() {
     let source = `import std:themes/default as *
 
 page demo
-let item = place_on!(pagectx(), rounded_rectangle(
+let item = place!(rectangle(
   180,
   100,
-  0.15,
   vector_style(
     linear_gradient_fill(
       c"#38bdf8",

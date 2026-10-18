@@ -790,7 +790,7 @@ fn shapeConstructor(statement: *const ast.Statement, binding: []const u8) ?Shape
     if (call.callee.qualifier != null) return null;
     const kind: ShapeKind = if (std.mem.eql(u8, call.callee.name, "rectangle!"))
         .rectangle
-    else if (std.mem.eql(u8, call.callee.name, "circle!") or std.mem.eql(u8, call.callee.name, "ellipse!"))
+    else if (std.mem.eql(u8, call.callee.name, "circle!"))
         .circle
     else if (std.mem.eql(u8, call.callee.name, "arrow_shape!"))
         .arrow
@@ -802,7 +802,7 @@ fn shapeConstructor(statement: *const ast.Statement, binding: []const u8) ?Shape
         .line
     else
         return null;
-    const style_index: usize = if (std.mem.eql(u8, call.callee.name, "circle!")) 1 else 2;
+    const style_index: usize = 2;
     if (call.args.items.len != style_index + 1 or call.arg_spans.items.len <= style_index) return null;
     const style = switch (call.args.items[style_index]) {
         .record => |*value| value,

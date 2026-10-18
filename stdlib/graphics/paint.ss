@@ -1,5 +1,4 @@
-import std:internal/classes
-import std:internal/objects as objects
+import std:graphics/types as { LineCap, LineJoin, VectorStrokeStyle, VectorStyle, FillStyle, FillKind, GradientSpread, PaintSpace, GradientDirection, PatternStyle }
 
 import std:graphics/path as paths
 

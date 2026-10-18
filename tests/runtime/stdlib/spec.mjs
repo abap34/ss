@@ -53,23 +53,26 @@ end
   assert.equal(customPaint.math_scale, 1.4);
   assert.equal(nested.nodes.find(n => n.content === 'Default').render.text.markdown_code_pad_x, 12);
 
-  const parts = await dump(`page diagram
+  const parts = await dump(`import std:text as text_api
+type Illustration { body: PathShape caption: String }
+fn display(self: Placed<Illustration>) -> Group<PathShape, text_api::Text>
+  return (self.value.body // text_api::Text { content = self.value.caption }) with { gap = 12 }
+end
+page diagram
 let drawing = rectangle(200, 80)
-let illustration = figure_parts(drawing, "Caption")
-let framed = box_parts(illustration.root, ChromeStyle { pad_x = 12 pad_y = 10 })
-~ drawing.left == page.left + 180
-~ drawing.top == page.top - 180
-place_on!(pagectx(), framed.root)
+let illustration = place!(Illustration { body = drawing caption = "Caption" })
+~ illustration.left == page.left + 180
+~ illustration.top == page.top - 180
 end
 `);
   assert.equal(parts.nodes.filter(n => n.content === 'Caption').length, 1);
-  assert.equal(parts.nodes.filter(n => n.role === 'panel').length, 1);
+  assert.equal(parts.nodes.filter(n => n.placement?.input.type?.name === 'Illustration').length, 1);
   const caption = parts.nodes.find(n => n.content === 'Caption');
-  const captionSemantics = JSON.parse(caption.fields.semantics);
-  assert.equal(captionSemantics.fields.find(f => f.name === 'role').value.case, 'caption');
-  const shape = parts.nodes.find(n => n.role === 'vector_path');
+  const shape = parts.nodes.find(n => n.placement?.display.kind === 'path_shape');
   assert(shape);
-  assert(Math.abs(shape.y - (caption.y + caption.height) - 12) < 0.01);
+  assert.equal(shape.placement.page, caption.placement.page);
+  assert.equal(shape.role, null);
+  assert.equal(caption.role, null);
 
   const contents = await dump(`page contents
 toc!("Contents")
