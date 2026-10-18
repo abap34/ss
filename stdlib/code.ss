@@ -1,3 +1,4 @@
+import std:code/content as { Code }
 import std:code/style as { CodeBlockStyle }
 import std:code/types as { CodeColors, CodeHighlightTheme }
 import std:code/palettes as { code_theme_github_light, code_theme_github_dark, code_theme_solarized_light, code_theme_solarized_dark, code_theme_one_dark, code_theme_monokai }

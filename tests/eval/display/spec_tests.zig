@@ -440,6 +440,87 @@ test "native image display: immutable inputs retain asset styles and independent
     try testing.expectEqualSlices(core.NodeId, &.{ roots[0], roots[1], child }, selected.ids.items);
 }
 
+test "native code display: source, language and styles remain immutable across placements" {
+    var state = try documentWithModules(
+        \\import std:code as code_api
+        \\type Example { code: code_api::Code }
+        \\fn display(self: Placed<Example>) -> code_api::Code = self.value.code
+        \\const sample: code_api::Code = code_api::Code {
+        \\  source = "**Literal** $x$ ![image](missing.png)"
+        \\  language = "python"
+        \\  style = code_api::CodeBlockStyle {} with {
+        \\    text.size = 18
+        \\    highlight.code.plain = c"#123456"
+        \\    chrome.pad_x = 16
+        \\  }
+        \\}
+        \\page first
+        \\  let highlighted = place!(sample)
+        \\  let plain = place!(sample with { language = "plain" style.text.size = 22 })
+        \\end
+        \\page second
+        \\  let wrapped = place!(Example { code = sample })
+        \\end
+    );
+    defer state.deinit();
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    // Legacy document colors must not supply missing colors in immutable inputs.
+    try state.setNodeFieldValue(state.graph.document_id, "code_theme_comment_color", .{ .string = "1,0,0" });
+    const page = state.graph.page_order.items[0];
+    const roots = state.placementRootsOf(page);
+    const parent = state.placementRootsOf(state.graph.page_order.items[1])[0];
+    const child = state.childrenOf(parent).?[0];
+    const ids = [_]core.NodeId{ roots[0], roots[1], child };
+    const languages = [_][]const u8{ "python", "plain", "python" };
+    for (ids, languages, [_]f32{ 18, 22, 18 }) |id, language, size| {
+        const node = state.getNode(id).?;
+        try testing.expectEqual(core.native_display.Kind.code, node.placement.?.display.native);
+        try testing.expect(node.role == null);
+        try testing.expect(node.content == null);
+        try testing.expectEqual(@as(usize, 0), node.fields.items.len);
+        const paint = core.render_policy.resolve(&state, node);
+        try testing.expectEqual(core.render_policy.RenderKind.code, paint.kind);
+        try testing.expectEqualStrings(language, paint.code.?.language.?);
+        try testing.expectEqual(size, paint.text.?.font_size);
+        try testing.expectEqual(@as(f32, 16), paint.chrome.pad_x);
+        try testing.expectApproxEqAbs(@as(f32, 18.0 / 255.0), paint.code.?.plain.r, 0.0001);
+        try testing.expectEqualDeep(paint.code.?.plain, paint.code.?.comment);
+        var prepared = try core.prepared.prepareObject(testing.allocator, &state, node);
+        defer prepared.deinit(testing.allocator);
+        try testing.expectEqualStrings("**Literal** $x$ ![image](missing.png)", prepared.content);
+        try testing.expectEqual(core.markdown.ParseMode.none, prepared.parse_mode);
+        try testing.expect(prepared.markdown_doc == null);
+        try testing.expect(prepared.text_layout == null);
+        try testing.expectEqual(@as(usize, 0), prepared.asset_deps.len);
+    }
+    var selected = try state.selectTypedPlacements(testing.allocator, .{ .document = state.graph.document_id }, state.getNode(child).?.placement.?.value.record.ty);
+    defer selected.deinit(testing.allocator);
+    try testing.expectEqualSlices(core.NodeId, &ids, selected.ids.items);
+}
+
+test "native code display: nominal identity and language input are required" {
+    var state = try documentWithModules(
+        \\import std:code as code_api
+        \\type Code { source: String }
+    );
+    defer state.deinit();
+    try compiler.analysis.analyzeDocumentState(testing.allocator, &state);
+    const local = Type.recordType("Code").inModule(0);
+    try testing.expect(core.native_display.kindForType(&state, local) == null);
+    try testing.expectError(error.InvalidType, prepareTarget(&state, local));
+    const module = state.moduleByPathOrSpec("std:code/content").?;
+    const native_type = Type.recordType("Code").inModule(module.id);
+    try testing.expectEqual(core.native_display.Kind.code, (try prepareTarget(&state, native_type)).native);
+    var value = core.Value{ .record = .init(native_type) };
+    defer value.deinit(testing.allocator);
+    try value.record.fields.append(testing.allocator, .{ .name = "source", .value = .{ .string = "Source" } });
+    try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, .code));
+    try value.record.fields.append(testing.allocator, .{ .name = "language", .value = .{ .number = 1 } });
+    try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, .code));
+}
+
 test "native asset display: local names and incomplete inputs cannot impersonate renderer types" {
     var state = try documentWithModules(
         \\import std:assets as assets

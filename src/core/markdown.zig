@@ -375,6 +375,9 @@ const ImageState = struct {
 };
 
 pub fn parseModeForNode(state: anytype, node: anytype) ParseMode {
+    if (node.placement) |placement| {
+        if (placement.display == .native and placement.display.native != .text) return .none;
+    }
     if (fields.read(state.allocator, state, node, "text", &.{"parse"}, .text)) |mode| {
         if (std.meta.stringToEnum(ParseMode, mode)) |parsed| return parsed;
     }

@@ -350,6 +350,7 @@ pub fn resolveKind(state: anytype, node: *const Node) RenderKind {
             .text => .text,
             .image => .raster_asset,
             .pdf => .vector_asset,
+            .code => .code,
         },
         .pending, .running => {},
     };
@@ -985,6 +986,9 @@ fn explicitRecordHorizontalAlign(node: *const Node, record_key: []const u8, path
 }
 
 fn themedRecordColorProperty(state: anytype, node: *const Node, record_key: []const u8, path: []const []const u8, theme_key: []const u8) ?Color {
+    if (node.placement) |placement| {
+        if (placement.display == .native) return parseRecordColorProperty(state, node, record_key, path);
+    }
     if (explicitRecordColorProperty(node, record_key, path)) |color| return color;
     if (node.kind == .object) {
         if (state.parentPageOf(node.id)) |page_id| {

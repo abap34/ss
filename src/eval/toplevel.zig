@@ -196,7 +196,7 @@ pub const EvalContext = struct {
                     .expanded => return error.DisplayTargetMismatch,
                 }
                 const payload_kind: core.PayloadKind = switch (kind) {
-                    .text => .text,
+                    .text, .code => .text,
                     .image => .image_ref,
                     .pdf => .pdf_ref,
                 };
@@ -213,7 +213,7 @@ pub const EvalContext = struct {
                     }
                 }
                 node.object_kind = switch (kind) {
-                    .text => .text,
+                    .text, .code => .text,
                     .image, .pdf => .asset,
                 };
                 node.payload_kind = payload_kind;
