@@ -33,10 +33,10 @@ async function testSnapshotAndSourceEdits() {
 import "./position" as *
 
 type Parts {
-  root: Object
+  root: Placed<Text>
 }
 
-fn movable!() -> Object
+fn movable!() -> Placed<Text>
   let result = text!("Move me")
   ~ result.left == page.left + left_offset
   ~ result.top == page.top - 96
@@ -537,14 +537,8 @@ async function testPositionEditsAllowReflowAndMoveReturnedGroups() {
     const uri = pathToFileURL(slide).toString();
     const source = `import std:themes/default as *
 
-fn/! grouped() -> Object
-  let title = text("Grouped title")
-  let rule = text("-")
-  ~ title.left == page.left + 72
-  ~ title.top == page.top - 100
-  ~ rule.left == title.left
-  ~ rule.top == title.bottom - 30
-  return group(title, rule)
+fn/! grouped() -> Group<Text, Text>
+  return (text("Grouped title") // text("-")) with { gap = 30 }
 end
 
 page demo
