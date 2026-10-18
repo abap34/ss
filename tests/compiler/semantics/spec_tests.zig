@@ -7571,22 +7571,26 @@ test "compiler semantics: placement facts follow returned groups and record alia
     , &.{"members=2"});
 }
 
-test "compiler semantics: local placement satisfies a later parent page read" {
-    try expectDumpContains(
-        \\import std:themes/default as *
-        \\fn make_item!() -> Object
-        \\  let item = txt_obj("A", "body")
-        \\  place_on!(pagectx(), item)
-        \\  if page_of(item)?
-        \\    item.link_id = "placed"
+test "compiler semantics: returned placements retain their page ownership" {
+    try expectObjectContent(
+        \\fn make_item!() -> Placed<Text>
+        \\  let item = text!("A")
+        \\  if page_index(item.page) == 1
+        \\    return text!("placed")
         \\  end
         \\  return item
         \\end
         \\page main
         \\  let item = make_item!()
-        \\  text!(item.link_id ?? "missing")
+        \\  text!(item.value.content ++ ":page=" ++ str(page_index(item.page)))
         \\end
-    , &.{"placed"});
+    , "placed:page=1");
+    try expectDiagnostic(
+        \\page main
+        \\  let item = text!("A")
+        \\  page_of(item)
+        \\end
+    , "case.ss:bytes:", "UnknownFunction");
 }
 
 test "compiler semantics: repeated placement is rejected" {

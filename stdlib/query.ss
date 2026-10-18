@@ -43,7 +43,3 @@ end
 fn doc_objs(doc: Document, role_name: String) -> Selection<Object>
   return select(doc, "document_objects_by_role", role_name)
 end
-
-fn page_of(obj: Object) -> Page?
-  return select(obj, "parent_page")
-end
