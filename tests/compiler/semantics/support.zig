@@ -137,15 +137,13 @@ pub fn expectObjectProperty(io: std.Io, allocator: std.mem.Allocator, path: []co
 
     for (state.graph.nodes.items) |node| {
         if (node.kind != .object) continue;
-        for (node.fields.items) |field| {
-            if (!std.mem.eql(u8, field.key, key)) continue;
-            const value = core.value_text.propertyString(allocator, field.value) catch |err| switch (err) {
-                error.ExpectedStringArgument => continue,
-                else => return err,
-            };
-            defer if (core.value_text.propertyStringNeedsFree(field.value)) allocator.free(value);
-            if (std.mem.eql(u8, value, expected)) return;
-        }
+        const field = core.nodeField(&node, key) orelse continue;
+        const value = core.value_text.propertyString(allocator, field) catch |err| switch (err) {
+            error.ExpectedStringArgument => continue,
+            else => return err,
+        };
+        defer if (core.value_text.propertyStringNeedsFree(field)) allocator.free(value);
+        if (std.mem.eql(u8, value, expected)) return;
     }
     return error.ExpectedObjectPropertyMissing;
 }
@@ -325,8 +323,6 @@ pub fn expectResolvedCodePaintIsColorful(io: std.Io, allocator: std.mem.Allocato
 
     for (state.graph.nodes.items) |node| {
         if (node.kind != .object) continue;
-        const role = node.role orelse continue;
-        if (!std.mem.eql(u8, role, "code")) continue;
         const render = core.render_policy.resolve(&state, &node);
         const code = render.code orelse continue;
         try expectColorDiffers(code.keyword, code.plain);

@@ -450,7 +450,7 @@ test "native code display: source, language and styles remain immutable across p
         \\  language = "python"
         \\  style = code_api::CodeBlockStyle {} with {
         \\    text.size = 18
-        \\    highlight.code.plain = c"#123456"
+        \\    highlight = code_api::CodeHighlightTheme { code = code_api::CodeColors { plain = c"#123456" } }
         \\    chrome.pad_x = 16
         \\  }
         \\}
@@ -498,6 +498,47 @@ test "native code display: source, language and styles remain immutable across p
     var selected = try state.selectTypedPlacements(testing.allocator, .{ .document = state.graph.document_id }, state.getNode(child).?.placement.?.value.record.ty);
     defer selected.deinit(testing.allocator);
     try testing.expectEqualSlices(core.NodeId, &ids, selected.ids.items);
+}
+
+test "code constructors: values allocate only at placement and defaults are independent of mutable themes" {
+    var state = try documentWithModules(
+        \\import std:code as c
+        \\fn duplicate<T>(value: T) -> Group<T, T> = value || value
+        \\page unused
+        \\  let unused: c::Code = c::code("Unused")
+        \\end
+        \\page used
+        \\  set_theme(default_theme() with { code.text.size = 99 })
+        \\  let value: c::Code = c::code("return 1", "python")
+        \\  let direct: Placed<c::Code> = c::code!("return 1", "python")
+        \\  let changed = place!(value with { style.text.size = 22 })
+        \\  let copies = place!(duplicate(value))
+        \\  let count = selection_count(select<c::Code>(pagectx()))
+        \\  ~ direct.width == count * 40
+        \\end
+    );
+    defer state.deinit();
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    try testing.expectEqual(@as(usize, 0), state.placementRootsOf(state.graph.page_order.items[0]).len);
+    const roots = state.placementRootsOf(state.graph.page_order.items[1]);
+    try testing.expectEqual(@as(usize, 3), roots.len);
+    const children = state.childrenOf(roots[2]).?;
+    try testing.expectEqual(@as(usize, 2), children.len);
+    const ids = [_]core.NodeId{ roots[0], roots[1], children[0], children[1] };
+    for (ids, [_]f32{ 16, 22, 16, 16 }) |id, size| {
+        const node = state.getNode(id).?;
+        try testing.expectEqual(core.native_display.Kind.code, node.placement.?.display.native);
+        try testing.expectEqualStrings("return 1", core.nodeContent(node).?);
+        try testing.expect(node.role == null);
+        try testing.expectEqual(@as(usize, 0), node.fields.items.len);
+        const paint = core.render_policy.resolve(&state, node);
+        try testing.expectEqual(size, paint.text.?.font_size);
+        try testing.expectEqualStrings("python", paint.code.?.language.?);
+        try testing.expectApproxEqAbs(@as(f32, 207.0 / 255.0), paint.code.?.keyword.r, 0.0001);
+    }
+    try testing.expect(children[0] != children[1]);
 }
 
 test "native code display: nominal identity and language input are required" {
