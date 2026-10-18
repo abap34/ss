@@ -442,7 +442,6 @@ fn lowerErrorMessage(err: anyerror) ?[]const u8 {
         error.ExpectedAnchor => "expected an anchor argument",
         error.ExpectedObject => "expected an object argument",
         error.NoCurrentPage => "this operation is only valid inside a page block",
-        error.NoPreviousPage => "the current page is the first page and has no previous page",
         error.UnknownAnchor => "unknown anchor",
         error.UnknownRole => "unknown role",
         error.UnknownPayloadKind => "unknown payload kind",

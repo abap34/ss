@@ -198,6 +198,25 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             }
             break :blk target;
         },
+        .selection_filter => blk: {
+            var target = try ctx.evalExprValue(call.args.items[0]);
+            errdefer target.deinit(ctx.state.allocator);
+            const predicate = try evalFunctionArg(ctx, call, 1);
+            if (target != .selection) return error.ExpectedSelection;
+            // Expression evaluation owns this snapshot; compacting it cannot
+            // change the caller's selection or the callback's captured values.
+            var kept: usize = 0;
+            for (target.selection.ids.items) |id| {
+                var keep = try ctx.invokeCallback(predicate, &.{itemValue(target.selection.item_tag, id)});
+                defer keep.deinit(ctx.state.allocator);
+                if (try eval_value.boolean(keep)) {
+                    target.selection.ids.items[kept] = id;
+                    kept += 1;
+                }
+            }
+            target.selection.ids.items.len = kept;
+            break :blk target;
+        },
         .foreach_enumerate => blk: {
             var target = try ctx.evalExprValue(call.args.items[0]);
             errdefer target.deinit(ctx.state.allocator);

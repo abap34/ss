@@ -118,10 +118,11 @@ import std:themes/default as {
   default_theme,
 }
 import std:query as {
-  prev_page,
+  previous_page,
   objs,
   objs_here,
   selection,
+  filter,
   children,
   descendants,
   doc_pages,

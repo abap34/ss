@@ -220,6 +220,9 @@ fn typeForPrimitiveCall(allocator: std.mem.Allocator, budget: ?QueryBudget, snap
         }
         return registry.queryOutputType(query);
     }
+    if (descriptor.result_policy == .first_arg and call.args.items.len > descriptor.result_arg_index) {
+        return try typeForExpr(allocator, budget, snapshot, module_id, offset, call.args.items[descriptor.result_arg_index]);
+    }
     if (descriptor.op == .first and call.args.items.len == 1) {
         const selection = (try typeForExpr(allocator, budget, snapshot, module_id, offset, call.args.items[0])) orelse return null;
         return if (selection.kind == .selection) selection.selectionItem() else null;

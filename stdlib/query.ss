@@ -1,7 +1,7 @@
 import std:internal/classes
 
-fn prev_page() -> Page
-  return select(pagectx(), "previous_page")
+fn previous_page(page_value: Page) -> Page?
+  return select(page_value, "previous_page")
 end
 
 fn objs(page_value: Page, role_name: String) -> Selection<Object>
@@ -10,6 +10,10 @@ end
 
 fn objs_here(role_name: String) -> Selection<Object>
   return objs(pagectx(), role_name)
+end
+
+fn filter<T>(items: Selection<T>, predicate: T -> Bool) -> Selection<T>
+  return selection_filter(items, predicate)
 end
 
 fn selection<T>(item: T) -> Selection<T>

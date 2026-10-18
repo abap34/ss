@@ -746,3 +746,21 @@ test "analysis query spec: singleton selection preserves its input through first
     try expectAppliedField(&snapshot, path, source, "first(selection(item)).value.title", "title", "String", 0);
     try expectAppliedField(&snapshot, path, source, "first(select(item, \"self_placement\")).value.title", "title", "String", 0);
 }
+
+test "analysis query spec: filtering preserves generic placement input fields" {
+    const path = "stdlib/internal/filtered-selection-query-test.ss";
+    const source =
+        \\type Heading { title: String }
+        \\fn filter<T>(items: Selection<T>, predicate: T -> Bool) -> Selection<T> = selection_filter(items, predicate)
+        \\fn title(items: Selection<Placed<Heading>>) -> String = first(filter(items, (h: Placed<Heading>) |-> true)).value.title
+        \\fn direct(items: Selection<Placed<Heading>>) -> String = first(selection_filter(items, (h: Placed<Heading>) |-> true)).value.title
+    ;
+    var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+    defer sources.deinit();
+    try sources.put(path, source);
+    var snapshot = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{});
+    defer snapshot.deinit();
+    try testing.expect(!snapshot.diagnostics.hasErrors());
+    try expectAppliedField(&snapshot, path, source, "first(filter(items, (h: Placed<Heading>) |-> true)).value.title", "title", "String", 0);
+    try expectAppliedField(&snapshot, path, source, "first(selection_filter(items, (h: Placed<Heading>) |-> true)).value.title", "title", "String", 0);
+}
