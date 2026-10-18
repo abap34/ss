@@ -394,7 +394,7 @@ function internalLinkDeckSource(targetText, linkText) {
 page target
 let target = txt_obj("${targetText}", "body")
 target.link_id = "target"
-place!(target)
+place_on!(pagectx(), target)
 end
 
 page link

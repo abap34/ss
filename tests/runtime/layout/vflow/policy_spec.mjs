@@ -128,7 +128,7 @@ let lower = text("Right lower paragraph")
 ~ left.width == 240
 ~ upper.width == 220
 ~ lower.width == 220
-place!(left || (upper // lower))
+place_on!(pagectx(), left || (upper // lower))
 end
 `;
       await writeFile(path.join(project, "slide.ss"), imports + pages, "utf8");

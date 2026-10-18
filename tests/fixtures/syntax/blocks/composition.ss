@@ -11,5 +11,5 @@ B
     text << ;; Caption
 C
 >>)
-  place!(g)
+  place_on!(pagectx(), g)
 end

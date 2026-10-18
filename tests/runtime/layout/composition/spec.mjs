@@ -70,9 +70,9 @@ async function testNestedPlacedObjects() {
 page placed
 vflow(LayoutPolicy.top)
 ${boxes}
-place!(a)
-place!(b)
-place!(c)
+place_on!(pagectx(), a)
+place_on!(pagectx(), b)
+place_on!(pagectx(), c)
 ${anchor}
 a || (b // c)
 end
@@ -97,7 +97,7 @@ page placed
 vflow(LayoutPolicy.top)
 ${boxes}
 let combined = a || (b // c)
-place!(combined)
+place_on!(pagectx(), combined)
 ${anchor}
 end
 `);
@@ -117,7 +117,7 @@ async function testIntermediateBinding() {
   const nested = await dumpSource("nested", `${prelude}
 page comparison
 ${boxes}
-place!(a || (b // c))
+place_on!(pagectx(), a || (b // c))
 ${anchor}
 end
 `);
@@ -125,7 +125,7 @@ end
 page comparison
 ${boxes}
 let right = b // c
-place!(a || right)
+place_on!(pagectx(), a || right)
 ${anchor}
 end
 `);
@@ -154,9 +154,9 @@ let b = body_obj!("B")
   const inferred = await dumpSource("ordinary-group", `${prelude}
 page groups
 ${boxes}
-place!(a)
-place!(b)
-place!(c)
+place_on!(pagectx(), a)
+place_on!(pagectx(), b)
+place_on!(pagectx(), c)
 ${anchor}
 ~ b.left == a.right + 32
 ~ b.top == a.top
@@ -173,7 +173,7 @@ end
 
   const incomplete = await dumpSource("mixed-placement-group", `${prelude}
 page groups
-let a = place!(new("A", "body", "text"))
+let a = place_on!(pagectx(), new("A", "body", "text"))
 let b = new("B", "body", "text")
 group(a, b)
 end
@@ -183,10 +183,10 @@ end
 
   const separate = await dumpSource("cross-page-group", `${prelude}
 page first
-place!(new("A", "first_box", "text"))
+place_on!(pagectx(), new("A", "first_box", "text"))
 end
 page second
-place!(new("B", "second_box", "text"))
+place_on!(pagectx(), new("B", "second_box", "text"))
 end
 document
 let a = first(objs_all("first_box"))
@@ -216,12 +216,12 @@ ${boxes}
 let d = box("D", 100, 180)
 let e = box("E", 50, 40)
 let f = box("F", 50, 40)
-place!(a)
-place!(b)
-place!(c)
-place!(d)
-place!(e)
-place!(f)
+place_on!(pagectx(), a)
+place_on!(pagectx(), b)
+place_on!(pagectx(), c)
+place_on!(pagectx(), d)
+place_on!(pagectx(), e)
+place_on!(pagectx(), f)
 ~ b.left == a.right + 32
 ~ b.top == a.top
 ~ c.left == a.left
@@ -293,7 +293,7 @@ let g = ${expression}
 ~ g.left == page.left + 100
 ~ g.top == page.top - 100
 ${padded ? "g.chrome.pad_x = 12\ng.chrome.pad_y = 8" : ""}
-place!(g)
+place_on!(pagectx(), g)
 end
 `);
       const g = groupNodes(dump).find((item) => dump.placement_roots.some((entry) => entry.roots.includes(item.id)));
@@ -317,7 +317,7 @@ let g = group(a, b)
 ${horizontal ? 'set_prop(g, "align_children_y", true)' : ""}
 g.chrome.pad_x = 12
 g.chrome.pad_y = 8
-place!(g)
+place_on!(pagectx(), g)
 end
 `;
     const split = await dumpSource(`natural-split-${horizontal}`, baseline.replace("group(a, b)", `a ${operator} b`).replace('set_prop(g, "align_children_y", true)', ""));
@@ -338,7 +338,7 @@ let g = a |=| b
 ~ g.right == page.left + 900
 ~ g.bottom == page.bottom + 100
 ~ g.top == page.bottom + 600
-place!(g)
+place_on!(pagectx(), g)
 end
 `);
   const g = groupNodes(dump)[0];
@@ -358,7 +358,7 @@ let a = text("A")
 let b = text("B")
 let g = ${expression}
 ${dimensions}
-place!(g)
+place_on!(pagectx(), g)
 end
 `, name === "insufficient-space" ? "NegativeFrameSize" : "ConstraintConflict");
   }
@@ -373,7 +373,7 @@ let g = a |=| b
 ~ g.left == page.left + 80
 ~ g.top == page.top - 100
 ~!~ b.left == page.left + 900
-place!(g)
+place_on!(pagectx(), g)
 end
 `);
   const right = node(updated.dump, "B");
@@ -409,7 +409,7 @@ end
   await expectFailure("negative-split-gap", `${prelude}
 page invalid
 let items = selection_union(select(text("A"), "self_object"), select(text("B"), "self_object"))
-place!(hsplit(items, -1))
+place_on!(pagectx(), hsplit(items, -1))
 end
 `, "InvalidGroupSplit");
 }
@@ -429,7 +429,7 @@ g.chrome.pad_x = 12
 g.chrome.pad_y = 8
 g.layout.spacing_after = 32
 ~ g.width == 1000
-place!(g)
+place_on!(pagectx(), g)
 body_obj!("After split")
 end
 `);
@@ -467,7 +467,7 @@ let inner = b // c
 let g = a |=| inner
 g.layout.spacing_after = 32
 ~ g.width == 1000
-place!(g)
+place_on!(pagectx(), g)
 body_obj!("After split")
 end
 `);
@@ -500,7 +500,7 @@ let a = text("Short")
 let b = text("Second line")
 let g = a |=| b
 ${constraints}
-place!(g)
+place_on!(pagectx(), g)
 end
 `);
     const g = groupNodes(dump)[0];
@@ -543,7 +543,7 @@ let a = text("Short")
 let b = text("Second line")
 let c = text("Third")
 let g = ${expression}
-place!(g)
+place_on!(pagectx(), g)
 end
 `);
     const rootId = dump.placement_roots.flatMap((entry) => entry.roots)[0];
@@ -580,7 +580,7 @@ let a = body_obj("Short")
 let b = body_obj("Second line")
 let g = a /=/ b
 ${constraints}
-place!(g)
+place_on!(pagectx(), g)
 end
 `);
     const g = groupNodes(dump)[0];
@@ -601,7 +601,7 @@ let b = body_obj("${"Words wrap within the available row width. ".repeat(12)}")
 let g = a /=/ b
 g.chrome.pad_x = 16
 ~ g.height == 400
-place!(g)
+place_on!(pagectx(), g)
 end
 `);
     const g = groupNodes(dump)[0];
@@ -631,7 +631,7 @@ let c = body_obj("Third")
 let g = ${expression}
 ${name === "horizontal-parent" ? "~ g.width == 800" : ""}
 ${name === "vertical-parent" ? "~ g.height == 400" : ""}
-place!(g)
+place_on!(pagectx(), g)
 end
 `);
     const rootId = dump.placement_roots.flatMap((entry) => entry.roots)[0];
@@ -684,7 +684,7 @@ g.chrome.pad_y = 7
 ~ g.height == 640
 ~ g.left == page.left + 80
 ~ g.top == page.top - 40
-place!(g)
+place_on!(pagectx(), g)
 end
 `);
         const groups = groupNodes(dump);
@@ -703,7 +703,7 @@ page bound
 let left = body_obj("A") |=| body_obj("B")
 let g = left |=| body_obj("C")
 ~ g.width == 1000
-place!(g)
+place_on!(pagectx(), g)
 end
 `);
   assert(groupNodes(bound.dump).length === 2, "bound group was flattened");
@@ -712,7 +712,7 @@ end
   await expectFailure("equal-duplicate", `${prelude}
 page duplicate
 let a = body_obj("A")
-place!(a |=| a)
+place_on!(pagectx(), a |=| a)
 end
 `, "InvalidGroupSplit");
   await expectFailure("group-page-selection", `${prelude}
@@ -768,7 +768,7 @@ ${index < 6 ? "~ g.width == 1000" : index === 7 ? "~ g.width == 600" : ""}
 ~ g.height == 500
 ~ g.left == page.left + 80
 ~ g.top == page.top - 80
-place!(g)
+place_on!(pagectx(), g)
 end
 `);
   const expected = [];
@@ -800,7 +800,7 @@ async function testSameDirectionBinaryGroups() {
     const { dump } = await dumpSource(operator === "||" ? "horizontal-chain" : "vertical-chain", `${prelude}
 page chain
 ${boxes}
-place!(a ${operator} b ${operator} c)
+place_on!(pagectx(), a ${operator} b ${operator} c)
 ${anchor}
 end
 `);
@@ -826,9 +826,9 @@ async function testSharedObjects() {
 page shared
 vflow(LayoutPolicy.top)
 ${boxes}
-place!(a)
-place!(b)
-place!(c)
+place_on!(pagectx(), a)
+place_on!(pagectx(), b)
+place_on!(pagectx(), c)
 ${anchor}
 a || b
 b // c
@@ -845,9 +845,9 @@ async function testConstraintUpdate() {
   const { dump } = await dumpSource("updated", `${prelude}
 page update
 ${boxes}
-place!(a)
-place!(b)
-place!(c)
+place_on!(pagectx(), a)
+place_on!(pagectx(), b)
+place_on!(pagectx(), c)
 ${anchor}
 a || b
 ~!~ b.top == a.bottom - 24
@@ -870,7 +870,7 @@ ${prelude}
 page gaps
 vflow(LayoutPolicy.top)
 ${boxes}
-place!(joins::hjoin(a, joins::vjoin(b, c, 12), 48))
+place_on!(pagectx(), joins::hjoin(a, joins::vjoin(b, c, 12), 48))
 ${anchor}
 end
 `);
@@ -881,8 +881,8 @@ async function testInferredGroupConstraintUpdate() {
   const { dump } = await dumpSource("inferred-group-update", `${prelude}
 page update_group
 vflow(LayoutPolicy.top)
-let a = place!(box("A", 120, 80))
-let b = place!(box("B", 180, 60))
+let a = place_on!(pagectx(), box("A", 120, 80))
+let b = place_on!(pagectx(), box("B", 180, 60))
 ~ a.left == page.left + 80
 ~ a.top == page.top - 80
 let combined = a || b
@@ -915,7 +915,7 @@ end
 async function testOperandEvaluation() {
   const { dump } = await dumpSource("evaluation-order", `${prelude}
 fn mark!(label: String) -> Object
-  return place!(box(label, 120, 60))
+  return place_on!(pagectx(), box(label, 120, 60))
 end
 
 page evaluation
@@ -957,7 +957,7 @@ ${prelude}
 page imported
 vflow(LayoutPolicy.top)
 ${boxes}
-place!(component::combine(a, b, c))
+place_on!(pagectx(), component::combine(a, b, c))
 ${anchor}
 end
 `, { "component.ss": `fn combine(a: Object, b: Object, c: Object) -> Object
@@ -993,18 +993,18 @@ end
 async function testConflictsAndMixedDirections() {
   await expectFailure("conflict", `${prelude}
 page conflict
-let a = place!(box("A", 120, 80))
-let b = place!(box("B", 180, 60))
+let a = place_on!(pagectx(), box("A", 120, 80))
+let b = place_on!(pagectx(), box("B", 180, 60))
 a || b
 ~ b.left == a.right + 64
 end
 `, "ConstraintConflict");
   await expectFailure("cross-page-composition", `${prelude}
 page first
-place!(new("A", "first_box", "text"))
+place_on!(pagectx(), new("A", "first_box", "text"))
 end
 page second
-place!(new("B", "second_box", "text"))
+place_on!(pagectx(), new("B", "second_box", "text"))
 end
 document
 let a = first(objs_all("first_box"))
@@ -1014,14 +1014,14 @@ end
 `, "CrossPageConstraint");
   await expectFailure("self-composition", `${prelude}
 page conflict
-let a = place!(box("A", 120, 80))
+let a = place_on!(pagectx(), box("A", 120, 80))
 a || a
 end
 `);
   await expectFailure("mixed-directions", `${prelude}
 page mixed
 ${boxes}
-place!(a || b // c)
+place_on!(pagectx(), a || b // c)
 end
 `);
 }
@@ -1042,8 +1042,8 @@ function policyPairSource({ documentPolicy, pagePolicy, before = "", after = "",
 ${documentPolicy ? `document\nvflow_doc(LayoutPolicy.${documentPolicy})\nend\n` : ""}
 page policy
 ${pagePolicy ? `vflow(LayoutPolicy.${pagePolicy})` : ""}
-let a = place!(box("A", 120, 80))
-let b = place!(box("B", 180, 60))
+let a = place_on!(pagectx(), box("A", 120, 80))
+let b = place_on!(pagectx(), box("B", 180, 60))
 ~ a.left == page.left + 80
 ${fixedLeft ? "~ a.top == page.top - 80" : ""}
 ${before}
@@ -1098,7 +1098,7 @@ async function testNestedHorizontalPolicy() {
 page nested_policy
 vflow(LayoutPolicy.center)
 ${boxes}
-${placement === "children" ? "place!(a)\nplace!(b)\nplace!(c)\na || (b // c)" : "place!(a || (b // c))"}
+${placement === "children" ? "place_on!(pagectx(), a)\nplace_on!(pagectx(), b)\nplace_on!(pagectx(), c)\na || (b // c)" : "place_on!(pagectx(), a || (b // c))"}
 ${anchor}
 end
 `);
@@ -1194,7 +1194,7 @@ async function testCenteredChainAndVerticalComposition() {
 page chain_policy
 vflow(LayoutPolicy.center_stack)
 ${boxes}
-place!(a || b || c)
+place_on!(pagectx(), a || b || c)
 ${anchor}
 end
 `);
@@ -1210,8 +1210,8 @@ end
   const vertical = await dumpSource("policy-vertical-unchanged", `${prelude}
 page vertical_policy
 vflow(LayoutPolicy.center)
-let a = place!(box("A", 120, 80))
-let b = place!(box("B", 180, 60))
+let a = place_on!(pagectx(), box("A", 120, 80))
+let b = place_on!(pagectx(), box("B", 180, 60))
 ${anchor}
 a // b
 end

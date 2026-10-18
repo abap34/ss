@@ -198,7 +198,7 @@ picture.asset.pdf_box = PdfPageBox.crop
 picture.chrome.fill = none
 picture.chrome.stroke = none
 picture.chrome.line_width = 0
-place!(picture)
+place_on!(pagectx(), picture)
 ~ picture.left == page.left + 312
 ~ picture.top == page.top - 168
 end

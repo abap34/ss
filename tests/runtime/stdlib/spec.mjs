@@ -59,7 +59,7 @@ let illustration = figure_parts(drawing, "Caption")
 let framed = box_parts(illustration.root, ChromeStyle { pad_x = 12 pad_y = 10 })
 ~ drawing.left == page.left + 180
 ~ drawing.top == page.top - 180
-place!(framed.root)
+place_on!(pagectx(), framed.root)
 end
 `);
   assert.equal(parts.nodes.filter(n => n.content === 'Caption').length, 1);

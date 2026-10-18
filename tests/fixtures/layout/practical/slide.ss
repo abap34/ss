@@ -50,7 +50,7 @@ Each batch produces one compact report with a count and a short explanation.
   ~ content.height == 440
   ~ content.left == page.left + 120
   ~ content.top == page.top - 180
-  place!(content)
+  place_on!(pagectx(), content)
 end
 
 page matrix
@@ -89,7 +89,7 @@ Read the result and confirm the next step.
   ~ content.height == 440
   ~ content.left == page.left + 120
   ~ content.top == page.top - 180
-  place!(content)
+  place_on!(pagectx(), content)
 end
 
 page table_code
@@ -121,7 +121,7 @@ write_report(valid)
   ~ content.height == 440
   ~ content.left == page.left + 120
   ~ content.top == page.top - 180
-  place!(content)
+  place_on!(pagectx(), content)
 end
 
 page flow
@@ -158,7 +158,7 @@ Each bar uses the same baseline. The caption stays below the complete image.
   let content = group(diagram, caption, annotation)
   ~ content.left == page.left + 120
   ~ content.top == page.top - 170
-  place!(content)
+  place_on!(pagectx(), content)
 end
 
 page cards
@@ -173,7 +173,7 @@ page cards
   let row = group(a, b, c)
   ~ row.left == page.left + 150
   ~ row.top == page.top - 210
-  place!(row)
+  place_on!(pagectx(), row)
   let summary = text!("Card summary: all three steps share one row, with a separate explanation underneath.")
   ~ summary.width == 948
   ~ summary.left == row.left

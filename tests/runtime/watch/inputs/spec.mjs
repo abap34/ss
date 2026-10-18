@@ -60,7 +60,7 @@ try {
   await writeFile(diagram, svg("red"));
   const beforeDiagram = checks();
   await writeFile(source,
-    'import std:themes/default as *\npage main\nplace!(img_obj("../outside/diagram.svg"))\nend\n');
+    'import std:themes/default as *\npage main\nplace_on!(pagectx(), img_obj("../outside/diagram.svg"))\nend\n');
   await watch.waitFor(() => checks() > beforeDiagram, "prepared image dependency");
   await settle();
   const beforeImageChange = checks();

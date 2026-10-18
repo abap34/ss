@@ -214,7 +214,7 @@ import std:text as *
 
 page ok
   let t = text("body")
-  place!(t)
+  place_on!(pagectx(), t)
 end
 `;
     const memberValidDiagnosticsPromise = client.waitForDiagnostics(
@@ -417,7 +417,7 @@ fn themed(theme_value: Theme) -> Object
 end
 
 page title
-  place!(themed(current_theme()))
+  place_on!(pagectx(), themed(current_theme()))
 end
 `;
     await writeFile(slide, localSource, "utf8");

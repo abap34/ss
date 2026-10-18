@@ -11,13 +11,13 @@ fn/! block(label: String) -> Object
 end
 
 fn decoration!() -> Void
-  let badge = place!(lab_obj("DRAFT"))
+  let badge = place_on!(pagectx(), lab_obj("DRAFT"))
   ~ badge.width == 140
   ~ badge.height == 32
   ~ badge.right == page.right - 24
   ~ badge.top == page.top - 24
 
-  let note = place!(lab_obj("Fixed note"))
+  let note = place_on!(pagectx(), lab_obj("Fixed note"))
   ~ note.width == 200
   ~ note.height == 32
   ~ note.right == badge.right

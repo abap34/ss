@@ -224,7 +224,7 @@ test "execution graph owns computed resource names after analyzers and cached su
             \\end
             \\page main
             \\  let items = doc_objs(docctx(), "tag" ++ "ged")
-            \\  let item = place!(new("item", "tag" ++ "ged", "text"))
+            \\  let item = place_on!(pagectx(), new("item", "tag" ++ "ged", "text"))
             \\end
         );
         defer state.deinit();

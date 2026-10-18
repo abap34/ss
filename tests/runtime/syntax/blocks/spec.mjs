@@ -24,10 +24,10 @@ const dump = JSON.parse(await readFile(dumpFile, "utf8"));
 assert.deepEqual(dump.nodes.filter((node) => node.content).map((node) => node.content), ["A >> remains text", "B", "C"]);
 
 for (const operator of operators) {
-  await check(wrap(`let g = (text << ;; header\nInline >> content\n>>) ${operator}\ntext(<< ;; header\nB\n>>)\nplace!(g)`));
+  await check(wrap(`let g = (text << ;; header\nInline >> content\n>>) ${operator}\ntext(<< ;; header\nB\n>>)\nplace_on!(pagectx(), g)`));
   for (const left of ['text("A")', "text <<\nA\n>>"]) {
     for (const separator of ["\n", "\n\n", "\n;; comment\n", "\r\n;; comment\r\n"]) {
-      await check(wrap(`let g = ${left}${separator}${operator} text("B")\nplace!(g)`));
+      await check(wrap(`let g = ${left}${separator}${operator} text("B")\nplace_on!(pagectx(), g)`));
     }
   }
 }
@@ -67,7 +67,7 @@ await withLspClient({ cwd: project }, async (client) => {
   assert.equal(items.length, 1, "block error produced cascading diagnostics");
   assert.match(items[0].message, /UnterminatedBlockString.*opened here/);
   assert.deepEqual(items[0].range, { start: { line: 2, character: 5 }, end: { line: 2, character: 7 } });
-  const fixed = wrap('place!((text <<\nA\n>>) |=| text("B"))');
+  const fixed = wrap('place_on!(pagectx(), (text <<\nA\n>>) |=| text("B"))');
   const cleared = client.waitForDiagnostics(uri, (items, message) => items.length === 0 && message.params.version === 2);
   client.changeDocument({ uri, text: fixed, version: 2 });
   await cleared;

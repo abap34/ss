@@ -85,7 +85,7 @@ async function testChromeStrokeStaysInsideFrameForDiagnostics() {
       `import std:themes/default as *
 
 page chrome_ok
-  let panel = place!(new("", "panel", "text"))
+  let panel = place_on!(pagectx(), new("", "panel", "text"))
   panel.chrome = ChromeStyle {
     fill = c"0.97,0.98,1"
     stroke = c"0.80,0.84,0.90"

@@ -850,3 +850,88 @@ test "paired placement: imported constructors preserve values defaults and concr
     try testing.expect(roots[3] != roots[4]);
     try testing.expect(state.childrenOf(roots[3]).?[0] != state.childrenOf(roots[4]).?[0]);
 }
+
+test "public placement: inferred explicit and forwarded type arguments preserve independent placements" {
+    var state = try documentWithModules(
+        \\import std:layout as layout
+        \\import std:text as text_api
+        \\type Label { title: String }
+        \\fn display(self: Placed<Label>) -> text_api::Text
+        \\  return text_api::Text { content = self.value.title ++ ":" ++ str(page_index(self.page)) }
+        \\end
+        \\fn forward!<T>(value: T) -> Placed<T>
+        \\  return layout::place!<T>(value)
+        \\end
+        \\const shared: Label = Label { title = "Shared" }
+        \\page first
+        \\  let a: Placed<Label> = place!(shared)
+        \\  let b: Placed<Label> = layout::place!<Label>(shared)
+        \\  let alias = a
+        \\  ~ b.left == alias.right + 24
+        \\  let plain: Placed<text_api::Text> = place!(text_api::Text { content = "Native" })
+        \\end
+        \\page second
+        \\  let c: Placed<Label> = forward!(shared)
+        \\  let selection: Selection<Placed<Label>> = select<Label>(pagectx())
+        \\  let title: String = first(selection).value.title
+        \\end
+    );
+    defer state.deinit();
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const pages = state.graph.page_order.items;
+    try testing.expectEqual(@as(usize, 2), pages.len);
+    const first = state.placementRootsOf(pages[0]);
+    const second = state.placementRootsOf(pages[1]);
+    try testing.expectEqual(@as(usize, 3), first.len);
+    try testing.expectEqual(@as(usize, 1), second.len);
+    try testing.expect(first[0] != first[1]);
+    try testing.expect(first[0] != second[0]);
+    for (first[0..2]) |root| {
+        const placement = state.getNode(root).?.placement.?;
+        try testing.expectEqual(pages[0], placement.page_id);
+        try testing.expectEqualStrings("Shared", placement.value.record.field("title").?.string);
+        const child = state.childrenOf(root).?[0];
+        try testing.expectEqualStrings("Shared:1", core.nodeDisplayContent(state.getNode(child).?));
+    }
+    try testing.expectEqualStrings("Native", core.nodeDisplayContent(state.getNode(first[2]).?));
+    const child = state.childrenOf(second[0]).?[0];
+    try testing.expectEqual(pages[1], state.getNode(second[0]).?.placement.?.page_id);
+    try testing.expectEqualStrings("Shared:2", core.nodeDisplayContent(state.getNode(child).?));
+    const relation = state.constraints.active.items[0];
+    try testing.expectEqual(first[1], relation.target_node);
+    try testing.expectEqual(first[0], relation.source.node.node_id);
+}
+
+test "public placement: non-displayable values and placed references fail before evaluation" {
+    for ([_][]const u8{
+        "place!(42)",
+        "place!(Settings {})",
+        "place!(place!(text_api::Text { content = \"Twice\" }))",
+        "layout::place!<Number>(text_api::Text { content = \"Mismatch\" })",
+        "place!(new(\"Legacy\", \"body\", \"text\"))",
+        "place!(nothing())",
+    }) |expression| {
+        const source = try std.fmt.allocPrint(testing.allocator,
+            \\import std:text as text_api
+            \\import std:layout as layout
+            \\type Settings {{}}
+            \\fn nothing() -> Void
+            \\end
+            \\page main
+            \\  {s}
+            \\end
+        , .{expression});
+        defer testing.allocator.free(source);
+        var state = try documentWithModules(source);
+        defer state.deinit();
+        if (compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)) |result| {
+            var graph = result.?;
+            graph.deinit();
+            return error.ExpectedInvalidPlacement;
+        } else |_| {}
+        try testing.expect(state.diagnostics.entries.items.len != 0);
+        for (state.graph.page_order.items) |page| try testing.expectEqual(@as(usize, 0), state.placementRootsOf(page).len);
+    }
+}
