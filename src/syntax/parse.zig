@@ -498,6 +498,13 @@ const Parser = struct {
 
         var placed = try func.cloneSignature(self.allocator, placed_name, func.span);
         errdefer placed.deinit(self.allocator);
+        // Bare Object constructors still use the legacy attachment path until
+        // stdlib migration removes them. All typed constructors return a reference.
+        if (!(func.result_type.kind == .object and func.result_type.class_name == null)) {
+            const reference = try ast.Type.placedOf(self.allocator, placed.result_type);
+            placed.result_type.deinit(self.allocator);
+            placed.result_type = reference;
+        }
 
         var inner_args = std.ArrayList(Expr).empty;
         errdefer {

@@ -603,6 +603,40 @@ test "analysis query spec: placement members expose concrete input and hide eras
     }
 }
 
+test "analysis query spec: paired typed constructors expose placing signatures and input fields" {
+    const path = "stdlib/internal/paired-placement-query-test.ss";
+    const source =
+        \\import std:text/content as native
+        \\type Wrapper<T> { content: T }
+        \\fn display<T>(self: Placed<Wrapper<T>>) -> T = self.value.content
+        \\fn/! wrap<T>(content: T) -> Wrapper<T> = Wrapper<T> { content = content }
+        \\page main
+        \\  let content = native::Text { content = "Wrapped" }
+        \\  let placed = wrap!(content)
+        \\  let text: String = placed.value.content.content
+        \\end
+    ;
+    var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+    defer sources.deinit();
+    try sources.put(path, source);
+    var snapshot = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{});
+    defer snapshot.deinit();
+    try testing.expect(!snapshot.diagnostics.hasErrors());
+    try expectAppliedField(&snapshot, path, source, "placed.value.content", "content", "Text", 1);
+    const request = analysis.query.types.SourceRequest{
+        .path = path,
+        .source = source,
+        .offset = std.mem.indexOf(u8, source, "wrap!(content)").? + 2,
+    };
+    var hover = (try analysis.snapshot.hoverAt(testing.allocator, &snapshot, request, .{ .budget_ms = 1000 })) orelse return error.ExpectedHover;
+    defer hover.deinit(testing.allocator);
+    try testing.expect(std.mem.indexOf(u8, hover.markdown, "Placed<Wrapper<T>>") != null);
+    const definitions = try analysis.snapshot.definitionAt(testing.allocator, &snapshot, request, .{ .budget_ms = 1000 });
+    defer testing.allocator.free(definitions);
+    try testing.expectEqual(@as(usize, 1), definitions.len);
+    try testing.expectEqual(@as(usize, 3), definitions[0].line);
+}
+
 test "analysis query spec: unfinished placement access keeps the concrete input type" {
     const path = "stdlib/internal/unfinished-placement-query-test.ss";
     for ([_]struct { source: []const u8, needle: []const u8, expected: []const u8 }{

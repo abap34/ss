@@ -4,6 +4,8 @@ type Heading {
   title: String
 }
 
+fn/! heading(title: String) -> Heading = Heading { title = title }
+
 fn place!<T>(value: T) -> Placed<T>
   return place_on!(pagectx(), value)
 end
@@ -24,6 +26,6 @@ page first
 end
 
 page second
-  let heading = place!(Heading { title = "Second" })
-  ~ heading.left == page.left + 48
+  let item = heading!("Second")
+  ~ item.left == page.left + 48
 end
