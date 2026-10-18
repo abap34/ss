@@ -7,3 +7,5 @@ type AssetBlockStyle {
   asset: AssetStyle = AssetStyle {}
   chrome: ChromeStyle = ChromeStyle {}
 }
+
+const default_icon_style: AssetBlockStyle = AssetBlockStyle { asset = AssetStyle { tint = c"#374151" } }

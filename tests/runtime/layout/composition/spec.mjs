@@ -517,9 +517,12 @@ end
   for (const policy of ["left", "center", "right"]) {
     for (const scale of [1, 0.02]) {
       const { dump } = await dumpSource(`horizontal-inferred-${policy}-${scale}`, `import std:themes/default as *
+import std:text as { Text }
 page example
 hflow(LayoutPolicy.${policy})
-text!("Short") |=| image!("${asset}", ${scale})
+let pair = place!(Text { content = "Short" } |=| image("${asset}", AssetBlockStyle {} with { asset.scale = ${scale} }))
+~ pair.left == page.left + 72
+~ pair.width == 1136
 end
 `);
       const a = node(dump, "Short");
@@ -528,7 +531,8 @@ end
       assertClose(b.x, 656, "image scale changed the right column boundary");
       assertClose(a.width, 552, "inferred left column width");
       assertClose(b.width, 552, "inferred right column width");
-      assert(groupNodes(dump).length === 0, "inferred split implicitly attached a group");
+      assert(dump.nodes.filter(node => node.placement?.input.kind === "group").length === 1,
+        "the equal composition must have one typed group placement");
       assert(dump.diagnostics.length === 0, `inferred split diagnostics: ${JSON.stringify(dump.diagnostics)}`);
     }
   }

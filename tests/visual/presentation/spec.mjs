@@ -20,7 +20,7 @@ page first
 text!("Presentation test")
 end
 page second
-pdf!("asset.pdf", 1.0, 1)
+pdf!("asset.pdf")
 end
 `);
 await writeFile(path.join(output, "ss.toml"), '[project]\nentry = "slide.ss"\n');

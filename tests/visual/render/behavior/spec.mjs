@@ -64,7 +64,7 @@ async function renderPdfAssetCases() {
 import std:assets/style as { AssetBlockStyle }
 
 page small
-let asset = pdf!("asset.pdf", 0.3, 1, PdfPageBox.crop, AssetBlockStyle {})
+let asset = pdf!("asset.pdf", AssetBlockStyle {} with { asset.scale = 0.3 })
 ~ asset.left == page.left + 100
 ~ asset.right == page.right - 480
 ~ asset.top == page.top - 120
@@ -72,7 +72,7 @@ let asset = pdf!("asset.pdf", 0.3, 1, PdfPageBox.crop, AssetBlockStyle {})
 end
 
 page large
-let asset = pdf!("asset.pdf", 0.8, 1, PdfPageBox.crop, AssetBlockStyle {})
+let asset = pdf!("asset.pdf", AssetBlockStyle {} with { asset.scale = 0.8 })
 ~ asset.left == page.left + 100
 ~ asset.right == page.right - 480
 ~ asset.top == page.top - 120
@@ -80,7 +80,7 @@ let asset = pdf!("asset.pdf", 0.8, 1, PdfPageBox.crop, AssetBlockStyle {})
 end
 
 page fixed_frame
-let asset = pdf!("asset.pdf", 1, 1, PdfPageBox.crop, AssetBlockStyle {})
+let asset = pdf!("asset.pdf", AssetBlockStyle {} with { asset.scale = 1 })
 ~ asset.left == page.left + 100
 ~ asset.right == asset.left + 80
 ~ asset.top == page.top - 120

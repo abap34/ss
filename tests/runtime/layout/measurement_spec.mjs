@@ -259,7 +259,7 @@ async function testCheckReportsUnknownStandaloneIcon() {
       `import std:themes/default as *
 
 page bad
-let icon_item = icon!("fa-solid:not-an-icon", 72, 72)
+let icon_item = icon!("fa-solid:not-an-icon")
 ~ icon_item.left == page.left + 120
 ~ icon_item.top == page.top - 120
 end
@@ -323,13 +323,9 @@ async function testPdfFactorScalesMeasuredAssetFrame() {
       `import std:prelude as *
 
 page pdf_scale
-  let small = pdf("asset.pdf", 0.3, 1, PdfPageBox.crop, AssetBlockStyle {})
-  small.link_id = "small"
-  place_on!(pagectx(), small)
+  let small = pdf!("asset.pdf", AssetBlockStyle {} with { asset.scale = 0.3 })
 
-  let large = pdf("asset.pdf", 2, 1, PdfPageBox.crop, AssetBlockStyle {})
-  large.link_id = "large"
-  place_on!(pagectx(), large)
+  let large = pdf!("asset.pdf", AssetBlockStyle {} with { asset.scale = 2 })
 end
 `,
       "utf8",

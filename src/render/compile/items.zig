@@ -1163,7 +1163,10 @@ fn addTargetedRenderDiagnostic(
     const detail = recorded_message orelse
         (if (font_diagnostic) |report| report.message else null) orelse
         renderFailureDiagnosticMessage(&detail_buffer, err);
-    const reason = try std.fmt.allocPrint(state.allocator, "{s}: {s}", .{ label, detail });
+    const reason = if (recorded_message != null and err == error.InvalidPdfResource)
+        try std.fmt.allocPrint(state.allocator, "{s}: {s}; {s}", .{ label, renderFailureDiagnosticMessage(&detail_buffer, err), detail })
+    else
+        try std.fmt.allocPrint(state.allocator, "{s}: {s}", .{ label, detail });
     try state.addRenderDiagnostic(.@"error", resolved_target.page_id, resolved_target.node_id, origin, .{
         .render_failed = .{
             .reason = reason,
@@ -1208,7 +1211,7 @@ fn renderFailureDiagnosticMessage(buffer: []u8, err: anyerror) []const u8 {
         error.UnsupportedAssetType => "UnsupportedAssetType: this object cannot render the asset type; use image! for images and pdf! for PDF files",
         error.InvalidRasterResource => "InvalidRasterResource: the file is not a valid raster image; verify its contents and use pdf! for PDF files",
         error.InvalidSvgResource => "InvalidSvgResource: the file is not a valid SVG with usable intrinsic dimensions; repair or replace the SVG",
-        error.InvalidPdfResource => "InvalidPdfResource: the file is not a readable PDF or the requested page is unavailable; verify the PDF and page number",
+        error.InvalidPdfResource => "InvalidPdfResource: the file is not a readable PDF or the requested page is unavailable; verify the PDF and page number; use image! for images and pdf! for PDF files",
         error.ResourceChangedDuringRead => "ResourceChangedDuringRead: the asset changed repeatedly while it was being read; wait for the writer to finish and retry",
         error.UnknownTreeSitterLanguage => "UnknownTreeSitterLanguage: the configured parser is unavailable; select a supported built-in parser in ss.toml",
         error.TreeSitterParserCreateFailed => "TreeSitterParserCreateFailed: could not initialize syntax highlighting; retry or disable highlighting for this language",

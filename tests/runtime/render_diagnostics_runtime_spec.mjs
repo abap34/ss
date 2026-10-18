@@ -405,7 +405,7 @@ end
     const output = `${result.stdout}\n${result.stderr}`;
     assert(result.code !== 0, "render should reject a PNG passed to pdf!");
     assert(output.includes("RenderFailed:"), `mismatched PDF asset did not produce a source diagnostic:\n${output}`);
-    assert(output.includes("UnsupportedAssetType:"), `mismatched PDF asset omitted the format cause:\n${output}`);
+    assert(output.includes("InvalidPdfResource:"), `mismatched PDF asset omitted the format cause:\n${output}`);
     assert(output.includes("use image! for images and pdf! for PDF files"), `mismatched PDF asset omitted corrective guidance:\n${output}`);
     assert(output.includes('| pdf!("asset.png")'), `mismatched PDF asset diagnostic omitted the source excerpt:\n${output}`);
     assert(!output.includes("CommandFailed:"), `mismatched PDF asset escaped to the command boundary:\n${output}`);

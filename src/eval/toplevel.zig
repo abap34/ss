@@ -201,7 +201,20 @@ pub const EvalContext = struct {
                 const node = self.state.getNode(id) orelse return error.UnknownNode;
                 if (node.discarded) return error.InvalidPlacementParent;
                 const placement = if (node.placement) |*value| value else return error.InvalidValueTag;
-                try core.native_display.validateValue(self.state, placement.value, kind);
+                core.native_display.validateValue(self.state, placement.value, kind) catch |err| switch (err) {
+                    error.InvalidFontAwesomeIcon => {
+                        const source = placement.value.record.field("source").?.string;
+                        const origin = core.ContentProvenance.originForSpan(self.state.stringProvenance(source), 0, source.len) orelse node.origin;
+                        try self.state.addValidationDiagnostic(.@"error", placement.page_id, id, origin, .{
+                            .user_report = .{
+                                .code = "InvalidFontAwesomeIcon",
+                                .message = try std.fmt.allocPrint(self.state.allocator, "Unknown Font Awesome icon '{s}'. Use a bundled icon name such as 'fa-solid:star'.", .{source}),
+                            },
+                        });
+                        return err;
+                    },
+                    else => return err,
+                };
                 switch (placement.display) {
                     .pending => {},
                     .native => |existing| {
@@ -219,7 +232,9 @@ pub const EvalContext = struct {
                     .path_shape => .text,
                 };
                 if (kind == .image or kind == .pdf) {
-                    try validateAssetPath(self.state, placement.page_id, id, placement.value.record.field("path").?.string, payload_kind, node.origin);
+                    const path = placement.value.record.field("path").?.string;
+                    const origin = core.ContentProvenance.originForSpan(self.state.stringProvenance(path), 0, path.len) orelse node.origin;
+                    try validateAssetPath(self.state, placement.page_id, id, path, payload_kind, origin);
                 }
                 if (kind == .pdf) {
                     const style = placement.value.record.field("style").?.record;
