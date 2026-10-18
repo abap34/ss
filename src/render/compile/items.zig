@@ -529,7 +529,10 @@ pub const LayoutMeasurementScope = struct {
                 .x = 0,
                 .y = 0,
                 .width = @max(width, 1),
-                .height = measurementFrameHeight(frame, mode),
+                .height = if (core.render_policy.naturalPathSize(node)) |size|
+                    (if (mode == .width_constrained and frame.height > 0) frame.height else size.height)
+                else
+                    measurementFrameHeight(frame, mode),
             },
             .content = object.content,
             .content_provenance = object.content_provenance,
@@ -1957,6 +1960,19 @@ fn measureObjectCommandIntrinsic(ctx: *DrawContext, command: *const ObjectComman
         if (render.text) |*text| text.wrap = false;
     }
     if (render.kind == .vector_path or render.kind == .connector or render.kind == .chrome_only) {
+        if (render.vector_path) |path| if (path.natural_size) |size| {
+            const shape_frame = Frame{
+                .x = 0,
+                .y = 0,
+                .width = if (mode == .natural) size.width else outer_width,
+                .height = if (mode == .natural) size.height else command.frame.height,
+            };
+            var measured = try measureFrameIntrinsic(ctx, command, shape_frame);
+            // Stroke and markers contribute ink bounds, not the logical frame.
+            measured.width = shape_frame.width;
+            measured.height = shape_frame.height;
+            return measured;
+        };
         const frame_width: f32 = if (mode == .natural) 1 else @max(outer_width, 1);
         return try measureFrameIntrinsic(ctx, command, Frame{ .x = 0, .y = 0, .width = frame_width, .height = 1 });
     }
@@ -1987,7 +2003,7 @@ fn measureObjectCommandIntrinsic(ctx: *DrawContext, command: *const ObjectComman
 
 fn measureFrameIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, frame: Frame) !core.LayoutMeasurement {
     var measurement = MeasurementScope.init(ctx);
-    try measurement.begin();
+    try measurement.beginWithCapture(true);
     defer measurement.deinit();
 
     try drawObjectChrome(ctx, frame, command.render);
@@ -2300,6 +2316,7 @@ fn addDestination(ctx: *DrawContext, maybe_link_id: ?[]const u8, frame: Frame) !
 }
 
 fn contentFrameForRender(frame: Frame, render: ResolvedRender) Frame {
+    if (render.vector_path) |path| if (path.natural_size != null) return frame;
     return .{
         .x = frame.x + render.chrome.pad_x,
         .y = frame.y + render.chrome.pad_y,

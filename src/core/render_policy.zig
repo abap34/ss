@@ -97,7 +97,10 @@ pub const MarkerPaint = struct {
 };
 
 pub const VectorPathPaint = struct {
+    pub const Size = struct { width: f32, height: f32 };
+
     path: model.Path,
+    natural_size: ?Size = null,
     fill: VectorFillPaint,
     stroke: ?VectorStrokePaint,
     marker_start: ?MarkerPaint,
@@ -352,6 +355,7 @@ pub fn resolveKind(state: anytype, node: *const Node) RenderKind {
             .pdf => .vector_asset,
             .code => .code,
             .latex => .latex,
+            .path_shape => .vector_path,
         },
         .pending, .running => {},
     };
@@ -374,6 +378,7 @@ pub fn resolveTextMetrics(state: anytype, node: *const Node) TextMetrics {
 }
 
 pub fn shouldWrapText(state: anytype, node: *const Node) bool {
+    if (naturalPathSize(node) != null) return false;
     switch (node.payload_kind orelse .text) {
         .image_ref, .pdf_ref => return false,
         else => {},
@@ -576,6 +581,15 @@ fn resolveCode(state: anytype, node: *const Node, kind: RenderKind) ?CodePaint {
     };
 }
 
+pub fn naturalPathSize(node: *const Node) ?VectorPathPaint.Size {
+    const placement = node.placement orelse return null;
+    if (placement.display != .native or placement.display.native != .path_shape) return null;
+    return .{
+        .width = @floatCast(placement.value.record.field("width").?.number),
+        .height = @floatCast(placement.value.record.field("height").?.number),
+    };
+}
+
 fn resolveVectorPath(node: *const Node, kind: RenderKind) ?VectorPathPaint {
     if (kind != .vector_path) return null;
     const path_value = model.nodeField(node, "path") orelse return null;
@@ -590,6 +604,7 @@ fn resolveVectorPath(node: *const Node, kind: RenderKind) ?VectorPathPaint {
     const stroke = resolveVectorStroke(node, "stroke");
     return .{
         .path = path,
+        .natural_size = naturalPathSize(node),
         .fill = fill,
         .stroke = stroke,
         .marker_start = markerFromNode(node, "marker_start"),

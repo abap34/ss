@@ -20,6 +20,7 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
         .{ .path = "tests/runtime/layout/composition/typed_spec.mjs", .name = "test-typed-composition", .description = "Check immutable composition operators, spacing, and equal cells" },
         .{ .path = "tests/runtime/layout/group/spec.mjs", .name = "test-typed-group", .description = "Check typed group ownership, bounds, and rendering" },
         .{ .path = "tests/runtime/math/typed_display_spec.mjs", .name = "test-typed-latex", .description = "Check immutable LaTeX bodies, configuration, and rendering" },
+        .{ .path = "tests/runtime/graphics/path/typed_spec.mjs", .name = "test-typed-path", .description = "Check immutable vector paths, dimensions, composition, and rendering" },
         .{ .path = "tests/runtime/math/formula/spec.mjs", .name = "test-typed-math", .description = "Check typed formula construction, composition, and rendering" },
         .{ .path = "tests/runtime/document/typed_page_numbers_spec.mjs", .name = "test-typed-document", .description = "Check typed page numbers, contents, and references in a multi-page document" },
         .{ .path = "tests/runtime/data/csv/spec.mjs", .name = "test-csv", .description = "Check CSV parsing, table rendering, and editor inputs" },

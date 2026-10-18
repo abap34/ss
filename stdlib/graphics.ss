@@ -1,5 +1,6 @@
 import std:graphics/types as { LineCap, LineJoin, FillRule, PaintSpace, GradientSpread, FillKind, ConnectorAnchor, ConnectorRoute, PathVerb, PathCommand, VectorStrokeStyle, LineStyle, GradientDirection, PatternStyle, FillStyle, MarkerStyle, VectorStyle, ConnectorStyle }
 import std:internal/classes
+import std:graphics/content as { PathShape }
 import std:internal/objects as objects
 
 import std:graphics/path as paths
