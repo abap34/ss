@@ -11,13 +11,13 @@ fn block!(label: String) -> Placed<Text>
 end
 
 fn decoration!() -> Void
-  let badge = place_on!(pagectx(), lab_obj("DRAFT"))
+  let badge = place_on!(pagectx(), text("DRAFT", default_theme().label))
   ~ badge.width == 140
   ~ badge.height == 32
   ~ badge.right == page.right - 24
   ~ badge.top == page.top - 24
 
-  let note = place_on!(pagectx(), lab_obj("Fixed note"))
+  let note = place_on!(pagectx(), text("Fixed note", default_theme().label))
   ~ note.width == 200
   ~ note.height == 32
   ~ note.right == badge.right
@@ -45,7 +45,7 @@ block!("Second block")
 end
 
 document
-pagenos!()
+foreach(pages(docctx()), (p: Page) |-> add_number!(p))
 foreach(pages(docctx()), (p: Page) |-> add_footer!(p))
 end
 
@@ -53,4 +53,10 @@ fn add_footer!(p: Page) -> Void
   let footer = place_on!(p, text("Page anchors and automatic placement", TextBlockStyle {} with { text.size = 12 }))
   p ~ footer.left == p.left + 72
   p ~ footer.bottom == p.bottom + 20
+end
+
+fn add_number!(p: Page) -> Void
+  let number = place_on!(p, pageno(default_theme().page_number))
+  p ~ number.right == p.right - 24
+  p ~ number.bottom == p.bottom + 20
 end

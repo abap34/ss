@@ -6,6 +6,7 @@ import path from "node:path";
 import { assert, root, ssBin } from "../../harness.mjs";
 
 const pageHeight = 720;
+const isPageNumber = item => item.placement?.input.type.name === "PageNumber";
 
 await testDocumentAndPageVflowPolicies();
 await testPageAnchorFixture();
@@ -90,7 +91,7 @@ async function testPageAnchorFixture() {
       assertClose(note.y + note.height, badge.y - 16, "transitive page anchor");
     }
     for (const objects of [baseline, anchored, centered]) {
-      assertClose(objects.find((item) => item.role === "pageno").y, 20, "generated page number anchor");
+      assertClose(objects.find((item) => isPageNumber(item)).y, 20, "generated page number anchor");
       assertClose(objects.find((item) => item.content === "Page anchors and automatic placement").y, 20, "generated footer anchor");
     }
   } finally {
@@ -131,10 +132,19 @@ end
 `;
       await writeFile(path.join(project, "slide.ss"), imports + pages, "utf8");
       const baseline = await dumpSlide(project, path.join(project, "without-numbers.json"));
-      assert(!baseline.nodes.some((item) => item.role === "pageno"), "baseline unexpectedly contains a page number");
+      assert(!baseline.nodes.some((item) => isPageNumber(item)), "baseline unexpectedly contains a page number");
 
       for (const position of ["before", "after"]) {
-        const generation = "\ndocument\npagenos!()\nend\n";
+        const generation = `
+fn add_number!(p: Page) -> Void
+  let number = place_on!(p, pageno(default_theme().page_number))
+  p ~ number.right == p.right - 24
+  p ~ number.bottom == p.bottom + 20
+end
+document
+  foreach(pages(docctx()), (p: Page) |-> add_number!(p))
+end
+`;
         const source = imports + (position === "before" ? generation + pages : pages + generation);
         await writeFile(path.join(project, "slide.ss"), source, "utf8");
         const numbered = await dumpSlide(project, path.join(project, `numbers-${position}.json`));
@@ -147,10 +157,10 @@ end
           };
           const expected = pageObjects(baseline);
           const objects = pageObjects(numbered);
-          const numbers = objects.filter((item) => item.role === "pageno");
+          const numbers = objects.filter((item) => isPageNumber(item));
           assert(numbers.length === 1, `${name} should receive exactly one page number`);
           assertClose(numbers[0].y, 20, `${name} page number position`);
-          const actual = objects.filter((item) => item.role !== "pageno");
+          const actual = objects.filter((item) => !isPageNumber(item));
           const metadata = (items) => items.map(({ name, role, content, fields }) => ({ name, role, content, fields }));
           deepStrictEqual(metadata(actual), metadata(expected), `${name}: numbering changed existing content or style`);
           for (let index = 0; index < expected.length; index += 1) {

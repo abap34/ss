@@ -2,7 +2,7 @@ import std:themes/default as *
 import std:math as formulas
 
 page algorithm
-page_bg(c"0.88,0.94,1")
+pagectx().background_fill = c"0.88,0.94,1"
 let source = <<
 \DontPrintSemicolon
 \begin{algorithm}[H]

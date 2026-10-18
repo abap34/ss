@@ -80,17 +80,8 @@ import std:document as {
   heading,
   heading!,
   number_of,
-  citation,
-  citation!,
   pageno,
   pageno!,
-  pagenos!,
-  need_titles,
-  numbered_item,
-  numbered_item!,
-  numbering!,
-  page_bg,
-  doc_bg,
 }
 import std:themes/default as {
   default_theme,
