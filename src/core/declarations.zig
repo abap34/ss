@@ -280,22 +280,9 @@ fn indexModule(index: *DeclarationIndex, module: anytype) !void {
         try index.record_by_module.put(.{ .module_id = module.id, .name = decl.name }, record_index);
         try appendRecordFields(index, module.id, decl.name, decl.fields.items);
     }
-
-    for (module.syntax.objects.items) |decl| {
-        const class_index = index.classes.items.len;
-        try index.classes.append(index.allocator, .{
-            .name = decl.name,
-            .base = if (decl.base) |base| .{ .module_id = decl.base_module_id orelse module.id, .name = localName(base) } else null,
-            .module_id = module.id,
-            .span = decl.span,
-        });
-        try index.class_by_module.put(.{ .module_id = module.id, .name = decl.name }, class_index);
-        try appendRoles(index, module.id, .{ .module_id = module.id, .name = decl.name }, decl.roles.items);
-        try appendFields(index, module.id, .{ .module_id = module.id, .name = decl.name }, decl.fields.items);
-    }
 }
 
-fn appendRecordFields(index: *DeclarationIndex, module_id: u32, record_name: []const u8, fields: []const ast.ObjectFieldDecl) !void {
+fn appendRecordFields(index: *DeclarationIndex, module_id: u32, record_name: []const u8, fields: []const ast.FieldDecl) !void {
     for (fields) |field| {
         const field_index = index.record_fields.items.len;
         try index.record_fields.append(index.allocator, .{
@@ -324,7 +311,7 @@ fn appendRoles(index: *DeclarationIndex, module_id: u32, class_id: model.Nominal
     }
 }
 
-fn appendFields(index: *DeclarationIndex, module_id: u32, class_id: model.NominalId, fields: []const ast.ObjectFieldDecl) !void {
+fn appendFields(index: *DeclarationIndex, module_id: u32, class_id: model.NominalId, fields: []const ast.FieldDecl) !void {
     for (fields) |field| {
         const field_index = index.fields.items.len;
         try index.fields.append(index.allocator, .{

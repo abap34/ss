@@ -25,7 +25,6 @@ pub const Index = struct {
         for (module.constants.items) |constant| try self.expr(constant.value, null);
         for (module.functions.items) |function| try self.collectFunction(function);
         for (module.records.items) |record| try self.fields(record.fields.items);
-        for (module.objects.items) |object| try self.fields(object.fields.items);
         try self.statements(module.document_statements.items);
         for (module.pages.items) |page| try self.statements(page.statements.items);
     }
@@ -41,7 +40,7 @@ pub const Index = struct {
         try self.fields(record.fields.items);
     }
 
-    fn fields(self: *Index, items: []const ast.ObjectFieldDecl) !void {
+    fn fields(self: *Index, items: []const ast.FieldDecl) !void {
         for (items) |field| {
             if (field.default_value) |value| try self.expr(value.*, null);
         }

@@ -191,9 +191,9 @@ fn checkDocumentDeclarations(allocator: std.mem.Allocator, state: *core.Document
         try semantics.checkTypeAnnotations(allocator, state, sema);
         try semantics.checkDisplayDeclarations(allocator, state);
         {
-            const object_declarations_start = utils.measure_profile.start();
-            defer utils.measure_profile.recordAnalysis(.semantics_object_declarations, object_declarations_start);
-            try fields.checkObjectDeclarations(allocator, state, sema);
+            const type_fields_start = utils.measure_profile.start();
+            defer utils.measure_profile.recordAnalysis(.semantics_type_fields, type_fields_start);
+            try fields.checkTypeFields(allocator, state, sema);
         }
         try checker.checkPageNamesUnique(allocator, state);
     }

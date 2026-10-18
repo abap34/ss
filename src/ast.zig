@@ -12,7 +12,6 @@ pub const Module = struct {
     top_level_items: std.ArrayList(TopLevelItem),
     types: std.ArrayList(TypeDecl),
     records: std.ArrayList(RecordDecl),
-    objects: std.ArrayList(ObjectDecl),
     constants: std.ArrayList(ConstDecl),
     functions: std.ArrayList(FunctionDecl),
     document_blocks: std.ArrayList(DocumentBlockDecl),
@@ -20,7 +19,7 @@ pub const Module = struct {
     pages: std.ArrayList(PageDecl),
 
     pub fn init() Module {
-        return .{ .imports = .empty, .top_level_items = .empty, .types = .empty, .records = .empty, .objects = .empty, .constants = .empty, .functions = .empty, .document_blocks = .empty, .document_statements = .empty, .pages = .empty };
+        return .{ .imports = .empty, .top_level_items = .empty, .types = .empty, .records = .empty, .constants = .empty, .functions = .empty, .document_blocks = .empty, .document_statements = .empty, .pages = .empty };
     }
 
     pub fn deinit(self: *Module, allocator: Allocator) void {
@@ -31,8 +30,6 @@ pub const Module = struct {
         self.types.deinit(allocator);
         for (self.records.items) |*record| record.deinit(allocator);
         self.records.deinit(allocator);
-        for (self.objects.items) |*object| object.deinit(allocator);
-        self.objects.deinit(allocator);
         for (self.constants.items) |*constant| constant.deinit(allocator);
         self.constants.deinit(allocator);
         for (self.functions.items) |*func| func.deinit(allocator);
@@ -55,8 +52,6 @@ pub const Module = struct {
         for (self.types.items) |value| result.types.appendAssumeCapacity(try value.clone(allocator));
         try result.records.ensureTotalCapacity(allocator, self.records.items.len);
         for (self.records.items) |value| result.records.appendAssumeCapacity(try value.clone(allocator));
-        try result.objects.ensureTotalCapacity(allocator, self.objects.items.len);
-        for (self.objects.items) |value| result.objects.appendAssumeCapacity(try value.clone(allocator));
         try result.constants.ensureTotalCapacity(allocator, self.constants.items.len);
         for (self.constants.items) |value| result.constants.appendAssumeCapacity(try value.clone(allocator));
         try result.functions.ensureTotalCapacity(allocator, self.functions.items.len);
@@ -175,7 +170,7 @@ pub const EnumCaseDecl = struct {
     }
 };
 
-pub const ObjectFieldDecl = struct {
+pub const FieldDecl = struct {
     name: []const u8,
     name_span: ?Span = null,
     value_type: Type,
@@ -183,7 +178,7 @@ pub const ObjectFieldDecl = struct {
     default_property_value: ?[]const u8 = null,
     span: Span,
 
-    pub fn deinit(self: *ObjectFieldDecl, allocator: Allocator) void {
+    pub fn deinit(self: *FieldDecl, allocator: Allocator) void {
         allocator.free(self.name);
         self.value_type.deinit(allocator);
         if (self.default_value) |expr| {
@@ -193,7 +188,7 @@ pub const ObjectFieldDecl = struct {
         if (self.default_property_value) |value| allocator.free(value);
     }
 
-    pub fn clone(self: ObjectFieldDecl, allocator: Allocator) anyerror!ObjectFieldDecl {
+    pub fn clone(self: FieldDecl, allocator: Allocator) anyerror!FieldDecl {
         const name = try allocator.dupe(u8, self.name);
         errdefer allocator.free(name);
         var value_type = try self.value_type.clone(allocator);
@@ -219,44 +214,6 @@ pub const ObjectFieldDecl = struct {
             .default_property_value = default_property_value,
             .span = self.span,
         };
-    }
-};
-
-pub const ObjectDecl = struct {
-    name: []const u8,
-    name_span: ?Span = null,
-    base: ?[]const u8 = null,
-    base_module_id: ?u32 = null,
-    roles: std.ArrayList([]const u8),
-    fields: std.ArrayList(ObjectFieldDecl),
-    span: Span,
-
-    pub fn deinit(self: *ObjectDecl, allocator: Allocator) void {
-        allocator.free(self.name);
-        if (self.base) |base| allocator.free(base);
-        for (self.roles.items) |role| allocator.free(role);
-        self.roles.deinit(allocator);
-        for (self.fields.items) |*field| field.deinit(allocator);
-        self.fields.deinit(allocator);
-    }
-
-    pub fn clone(self: ObjectDecl, allocator: Allocator) anyerror!ObjectDecl {
-        var result = ObjectDecl{
-            .name = try allocator.dupe(u8, self.name),
-            .name_span = self.name_span,
-            .base = null,
-            .base_module_id = self.base_module_id,
-            .roles = .empty,
-            .fields = .empty,
-            .span = self.span,
-        };
-        errdefer result.deinit(allocator);
-        if (self.base) |value| result.base = try allocator.dupe(u8, value);
-        try result.roles.ensureTotalCapacity(allocator, self.roles.items.len);
-        for (self.roles.items) |value| result.roles.appendAssumeCapacity(try allocator.dupe(u8, value));
-        try result.fields.ensureTotalCapacity(allocator, self.fields.items.len);
-        for (self.fields.items) |value| result.fields.appendAssumeCapacity(try value.clone(allocator));
-        return result;
     }
 };
 
@@ -299,7 +256,7 @@ pub const RecordDecl = struct {
     type_params: std.ArrayList(TypeParameter) = .empty,
     name: []const u8,
     name_span: ?Span = null,
-    fields: std.ArrayList(ObjectFieldDecl),
+    fields: std.ArrayList(FieldDecl),
     span: Span,
 
     pub fn deinit(self: *RecordDecl, allocator: Allocator) void {

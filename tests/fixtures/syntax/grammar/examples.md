@@ -89,17 +89,15 @@ import std:prelude as { text, text!, place!, }
 type Empty {}
 type Style { size: Number = 20; color: Color = c"black" }
 enum Align { left center right }
-type Card = object {
-  base = Object
-  roles = ["card",]
+type Card {
   style: Style
 }
 const identity: (Number) -> Number = (x: Number) |-> x
-fn consume(value: (Page -> Object)?, items: Selection<Object<Card>>) -> Void
+fn consume(value: (Page -> Placement)?, items: Selection<Placed<Card>>) -> Void
   return
 end
 fn make(style: Style = Style {}) -> Style = style with {}
-fn/! caption(label: String) -> Object = text(label)
+fn/! caption(label: String) -> Text = text(label)
 document
 end
 page "Grammar examples"

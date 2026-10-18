@@ -2,24 +2,22 @@
 Declarations and a page
 ================================================================================
 
-import std:themes/default as *
-import std:themes/default
+import std:text as *
 
-const gap: number = 24
+const gap: Number = 24
 
-@render("text")
-fn h1(text: string) -> object
-  return object(text, "title", "text")
+fn/! h1(value: String) -> Text
+  return text(value)
 end
 
-type Hero = object {
-  title: string = "Intro"
+type Hero {
+  title: String = "Intro"
 }
 
 page "Intro"
-  let title = h1("Hello")
-  let subtitle = default::h2("Sub")
-  text <<
+  let title = h1!("Hello")
+  let subtitle = text!("Sub")
+  text! <<
 Markdown body
 >>
   ~ title.left == page.left + gap
@@ -30,45 +28,38 @@ end
 (source_file
   (import_declaration
     spec: (import_spec))
-  (import_declaration
-    spec: (import_spec))
   (const_declaration
     name: (identifier)
     type: (type
-      (primary_type))
+      (primary_type
+        (type_identifier)))
     value: (number))
   (function_declaration
-    (annotation
-      name: (identifier)
-      (annotation_arg
-        (annotation_value
-          (string))))
-    name: (bare_callable_identifier
-      (identifier))
+    name: (identifier)
     (parameters
       (parameter
         name: (identifier)
         type: (type
-          (primary_type))))
+          (primary_type
+            (type_identifier)))))
     result: (type
-      (primary_type))
+      (primary_type
+        (type_identifier)))
     (return_statement
       value: (call_expression
         function: (callable_identifier
           (bare_callable_identifier
             (identifier)))
-        (identifier)
-        (string)
-        (string))))
+        (identifier))))
   (type_declaration
     name: (type_identifier)
-    (object_type
-      (object_member
-        (object_field
-          name: (identifier)
-          type: (type
-            (primary_type))
-          (string)))))
+    (type_body
+      (type_field
+        name: (identifier)
+        type: (type
+          (primary_type
+            (type_identifier)))
+        (string))))
   (page_declaration
     name: (string)
     (let_statement
@@ -82,10 +73,8 @@ end
       name: (identifier)
       value: (call_expression
         function: (callable_identifier
-          (qualified_callable_identifier
-            module: (identifier)
-            name: (bare_callable_identifier
-              (identifier))))
+          (bare_callable_identifier
+            (identifier)))
         (string)))
     (block_call_statement
       function: (callable_identifier

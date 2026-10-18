@@ -22,7 +22,7 @@ await testCompositionOperatorSyntax();
 await testPairedFunctionKeywordSyntax();
 await testValueUpdateKeywordSyntax();
 await testTypeDeclarationSyntax();
-await testRemovedExtensionKeywords();
+await testRemovedDeclarationKeywords();
 await testBlockStringSyntax();
 
 async function testValueUpdateKeywordSyntax() {
@@ -45,10 +45,13 @@ async function testTypeDeclarationSyntax() {
   }
 }
 
-async function testRemovedExtensionKeywords() {
+async function testRemovedDeclarationKeywords() {
   const grammar = JSON.parse(await readFile(path.join(root, "editor/vscode/syntaxes/ss.tmLanguage.json"), "utf8"));
   const keyword = new RegExp(grammar.repository.keywords.patterns[0].match, "g");
-  assert("extend implements".match(keyword) === null, "removed extension names must remain ordinary identifiers");
+  assert("extend implements object base roles".match(keyword) === null, "removed declaration keywords must remain ordinary identifiers");
+  const builtinType = new RegExp(grammar.repository.keywords.patterns[1].match, "g");
+  assert("Object object".match(builtinType) === null, "Object must not highlight as a built-in type");
+  assert(JSON.stringify("Placed<Text> Placement".match(builtinType)) === '["Placed","Placement"]', "placement types must highlight without classifying user types as built-ins");
   for (const pattern of grammar.repository.declarations.patterns) {
     assert(new RegExp(pattern.match).exec("extend Card") === null, "removed extensions must not highlight as declarations");
   }
@@ -99,7 +102,7 @@ async function testCompositionOperatorSyntax() {
     ["a / 2", ["/"]],
     ["a|b&c-d", ["|", "&", "-"]],
     ["a?.field ?? fallback", ["?.", "??"]],
-    ["(a: Object) |-> a", [":", "|->"]],
+    ["(a: Placement) |-> a", [":", "|->"]],
   ]) {
     assert(JSON.stringify(source.match(operator)) === JSON.stringify(expected), `operator tokens differ: ${source}`);
   }

@@ -94,7 +94,8 @@ module.exports = grammar({
     type_declaration: $ => seq(
       "type",
       field("name", $.type_identifier),
-      choice(seq("=", $.object_type), seq(optional($.type_parameters), $.type_body)),
+      optional($.type_parameters),
+      $.type_body,
     ),
 
     enum_declaration: $ => seq(
@@ -118,21 +119,9 @@ module.exports = grammar({
 
     optional_type: $ => seq($.primary_type, "?"),
 
-    object_type: $ => seq(
-      "object",
-      "{",
-      repeat($._terminator),
-      repeat($.object_member),
-      "}",
-    ),
+    type_body: $ => seq("{", repeat($._terminator), repeat($.type_field), "}"),
 
-    type_body: $ => seq("{", repeat($._terminator), repeat($.object_field), "}"),
-
-    object_member: $ => choice($.object_base, $.object_roles, $.object_field),
-    object_base: $ => seq("base", "=", field("type", $._type_name), optional($._terminator)),
-    object_roles: $ => seq("roles", "=", field("value", $.list_expression), optional($._terminator)),
-
-    object_field: $ => seq(field("name", $.identifier), ":", field("type", $.type), optional(seq("=", $._expression)), optional($._terminator)),
+    type_field: $ => seq(field("name", $.identifier), ":", field("type", $.type), optional(seq("=", $._expression)), optional($._terminator)),
 
     document_block: $ => seq("document", $._body),
 
@@ -154,7 +143,7 @@ module.exports = grammar({
       $.line_call_statement,
     ),
 
-    let_statement: $ => seq("let", field("name", $.identifier), "=", field("value", $._expression), $._terminator),
+    let_statement: $ => seq("let", field("name", $.identifier), optional(seq(":", field("type", $.type))), "=", field("value", $._expression), $._terminator),
     return_statement: $ => seq("return", optional(field("value", $._expression)), $._terminator),
     constrain_statement: $ => seq(optional(field("page", $._expression)), "~", field("value", $._expression), $._terminator),
     constraint_update_statement: $ => seq(
@@ -300,7 +289,10 @@ module.exports = grammar({
       "??",
       field("default", $._expression),
     )),
-    property_exists_expression: $ => prec(PREC.unary, seq(field("property", $.member_expression), "?")),
+    property_exists_expression: $ => prec(PREC.unary, seq(
+      field("property", choice($.identifier, $.qualified_identifier, $.member_expression, $.call_expression, $.parenthesized_expression)),
+      "?",
+    )),
     if_expression: $ => seq("if", field("condition", $._expression), "then", field("then", $._expression), "else", field("else", $._expression), "end"),
     parenthesized_expression: $ => seq("(", repeat($._terminator), $._expression, repeat($._terminator), ")"),
     lambda_expression: $ => seq(
@@ -329,7 +321,6 @@ module.exports = grammar({
     primary_type: $ => choice(
       "document",
       "page",
-      seq(choice("object", "Object"), optional(seq("<", $._type_name, ">"))),
       seq(choice("selection", "Selection"), optional($.type_arguments)),
       "anchor",
       "string",

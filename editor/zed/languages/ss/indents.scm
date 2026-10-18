@@ -14,9 +14,6 @@
   (for_statement
     "for" @start.for
     "end" @end)
-  (object_type
-    "object" @start.object
-    "}" @end)
   (type_body
     "{" @start.type
     "}" @end)

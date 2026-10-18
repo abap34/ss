@@ -5273,6 +5273,22 @@ test "compiler semantics: unresolved names are diagnosed inside compound type an
     }
 }
 
+test "compiler semantics: Object requires an ordinary user type declaration" {
+    for ([_][]const u8{ "Object", "Object<Text>" }) |annotation| {
+        const source = try std.fmt.allocPrint(testing.allocator, "fn unused(value: {s}) -> Number = 0\npage main\nend\n", .{annotation});
+        defer testing.allocator.free(source);
+        try expectDiagnostic(source, "case.ss:bytes:", "UnknownType: unknown type: Object");
+    }
+    try buildSource(
+        \\type Object { object: String base: Number roles: String }
+        \\const value: Object = Object { object = "value", base = 1, roles = "label" }
+        \\page main
+        \\  let label: String = value.object
+        \\end
+        \\
+    );
+}
+
 test "compiler semantics: numeric comparisons evaluate both outcomes" {
     const failures = [_][]const u8{
         "not(1==1)",

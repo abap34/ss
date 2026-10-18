@@ -23,7 +23,6 @@ pub const BuiltinType = struct {
 const builtin_types = [_]BuiltinType{
     .{ .name = "Document", .ty = ast.Type.document },
     .{ .name = "Page", .ty = ast.Type.page },
-    .{ .name = "Object", .ty = ast.Type.object },
     .{ .name = "Group", .ty = .{ .kind = .group } },
     .{ .name = "Placed", .ty = .{ .kind = .placed } },
     .{ .name = "Placement", .ty = ast.Type.placement },

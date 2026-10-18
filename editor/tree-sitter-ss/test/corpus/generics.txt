@@ -22,7 +22,7 @@ end
     (type_identifier)
     (type_parameters (type_parameter (type_identifier)))
     (type_body
-      (object_field (identifier) (type (primary_type (type_identifier))))))
+      (type_field (identifier) (type (primary_type (type_identifier))))))
   (function_declaration
     (bare_callable_identifier (identifier))
     (type_parameters (type_parameter (type_identifier)))

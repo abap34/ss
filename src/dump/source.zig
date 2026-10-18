@@ -102,10 +102,6 @@ fn writeModuleSyntax(allocator: std.mem.Allocator, object: *json.Object, program
     for (program.records.items) |record_decl| try writeRecordDeclaration(allocator, &records, record_decl);
     try records.end();
 
-    var objects = try program_object.arrayField("objects");
-    for (program.objects.items) |object_decl| try writeObjectDeclaration(allocator, &objects, object_decl);
-    try objects.end();
-
     var constants = try program_object.arrayField("constants");
     for (program.constants.items) |constant_decl| {
         var item = try constants.objectItem();
@@ -184,25 +180,15 @@ fn writeImportMode(object: *json.Object, mode: ast.ImportDecl.Mode) !void {
     try object.boolField("unqualified", mode.unqualified);
 }
 
-fn writeObjectDeclaration(allocator: std.mem.Allocator, objects: *json.Array, object_decl: ast.ObjectDecl) !void {
-    var item = try objects.objectItem();
-    try item.stringField("name", object_decl.name);
-    try item.optionalStringField("base", object_decl.base);
-    try writeStringArrayField(&item, "roles", object_decl.roles.items);
-    try writeObjectFieldsField(allocator, &item, object_decl.fields.items);
-    try writeSpan(&item, object_decl.span);
-    try item.end();
-}
-
 fn writeRecordDeclaration(allocator: std.mem.Allocator, records: *json.Array, record_decl: ast.RecordDecl) !void {
     var item = try records.objectItem();
     try item.stringField("name", record_decl.name);
-    try writeObjectFieldsField(allocator, &item, record_decl.fields.items);
+    try writeFieldsField(allocator, &item, record_decl.fields.items);
     try writeSpan(&item, record_decl.span);
     try item.end();
 }
 
-fn writeObjectFieldsField(allocator: std.mem.Allocator, object: *json.Object, fields: []const ast.ObjectFieldDecl) !void {
+fn writeFieldsField(allocator: std.mem.Allocator, object: *json.Object, fields: []const ast.FieldDecl) !void {
     var array = try object.arrayField("fields");
     for (fields) |field| {
         var item = try array.objectItem();

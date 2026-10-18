@@ -68,10 +68,6 @@ pub fn callableAt(budget: ?QueryBudget, program: *const ast.Module, offset: usiz
         if (expired(budget)) return null;
         if (callableInFields(budget, record.fields.items, offset)) |target| return target;
     }
-    for (program.objects.items) |object| {
-        if (expired(budget)) return null;
-        if (callableInFields(budget, object.fields.items, offset)) |target| return target;
-    }
     for (program.constants.items) |constant_decl| {
         if (expired(budget)) return null;
         if (callableInExpr(budget, constant_decl.value, offset)) |target| return target;
@@ -114,10 +110,6 @@ pub fn sourceNameAt(budget: ?QueryBudget, program: *const ast.Module, offset: us
             if (spanContainsOffset(parameter.span, offset)) return .{ .text = parameter.name, .kind = .type_parameter };
         }
         if (sourceNameInFields(budget, record.fields.items, offset)) |target| return target;
-    }
-    for (program.objects.items) |object| {
-        if (expired(budget)) return null;
-        if (sourceNameInFields(budget, object.fields.items, offset)) |target| return target;
     }
     for (program.constants.items) |constant_decl| {
         if (expired(budget)) return null;
@@ -176,10 +168,6 @@ pub fn recordUpdatePathAt(budget: ?QueryBudget, program: *const ast.Module, offs
         if (expired(budget)) return null;
         if (recordUpdatePathInFields(budget, record.fields.items, offset)) |target| return target;
     }
-    for (program.objects.items) |object| {
-        if (expired(budget)) return null;
-        if (recordUpdatePathInFields(budget, object.fields.items, offset)) |target| return target;
-    }
     for (program.constants.items) |constant_decl| {
         if (expired(budget)) return null;
         if (recordUpdatePathInExpr(budget, constant_decl.value, offset)) |target| return target;
@@ -208,10 +196,6 @@ pub fn recordUpdateCompletionAt(budget: ?QueryBudget, program: *const ast.Module
         if (expired(budget)) return null;
         if (recordUpdateCompletionInFields(budget, record.fields.items, offset)) |target| return target;
     }
-    for (program.objects.items) |object| {
-        if (expired(budget)) return null;
-        if (recordUpdateCompletionInFields(budget, object.fields.items, offset)) |target| return target;
-    }
     for (program.constants.items) |constant_decl| {
         if (expired(budget)) return null;
         if (recordUpdateCompletionInExpr(budget, constant_decl.value, offset)) |target| return target;
@@ -239,10 +223,6 @@ pub fn memberAt(budget: ?QueryBudget, program: *const ast.Module, offset: usize)
     for (program.records.items) |record| {
         if (expired(budget)) return null;
         if (memberInFields(budget, record.fields.items, offset)) |target| return target;
-    }
-    for (program.objects.items) |object| {
-        if (expired(budget)) return null;
-        if (memberInFields(budget, object.fields.items, offset)) |target| return target;
     }
     for (program.constants.items) |constant_decl| {
         if (expired(budget)) return null;
@@ -330,7 +310,7 @@ pub fn importSpecAt(budget: ?QueryBudget, program: *const ast.Module, offset: us
     return null;
 }
 
-fn callableInFields(budget: ?QueryBudget, fields: []const ast.ObjectFieldDecl, offset: usize) ?CallableTarget {
+fn callableInFields(budget: ?QueryBudget, fields: []const ast.FieldDecl, offset: usize) ?CallableTarget {
     if (expired(budget)) return null;
     for (fields) |field| {
         if (expired(budget)) return null;
@@ -340,7 +320,7 @@ fn callableInFields(budget: ?QueryBudget, fields: []const ast.ObjectFieldDecl, o
     return null;
 }
 
-fn sourceNameInFields(budget: ?QueryBudget, fields: []const ast.ObjectFieldDecl, offset: usize) ?SourceNameTarget {
+fn sourceNameInFields(budget: ?QueryBudget, fields: []const ast.FieldDecl, offset: usize) ?SourceNameTarget {
     if (expired(budget)) return null;
     for (fields) |field| {
         if (expired(budget)) return null;
@@ -351,7 +331,7 @@ fn sourceNameInFields(budget: ?QueryBudget, fields: []const ast.ObjectFieldDecl,
     return null;
 }
 
-fn recordUpdatePathInFields(budget: ?QueryBudget, fields: []const ast.ObjectFieldDecl, offset: usize) ?RecordUpdatePathTarget {
+fn recordUpdatePathInFields(budget: ?QueryBudget, fields: []const ast.FieldDecl, offset: usize) ?RecordUpdatePathTarget {
     if (expired(budget)) return null;
     for (fields) |field| {
         if (expired(budget)) return null;
@@ -361,7 +341,7 @@ fn recordUpdatePathInFields(budget: ?QueryBudget, fields: []const ast.ObjectFiel
     return null;
 }
 
-fn recordUpdateCompletionInFields(budget: ?QueryBudget, fields: []const ast.ObjectFieldDecl, offset: usize) ?RecordUpdateCompletionTarget {
+fn recordUpdateCompletionInFields(budget: ?QueryBudget, fields: []const ast.FieldDecl, offset: usize) ?RecordUpdateCompletionTarget {
     if (expired(budget)) return null;
     for (fields) |field| {
         if (expired(budget)) return null;
@@ -371,7 +351,7 @@ fn recordUpdateCompletionInFields(budget: ?QueryBudget, fields: []const ast.Obje
     return null;
 }
 
-fn memberInFields(budget: ?QueryBudget, fields: []const ast.ObjectFieldDecl, offset: usize) ?MemberTarget {
+fn memberInFields(budget: ?QueryBudget, fields: []const ast.FieldDecl, offset: usize) ?MemberTarget {
     if (expired(budget)) return null;
     for (fields) |field| {
         if (expired(budget)) return null;

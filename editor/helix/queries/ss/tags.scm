@@ -10,5 +10,5 @@
 (type_declaration
   name: (type_identifier) @name) @definition.type
 
-(object_field
+(type_field
   name: (identifier) @name) @definition.field

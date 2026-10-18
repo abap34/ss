@@ -5,24 +5,11 @@ const core = @import("core");
 const infer = @import("infer.zig");
 const semantic_env = @import("../language/env.zig");
 const semantic_types = @import("types.zig");
-const language_names = @import("../language/names.zig");
 
 const SemanticEnv = semantic_env.SemanticEnv;
 const TypeEnv = semantic_types.TypeEnv;
 
-pub fn checkObjectDeclarations(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) !void {
-    // Roles form a document-wide namespace for dynamic object construction.
-    var roles = std.StringHashMap([]const u8).init(allocator);
-    defer roles.deinit();
-
-    for (state.modules.order.items) |module_id| {
-        const module = state.moduleById(module_id) orelse continue;
-        const origin_path = originPathForModule(module);
-        try checkObjectNamesUnique(allocator, state, origin_path, module.syntax.objects.items);
-        try checkRecordNamesUnique(allocator, state, origin_path, module.syntax.records.items);
-    }
-    try checkObjectInheritance(allocator, state, sema);
-
+pub fn checkTypeFields(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) !void {
     for (state.modules.order.items) |module_id| {
         const module = state.moduleById(module_id) orelse continue;
         const origin_path = originPathForModule(module);
@@ -30,66 +17,6 @@ pub fn checkObjectDeclarations(allocator: std.mem.Allocator, state: *core.Docume
         for (module.syntax.records.items) |record_decl| {
             try checkRecordDeclaration(allocator, state, &module_sema, origin_path, record_decl);
         }
-        for (module.syntax.objects.items) |object_decl| {
-            try checkObjectDeclaration(allocator, state, &module_sema, origin_path, object_decl);
-            try checkRolesUnique(state, origin_path, &roles, object_decl.name, object_decl.roles.items, object_decl.span);
-        }
-    }
-}
-
-fn checkObjectInheritance(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) !void {
-    const index = sema.declarations orelse return;
-    const Visit = enum { unseen, active, complete };
-    const visits = try allocator.alloc(Visit, index.classes.items.len);
-    defer allocator.free(visits);
-    @memset(visits, .unseen);
-    var path = std.ArrayList(usize).empty;
-    defer path.deinit(allocator);
-
-    for (0..index.classes.items.len) |root| {
-        if (visits[root] != .unseen) continue;
-        path.clearRetainingCapacity();
-        var current: ?usize = root;
-        while (current) |class_index| {
-            switch (visits[class_index]) {
-                .complete => break,
-                .active => {
-                    const cycle_start = std.mem.indexOfScalar(usize, path.items, class_index).?;
-                    for (path.items[cycle_start..]) |member| {
-                        const class = index.classes.items[member];
-                        const module = state.moduleById(class.module_id) orelse continue;
-                        const origin = core.SourceOrigin.at(originPathForModule(module), class.span);
-
-                        try addUserReport(state, origin, "ObjectInheritanceCycle", "object class '{s}' inherits from '{s}' in a cycle", .{ class.name, class.base.?.name });
-                    }
-                    return error.InvalidType;
-                },
-                .unseen => {},
-            }
-            visits[class_index] = .active;
-            try path.append(allocator, class_index);
-            current = if (index.classes.items[class_index].base) |base| index.class_by_module.get(base) else null;
-        }
-        for (path.items) |member| visits[member] = .complete;
-    }
-}
-
-fn checkRecordNamesUnique(
-    allocator: std.mem.Allocator,
-    state: *core.DocumentState,
-    origin_path: []const u8,
-    records: []const ast.RecordDecl,
-) !void {
-    var names = std.StringHashMap(void).init(allocator);
-    defer names.deinit();
-    for (records) |record_decl| {
-        if (names.contains(record_decl.name)) {
-            const origin = core.SourceOrigin.at(origin_path, record_decl.span);
-
-            try addUserReport(state, origin, "DuplicateType", "type '{s}' is already defined in this module", .{record_decl.name});
-            return error.InvalidType;
-        }
-        try names.put(record_decl.name, {});
     }
 }
 
@@ -101,69 +28,23 @@ fn checkRecordDeclaration(
     record_decl: ast.RecordDecl,
 ) !void {
     if (record_decl.type_params.items.len != 0) return;
-    try checkObjectFields(allocator, state, sema, origin_path, record_decl.fields.items, false);
+    try checkFields(allocator, state, sema, origin_path, record_decl.fields.items);
 }
 
-fn checkObjectNamesUnique(
-    allocator: std.mem.Allocator,
-    state: *core.DocumentState,
-    origin_path: []const u8,
-    objects: []const ast.ObjectDecl,
-) !void {
-    var names = std.StringHashMap(void).init(allocator);
-    defer names.deinit();
-    for (objects) |object_decl| {
-        if (names.contains(object_decl.name)) {
-            const origin = core.SourceOrigin.at(origin_path, object_decl.span);
-
-            try addUserReport(state, origin, "DuplicateObjectClass", "object class '{s}' is already defined in this module", .{object_decl.name});
-            return error.InvalidType;
-        }
-        try names.put(object_decl.name, {});
-    }
-}
-
-fn checkObjectDeclaration(
+fn checkFields(
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
     sema: *const SemanticEnv,
     origin_path: []const u8,
-    object_decl: ast.ObjectDecl,
-) !void {
-    const origin = core.SourceOrigin.at(origin_path, object_decl.span);
-
-    if (object_decl.base) |base| {
-        if (object_decl.base_module_id == null) {
-            try addUserReport(state, origin, "InvalidObjectDeclaration", "unknown base object class: {s}", .{base});
-            return error.InvalidType;
-        }
-    }
-    try checkObjectFields(allocator, state, sema, origin_path, object_decl.fields.items, true);
-}
-
-fn checkObjectFields(
-    allocator: std.mem.Allocator,
-    state: *core.DocumentState,
-    sema: *const SemanticEnv,
-    origin_path: []const u8,
-    fields: []const ast.ObjectFieldDecl,
-    stored: bool,
+    fields: []const ast.FieldDecl,
 ) !void {
     for (fields) |field| {
         const origin = core.SourceOrigin.at(origin_path, field.span);
 
-        if (stored and language_names.parseAnchorName(field.name) != null) {
-            try addUserReport(state, origin, "ReservedAnchorField", "field '{s}' is reserved for symbolic anchors; choose another field name", .{field.name});
-            return error.InvalidType;
-        }
         const field_type = field.value_type;
         if (field_type.kind == .hole) continue;
-        if (stored and !try semantic_types.isPropertyStorable(allocator, sema, field_type)) {
-            try addUserReport(state, origin, "InvalidPropertyType", "property '{s}' must not contain functions or unconstrained Any values", .{field.name});
-            return error.InvalidType;
-        }
         if (field.default_value) |default_value| {
-            try checkFieldDefault(allocator, state, sema, origin, field_type, default_value.*, field.default_property_value, stored);
+            try checkFieldDefault(allocator, state, sema, origin, field_type, default_value.*);
         }
     }
 }
@@ -175,8 +56,6 @@ fn checkFieldDefault(
     origin: core.SourceOrigin,
     ty: ast.Type,
     default_value: ast.Expr,
-    default_property_value: ?[]const u8,
-    stored: bool,
 ) !void {
     var env = TypeEnv.init(allocator);
     defer env.deinit();
@@ -185,22 +64,11 @@ fn checkFieldDefault(
         else => return err,
     };
     if (actual.hole != null) return;
-    if ((!stored or fieldDefaultHasStaticPropertyValue(default_value, default_property_value)) and fieldDefaultTypeAccepts(ty, actual.ty, default_value)) return;
+    if (ast.Type.accepts(ty, actual.ty)) return;
     const label = try fieldTypeLabel(allocator, ty);
     defer allocator.free(label);
     try addUserReport(state, origin, "InvalidFieldDefault", "default value does not match field type {s}", .{label});
     return error.InvalidType;
-}
-
-fn fieldDefaultHasStaticPropertyValue(default_value: ast.Expr, default_property_value: ?[]const u8) bool {
-    if (default_value == .none) return true;
-    return default_property_value != null;
-}
-
-fn fieldDefaultTypeAccepts(expected: ast.Type, actual: ast.Type, default_value: ast.Expr) bool {
-    _ = default_value;
-    if (ast.Type.accepts(expected, actual)) return true;
-    return false;
 }
 
 fn fieldTypeLabel(allocator: std.mem.Allocator, ty: ast.Type) ![]const u8 {
@@ -208,31 +76,6 @@ fn fieldTypeLabel(allocator: std.mem.Allocator, ty: ast.Type) ![]const u8 {
         .enum_type => if (ty.enum_name) |name| try allocator.dupe(u8, name) else try ty.formatAlloc(allocator),
         else => try ty.formatAlloc(allocator),
     };
-}
-
-fn checkRolesUnique(
-    state: *core.DocumentState,
-    origin_path: []const u8,
-    roles: *std.StringHashMap([]const u8),
-    class_name: []const u8,
-    role_names: []const []const u8,
-    span: ast.Span,
-) !void {
-    for (role_names) |role_name| {
-        if (roles.get(role_name)) |existing_class| {
-            const origin = core.SourceOrigin.at(origin_path, span);
-
-            try addUserReport(
-                state,
-                origin,
-                "DuplicateRole",
-                "role '{s}' is already provided by {s}",
-                .{ role_name, existing_class },
-            );
-            return error.InvalidType;
-        }
-        try roles.put(role_name, class_name);
-    }
 }
 
 const addUserReport = @import("diagnostics.zig").addUserReport;

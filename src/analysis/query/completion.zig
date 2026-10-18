@@ -325,11 +325,6 @@ fn appendParsedTypeNameCompletions(builder: *CandidateBuilder, program: ?*const 
         const label = spanText(source, decl.name_span) orelse continue;
         try builder.add(.{ .label = label, .kind = .type_decl, .detail = "type" });
     }
-    for (parsed.objects.items) |decl| {
-        try builder.checkBudget();
-        const label = spanText(source, decl.name_span) orelse continue;
-        try builder.add(.{ .label = label, .kind = .class });
-    }
 }
 
 fn spanText(source: []const u8, maybe_span: ?ast.Span) ?[]const u8 {

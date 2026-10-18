@@ -13,7 +13,6 @@ const Allocator = std.mem.Allocator;
 const Module = ast.Module;
 const TypeDecl = ast.TypeDecl;
 const RecordDecl = ast.RecordDecl;
-const ObjectDecl = ast.ObjectDecl;
 const ConstDecl = ast.ConstDecl;
 const FunctionDecl = ast.FunctionDecl;
 const PageDecl = ast.PageDecl;
@@ -221,21 +220,9 @@ const Parser = struct {
             try module.types.append(self.allocator, decl);
         } else if (try self.consumeKeyword("type")) {
             imports_allowed.* = false;
-            const type_item = try self.parseTypeItemAfterKeyword(item_start);
-            switch (type_item) {
-                .record => |value| {
-                    var record_decl = value;
-                    errdefer record_decl.deinit(self.allocator);
-                    try module.records.append(self.allocator, record_decl);
-                },
-                .object => |value| {
-                    var object_decl = value;
-                    var object_decl_moved = false;
-                    errdefer if (!object_decl_moved) object_decl.deinit(self.allocator);
-                    try module.objects.append(self.allocator, object_decl);
-                    object_decl_moved = true;
-                },
-            }
+            var decl = try self.parseTypeAfterKeyword(item_start);
+            errdefer decl.deinit(self.allocator);
+            try module.records.append(self.allocator, decl);
         } else if (try self.consumeKeyword("document")) {
             imports_allowed.* = false;
             var statements = try self.parseBodyStatements();
@@ -490,13 +477,9 @@ const Parser = struct {
 
         var placed = try func.cloneSignature(self.allocator, placed_name, func.span);
         errdefer placed.deinit(self.allocator);
-        // Bare Object constructors still use the legacy attachment path until
-        // stdlib migration removes them. All typed constructors return a reference.
-        if (!(func.result_type.kind == .object and func.result_type.class_name == null)) {
-            const reference = try ast.Type.placedOf(self.allocator, placed.result_type);
-            placed.result_type.deinit(self.allocator);
-            placed.result_type = reference;
-        }
+        const reference = try ast.Type.placedOf(self.allocator, placed.result_type);
+        placed.result_type.deinit(self.allocator);
+        placed.result_type = reference;
 
         var inner_args = std.ArrayList(Expr).empty;
         errdefer {
@@ -571,38 +554,23 @@ const Parser = struct {
         };
     }
 
-    const TypeItem = union(enum) {
-        object: ObjectDecl,
-        record: RecordDecl,
-    };
-
-    fn parseTypeItemAfterKeyword(self: *Parser, start: usize) !TypeItem {
-        const parsed_name = try self.parseIdentifierWithSpan();
-        var parsed_name_moved = false;
-        errdefer if (!parsed_name_moved) self.allocator.free(parsed_name.text);
-        source.skipTriviaFrom(self.source, &self.pos);
-        var type_params = try self.parseTypeParameters();
+    fn parseTypeAfterKeyword(self: *Parser, start: usize) !RecordDecl {
+        const name = try self.parseIdentifierWithSpan();
+        var name_moved = false;
+        errdefer if (!name_moved) self.allocator.free(name.text);
+        var parameters = try self.parseTypeParameters();
         defer {
-            for (type_params.items) |*parameter| parameter.deinit(self.allocator);
-            type_params.deinit(self.allocator);
+            for (parameters.items) |*parameter| parameter.deinit(self.allocator);
+            parameters.deinit(self.allocator);
         }
         source.skipTriviaFrom(self.source, &self.pos);
-        if (self.peekChar('{')) {
-            parsed_name_moved = true;
-            var decl = try self.parseRecordDeclBody(start, parsed_name);
-            decl.type_params = type_params;
-            type_params = .empty;
-            return .{ .record = decl };
-        }
-        if (type_params.items.len != 0) return self.fail(error.ExpectedChar);
-        source.skipInlineSpaces(self.source, &self.pos);
-        try self.expectChar('=');
-        source.skipInlineSpaces(self.source, &self.pos);
-        if (try self.consumeKeyword("object")) {
-            parsed_name_moved = true;
-            return .{ .object = try self.parseObjectDeclBody(start, parsed_name) };
-        }
-        return self.fail(error.ExpectedTypeAnnotation);
+        if (self.peekChar('=')) return self.fail(error.ExpectedTypeAnnotation);
+        if (!self.peekChar('{')) return self.fail(error.ExpectedChar);
+        name_moved = true;
+        var decl = try self.parseRecordDeclBody(start, name);
+        decl.type_params = parameters;
+        parameters = .empty;
+        return decl;
     }
 
     fn parseEnumAfterKeyword(self: *Parser, start: usize) !TypeDecl {
@@ -637,25 +605,6 @@ const Parser = struct {
         };
     }
 
-    fn parseObjectDeclBody(self: *Parser, start: usize, name: ParsedName) !ObjectDecl {
-        var name_moved = false;
-        errdefer if (!name_moved) self.allocator.free(name.text);
-        source.skipTriviaFrom(self.source, &self.pos);
-        try self.expectChar('{');
-        var decl = ObjectDecl{
-            .name = name.text,
-            .name_span = name.span,
-            .roles = .empty,
-            .fields = .empty,
-            .span = .{ .start = start, .end = start },
-        };
-        name_moved = true;
-        errdefer decl.deinit(self.allocator);
-        try self.parseObjectMembers(&decl.base, &decl.roles, &decl.fields);
-        decl.span.end = self.pos;
-        return decl;
-    }
-
     fn parseRecordDeclBody(self: *Parser, start: usize, name: ParsedName) !RecordDecl {
         var name_moved = false;
         errdefer if (!name_moved) self.allocator.free(name.text);
@@ -674,7 +623,7 @@ const Parser = struct {
         return decl;
     }
 
-    fn parseRecordMembers(self: *Parser, fields: *std.ArrayList(ast.ObjectFieldDecl)) !void {
+    fn parseRecordMembers(self: *Parser, fields: *std.ArrayList(ast.FieldDecl)) !void {
         source.skipTriviaFrom(self.source, &self.pos);
         while (!self.eof() and !self.peekChar('}')) {
             const member_start = self.pos;
@@ -688,34 +637,28 @@ const Parser = struct {
             var field_type = try self.parseTypeAnnotation();
             errdefer field_type.deinit(self.allocator);
             var default_value: ?*Expr = null;
-            var default_property_value: ?[]const u8 = null;
             errdefer {
                 if (default_value) |expr| {
                     expr.deinit(self.allocator);
                     self.allocator.destroy(expr);
                 }
-                if (default_property_value) |value| self.allocator.free(value);
             }
             source.skipInlineSpaces(self.source, &self.pos);
             if (!self.eof() and self.source[self.pos] == '=') {
                 self.pos += 1;
                 source.skipInlineSpaces(self.source, &self.pos);
-                const parsed_default = try self.parseObjectFieldDefault();
-                default_value = parsed_default.expr;
-                default_property_value = parsed_default.property_value;
+                default_value = try self.parseFieldDefault();
             }
             try fields.append(self.allocator, .{
                 .name = name.text,
                 .name_span = name.span,
                 .value_type = field_type,
                 .default_value = default_value,
-                .default_property_value = default_property_value,
                 .span = .{ .start = member_start, .end = self.pos },
             });
             name_moved = true;
             field_type = ast.Type.none;
             default_value = null;
-            default_property_value = null;
             try self.consumeStatementTerminator();
             source.skipTriviaFrom(self.source, &self.pos);
         }
@@ -723,115 +666,12 @@ const Parser = struct {
         try self.consumeStatementTerminator();
     }
 
-    fn parseObjectMembers(
-        self: *Parser,
-        maybe_base: ?*?[]const u8,
-        roles: *std.ArrayList([]const u8),
-        fields: *std.ArrayList(ast.ObjectFieldDecl),
-    ) !void {
-        source.skipTriviaFrom(self.source, &self.pos);
-        while (!self.eof() and !self.peekChar('}')) {
-            const member_start = self.pos;
-            const name = try self.parseIdentifierWithSpan();
-            var name_moved = false;
-            errdefer if (!name_moved) self.allocator.free(name.text);
-            source.skipInlineSpaces(self.source, &self.pos);
-            if (!self.eof() and self.source[self.pos] == '=') {
-                self.pos += 1;
-                source.skipTriviaFrom(self.source, &self.pos);
-                if (std.mem.eql(u8, name.text, "base")) {
-                    if (maybe_base) |base| {
-                        const value = try self.parseQualifiedTypeName();
-                        if (base.*) |existing| self.allocator.free(existing);
-                        base.* = value;
-                    } else {
-                        return self.fail(error.ExpectedIdentifier);
-                    }
-                } else if (std.mem.eql(u8, name.text, "roles")) {
-                    try self.parseStringListInto(roles);
-                } else {
-                    return self.fail(error.ExpectedTypeAnnotation);
-                }
-                self.allocator.free(name.text);
-                name_moved = true;
-                try self.consumeStatementTerminator();
-                source.skipTriviaFrom(self.source, &self.pos);
-                continue;
-            }
-            if (self.eof() or self.source[self.pos] != ':') return self.fail(error.ExpectedTypeAnnotation);
-            self.pos += 1;
-            source.skipInlineSpaces(self.source, &self.pos);
-            var field_type = try self.parseTypeAnnotation();
-            errdefer field_type.deinit(self.allocator);
-            var default_value: ?*Expr = null;
-            var default_property_value: ?[]const u8 = null;
-            errdefer {
-                if (default_value) |expr| {
-                    expr.deinit(self.allocator);
-                    self.allocator.destroy(expr);
-                }
-                if (default_property_value) |value| self.allocator.free(value);
-            }
-            source.skipInlineSpaces(self.source, &self.pos);
-            if (!self.eof() and self.source[self.pos] == '=') {
-                self.pos += 1;
-                source.skipInlineSpaces(self.source, &self.pos);
-                const parsed_default = try self.parseObjectFieldDefault();
-                default_value = parsed_default.expr;
-                default_property_value = parsed_default.property_value;
-            }
-            try fields.append(self.allocator, .{
-                .name = name.text,
-                .name_span = name.span,
-                .value_type = field_type,
-                .default_value = default_value,
-                .default_property_value = default_property_value,
-                .span = .{ .start = member_start, .end = self.pos },
-            });
-            name_moved = true;
-            field_type = ast.Type.none;
-            default_value = null;
-            default_property_value = null;
-            try self.consumeStatementTerminator();
-            source.skipTriviaFrom(self.source, &self.pos);
-        }
-        try self.expectChar('}');
-        try self.consumeStatementTerminator();
-    }
-
-    const ParsedObjectFieldDefault = struct {
-        expr: *Expr,
-        property_value: ?[]const u8,
-    };
-
-    fn parseObjectFieldDefault(self: *Parser) !ParsedObjectFieldDefault {
+    fn parseFieldDefault(self: *Parser) !*Expr {
         const expr = try self.allocator.create(Expr);
         errdefer self.allocator.destroy(expr);
         expr.* = try self.parseExpr();
         errdefer expr.deinit(self.allocator);
-        return .{
-            .expr = expr,
-            .property_value = null,
-        };
-    }
-
-    fn parseStringListInto(self: *Parser, out: *std.ArrayList([]const u8)) !void {
-        source.skipTriviaFrom(self.source, &self.pos);
-        try self.expectChar('[');
-        source.skipTriviaFrom(self.source, &self.pos);
-        while (!self.eof() and !self.peekChar(']')) {
-            const value = try self.parseString();
-            errdefer self.allocator.free(value);
-            try out.append(self.allocator, value);
-            source.skipTriviaFrom(self.source, &self.pos);
-            if (!self.eof() and self.source[self.pos] == ',') {
-                self.pos += 1;
-                source.skipTriviaFrom(self.source, &self.pos);
-                continue;
-            }
-            break;
-        }
-        try self.expectChar(']');
+        return expr;
     }
 
     fn peekKeyword(self: *Parser, keyword: []const u8) !bool {
@@ -936,7 +776,6 @@ const Parser = struct {
             self.allocator.free(name.text);
             return try self.parseNamedTypeArguments(ast.Type.page);
         }
-        if (std.mem.eql(u8, name.text, "Object")) return try self.parseObjectType(name);
         if (std.mem.eql(u8, name.text, "Anchor")) {
             self.allocator.free(name.text);
             return try self.parseNamedTypeArguments(ast.Type.anchor);
@@ -1010,17 +849,6 @@ const Parser = struct {
             .text = text,
             .span = .{ .start = first.span.start, .end = second.span.end },
         };
-    }
-
-    fn parseObjectType(self: *Parser, object_name: ParsedName) anyerror!ast.Type {
-        defer self.allocator.free(object_name.text);
-        source.skipInlineSpaces(self.source, &self.pos);
-        if (self.eof() or self.source[self.pos] != '<') return ast.Type.object;
-        try self.expectChar('<');
-        const class_name = try self.parseQualifiedTypeNameWithSpan();
-        defer self.allocator.free(class_name.text);
-        try self.expectChar('>');
-        return ast.Type.objectClassAt(self.source[class_name.span.start..class_name.span.end], class_name.span);
     }
 
     fn parseTypeParameters(self: *Parser) !std.ArrayList(ast.TypeParameter) {
@@ -2925,7 +2753,6 @@ const Parser = struct {
             "const",
             "type",
             "enum",
-            "object",
             "if",
             "else",
             "end",
