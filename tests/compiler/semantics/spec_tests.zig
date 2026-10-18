@@ -1502,8 +1502,9 @@ test "compiler semantics: Color is a static type" {
         \\end
         \\
         \\page ok
-        \\  let body = body_obj("ok")
-        \\  body.text.color = keep_color(c"0.1,0.2,0.3")
+        \\  let body = text!("ok", default_text_style with {
+        \\    text.color = keep_color(c"0.1,0.2,0.3")
+        \\  })
         \\end
         \\
     );
@@ -1516,8 +1517,9 @@ test "compiler semantics: Color is a static type" {
         \\end
         \\
         \\page bad
-        \\  let body = body_obj("bad")
-        \\  body.text.color = keep_color("0.1,0.2,0.3")
+        \\  let body = text!("bad", default_text_style with {
+        \\    text.color = keep_color("0.1,0.2,0.3")
+        \\  })
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Color, got String");
@@ -1526,8 +1528,9 @@ test "compiler semantics: Color is a static type" {
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  let body = body_obj("color")
-        \\  body.text.color = c"#334455"
+        \\  let body = text!("color", default_text_style with {
+        \\    text.color = c"#334455"
+        \\  })
         \\end
         \\
     , "text", &.{"color"}, "0.2,0.26666668,0.33333334");
@@ -1536,8 +1539,9 @@ test "compiler semantics: Color is a static type" {
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  let body = body_obj("**bold**")
-        \\  body.text.markdown.bold_color = c"#884422"
+        \\  let body = text!("**bold**", default_text_style with {
+        \\    text.markdown.bold_color = c"#884422"
+        \\  })
         \\end
         \\
     , "text", &.{ "markdown", "bold_color" }, "0.53333336,0.26666668,0.13333334");
@@ -1546,21 +1550,23 @@ test "compiler semantics: Color is a static type" {
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let body = body_obj("bad")
-        \\  body.text.markdown.code.chrome.fill = "red"
+        \\  let body = text!("bad", default_text_style with {
+        \\    text.markdown.code.chrome.fill = "red"
+        \\  })
         \\end
         \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'text.markdown.code.chrome.fill' expects Color?, got String");
+    , "case.ss:bytes:", "TypeMismatch: expected Color?, got String");
 
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let body = body_obj("bad")
-        \\  body.text.markdown.bold_color = "red"
+        \\  let body = text!("bad", default_text_style with {
+        \\    text.markdown.bold_color = "red"
+        \\  })
         \\end
         \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'text.markdown.bold_color' expects Color?, got String");
+    , "case.ss:bytes:", "TypeMismatch: expected Color?, got String");
 }
 
 test "compiler semantics: structured style values expand to render properties" {
@@ -1568,12 +1574,13 @@ test "compiler semantics: structured style values expand to render properties" {
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  let body = body_obj("style")
-        \\  body.text = TextStyle {
-        \\    size = 33
-        \\    color = c"#123456"
-        \\    font = FontFace { family = "Menlo", weight = 700 }
-        \\  }
+        \\  let body = text!("style", default_text_style with {
+        \\    text = TextStyle {
+        \\      size = 33
+        \\      color = c"#123456"
+        \\      font = FontFace { family = "Menlo", weight = 700 }
+        \\    }
+        \\  })
         \\end
         \\
     ;
@@ -1588,8 +1595,9 @@ test "compiler semantics: markdown underline uses a structured style" {
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  let body = body_obj("plain _underlined_ text")
-        \\  body.text.markdown.underline = MarkdownUnderlineStyle { color = c"#cc3366" opacity = 0.35 width = 5 offset = 3 dash = "8,4" }
+        \\  let body = text!("plain _underlined_ text", default_text_style with {
+        \\    text.markdown.underline = MarkdownUnderlineStyle { color = c"#cc3366" opacity = 0.35 width = 5 offset = 3 dash = "8,4" }
+        \\  })
         \\end
         \\
     ;
@@ -1604,11 +1612,12 @@ test "compiler semantics: markdown underline uses a structured style" {
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let body = body_obj("_bad_")
-        \\  body.text.markdown.underline.opacity = "opaque"
+        \\  let body = text!("_bad_", default_text_style with {
+        \\    text.markdown.underline.opacity = "opaque"
+        \\  })
         \\end
         \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'text.markdown.underline.opacity' expects Number, got String");
+    , "case.ss:bytes:", "TypeMismatch: expected Number, got String");
 }
 
 test "compiler semantics: set_prop rejects a duplicate property definition" {
@@ -1646,20 +1655,21 @@ test "compiler semantics: image chrome and typed toc text accept explicit styles
     try expectFixtureDumpContains("theme/toc-style", &.{ "\"font_size\":41.0", "\"font_size\":23.0" });
 }
 
-test "compiler semantics: nested property assignment updates style records" {
+test "compiler semantics: nested style updates reach the placed text" {
     const source =
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  let body = body_obj("style")
-        \\  body.text.size = 33
-        \\  body.text.color = c"#123456"
-        \\  body.text.font.family = "Menlo"
-        \\  body.text.font.weight = 650
-        \\  body.text.font.style = FontStyle.italic
-        \\  body.text.font.stretch = FontStretch.expanded
-        \\  body.layout.x = 123
-        \\  body.layout.wrap = WrapMode.off
+        \\  let body = text!("style", default_text_style with {
+        \\    text.size = 33
+        \\    text.color = c"#123456"
+        \\    text.font.family = "Menlo"
+        \\    text.font.weight = 650
+        \\    text.font.style = FontStyle.italic
+        \\    text.font.stretch = FontStretch.expanded
+        \\    layout.x = 123
+        \\    layout.wrap = WrapMode.off
+        \\  })
         \\
         \\end
         \\
@@ -1674,18 +1684,19 @@ test "compiler semantics: nested property assignment updates style records" {
     try expectObjectFieldPath(source, "layout", &.{"wrap"}, "off");
 }
 
-test "compiler semantics: nested property definitions preserve sibling leaves" {
+test "compiler semantics: nested style updates preserve sibling leaves" {
     const source =
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  let body = body_obj("style")
-        \\  body.text.size = 21
-        \\  body.text.font.family = "Avenir"
-        \\  body.text.font.weight = 600
-        \\  body.text.markdown.bold_color = c"#445566"
-        \\  body.text.color = c"#123456"
-        \\  body.text.font.style = FontStyle.italic
+        \\  let body = text!("style", default_text_style with {
+        \\    text.size = 21
+        \\    text.font.family = "Avenir"
+        \\    text.font.weight = 600
+        \\    text.markdown.bold_color = c"#445566"
+        \\    text.color = c"#123456"
+        \\    text.font.style = FontStyle.italic
+        \\  })
         \\end
         \\
     ;
@@ -1697,26 +1708,28 @@ test "compiler semantics: nested property definitions preserve sibling leaves" {
     try expectObjectFieldPath(source, "text", &.{"color"}, "0.07058824,0.20392157,0.3372549");
 }
 
-test "compiler semantics: nested property definitions accept explicit none" {
+test "compiler semantics: nested style updates accept explicit none" {
     const source =
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  let body = body_obj("style")
-        \\  body.text.markdown.bold_color = none
+        \\  let body = text!("style", default_text_style with {
+        \\    text.markdown.bold_color = none
+        \\  })
         \\end
         \\
     ;
     try expectObjectFieldPathNone(source, "text", &.{ "markdown", "bold_color" });
 }
 
-test "compiler semantics: nested property assignment rejects invalid paths and values" {
+test "compiler semantics: nested style updates reject invalid paths and values" {
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let body = body_obj("bad")
-        \\  body.text.missing = 1
+        \\  let body = text!("bad", default_text_style with {
+        \\    text.missing = 1
+        \\  })
         \\end
         \\
     , "case.ss:bytes:", "UnknownField: type 'TextStyle' has no field 'missing'");
@@ -1725,8 +1738,9 @@ test "compiler semantics: nested property assignment rejects invalid paths and v
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let body = body_obj("bad")
-        \\  body.text.size.value = 1
+        \\  let body = text!("bad", default_text_style with {
+        \\    text.size.value = 1
+        \\  })
         \\end
         \\
     , "case.ss:bytes:", "InvalidValueUpdatePath: field 'text.size' has type Number, which has no fields");
@@ -1735,21 +1749,23 @@ test "compiler semantics: nested property assignment rejects invalid paths and v
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let body = body_obj("bad")
-        \\  body.link_id.value = "id"
+        \\  let body = text!("bad", default_text_style with {
+        \\    text.font.family.value = "id"
+        \\  })
         \\end
         \\
-    , "case.ss:bytes:", "InvalidValueUpdatePath: field 'link_id' has type String, which has no fields");
+    , "case.ss:bytes:", "InvalidValueUpdatePath: field 'text.font.family' has type String, which has no fields");
 
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let body = body_obj("bad")
-        \\  body.text.size = "large"
+        \\  let body = text!("bad", default_text_style with {
+        \\    text.size = "large"
+        \\  })
         \\end
         \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'text.size' expects Number, got String");
+    , "case.ss:bytes:", "TypeMismatch: expected Number, got String");
 }
 
 test "compiler semantics: code theme helpers set code and markdown colors" {
@@ -1829,9 +1845,8 @@ test "compiler semantics: structured style value members are typed" {
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  let body = body_obj("style")
         \\  let style = TextStyle { size = 31 }
-        \\  body.text.size = style.size
+        \\  let body = text!("style", default_text_style with { text.size = style.size })
         \\end
         \\
     , "text", &.{"size"}, "31");
@@ -1840,11 +1855,12 @@ test "compiler semantics: structured style value members are typed" {
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let body = body_obj("bad")
-        \\  body.text = FontFace { family = "Menlo" }
+        \\  let body = text!("bad", default_text_style with {
+        \\    text = FontFace { family = "Menlo" }
+        \\  })
         \\end
         \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'text' expects TextStyle, got FontFace");
+    , "case.ss:bytes:", "TypeMismatch: expected TextStyle, got FontFace");
 }
 
 test "compiler semantics: ordinary values reject direct and nested field assignment" {
@@ -1883,11 +1899,12 @@ test "compiler semantics: ordinary value updates copy nested fields" {
         \\  let changed = base with {
         \\    body.size = 33
         \\  }
-        \\  let body = body_obj("changed")
-        \\  body.text = TextStyle {
-        \\    size = changed.body.size
-        \\    color = changed.body.color
-        \\  }
+        \\  let body = text!("changed", default_text_style with {
+        \\    text = TextStyle {
+        \\      size = changed.body.size
+        \\      color = changed.body.color
+        \\    }
+        \\  })
         \\end
         \\
     , "text", &.{"size"}, "33");
@@ -1908,10 +1925,11 @@ test "compiler semantics: ordinary value updates copy nested fields" {
         \\  let changed = base with {
         \\    body.size = 33
         \\  }
-        \\  let body = body_obj("base")
-        \\  body.text = TextStyle {
-        \\    size = base.body.size
-        \\  }
+        \\  let body = text!("base", default_text_style with {
+        \\    text = TextStyle {
+        \\      size = base.body.size
+        \\    }
+        \\  })
         \\end
         \\
     , "text", &.{"size"}, "20");
