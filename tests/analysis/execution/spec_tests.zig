@@ -133,24 +133,24 @@ fn expectCyclePath(source: []const u8, statements: []const []const u8, keys: []c
 test "cycle diagnostics identify the cycle instead of an earlier downstream statement" {
     try expectCyclePath(
         \\document
-        \\  let downstream = docctx().footer_text
-        \\  docctx().footer_text = docctx().watermark
-        \\  docctx().watermark = docctx().footer_text
+        \\  let downstream = docctx().layout_h_center_offset
+        \\  docctx().layout_h_center_offset = docctx().layout_v_center_offset
+        \\  docctx().layout_v_center_offset = docctx().layout_h_center_offset
         \\end
     , &.{
-        "docctx().footer_text = docctx().watermark",
-        "docctx().watermark = docctx().footer_text",
-    }, &.{ "footer_text", "watermark" });
+        "docctx().layout_h_center_offset = docctx().layout_v_center_offset",
+        "docctx().layout_v_center_offset = docctx().layout_h_center_offset",
+    }, &.{ "layout_h_center_offset", "layout_v_center_offset" });
 }
 
 test "cycle diagnostics include the resource of a self dependency" {
     try expectCyclePath(
         \\document
         \\  let independent = 2
-        \\  let downstream = docctx().footer_text
-        \\  docctx().footer_text = docctx().footer_text
+        \\  let downstream = docctx().layout_h_center_offset
+        \\  docctx().layout_h_center_offset = docctx().layout_h_center_offset
         \\end
-    , &.{"docctx().footer_text = docctx().footer_text"}, &.{"footer_text"});
+    , &.{"docctx().layout_h_center_offset = docctx().layout_h_center_offset"}, &.{"layout_h_center_offset"});
 }
 
 test "cycle diagnostics retain every edge of a longer closed path" {
@@ -170,16 +170,16 @@ test "cycle diagnostics retain every edge of a longer closed path" {
 
 test "nested record anchors depend on both immutable root bindings" {
     var state = try document(
-        \\type Inner { item: Object }
+        \\type Inner { item: Placed<Text> }
         \\type Outer { inner: Inner }
         \\page main
-        \\  let target = Outer { inner = Inner { item = text!(docctx().footer_text ?? "missing") } }
-        \\  let source = Outer { inner = Inner { item = text!(docctx().watermark ?? "missing") } }
+        \\  let target = Outer { inner = Inner { item = text!(str(docctx().layout_h_center_offset)) } }
+        \\  let source = Outer { inner = Inner { item = text!(str(docctx().layout_v_center_offset)) } }
         \\  ~ target.inner.item.left == source.inner.item.right + 24
         \\end
         \\document
-        \\  docctx().footer_text = "Target"
-        \\  docctx().watermark = "Source"
+        \\  docctx().layout_h_center_offset = 42
+        \\  docctx().layout_v_center_offset = 84
         \\end
     );
     defer state.deinit();
@@ -415,13 +415,13 @@ test "execution graph owns typed display summaries after temporary analysis stor
         var state = try document(
             \\type Label {}
             \\fn display(self: Placed<Label>) -> Text
-            \\  return Text { content = self.document.footer_text ?? "" }
+            \\  return Text { content = str(self.document.layout_h_center_offset) }
             \\end
             \\page main
             \\  place!(Label {})
             \\end
             \\document
-            \\  docctx().footer_text = "X"
+            \\  docctx().layout_h_center_offset = 42
             \\end
         );
         defer state.deinit();
@@ -436,7 +436,7 @@ test "execution graph owns typed display summaries after temporary analysis stor
             for (unit.summary.reads.items) |resource| {
                 if (resource != .property) continue;
                 const name = resource.property.key.displayName() orelse continue;
-                if (!std.mem.eql(u8, name, "footer_text")) continue;
+                if (!std.mem.eql(u8, name, "layout_h_center_offset")) continue;
                 found = true;
                 var found_edge = false;
                 for (graph.edges.items) |edge| {

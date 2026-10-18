@@ -51,14 +51,14 @@ console.log(`layout composition: ${caseCount} cases passed`);
 async function testAuthoredPlacementOrder() {
   const { dump } = await dumpSource("authored-placement-order", `import std:themes/default as *
 page main
-  text!(docctx().footer_text ?? "unset")
+  text!(str(docctx().layout_h_center_offset))
   text!("Second")
 end
 document
-  docctx().footer_text = "First"
+  docctx().layout_h_center_offset = 42
 end
 `);
-  const first = node(dump, "First");
+  const first = node(dump, "42");
   const second = node(dump, "Second");
   assert(first.y > second.y, "fallback placement followed evaluation order instead of composition order");
   const roots = dump.placement_roots.flatMap((entry) => entry.roots);

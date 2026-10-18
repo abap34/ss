@@ -6,6 +6,4 @@ type PageSettings {
   layout_v: LayoutPolicy = LayoutPolicy.center
   layout_v_center_offset: Number = 0
   background_fill: Color? = none
-  footer_text: String? = none
-  watermark: String? = none
 }
