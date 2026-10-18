@@ -217,12 +217,21 @@ page ok
   place_on!(pagectx(), t)
 end
 `;
-    const memberValidDiagnosticsPromise = client.waitForDiagnostics(
+    const memberChangedDiagnostics = client.waitForDiagnostics(
       uri,
-      (diagnostics) => diagnostics.every((diagnostic) => diagnostic.severity !== 1),
-      "member valid diagnostics",
+      (_, message) => message.params.version === 5,
+      "diagnostics cleared after member edit",
     );
     client.changeDocument({ uri, version: 5, text: memberValidSource });
+    await memberChangedDiagnostics;
+    // didChange clears old diagnostics before analysis. Flush the queued rebuild
+    // before checking resolved semantic features on this valid document.
+    const memberValidDiagnosticsPromise = client.waitForDiagnostics(
+      uri,
+      (_, message) => message.params.version === 5,
+      "member valid diagnostics",
+    );
+    client.notify("textDocument/didSave", { textDocument: { uri } });
     const memberValidDiagnostics = await memberValidDiagnosticsPromise;
     assert(
       memberValidDiagnostics.params.diagnostics.every((diagnostic) => diagnostic.severity !== 1),
@@ -234,7 +243,7 @@ end
       position: positionAt(memberValidSource, "text(", 1),
     });
     assert(
-      textHover.contents?.value?.includes("text(content: String, style: Theme = theme::current_theme()) -> Object"),
+      textHover?.contents?.value?.includes("text(content: String, style: Theme = theme::current_theme()) -> Object"),
       `text hover did not show themed signature: ${JSON.stringify(textHover)}`,
     );
 
