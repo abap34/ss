@@ -206,13 +206,11 @@ test "dependency return caches distinguish argument facts and default arguments"
     const allocator = arena.allocator();
     var analysis = try Analysis.init(allocator,
         \\fn label(value: String = "default") -> String = value
-        \\fn keep(value: Object) -> Object = value
+        \\fn keep(value: Placement) -> Placement = value
         \\document
         \\  let first = label("first")
         \\  let second = label("second")
         \\  let omitted = label()
-        \\  let left = new(current_page(), "left", "body")
-        \\  let right = new(current_page(), "right", "body")
         \\  let a = keep(left)
         \\  let b = keep(right)
         \\  let again = keep(left)
@@ -225,8 +223,19 @@ test "dependency return caches distinguish argument facts and default arguments"
     defer cache.deinit();
     var analyzer = dependencies.Analyzer.initWithScopeAndCache(allocator, &sema, .{ .document = 0 }, &cache);
     defer analyzer.deinit();
-    var summary = try analyzer.documentStatements(analysis.syntax.document_statements.items);
+    // Seed distinct placement resources at the dependency-analysis boundary.
+    // This cache test does not load the stdlib or evaluate placement calls.
+    for ([_][]const u8{ "left", "right" }) |name| {
+        try analyzer.property_target_bindings.put(name, .{ .owner = .{ .object = .{
+            .identity = .{ .scope = .{ .document = 0 }, .name = name },
+        } } });
+    }
+    var summary = try analyzer.documentStatements(analysis.syntax.document_statements.items[0..5]);
     defer summary.deinit();
+    const body_analyses = cache.return_body_analyses;
+    var reused = try analyzer.documentStatements(analysis.syntax.document_statements.items[5..]);
+    defer reused.deinit();
+    try testing.expectEqual(body_analyses, cache.return_body_analyses);
     try testing.expectEqualStrings("first", analyzer.string_bindings.get("first").?);
     try testing.expectEqualStrings("second", analyzer.string_bindings.get("second").?);
     try testing.expectEqualStrings("default", analyzer.string_bindings.get("omitted").?);
@@ -235,7 +244,6 @@ test "dependency return caches distinguish argument facts and default arguments"
         .{ .binding = "b", .original = "right" },
         .{ .binding = "again", .original = "left" },
     }) |item| {
-        try testing.expectEqualStrings(item.original, analyzer.object_role_bindings.get(item.binding).?);
         const target = analyzer.property_target_bindings.get(item.binding).?;
         try testing.expectEqualStrings(item.original, target.owner.object.identity.?.name);
     }
