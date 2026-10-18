@@ -414,6 +414,20 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             break :blk .{ .object = object_id };
         },
         .group => blk: {
+            if (ctx.state.displays.isTypedGroupCall(call.callee.call_id)) {
+                var result = core.GroupValue{ .ty = .{ .kind = .group } };
+                errdefer result.deinit(ctx.state.allocator);
+                try result.children.ensureTotalCapacity(ctx.state.allocator, call.args.items.len);
+                const types = try ctx.state.allocator.alloc(ast.Type, call.args.items.len);
+                defer ctx.state.allocator.free(types);
+                for (call.args.items, types) |arg, *ty| {
+                    const child = try ctx.evalExprValue(arg);
+                    result.children.appendAssumeCapacity(child);
+                    ty.* = child.presentationType() orelse return error.InvalidType;
+                }
+                result.ty = try result.ty.withArguments(ctx.state.allocator, types);
+                break :blk .{ .group = result };
+            }
             var child_ids = std.ArrayList(core.NodeId).empty;
             defer child_ids.deinit(ctx.state.allocator);
             for (call.args.items) |arg| {
@@ -446,7 +460,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             const page_id = try evalPageArg(ctx, call, 0);
             var value = try ctx.evalExprValue(call.args.items[1]);
             defer value.deinit(ctx.state.allocator);
-            if (value == .record) break :blk .{ .object = try ctx.registerPlacement(page_id, value, call.callee.call_id) };
+            if (value == .record or value == .group) break :blk .{ .object = try ctx.registerPlacement(page_id, value, call.callee.call_id) };
             const object_id = if (value == .object) value.object else return error.ExpectedObject;
             try ctx.placeObjectOnPage(page_id, object_id);
             break :blk .{ .object = object_id };

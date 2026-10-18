@@ -1462,3 +1462,55 @@ fn exerciseTypeInstanceStore(allocator: std.mem.Allocator) !void {
 test "document state spec: concrete type instances own declarations and nested arguments" {
     try allocation_testing.checkAllAllocationFailures(testing.allocator, exerciseTypeInstanceStore, .{});
 }
+
+fn exercisePlacementChildren(allocator: std.mem.Allocator) !void {
+    var state = try initEmptyDocumentStateWithAllocator(allocator);
+    defer state.deinit();
+    const page = try state.addPage("Page");
+    var input = try placementInput(allocator);
+    defer input.deinit(allocator);
+    const parent = try state.registerPlacement(page, input, null);
+    const count = state.nodeCount();
+    const next = state.graph.next_id;
+    const ownership = state.graph.direct_page_ownership.items.len;
+    const children = state.registerPlacementChildren(parent, &.{ input, input, input }, .{ .path = "group.ss", .label = "children" }) catch |err| {
+        try testing.expectEqual(count, state.nodeCount());
+        try testing.expectEqual(next, state.graph.next_id);
+        try testing.expectEqual(ownership, state.graph.direct_page_ownership.items.len);
+        try testing.expectEqual(@as(usize, 0), if (state.childrenOf(parent)) |items| items.len else 0);
+        return err;
+    };
+    try testing.expectEqual(@as(usize, 3), children.len);
+    for (children, 0..) |id, offset| {
+        try testing.expectEqual(next + offset, id);
+        const node = state.getNode(id).?;
+        try testing.expectEqual(parent, node.placement.?.parent_id);
+        try testing.expectEqual(page, node.placement.?.page_id);
+        try testing.expectEqualStrings("group.ss", node.origin.?.path.?);
+    }
+    try testing.expectError(error.InvalidPlacementParent, state.registerPlacementChildren(parent, &.{input}, null));
+}
+
+test "document state spec: display children publish atomically under allocation failure" {
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, exercisePlacementChildren, .{});
+}
+
+fn exerciseGroupClone(allocator: std.mem.Allocator) !void {
+    var input = try placementInput(allocator);
+    defer input.deinit(allocator);
+    var group = core.Value{ .group = .{ .ty = try (ast.Type{ .kind = .group }).withArguments(allocator, &.{ input.record.ty, input.record.ty }) } };
+    defer group.deinit(allocator);
+    try group.group.children.ensureTotalCapacity(allocator, 2);
+    group.group.children.appendAssumeCapacity(try input.clone(allocator));
+    group.group.children.appendAssumeCapacity(try input.clone(allocator));
+    var copy = try group.clone(allocator);
+    defer copy.deinit(allocator);
+    try testing.expect(ast.Type.eql(copy.group.ty, group.group.ty));
+    try testing.expectEqual(@as(usize, 2), copy.group.children.items.len);
+    try testing.expect(copy.group.children.items.ptr != group.group.children.items.ptr);
+    try testing.expect(copy.group.children.items[0].record.fields.items.ptr != copy.group.children.items[1].record.fields.items.ptr);
+}
+
+test "document state spec: group values clone independently under allocation failure" {
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, exerciseGroupClone, .{});
+}

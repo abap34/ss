@@ -421,6 +421,7 @@ pub const Placement = struct {
         pending,
         running,
         native: NativeDisplayKind,
+        group,
         expanded: struct {
             target: FunctionKey,
             child: NodeId,
@@ -496,6 +497,7 @@ pub const ValueTag = enum {
     string,
     enum_case,
     record,
+    group,
     path,
     number,
     boolean,
@@ -641,7 +643,28 @@ pub const RecordValue = struct {
     }
 };
 
-/// Runtime values own selections, record field storage, paths and constraints.
+/// A finite product of unplaced presentation inputs. Repeated values retain
+/// separate positions; identities are allocated only when it is placed.
+pub const GroupValue = struct {
+    ty: Type,
+    children: std.ArrayList(Value) = .empty,
+
+    pub fn deinit(self: *GroupValue, allocator: Allocator) void {
+        self.ty.deinit(allocator);
+        for (self.children.items) |*child| child.deinit(allocator);
+        self.children.deinit(allocator);
+    }
+
+    pub fn clone(self: GroupValue, allocator: Allocator) anyerror!GroupValue {
+        var result = GroupValue{ .ty = try self.ty.clone(allocator) };
+        errdefer result.deinit(allocator);
+        try result.children.ensureTotalCapacity(allocator, self.children.items.len);
+        for (self.children.items) |child| result.children.appendAssumeCapacity(try child.clone(allocator));
+        return result;
+    }
+};
+
+/// Runtime values own selections, record fields, group children, paths and constraints.
 /// Strings, nominal names and function identities are borrowed from module syntax,
 /// document strings/content, or the evaluator's closure store. Those owners must
 /// outlive every copy: clone duplicates owned storage without extending borrows.
@@ -658,6 +681,7 @@ pub const Value = union(ValueTag) {
     string: []const u8,
     enum_case: EnumCaseValue,
     record: RecordValue,
+    group: GroupValue,
     path: Path,
     number: f32,
     boolean: bool,
@@ -668,6 +692,7 @@ pub const Value = union(ValueTag) {
         switch (self.*) {
             .selection => |*selection| selection.deinit(allocator),
             .record => |*record| record.deinit(allocator),
+            .group => |*group| group.deinit(allocator),
             .path => |*value| value.deinit(allocator),
             .constraints => |*constraints| constraints.deinit(allocator),
             else => {},
@@ -686,11 +711,20 @@ pub const Value = union(ValueTag) {
             .string => |text| .{ .string = text },
             .enum_case => |enum_case| .{ .enum_case = enum_case },
             .record => |record| .{ .record = try record.clone(allocator) },
+            .group => |group| .{ .group = try group.clone(allocator) },
             .path => |value| .{ .path = try value.clone(allocator) },
             .number => |number| .{ .number = number },
             .boolean => |boolean| .{ .boolean = boolean },
             .constraints => |constraints| .{ .constraints = try constraints.clone(allocator) },
             .void => .{ .void = {} },
+        };
+    }
+
+    pub fn presentationType(self: Value) ?Type {
+        return switch (self) {
+            .record => |record| record.ty,
+            .group => |group| group.ty,
+            else => null,
         };
     }
 
@@ -700,7 +734,7 @@ pub const Value = union(ValueTag) {
             .page => |id| id,
             .object => |id| id,
             .selection => |selection| selection.first(),
-            .none, .anchor, .function, .string, .enum_case, .record, .path, .number, .boolean, .constraints, .void => null,
+            .none, .anchor, .function, .string, .enum_case, .record, .group, .path, .number, .boolean, .constraints, .void => null,
         };
     }
 };

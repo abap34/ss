@@ -1179,7 +1179,7 @@ pub const Analyzer = struct {
                     .primitive => |primitive| break :blk try self.primitiveValueFacts(call, primitive),
                     .unknown => break :blk .{},
                     .function => |named| switch (named.decl.result_type.kind) {
-                        .function, .record, .optional, .any, .placed, .placement, .page, .document, .selection => {},
+                        .function, .record, .group, .optional, .any, .placed, .placement, .page, .document, .selection => {},
                         .object => {
                             const role = try self.objectRoleCall(call);
                             if (role != null and !std.mem.eql(u8, role.?, core.GroupRole)) {
@@ -1244,7 +1244,8 @@ pub const Analyzer = struct {
                 result.children = &.{};
             },
             .group => {
-                result.object_role = core.GroupRole;
+                const typed = self.isTypedGroupCall(call);
+                if (!typed) result.object_role = core.GroupRole;
                 const children = try self.value_storage.allocator().alloc(ValueFacts, call.args.items.len);
                 for (call.args.items, children) |arg, *child| child.* = try self.valueFacts(arg);
                 result.children = children;
@@ -1413,7 +1414,7 @@ pub const Analyzer = struct {
                 .named => |named| blk: {
                     // Scalar results contain neither callables nor object identities.
                     switch (named.decl.result_type.kind) {
-                        .function, .record, .optional, .any, .object, .placed, .placement, .page, .document, .selection => {},
+                        .function, .record, .group, .optional, .any, .object, .placed, .placement, .page, .document, .selection => {},
                         else => break :blk ValueFacts{},
                     }
                     const already_visiting = self.visiting.contains(named.key);
@@ -2106,6 +2107,9 @@ pub const Analyzer = struct {
         if (primitiveNeedsArgFacts(descriptor.op)) {
             var arg_facts = try self.collectCallArgFacts(call);
             defer self.deinitCallArgFacts(&arg_facts);
+            if (descriptor.op == .group) {
+                if (self.isTypedGroupCall(call)) return self.callArgFactsSummary(arg_facts.items);
+            }
             if (descriptor.op == .place_on) {
                 if (self.sema.state) |state| if (call.callee.call_id) |id| {
                     if (state.displays.call_targets.get(id)) |plan| return self.typedPlacementCall(id, state.displays.plans.items[plan], arg_facts.items);
@@ -2167,6 +2171,12 @@ pub const Analyzer = struct {
         for (plan.steps.items, 0..) |step, index| {
             switch (step.target) {
                 .native => steps.appendAssumeCapacity(AccessSummary.init(self.allocator)),
+                .group => {
+                    steps.appendAssumeCapacity(AccessSummary.init(self.allocator));
+                    for (step.children.items, 0..) |child_index, position| {
+                        inputs[child_index] = if (inputs[index].children) |children| if (position < children.len) children[position] else .{} else .{};
+                    }
+                },
                 .function => |key| {
                     const state = self.sema.state.?;
                     const function = try self.newValueFacts(&.{.{ .named = .{ .key = key, .module_id = key.module_id, .decl = state.functions.get(key).? } }}, &.{});
@@ -2415,6 +2425,10 @@ pub const Analyzer = struct {
         };
     }
 
+    fn isTypedGroupCall(self: *const Analyzer, call: ast.CallExpr) bool {
+        return if (self.sema.state) |state| state.displays.isTypedGroupCall(call.callee.call_id) else false;
+    }
+
     fn propertyTargetCall(self: *Analyzer, call: ast.CallExpr) anyerror!?PropertyTarget {
         const descriptor = (try self.callCallee(call.callee)) orelse return null;
         return switch (descriptor) {
@@ -2422,7 +2436,7 @@ pub const Analyzer = struct {
                 .docctx => PropertyTarget.document(),
                 .pagectx, .new_page => PropertyTarget.page(),
                 .new => PropertyTarget.freshObject(self.objectClassForRole(try literalStringArg(self, call, 1))),
-                .group => PropertyTarget.freshObject(self.objectClassForRole(core.GroupRole)),
+                .group => if (self.isTypedGroupCall(call)) null else PropertyTarget.freshObject(self.objectClassForRole(core.GroupRole)),
                 .place_on => if (call.args.items.len > 1)
                     try self.propertyTargetExpr(call.args.items[1])
                 else
@@ -2664,7 +2678,7 @@ pub const Analyzer = struct {
         return switch (descriptor) {
             .primitive => |primitive| switch (primitive.op) {
                 .new => try literalStringArg(self, call, 1),
-                .group => core.GroupRole,
+                .group => if (self.isTypedGroupCall(call)) null else core.GroupRole,
                 .place_on => try self.objectRoleArg(call, 1),
                 else => null,
             },
@@ -2744,6 +2758,9 @@ fn buildFunctionCallSummaryKey(
 }
 
 fn appendCompositionKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: ValueFacts) anyerror!void {
+    try appendKeyInt(allocator, out, if (value.candidates.len != 0 or value.fields.len != 0) value.id else 0);
+    try appendResourceScopeKey(allocator, out, value.page_scope);
+    try appendPlacementScopeKey(allocator, out, value.placement);
     try appendOptionalBytesKey(allocator, out, value.object_role);
     if (value.children) |children| {
         try out.append(allocator, 'c');

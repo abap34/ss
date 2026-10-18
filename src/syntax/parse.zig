@@ -1016,6 +1016,10 @@ const Parser = struct {
             if (!source.startsWithAt(self.source, self.pos, "<")) return try ast.Type.selectionOf(self.allocator, ast.Type.any);
             return try self.parseNamedTypeArguments(.{ .kind = .selection });
         }
+        if (std.mem.eql(u8, name.text, "Group")) {
+            self.allocator.free(name.text);
+            return try self.parseNamedTypeArguments(.{ .kind = .group });
+        }
         if (std.mem.eql(u8, name.text, "Placed") or std.mem.eql(u8, name.text, "Placement")) {
             const kind: ast.Type.Kind = if (std.mem.eql(u8, name.text, "Placed")) .placed else .placement;
             self.allocator.free(name.text);

@@ -788,3 +788,42 @@ test "analysis query spec: public placement retains concrete input fields throug
     try expectAppliedField(&snapshot, path, source, "inferred.value.title", "title", "String", 2);
     try expectAppliedField(&snapshot, path, source, "explicit.value.title", "title", "String", 2);
 }
+
+test "analysis query spec: groups retain concrete types through unfinished placement access" {
+    const path = "stdlib/internal/group-query-test.ss";
+    const source =
+        \\import std:text as text_api
+        \\import std:layout
+        \\page main
+        \\  let text = text_api::Text { content = "Child" }
+        \\  let content = group(text, group(text))
+        \\  let item = place!(content)
+        \\  let input = item.
+        \\end
+    ;
+    var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+    defer sources.deinit();
+    try sources.put(path, source);
+    var snapshot = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{});
+    defer snapshot.deinit();
+    var completion = try analysis.snapshot.completeAt(testing.allocator, &snapshot, .{
+        .path = path,
+        .source = source,
+        .offset = std.mem.indexOf(u8, source, "item.").? + "item.".len,
+    }, .{ .budget_ms = 1000 });
+    defer completion.deinit(testing.allocator);
+    var found = false;
+    for (completion.items) |item| {
+        if (!std.mem.eql(u8, item.label, "value")) continue;
+        try testing.expectEqualStrings("Group<Text, Group<Text>>", item.detail.?);
+        found = true;
+    }
+    try testing.expect(found);
+    var hover = (try analysis.snapshot.hoverAt(testing.allocator, &snapshot, .{
+        .path = path,
+        .source = source,
+        .offset = std.mem.indexOf(u8, source, "group(text").? + 2,
+    }, .{ .budget_ms = 1000 })) orelse return error.ExpectedHover;
+    defer hover.deinit(testing.allocator);
+    try testing.expect(std.mem.indexOf(u8, hover.markdown, "Group<T1, ...>") != null);
+}

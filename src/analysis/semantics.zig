@@ -1017,7 +1017,7 @@ fn checkTypeAnnotation(
     }
     for (ty.arguments) |argument| try checkTypeAnnotation(state, sema, module_id, argument, origin);
     if (ty.kind == .selection or ty.kind == .placed) try semantic_types.ensureTypeArgumentCount(state, 1, ty.arguments.len, origin);
-    if (ty.kind != .selection and ty.kind != .placed and ty.kind != .record and ty.kind != .object) try semantic_types.ensureTypeArgumentCount(state, 0, ty.arguments.len, origin);
+    if (ty.kind != .selection and ty.kind != .placed and ty.kind != .group and ty.kind != .record and ty.kind != .object) try semantic_types.ensureTypeArgumentCount(state, 0, ty.arguments.len, origin);
     if (ty.kind == .enum_type or ty.kind == .color or ty.kind == .none or ty.kind == .hole or ty.kind == .parameter) return;
     if (ty.kind == .optional) {
         if (ty.optional_child) |child| try checkTypeAnnotation(state, sema, module_id, child.*, origin);
@@ -1139,7 +1139,7 @@ pub fn checkDisplayDeclarations(allocator: std.mem.Allocator, state: *core.Docum
                     if (ast.Type.eql(previous, argument)) try displayError(state, module_id, function, "InvalidDisplaySignature", "display must cover every input type argument independently");
                 }
             }
-            if (function.result_type.kind != .record and function.result_type.kind != .parameter) {
+            if (function.result_type.kind != .record and function.result_type.kind != .group and function.result_type.kind != .parameter) {
                 try displayError(state, module_id, function, "InvalidDisplaySignature", "display must return an unplaced presentation value");
             }
             const entry = try seen.getOrPut(id.name);

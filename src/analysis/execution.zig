@@ -147,12 +147,12 @@ pub const ExecutionGraph = struct {
                         } });
                     }
                     const module_id = switch (step.target) {
-                        .native => source.module_id,
+                        .native, .group => source.module_id,
                         .function => |key| key.module_id,
                     };
                     const module = state.moduleById(module_id).?;
                     const span = switch (step.target) {
-                        .native => source.span,
+                        .native, .group => source.span,
                         .function => |key| state.functions.get(key).?.span,
                     };
                     const unit = self.units.items.len;

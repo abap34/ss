@@ -312,3 +312,25 @@ test "type spec: placed inputs remain invariant while placement erasure is one w
     copy.hashInto(&b);
     try testing.expectEqual(a.final(), b.final());
 }
+
+test "type spec: groups retain child order, arity and nested nominal types" {
+    const text = Type.recordType("Text").inModule(1);
+    const image = Type.recordType("Image").inModule(2);
+    var pair = try (Type{ .kind = .group }).withArguments(testing.allocator, &.{ text, image });
+    defer pair.deinit(testing.allocator);
+    var reversed = try (Type{ .kind = .group }).withArguments(testing.allocator, &.{ image, text });
+    defer reversed.deinit(testing.allocator);
+    var nested = try (Type{ .kind = .group }).withArguments(testing.allocator, &.{ text, pair });
+    defer nested.deinit(testing.allocator);
+    var repeated = try (Type{ .kind = .group }).withArguments(testing.allocator, &.{ text, image, image });
+    defer repeated.deinit(testing.allocator);
+    var clone = try nested.clone(testing.allocator);
+    defer clone.deinit(testing.allocator);
+    try expectFormat(nested, "Group<Text, Group<Text, Image>>");
+    try testing.expect(Type.eql(nested, clone));
+    try testing.expect(Type.accepts(nested, clone));
+    try testing.expect(!Type.accepts(pair, reversed));
+    try testing.expect(!Type.accepts(pair, repeated));
+    try testing.expect(!Type.accepts(pair, nested));
+    try testing.expect(!Type.accepts(Type.object, pair));
+}

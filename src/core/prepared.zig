@@ -175,7 +175,7 @@ pub fn prepareObjectWithRender(
 ) !PreparedObject {
     if (node.placement) |placement| switch (placement.display) {
         .pending, .running => return error.UnexpandedDisplay,
-        .native, .expanded => {},
+        .native, .expanded, .group => {},
     };
     const semantics = try resolveSemantics(state, node);
     var env = try render_env.resolveForNode(allocator, state, node);

@@ -58,6 +58,13 @@ pub fn prepare(
         const index = try plan.append(current, target, parent);
         switch (target) {
             .native => {},
+            .group => {
+                var child = current.arguments.len;
+                while (child > 0) {
+                    child -= 1;
+                    try pending.append(allocator, .{ .input = current.arguments[child], .origin = current_origin, .parent = index });
+                }
+            },
             .function => |key| {
                 const declaration = state.functions.get(key).?;
                 try pending.append(allocator, .{

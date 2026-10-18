@@ -204,9 +204,20 @@ pub fn typeForExpr(allocator: std.mem.Allocator, budget: ?QueryBudget, snapshot:
 
 fn typeForPrimitiveCall(allocator: std.mem.Allocator, budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, offset: usize, call: ast.CallExpr) anyerror!?ast.Type {
     const descriptor = registry.lookupPrimitiveCall(call.callee.name) orelse return null;
+    if (descriptor.op == .group and call.args.items.len != 0) {
+        const inputs = try allocator.alloc(ast.Type, call.args.items.len);
+        defer allocator.free(inputs);
+        for (call.args.items, inputs) |argument, *input| {
+            input.* = (try typeForExpr(allocator, budget, snapshot, module_id, offset, argument)) orelse return null;
+        }
+        if (inputs[0].kind == .record or inputs[0].kind == .group) {
+            for (inputs) |input| if (input.kind != .record and input.kind != .group) return null;
+            return try (ast.Type{ .kind = .group }).withArguments(allocator, inputs);
+        }
+    }
     if (descriptor.op == .select and call.type_args.items.len == 1 and call.args.items.len == 1) {
         const input = (try resolveType(allocator, budget, snapshot, module_id, offset, call.type_args.items[0])) orelse return null;
-        if (input.kind != .record) return null;
+        if (input.kind != .record and input.kind != .group) return null;
         var item = try ast.Type.placedOf(allocator, input);
         defer item.deinit(allocator);
         return try ast.Type.selectionOf(allocator, item);

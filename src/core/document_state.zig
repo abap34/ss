@@ -767,6 +767,48 @@ pub const DocumentState = struct {
         return id;
     }
 
+    /// Publish all direct children of a display together. Allocation failure
+    /// leaves its child collection and the node identity sequence unchanged.
+    pub fn registerPlacementChildren(self: *DocumentState, parent_id: NodeId, inputs: []const Value, origin: ?model.SourceOrigin) ![]const NodeId {
+        const parent = self.getNode(parent_id) orelse return error.UnknownNode;
+        if (parent.discarded) return error.InvalidPlacementParent;
+        const page_id = (parent.placement orelse return error.InvalidPlacementParent).page_id;
+        if (self.childrenOf(parent_id)) |existing| if (existing.len != 0) return error.InvalidPlacementParent;
+        var nodes = std.ArrayList(Node).empty;
+        defer nodes.deinit(self.allocator);
+        errdefer for (nodes.items) |*node| node.deinit(self.allocator);
+        try nodes.ensureTotalCapacity(self.allocator, inputs.len);
+        const owned_origin = if (origin) |source| try self.copyOrigin(source) else null;
+        for (inputs, 0..) |input, offset| {
+            if (input.presentationType() == null) return error.InvalidValueTag;
+            const value = try input.clone(self.allocator);
+            nodes.appendAssumeCapacity(.{
+                .id = self.graph.next_id + @as(NodeId, @intCast(offset)),
+                .kind = .object,
+                .name = "placement",
+                .attached = true,
+                .placement = .{ .value = value, .parent_id = parent_id, .page_id = page_id },
+                .origin = owned_origin,
+            });
+        }
+        try self.graph.nodes.ensureUnusedCapacity(self.allocator, nodes.items.len);
+        try self.graph.direct_page_ownership.ensureUnusedCapacity(self.allocator, nodes.items.len);
+        const children = try self.graph.contains.getOrPut(parent_id);
+        if (!children.found_existing) children.value_ptr.* = .empty;
+        errdefer if (!children.found_existing) {
+            children.value_ptr.deinit(self.allocator);
+            _ = self.graph.contains.remove(parent_id);
+        };
+        try children.value_ptr.ensureUnusedCapacity(self.allocator, nodes.items.len);
+        for (nodes.items) |node| {
+            children.value_ptr.appendAssumeCapacity(node.id);
+            self.graph.direct_page_ownership.appendAssumeCapacity(.{ .first = page_id, .count = 1 });
+            self.graph.nodes.appendAssumeCapacity(node);
+        }
+        self.graph.next_id += @intCast(nodes.items.len);
+        return children.value_ptr.items;
+    }
+
     pub fn createObjectWithOrigin(
         self: *DocumentState,
         name: []const u8,
@@ -1428,6 +1470,7 @@ pub const DocumentState = struct {
             .string => .string,
             .enum_case => .enum_case,
             .record => .record,
+            .group => .group,
             .path => .path,
             .number => .number,
             .boolean => .boolean,
@@ -1555,7 +1598,7 @@ pub const DocumentState = struct {
     /// Search registered input values in document construction order. The
     /// execution graph has already waited for every relevant producer.
     pub fn selectTypedPlacements(self: *DocumentState, allocator: Allocator, scope: Value, input: ast.Type) !Selection {
-        if (input.kind != .record) return error.InvalidSelectionType;
+        if (input.kind != .record and input.kind != .group) return error.InvalidSelectionType;
         var result = Selection.init(.object, "typed placements");
         errdefer result.deinit(allocator);
         switch (scope) {
@@ -1622,7 +1665,7 @@ pub const DocumentState = struct {
             const placement = node.placement orelse return error.InvalidSelectionScope;
             if (node.discarded) continue;
             const matches = if (input) |ty|
-                placement.value == .record and ast.Type.eql(placement.value.record.ty, ty)
+                if (placement.value.presentationType()) |actual| ast.Type.eql(actual, ty) else false
             else if (wanted) |ids| ids.contains(id) else true;
             if (matches) try result.append(allocator, id);
             const children = self.childrenOf(id) orelse continue;

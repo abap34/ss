@@ -345,7 +345,7 @@ pub fn resolvePageBackground(state: anytype, page: *const Node) ?Color {
 
 pub fn resolveKind(state: anytype, node: *const Node) RenderKind {
     if (node.placement) |placement| switch (placement.display) {
-        .expanded => return .chrome_only,
+        .expanded, .group => return .chrome_only,
         .native => |kind| return switch (kind) {
             .text => .text,
             .image => .raster_asset,

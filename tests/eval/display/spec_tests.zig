@@ -1254,3 +1254,183 @@ test "native latex display: configuration must have the declared nominal type" {
     try value.record.fields.append(testing.allocator, .{ .name = "config", .value = .{ .record = .init(Type.recordType("LatexConfig").inModule(0)) } });
     try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, .latex));
 }
+
+test "typed groups: heterogeneous inputs preserve nesting, duplicates and placement identity" {
+    var state = try documentWithModules(
+        \\import std:text as text_api
+        \\import std:code as code_api
+        \\type Label { title: String }
+        \\fn display(self: Placed<Label>) -> text_api::Text = text_api::Text { content = self.value.title }
+        \\fn pair<T, U>(a: T, b: U) -> Group<T, U> = group(a, b)
+        \\type Panel { title: String }
+        \\fn display(self: Placed<Panel>) -> Group<Label, code_api::Code>
+        \\  return pair(Label { title = self.value.title }, code_api::Code { source = "sample" })
+        \\end
+        \\page first
+        \\  let label = Label { title = "Shared" }
+        \\  let content = group(label, group(label, Panel { title = "Nested" }))
+        \\  let first = place!(content)
+        \\  let second = place!(content)
+        \\end
+    );
+    defer state.deinit();
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const page = state.graph.page_order.items[0];
+    const roots = state.placementRootsOf(page);
+    try testing.expectEqual(@as(usize, 2), roots.len);
+    for (roots) |root| {
+        const value = state.getNode(root).?.placement.?.value;
+        try testing.expectEqual(Type.Kind.group, value.group.ty.kind);
+        try testing.expectEqual(@as(usize, 2), value.group.ty.arguments.len);
+        try testing.expectEqual(Type.Kind.group, value.group.ty.arguments[1].kind);
+        const children = state.childrenOf(root).?;
+        try testing.expectEqual(@as(usize, 2), children.len);
+        try testing.expectEqual(root, state.getNode(children[0]).?.placement.?.parent_id);
+        const nested = state.childrenOf(children[1]).?;
+        try testing.expectEqual(@as(usize, 2), nested.len);
+        try testing.expect(children[0] != nested[0]);
+        try testing.expectEqualStrings("Shared", state.getNode(children[0]).?.placement.?.value.record.field("title").?.string);
+        const panel_group = state.childrenOf(nested[1]).?[0];
+        const panel_children = state.childrenOf(panel_group).?;
+        try testing.expectEqual(@as(usize, 2), panel_children.len);
+        try testing.expectEqual(page, state.getNode(panel_children[1]).?.placement.?.page_id);
+        try testing.expectEqual(core.native_display.Kind.code, state.getNode(panel_children[1]).?.placement.?.display.native);
+    }
+    const first_children = state.childrenOf(roots[0]).?;
+    const second_children = state.childrenOf(roots[1]).?;
+    try testing.expect(first_children[0] != second_children[0]);
+    var selected = try state.selectTypedPlacements(testing.allocator, .{ .document = state.graph.document_id }, state.getNode(roots[0]).?.placement.?.value.group.ty);
+    defer selected.deinit(testing.allocator);
+    try testing.expectEqualSlices(core.NodeId, roots, selected.ids.items);
+}
+
+test "typed groups: child callbacks retain captures and reject document mutation" {
+    const source =
+        \\import std:text as text_api
+        \\type Label { format: () -> String }
+        \\fn display(self: Placed<Label>) -> text_api::Text = text_api::Text { content = self.value.format() }
+        \\fn label(prefix: String) -> Label = Label { format = () |-> prefix }
+        \\fn content(a: Label, b: Label) -> Group<Label, Label> = group(a, b)
+        \\page first
+        \\  let result = place!(content(label("First"), label("Second")))
+        \\end
+    ;
+    var state = try documentWithModules(source);
+    defer state.deinit();
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const root = state.placementRootsOf(state.graph.page_order.items[0])[0];
+    for (state.childrenOf(root).?, [_][]const u8{ "First", "Second" }) |child, expected| {
+        const leaf = state.childrenOf(child).?[0];
+        try testing.expectEqualStrings(expected, core.nodeContent(state.getNode(leaf).?).?);
+    }
+    var invalid = try documentWithModules(
+        \\import std:text as text_api
+        \\type Label { format: () -> String }
+        \\fn display(self: Placed<Label>) -> text_api::Text = text_api::Text { content = self.value.format() }
+        \\fn mutate() -> String
+        \\  new_page(docctx(), "Unexpected")
+        \\  return "bad"
+        \\end
+        \\page first
+        \\  place!(group(Label { format = () |-> "Good" }, Label { format = mutate }))
+        \\end
+    );
+    defer invalid.deinit();
+    try testing.expectError(error.ImpureDisplayFunction, compiler.analysis.analyzeDocumentState(testing.allocator, &invalid));
+    try testing.expectEqual(@as(usize, 0), invalid.graph.page_order.items.len);
+}
+
+test "typed groups: recursive display through a group is rejected before evaluation" {
+    var state = try documentWithModules(
+        \\type Loop { title: String }
+        \\fn display(self: Placed<Loop>) -> Group<Loop> = group(self.value)
+        \\page first
+        \\  place!(Loop { title = "Recursive" })
+        \\end
+    );
+    defer state.deinit();
+    _ = compiler.analysis.analyzeDocumentState(testing.allocator, &state) catch {};
+    var found = false;
+    for (state.diagnostics.entries.items) |diagnostic| {
+        if (std.mem.eql(u8, diagnostic.code(), "NonTerminatingDisplay")) found = true;
+    }
+    try testing.expect(found);
+    try testing.expectEqual(@as(usize, 0), state.graph.page_order.items.len);
+}
+
+test "typed groups: construction alone does not allocate placements" {
+    var state = try documentWithModules(
+        \\import std:text as text_api
+        \\page first
+        \\  let content = group(text_api::Text { content = "Unused" }, text_api::Text { content = "Unused" })
+        \\end
+    );
+    defer state.deinit();
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    try testing.expectEqual(@as(usize, 2), state.nodeCount());
+    try testing.expectEqual(@as(usize, 0), state.placementRootsOf(state.graph.page_order.items[0]).len);
+}
+
+test "typed groups: paired generic constructors retain group input types" {
+    var state = try documentWithModules(
+        \\import std:text as t
+        \\fn/! pair<T, U>(a: T, b: U) -> Group<T, U> = group(a, b)
+        \\page first
+        \\  let placed: Placed<Group<t::Text, t::Text>> = pair!(t::Text { content = "First" }, t::Text { content = "Second" })
+        \\end
+    );
+    defer state.deinit();
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const roots = state.placementRootsOf(state.graph.page_order.items[0]);
+    try testing.expectEqual(@as(usize, 1), roots.len);
+    const children = state.childrenOf(roots[0]).?;
+    try testing.expectEqual(@as(usize, 2), children.len);
+    for (children, [_][]const u8{ "First", "Second" }) |child, expected| {
+        try testing.expectEqualStrings(expected, core.nodeContent(state.getNode(child).?).?);
+    }
+}
+
+test "typed groups: unused displays cannot mutate legacy groups" {
+    var state = try documentWithModules(
+        \\import std:text as t
+        \\type Legacy { item: Object }
+        \\fn display(self: Placed<Legacy>) -> t::Text
+        \\  let invalid = group(self.value.item)
+        \\  return t::Text { content = "Unused" }
+        \\end
+    );
+    defer state.deinit();
+    try testing.expectError(error.ImpureDisplayFunction, compiler.analysis.analyzeDocumentState(testing.allocator, &state));
+}
+
+test "typed groups: invalid children and mismatched signatures are diagnosed statically" {
+    for ([_][]const u8{
+        \\import std:text as t
+        \\page first
+        \\  let placed = place!(t::Text { content = "Already placed" })
+        \\  let invalid = group(t::Text { content = "Value" }, placed)
+        \\end
+        ,
+        \\import std:text as t
+        \\import std:code as c
+        \\fn invalid() -> Group<c::Code, t::Text> = group(t::Text { content = "Text" }, c::Code { source = "Code" })
+        ,
+        \\import std:text as t
+        \\fn invalid() -> Group<t::Text> = group(t::Text { content = "Text" }, t::Text { content = "Text" })
+        ,
+    }) |source| {
+        var state = try documentWithModules(source);
+        defer state.deinit();
+        if (compiler.analysis.analyzeDocumentState(testing.allocator, &state)) |_| return error.ExpectedTypeError else |_| {}
+        try testing.expect(state.diagnostics.entries.items.len != 0);
+        try testing.expectEqual(@as(usize, 0), state.graph.page_order.items.len);
+    }
+}

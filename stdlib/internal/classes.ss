@@ -411,7 +411,7 @@ type Toc = object {
   roles = ["toc"]
 }
 
-type Group = object {
+type ObjectGroup = object {
   base = Flow
   roles = ["group"]
 

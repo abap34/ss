@@ -63,7 +63,7 @@ pub fn parse(allocator: std.mem.Allocator, value: json.Value) anyerror!Type {
         ty.nominal_module_id = @intCast(module.integer);
     }
     if (json.fieldValue(object, "arguments")) |arguments| {
-        if (kind != .record and kind != .selection and kind != .placed and kind != .object) return error.InvalidValueTag;
+        if (kind != .record and kind != .group and kind != .selection and kind != .placed and kind != .object) return error.InvalidValueTag;
         ty.arguments = try parseTypes(allocator, arguments.*);
         ty.owns_arguments = true;
     }

@@ -588,3 +588,71 @@ test "typed queries: shared typed subtree helpers preserve the receiver path and
     const text = state.childrenOf(child).?[0];
     try testing.expectEqualStrings("1:0", core.nodeDisplayContent(state.getNode(text).?));
 }
+
+test "typed queries: generated groups preserve dependency and document order" {
+    var state = try document(
+        \\import std:text/content as native
+        \\type Heading { title: String }
+        \\type Bundle {}
+        \\type Toc {}
+        \\fn display(self: Placed<Heading>) -> native::Text = native::Text { content = self.value.title }
+        \\fn display(self: Placed<Bundle>) -> Group<Heading, Group<Heading, Heading>>
+        \\  return group(Heading { title = "First" }, group(Heading { title = "Second" }, Heading { title = "Third" }))
+        \\end
+        \\fn display(self: Placed<Toc>) -> native::Text
+        \\  return native::Text { content = join(select<Heading>(self.document), ", ", (h: Placed<Heading>) |-> h.value.title) }
+        \\end
+        \\page contents
+        \\  place!(Toc {})
+        \\end
+        \\page body
+        \\  let bundle = place!(Bundle {})
+        \\  let groups = select<Group<Heading, Group<Heading, Heading>>>(bundle)
+        \\  place!(native::Text { content = str(selection_count(groups)) })
+        \\end
+    );
+    defer state.deinit();
+    var graph = try checkedGraph(&state);
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const toc = state.placementRootsOf(state.graph.page_order.items[0])[0];
+    try testing.expectEqualStrings("First, Second, Third", core.nodeDisplayContent(state.getNode(state.childrenOf(toc).?[0]).?));
+    const roots = state.placementRootsOf(state.graph.page_order.items[1]);
+    try testing.expectEqualStrings("1", core.nodeDisplayContent(state.getNode(roots[1]).?));
+    const outer = state.childrenOf(roots[0]).?[0];
+    const children = state.childrenOf(outer).?;
+    try testing.expectEqual(@as(usize, 2), children.len);
+    try testing.expectEqual(@as(usize, 2), state.childrenOf(children[1]).?.len);
+}
+
+test "typed queries: group child captures distinguish dependency summaries" {
+    var state = try document(
+        \\import std:text/content as native
+        \\type Pair {}
+        \\type Reader { read: () -> String }
+        \\fn display(self: Placed<Pair>) -> Group<native::Text, native::Text>
+        \\  return group(native::Text { content = "A" }, native::Text { content = "B" })
+        \\end
+        \\fn display(self: Placed<Reader>) -> native::Text = native::Text { content = self.value.read() }
+        \\fn reader(target: Placement) -> Reader
+        \\  return Reader { read = () |-> str(selection_count(select<native::Text>(target))) }
+        \\end
+        \\fn reuse(value: Group<Reader>) -> Group<Reader> = value
+        \\page main
+        \\  let leaf = place!(native::Text { content = "Leaf" })
+        \\  let pair = place!(Pair {})
+        \\  let empty = place!(reuse(group(reader(leaf))))
+        \\  let full = place!(reuse(group(reader(pair))))
+        \\end
+    );
+    defer state.deinit();
+    var graph = try checkedGraph(&state);
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const roots = state.placementRootsOf(state.graph.page_order.items[0]);
+    for (roots[2..], [_][]const u8{ "0", "2" }) |root, expected| {
+        const reader = state.childrenOf(root).?[0];
+        const text = state.getNode(state.childrenOf(reader).?[0]).?;
+        try testing.expectEqualStrings(expected, core.nodeDisplayContent(text));
+    }
+}
