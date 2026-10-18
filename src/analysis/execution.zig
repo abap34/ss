@@ -142,8 +142,7 @@ pub const ExecutionGraph = struct {
                         const child = plan.steps.items[child_index];
                         try summary.addWrite(.{ .objects = .{
                             .input_type = child.input,
-                            .placement_call = definition.call_id,
-                            .depth = .exact(child.depth),
+                            .placement = .exact(definition.call_id, child.path),
                             .page_scope = definition.page_scope,
                         } });
                     }

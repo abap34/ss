@@ -540,3 +540,51 @@ test "typed queries: a child display can count direct siblings but not unfinishe
         try testing.expectEqualStrings("1", core.nodeDisplayContent(state.getNode(state.childrenOf(child).?[0]).?));
     }
 }
+
+test "typed queries: shared typed subtree helpers preserve the receiver path and exclude it from results" {
+    var state = try document(
+        \\import std:text/content as native
+        \\type Parent {}
+        \\type Child { parent: Placement }
+        \\fn display(self: Placed<Parent>) -> Child = Child { parent = self }
+        \\fn count_children(target: Placement) -> Number = selection_count(select<Child>(target))
+        \\fn display(self: Placed<Child>) -> native::Text
+        \\  let peers = count_children(self.value.parent)
+        \\  let nested = count_children(self)
+        \\  return native::Text { content = str(peers) ++ ":" ++ str(nested) }
+        \\end
+        \\page main
+        \\  place_on!(pagectx(), Parent {})
+        \\end
+    );
+    defer state.deinit();
+    var graph = try checkedGraph(&state);
+    defer graph.deinit();
+    var ancestor_reads: usize = 0;
+    var nested_reads: usize = 0;
+    const input = Type.recordType("Child").inModule(0);
+    for (graph.units.items) |unit| {
+        if (unit.kind != .display or unit.kind.display.step != 1) continue;
+        for (unit.summary.selection_reads.items) |read| {
+            if (read != .objects or read.objects.input_type == null or !Type.eql(input, read.objects.input_type.?)) continue;
+            const scope = read.objects.placement;
+            try testing.expect(scope.call != null);
+            try testing.expect(scope.depth.max == null);
+            if (scope.path.len == 0) {
+                ancestor_reads += 1;
+                try testing.expectEqual(@as(usize, 1), scope.depth.min);
+            } else {
+                nested_reads += 1;
+                try testing.expectEqualSlices(usize, &.{0}, scope.path);
+                try testing.expectEqual(@as(usize, 2), scope.depth.min);
+            }
+        }
+    }
+    try testing.expectEqual(@as(usize, 1), ancestor_reads);
+    try testing.expectEqual(@as(usize, 1), nested_reads);
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const parent = state.placementRootsOf(state.graph.page_order.items[0])[0];
+    const child = state.childrenOf(parent).?[0];
+    const text = state.childrenOf(child).?[0];
+    try testing.expectEqualStrings("1:0", core.nodeDisplayContent(state.getNode(text).?));
+}
