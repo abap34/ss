@@ -21,11 +21,9 @@ pub const ObjectIdentity = struct {
 };
 
 pub const ObjectOwner = struct {
-    class_id: ?core.NominalId = null,
     identity: ?ObjectIdentity = null,
 
     pub fn eql(self: ObjectOwner, other: ObjectOwner) bool {
-        if (!core.NominalId.optionalEql(self.class_id, other.class_id)) return false;
         if (self.identity) |identity| return if (other.identity) |other_identity| identity.eql(other_identity) else false;
         return other.identity == null;
     }
@@ -34,12 +32,11 @@ pub const ObjectOwner = struct {
         if (self.identity != null and other.identity != null) {
             return self.identity.?.eql(other.identity.?);
         }
-        return (self.class_id == null or other.class_id == null or self.class_id.?.eql(other.class_id.?));
+        return true;
     }
 
     pub fn merge(self: ObjectOwner, other: ObjectOwner) ObjectOwner {
         return .{
-            .class_id = if (core.NominalId.optionalEql(self.class_id, other.class_id)) self.class_id else null,
             .identity = if (self.identity != null and other.identity != null and self.identity.?.eql(other.identity.?))
                 self.identity
             else
@@ -48,7 +45,7 @@ pub const ObjectOwner = struct {
     }
 
     pub fn isUnknown(self: ObjectOwner) bool {
-        return self.class_id == null and self.identity == null;
+        return self.identity == null;
     }
 };
 
@@ -270,7 +267,6 @@ pub const Resource = union(ResourceKind) {
     },
     pages: ResourceScope,
     objects: struct {
-        role: ?[]const u8 = null,
         input_type: ?Type = null,
         // Repeated invocations share a scope and retain distinct display branches.
         placement: PlacementScope = .{},
@@ -286,7 +282,7 @@ pub const Resource = union(ResourceKind) {
         return switch (self) {
             .variable => |variable| other == .variable and resourceScopeEql(variable.scope, other.variable.scope) and std.mem.eql(u8, variable.name, other.variable.name),
             .pages => |scope| other == .pages and resourceScopeEql(scope, other.pages),
-            .objects => |left| other == .objects and left.placement.eql(other.objects.placement) and optionalTypeEql(left.input_type, other.objects.input_type) and optionalNameEql(left.role, other.objects.role) and left.owner.eql(other.objects.owner) and resourceScopeEql(left.page_scope, other.objects.page_scope),
+            .objects => |left| other == .objects and left.placement.eql(other.objects.placement) and optionalTypeEql(left.input_type, other.objects.input_type) and left.owner.eql(other.objects.owner) and resourceScopeEql(left.page_scope, other.objects.page_scope),
             .property => |property| other == .property and property.owner.eql(other.property.owner) and optionalNameEql(property.key.displayName(), other.property.key.displayName()),
         };
     }
@@ -304,9 +300,8 @@ pub const Resource = union(ResourceKind) {
             .objects => |left| switch (other) {
                 .objects => |right| blk: {
                     if (!left.placement.intersects(right.placement)) break :blk false;
-                    if ((left.input_type != null and right.role != null) or (right.input_type != null and left.role != null)) break :blk false;
                     if (left.input_type != null and right.input_type != null and !Type.eql(left.input_type.?, right.input_type.?)) break :blk false;
-                    break :blk optionalNameIntersects(left.role, right.role) and left.owner.intersects(right.owner) and left.page_scope.intersects(right.page_scope);
+                    break :blk left.owner.intersects(right.owner) and left.page_scope.intersects(right.page_scope);
                 },
                 else => false,
             },
@@ -321,8 +316,8 @@ pub const Resource = union(ResourceKind) {
         return .{ .variable = .{ .scope = scope, .name = name } };
     }
 
-    pub fn makeObjects(role_name: ?[]const u8) Resource {
-        return .{ .objects = .{ .role = role_name } };
+    pub fn makeObjects() Resource {
+        return .{ .objects = .{} };
     }
 
     pub fn makeProperty(owner: PropertyOwner, key: ?[]const u8) Resource {
@@ -355,11 +350,6 @@ fn resourceScopeEql(left: ResourceScope, right: ResourceScope) bool {
             else => false,
         },
     };
-}
-
-fn optionalNameIntersects(left: ?[]const u8, right: ?[]const u8) bool {
-    if (left == null or right == null) return true;
-    return std.mem.eql(u8, left.?, right.?);
 }
 
 fn optionalTypeEql(left: ?Type, right: ?Type) bool {
