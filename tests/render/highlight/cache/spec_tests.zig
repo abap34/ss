@@ -71,7 +71,7 @@ test "highlight cache: paired function declaration is one complete keyword" {
     var cache = Cache.init(testing.allocator, testing.io);
     defer cache.deinit();
     const languages = [_]utils.highlight.Language{language("ss", "ss", "builtin:ss")};
-    const content = "fn/! make() -> Object\n  return text(\"fn/!\") ;; fn/!\nend\n";
+    const content = "fn/! make() -> Text\n  return text(\"fn/!\") ;; fn/!\nend\n";
     var failure: Failure = .none;
     var result = try cache.highlight(&languages, "ss", content, &failure);
     defer result.deinit();

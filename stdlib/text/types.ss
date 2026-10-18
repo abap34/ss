@@ -10,8 +10,6 @@ type TextSemantics {
   heading_level: Number? = none
 }
 
-enum RenderKind { text code latex vector_asset raster_asset vector_path chrome_only }
-
 enum TextParseMode { none plain inline block }
 
 enum FontStyle { normal oblique italic }

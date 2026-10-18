@@ -12,19 +12,19 @@ const ExpectedToken = struct {
 test "syntax scanner: tokenizes source words and literals without comments" {
     const text =
         \\fn title!(x: String)
-        \\fn make() -> Object
+        \\fn make() -> Text
         \\  let color = c"#fff"
         \\  theme::text("hi ;; not comment") ;; comment
         \\  let lambda = (x: Number) |-> x
         \\  x = 12.5
         \\  let quoted = "not a color c\"#000000\""
-        \\  let multiline = "English Object
+        \\  let multiline = "English Text
         \\inside"
         \\  quote """
-        \\English Object
+        \\English Text
         \\"""
         \\  code <<
-        \\English Object
+        \\English Text
         \\>>
         \\  let after = "done"
         \\  ;; c"#111111"
@@ -38,7 +38,7 @@ test "syntax scanner: tokenizes source words and literals without comments" {
         .{ .kind = .identifier, .text = "fn", .line = 1 },
         .{ .kind = .identifier, .text = "make", .line = 1 },
         .{ .kind = .operator, .text = "->", .line = 1 },
-        .{ .kind = .identifier, .text = "Object", .line = 1 },
+        .{ .kind = .identifier, .text = "Text", .line = 1 },
         .{ .kind = .identifier, .text = "let", .line = 2 },
         .{ .kind = .identifier, .text = "color", .line = 2 },
         .{ .kind = .color_string, .text = "c\"#fff\"", .line = 2 },
@@ -172,19 +172,19 @@ test "syntax scanner: selection operators remain distinct from composition and l
 test "syntax scanner: classifies semantic tokens without LSP logic" {
     const text =
         \\fn title!(x: String)
-        \\fn make() -> Object
+        \\fn make() -> Text
         \\  let color = c"#fff"
         \\  theme::text("hi").size = 12
         \\  let lambda = (x: Number) |-> x
-        \\  let multiline = "English Object
+        \\  let multiline = "English Text
         \\inside"
         \\  quote """
-        \\English Object
+        \\English Text
         \\"""
         \\  code <<
-        \\English Object
+        \\English Text
         \\>>
-        \\  let after = Object
+        \\  let after = Text
     ;
 
     const tokens = try scanner.semanticTokens(testing.allocator, text);
@@ -197,7 +197,7 @@ test "syntax scanner: classifies semantic tokens without LSP logic" {
         .{ .kind = .keyword, .text = "fn" },
         .{ .kind = .function, .text = "make" },
         .{ .kind = .operator, .text = "->" },
-        .{ .kind = .type, .text = "Object" },
+        .{ .kind = .type, .text = "Text" },
         .{ .kind = .keyword, .text = "let" },
         .{ .kind = .variable, .text = "color" },
         .{ .kind = .string, .text = "c\"#fff\"" },
@@ -214,17 +214,17 @@ test "syntax scanner: classifies semantic tokens without LSP logic" {
         .{ .kind = .variable, .text = "multiline" },
         .{ .kind = .keyword, .text = "let" },
         .{ .kind = .variable, .text = "after" },
-        .{ .kind = .type, .text = "Object" },
+        .{ .kind = .type, .text = "Text" },
     });
 }
 
 test "syntax scanner: paired function declarations use one keyword token" {
-    const text = "fn/! make() -> Object\nfn/!make()\nfn title!()\nfn_name/!other\n\"fn/!\" ;; fn/! hidden";
+    const text = "fn/! make() -> Text\nfn/!make()\nfn title!()\nfn_name/!other\n\"fn/!\" ;; fn/! hidden";
     try expectTokens(text, &.{
         .{ .kind = .identifier, .text = "fn/!", .line = 0 },
         .{ .kind = .identifier, .text = "make", .line = 0 },
         .{ .kind = .operator, .text = "->", .line = 0 },
-        .{ .kind = .identifier, .text = "Object", .line = 0 },
+        .{ .kind = .identifier, .text = "Text", .line = 0 },
         .{ .kind = .identifier, .text = "fn/!", .line = 1 },
         .{ .kind = .identifier, .text = "make", .line = 1 },
         .{ .kind = .identifier, .text = "fn", .line = 2 },
@@ -239,7 +239,7 @@ test "syntax scanner: paired function declarations use one keyword token" {
         .{ .kind = .keyword, .text = "fn/!" },
         .{ .kind = .function, .text = "make" },
         .{ .kind = .operator, .text = "->" },
-        .{ .kind = .type, .text = "Object" },
+        .{ .kind = .type, .text = "Text" },
         .{ .kind = .keyword, .text = "fn/!" },
         .{ .kind = .function, .text = "make" },
         .{ .kind = .keyword, .text = "fn" },
