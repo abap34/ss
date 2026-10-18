@@ -11,14 +11,15 @@ const slide = path.join(project, "slide.ss");
 const run = (args) => execFileSync(ssBin, args, { cwd: project, encoding: "utf8", timeout: 60000 });
 const source = (attributes, content = "Custom meaning") => `
 import std:themes/default as *
+import std:internal/classes as { Text }
 type Custom = object {
   base = Text
   roles = ["custom-meaning"]
   semantics: SemanticStyle = SemanticStyle { ${attributes} }
 }
 page main
-  title!("Standard title")
-  subtitle!("Standard subtitle")
+  title_obj!("Standard title")
+  sub_obj!("Standard subtitle")
   code_obj!("source")
   fig_obj!("diagram")
   txt_obj!("${content}", "custom-meaning")

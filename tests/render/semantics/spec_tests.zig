@@ -32,6 +32,7 @@ fn objectSemantic(ir: *const render.Ir, index: usize) *const render.SemanticNode
 test "standard constructors and custom roles resolve typed semantic attributes into IR" {
     var state = try document(
         \\import std:themes/default as *
+        \\import std:internal/classes as { Text }
         \\type CustomHeading = object {
         \\  base = Text
         \\  roles = ["custom-heading"]
@@ -43,8 +44,8 @@ test "standard constructors and custom roles resolve typed semantic attributes i
         \\  semantics: SemanticStyle = SemanticStyle { role = SemanticRole.caption }
         \\}
         \\page main
-        \\  title!("Title")
-        \\  subtitle!("Subtitle")
+        \\  title_obj!("Title")
+        \\  sub_obj!("Subtitle")
         \\  code_obj!("source")
         \\  fig_obj!("diagram")
         \\  txt_obj!("First\n\n## Second", "custom-heading")
@@ -76,7 +77,7 @@ test "semantic-only edits update cached rendering without changing paint" {
     var state = try document(
         \\import std:themes/default as *
         \\page main
-        \\  title!("Same paint")
+        \\  title_obj!("Same paint")
         \\end
     );
     defer state.deinit();
@@ -103,6 +104,7 @@ test "semantic-only edits update cached rendering without changing paint" {
 
 test "semantic attribute types are checked statically and invalid levels are diagnosed during preparation" {
     var wrong_type = try document(
+        \\import std:internal/classes as { Text }
         \\type Bad = object {
         \\  base = Text
         \\  roles = ["bad"]
@@ -127,7 +129,7 @@ test "semantic attribute types are checked statically and invalid levels are dia
         "role = SemanticRole.heading, heading_level = 2.5",
         "role = SemanticRole.caption, heading_level = 2",
     }) |fields| {
-        const source = try std.fmt.allocPrint(testing.allocator, "type Bad = object {{\n base = Text\n roles = [\"bad\"]\n semantics: SemanticStyle = SemanticStyle {{ {s} }}\n }}\npage main\n  txt_obj!(\"Bad\", \"bad\")\nend\n", .{fields});
+        const source = try std.fmt.allocPrint(testing.allocator, "import std:internal/classes as {{ Text }}\ntype Bad = object {{\n base = Text\n roles = [\"bad\"]\n semantics: SemanticStyle = SemanticStyle {{ {s} }}\n }}\npage main\n  txt_obj!(\"Bad\", \"bad\")\nend\n", .{fields});
         defer testing.allocator.free(source);
         var state = try document(source);
         defer state.deinit();

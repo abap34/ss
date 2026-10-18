@@ -719,12 +719,11 @@ test "native text display: every bundled theme resolves the same text paint from
         const source = try std.fmt.allocPrint(testing.allocator,
             \\import std:themes/{s} as theme_api
             \\import std:text as {{ Text }}
-            \\import std:internal/style as styles
             \\fn/! styled(content: String, style: TextBlockStyle) -> Text = Text {{ content = content style = style }}
             \\page main
             \\  let theme = theme_api::default_theme()
-            \\  text!("# Theme", styles::markdown_text_style(theme))
-            \\  styled!("# Theme", styles::markdown_text_style(theme))
+            \\  text!("# Theme", theme.body)
+            \\  styled!("# Theme", theme.body)
             \\end
         , .{name});
         defer testing.allocator.free(source);

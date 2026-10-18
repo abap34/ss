@@ -51,8 +51,8 @@ test "analysis queries: every deadline selects the independent lexical completio
         \\  let value = Label { title = "Title", subtitle = "Subtitle", body = "Body" }
         \\  let copy = value with { title = "Changed" }
         \\  let t = text!("Body")
-        \\  text::h1("Title")
-        \\  t.text.size = 20
+        \\  text::text("Title")
+        \\  ~ t.left == page.left + 20
         \\end
     );
     defer case.deinit();
@@ -209,8 +209,8 @@ test "analysis completion: dot module and normal positions keep candidate kinds 
         \\import std:text as *
         \\
         \\page title
-        \\  let t = text::h1("body")
-        \\  t.text.size = 20
+        \\  let t = text::text("body")
+        \\  let restyled = t.style with { text.size = 20 }
         \\end
         \\
     );
@@ -220,8 +220,7 @@ test "analysis completion: dot module and normal positions keep candidate kinds 
         var result = try case.completeAfter("t.");
         defer result.deinit(case.allocator);
         try expectUnique(result);
-        try expectHas(result, "text");
-        try expectHas(result, "layout");
+        try expectHas(result, "style");
         try expectHas(result, "content");
         try expectMissing(result, "text_size");
         try expectMissing(result, "page");
@@ -235,8 +234,8 @@ test "analysis completion: dot module and normal positions keep candidate kinds 
         var result = try case.completeAfter("text::");
         defer result.deinit(case.allocator);
         try expectUnique(result);
-        try expectHas(result, "h1");
-        try expectHas(result, "h1!");
+        try expectHas(result, "text");
+        try expectHas(result, "text!");
         try expectMissing(result, "page");
         try expectMissing(result, "add");
         try expectMissing(result, "text_size");
@@ -249,7 +248,7 @@ test "analysis completion: dot module and normal positions keep candidate kinds 
         defer result.deinit(case.allocator);
         try expectUnique(result);
         try expectHas(result, "page");
-        try expectHas(result, "h1!");
+        try expectHas(result, "text!");
         try expectHas(result, "String");
         try expectHas(result, "Object");
         try expectHas(result, "Selection");
@@ -431,11 +430,11 @@ test "analysis completion: source recovery sees preceding same-scope bindings" {
         \\import std:text as *
         \\
         \\page title
-        \\  let t = h2! "before"
+        \\  let t = text! "before"
         \\  let alias = t
-        \\  let later = h2! "after"
-        \\  alias.text.size = 1
-        \\  later.text.size = 1
+        \\  let later = text! "after"
+        \\  ~ alias.left == page.left + 20
+        \\  ~ later.left == page.left + 20
         \\end
         \\
     );
@@ -445,10 +444,10 @@ test "analysis completion: source recovery sees preceding same-scope bindings" {
         \\import std:text as *
         \\
         \\page title
-        \\  let t = h2! "before"
+        \\  let t = text! "before"
         \\  let alias = t
         \\  alias.
-        \\  let later = h2! "after"
+        \\  let later = text! "after"
         \\  later.
         \\end
         \\
@@ -458,82 +457,64 @@ test "analysis completion: source recovery sees preceding same-scope bindings" {
         var result = try case.completeSourceAfter(request_source, "alias.");
         defer result.deinit(case.allocator);
         try expectUnique(result);
-        try expectHas(result, "text");
-        try expectHas(result, "layout");
+        try expectHas(result, "value");
+        try expectHas(result, "left");
         try expectMissing(result, "text_size");
-        try expectMissing(result, "page");
+        try expectHas(result, "page");
     }
 
     {
         var result = try case.completeSourceAfter(request_source, "later.");
         defer result.deinit(case.allocator);
         try expectUnique(result);
-        try expectHas(result, "text");
-        try expectHas(result, "layout");
+        try expectHas(result, "value");
+        try expectHas(result, "left");
         try expectMissing(result, "text_size");
-        try expectMissing(result, "page");
+        try expectHas(result, "page");
     }
 }
 
-test "analysis completion: fn paired function and const result annotations drive property targets" {
+test "analysis completion: function and const annotations preserve inputs and placements" {
     var case = try CompletionCase.init(
-        \\import std:text as *
-        \\
-        \\fn make_plain() -> Object
-        \\  return h2!("plain")
-        \\end
-        \\
-        \\fn/! make_paired(content: String) -> Object
-        \\  return h2!(content)
-        \\end
-        \\
-        \\const make_const: Object = h2!("const")
-        \\
-        \\page title
+        \\fn make_plain() -> Text = text("plain")
+        \\fn/! make_paired(content: String) -> Text = text(content)
+        \\const make_const: Text = text("const")
+        \\page main
         \\  let a = make_plain()
-        \\  a.text.size = 1
-        \\  let b = make_paired! "paired"
-        \\  b.text.size = 1
+        \\  let b = make_paired!("paired")
         \\  let c = make_const
-        \\  c.text.size = 1
         \\end
-        \\
     );
     defer case.deinit();
-
     const request_source =
-        \\import std:text as *
-        \\
-        \\fn make_plain() -> Object
-        \\  return h2!("plain")
-        \\end
-        \\
-        \\fn/! make_paired(content: String) -> Object
-        \\  return h2!(content)
-        \\end
-        \\
-        \\const make_const: Object = h2!("const")
-        \\
-        \\page title
+        \\fn make_plain() -> Text = text("plain")
+        \\fn/! make_paired(content: String) -> Text = text(content)
+        \\const make_const: Text = text("const")
+        \\page main
         \\  let a = make_plain()
         \\  a.
-        \\  let b = make_paired! "paired"
+        \\  let b = make_paired!("paired")
         \\  b.
         \\  let c = make_const
         \\  c.
         \\end
-        \\
     ;
-
-    inline for (.{ "a.", "b.", "c." }) |needle| {
+    inline for (.{ "a.", "c." }) |needle| {
         var result = try case.completeSourceAfter(request_source, needle);
         defer result.deinit(case.allocator);
         try expectUnique(result);
-        try expectHas(result, "text");
-        try expectHas(result, "layout");
-        try expectMissing(result, "text_size");
+        try expectHas(result, "content");
+        try expectHas(result, "style");
+        try expectMissing(result, "layout");
         try expectMissing(result, "page");
     }
+    var placed = try case.completeSourceAfter(request_source, "b.");
+    defer placed.deinit(case.allocator);
+    try expectUnique(placed);
+    try expectHas(placed, "value");
+    try expectHas(placed, "left");
+    try expectHas(placed, "page");
+    try expectMissing(placed, "style");
 }
 
 test "analysis completion: record update paths complete record fields" {
@@ -656,12 +637,12 @@ test "analysis completion: chevron blocks and comments do not create fake bindin
         \\import std:text as *
         \\
         \\page title
-        \\  ;; let fake_comment = h2! "comment"
-        \\  let t = h2! <<
-        \\let fake_block = h2! "block"
+        \\  ;; let fake_comment = text! "comment"
+        \\  let t = text! <<
+        \\let fake_block = text! "block"
         \\end
         \\>>
-        \\  t.text.size = 1
+        \\  ~ t.left == page.left + 20
         \\end
         \\
     );
@@ -671,9 +652,9 @@ test "analysis completion: chevron blocks and comments do not create fake bindin
         \\import std:text as *
         \\
         \\page title
-        \\  ;; let fake_comment = h2! "comment"
-        \\  let t = h2! <<
-        \\let fake_block = h2! "block"
+        \\  ;; let fake_comment = text! "comment"
+        \\  let t = text! <<
+        \\let fake_block = text! "block"
         \\end
         \\>>
         \\  t.
@@ -685,10 +666,10 @@ test "analysis completion: chevron blocks and comments do not create fake bindin
         var result = try case.completeSourceAfter(request_source, "t.");
         defer result.deinit(case.allocator);
         try expectUnique(result);
-        try expectHas(result, "text");
-        try expectHas(result, "layout");
+        try expectHas(result, "value");
+        try expectHas(result, "left");
         try expectMissing(result, "text_size");
-        try expectMissing(result, "page");
+        try expectHas(result, "page");
     }
 
     {
@@ -1240,18 +1221,18 @@ test "analysis queries: qualified calls bypass local names in hover and definiti
     var case = try CompletionCase.init(
         \\import std:text as theme
         \\page main
-        \\  let h1 = theme::h1("First")
-        \\  theme::h1("Second")
+        \\  let text = theme::text("First")
+        \\  theme::text("Second")
         \\end
     );
     defer case.deinit();
     const snapshot = try case.snapshotFor(case.source);
-    const offset = offsetAfter(case.source, "  theme::h1") - 1;
+    const offset = offsetAfter(case.source, "  theme::text") - 1;
     const req = query_types.SourceRequest{ .path = case.path, .source = case.source, .offset = offset };
     var clock = DeadlineClock{};
     var hover = (try snapshot_api.hoverAt(case.allocator, snapshot, req, clock.options())) orelse return error.ExpectedHover;
     defer hover.deinit(case.allocator);
-    try testing.expect(std.mem.indexOf(u8, hover.markdown, "h1(") != null);
+    try testing.expect(std.mem.indexOf(u8, hover.markdown, "text(") != null);
     const targets = try snapshot_api.definitionAt(case.allocator, snapshot, req, clock.options());
     defer case.allocator.free(targets);
     try testing.expectEqual(@as(usize, 1), targets.len);

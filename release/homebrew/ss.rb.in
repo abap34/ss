@@ -38,9 +38,9 @@ class @FORMULA_CLASS@ < Formula
       import std:themes/default as *
 
       page home
-      title!("Homebrew")
-      subtitle!("ss formula smoke")
-      byline!("v#{version}")
+      heading!("Homebrew")
+      text!("ss formula smoke")
+      text!("v#{version}", default_theme().byline)
       end
     EOS
 

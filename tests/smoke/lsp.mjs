@@ -25,7 +25,7 @@ const partsSource = await readFile(partsFixture, "utf8");
 const textModuleUri = pathToFileURL(textModule).toString();
 const textModuleSource = await readFile(textModule, "utf8");
 const moduleLabelDefinition = functionDefinitionLocation(partsUri, partsSource, "module_label");
-const subtitleDefinition = functionDefinitionLocation(textModuleUri, textModuleSource, "subtitle");
+const textDefinition = functionDefinitionLocation(textModuleUri, textModuleSource, "text");
 
 await withLspClient({ cwd: root }, async (client) => {
   const initialize = await client.initialize();
@@ -65,12 +65,12 @@ await withLspClient({ cwd: root }, async (client) => {
 
   const pairedDefinition = await client.request("textDocument/definition", {
     textDocument: { uri },
-    position: positionAt(source, "subtitle!", 2),
+    position: positionAt(source, "text!", 2),
   });
   assert(Array.isArray(pairedDefinition), `expected paired definition array, got ${JSON.stringify(pairedDefinition)}`);
   assert(
-    pairedDefinition.some((location) => isDefinitionLocation(location, subtitleDefinition)),
-    `definition did not jump to text module subtitle: ${JSON.stringify(pairedDefinition)}`,
+    pairedDefinition.some((location) => isDefinitionLocation(location, textDefinition)),
+    `definition did not jump to text module text: ${JSON.stringify(pairedDefinition)}`,
   );
 
   const brokenDiagnosticsPromise = client.waitForDiagnostics(
