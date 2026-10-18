@@ -5991,7 +5991,7 @@ test "compiler semantics: paired placement functions desugar through existing ch
         \\page ok
         \\end
         \\
-    , "case.ss:bytes:", "TypeMismatch: expected Object, got String");
+    , "case.ss:bytes:", "InvalidPlacementInput: placement requires an unplaced presentation value");
 
     try expectDiagnostic(
         \\import std:themes/default as *

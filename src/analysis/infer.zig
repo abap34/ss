@@ -1009,6 +1009,30 @@ fn inferPrimitiveCallInfo(
             try ensureType(state, allocator, actual, argument_type, origin, .UnmatchedArgumentType);
         }
     }
+    if (descriptor.result_policy == .placement) {
+        const input = argument_infos[descriptor.result_arg_index];
+        if (input.hole != null) return input;
+        // Legacy object constructors are removed as stdlib migrates. Their
+        // attachment path must not be used for immutable typed inputs.
+        if (input.ty.kind == .object) return input;
+        if (input.ty.kind != .record) {
+            try addUserReport(state, origin, "InvalidPlacementInput", "placement requires an unplaced presentation value", .{});
+            return error.InvalidType;
+        }
+        if (state) |owner| {
+            if (options.validate_contracts) {
+                const plan_index = owner.displays.find(input.ty) orelse create: {
+                    var plan = try @import("display.zig").prepare(owner.allocator, owner, sema, input.ty, origin, options.context);
+                    errdefer plan.deinit();
+                    const index = owner.displays.plans.items.len;
+                    try owner.displays.plans.append(owner.allocator, plan);
+                    break :create index;
+                };
+                if (call.callee.call_id) |id| try owner.displays.call_targets.put(id, plan_index);
+            }
+        }
+        return infoFromType(try Type.placedOf(allocator, input.ty));
+    }
     const info = try primitiveResultTypeInfo(allocator, state, sema, env, call, descriptor, origin, argument_infos);
     if (state != null and options.validate_contracts) {
         switch (descriptor.op) {
@@ -1284,6 +1308,7 @@ fn primitiveResultTypeInfo(
             };
         },
         .declared, .group_object, .object_from_role_arg => {},
+        .placement => unreachable,
     }
 
     if (descriptor.op == .concat and call.args.items.len == 2) {

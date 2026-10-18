@@ -32,6 +32,12 @@ pub const ExecutionUnit = struct {
     kind: Kind,
 
     pub const Kind = union(enum) {
+        display: struct {
+            producer: usize,
+            call_id: u64,
+            plan: usize,
+            step: usize,
+        },
         document_statement: struct {
             stmt: ast.Statement,
             index: usize,
@@ -106,6 +112,7 @@ pub const ExecutionGraph = struct {
             .page_id_mode = options.page_id_mode,
         };
         try builder.collectExecutionUnits(state.projectModule());
+        try graph.appendDisplayUnits(state);
         try resolveDisplayReads(allocator, graph.units.items);
         try validateExecutionUnits(state, graph.units.items);
         try buildDependencyEdges(allocator, graph.units.items, &graph.edges);
@@ -116,6 +123,50 @@ pub const ExecutionGraph = struct {
             return err;
         };
         return graph;
+    }
+
+    fn appendDisplayUnits(self: *ExecutionGraph, state: *core.DocumentState) !void {
+        const source_count = self.units.items.len;
+        for (0..source_count) |producer| {
+            const source = self.units.items[producer];
+            for (source.summary.placements.items) |definition| {
+                const plan_index = state.displays.call_targets.get(definition.call_id).?;
+                const plan = state.displays.plans.items[plan_index];
+                var previous = producer;
+                for (plan.steps.items, 0..) |step, index| {
+                    var summary = try definition.steps.items[index].clone(self.allocator);
+                    var moved = false;
+                    errdefer if (!moved) summary.deinit();
+                    summary.writes_layout_input = true;
+                    if (index + 1 < plan.steps.items.len) try summary.addWrite(.{ .objects = .{
+                        .input_type = plan.steps.items[index + 1].input,
+                        .page_scope = definition.page_scope,
+                    } });
+                    const module_id = switch (step.target) {
+                        .native => source.module_id,
+                        .function => |key| key.module_id,
+                    };
+                    const module = state.moduleById(module_id).?;
+                    const span = switch (step.target) {
+                        .native => source.span,
+                        .function => |key| state.functions.get(key).?.span,
+                    };
+                    const unit = self.units.items.len;
+                    try self.units.append(self.allocator, .{
+                        .module_id = module_id,
+                        .source = module.source,
+                        .path = module.path orelse module.spec,
+                        .source_order = source.source_order,
+                        .span = span,
+                        .summary = summary,
+                        .kind = .{ .display = .{ .producer = producer, .call_id = definition.call_id, .plan = plan_index, .step = index } },
+                    });
+                    moved = true;
+                    try self.edges.append(self.allocator, .{ .from = previous, .to = unit });
+                    previous = unit;
+                }
+            }
+        }
     }
 
     pub fn deinit(self: *ExecutionGraph) void {
@@ -347,6 +398,7 @@ fn validateExecutionUnits(state: *core.DocumentState, units: []const ExecutionUn
 fn buildDependencyEdges(allocator: std.mem.Allocator, units: []const ExecutionUnit, edges: *std.ArrayList(DependencyEdge)) !void {
     var edge_index = EdgeIndex.init(allocator);
     defer edge_index.deinit();
+    for (edges.items, 0..) |edge, index| try edge_index.put(.{ .from = edge.from, .to = edge.to }, index);
 
     var writer_index = resource_index.ResourceWriterIndex.init(allocator);
     defer writer_index.deinit();
@@ -672,6 +724,12 @@ pub fn executionGraphJson(allocator: std.mem.Allocator, state: *const core.Docum
         try item.stringField("path", unit.path);
         try writeScheduleSpan(&item, unit.span);
         switch (unit.kind) {
+            .display => |data| {
+                try item.stringField("kind", "display");
+                try item.intField("producer", data.producer);
+                try item.intField("call_id", data.call_id);
+                try item.intField("display_step", data.step);
+            },
             .document_statement => |data| {
                 try item.stringField("kind", "document_statement");
                 try item.nullField("page_id");

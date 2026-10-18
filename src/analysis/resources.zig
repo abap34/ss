@@ -1,5 +1,6 @@
 const std = @import("std");
 const core = @import("core");
+const Type = @import("ast").Type;
 
 pub const ResourceKind = enum {
     variable,
@@ -188,6 +189,7 @@ pub const Resource = union(ResourceKind) {
     pages: ResourceScope,
     objects: struct {
         role: ?[]const u8 = null,
+        input_type: ?Type = null,
         owner: ObjectOwner = .{},
         page_scope: ResourceScope = .any,
     },
@@ -200,7 +202,7 @@ pub const Resource = union(ResourceKind) {
         return switch (self) {
             .variable => |variable| other == .variable and resourceScopeEql(variable.scope, other.variable.scope) and std.mem.eql(u8, variable.name, other.variable.name),
             .pages => |scope| other == .pages and resourceScopeEql(scope, other.pages),
-            .objects => |left| other == .objects and optionalNameEql(left.role, other.objects.role) and left.owner.eql(other.objects.owner) and resourceScopeEql(left.page_scope, other.objects.page_scope),
+            .objects => |left| other == .objects and optionalTypeEql(left.input_type, other.objects.input_type) and optionalNameEql(left.role, other.objects.role) and left.owner.eql(other.objects.owner) and resourceScopeEql(left.page_scope, other.objects.page_scope),
             .property => |property| other == .property and property.owner.eql(other.property.owner) and optionalNameEql(property.key.displayName(), other.property.key.displayName()),
         };
     }
@@ -216,7 +218,11 @@ pub const Resource = union(ResourceKind) {
                 else => false,
             },
             .objects => |left| switch (other) {
-                .objects => |right| optionalNameIntersects(left.role, right.role) and left.owner.intersects(right.owner) and left.page_scope.intersects(right.page_scope),
+                .objects => |right| blk: {
+                    if ((left.input_type != null and right.role != null) or (right.input_type != null and left.role != null)) break :blk false;
+                    if (left.input_type != null and right.input_type != null and !Type.eql(left.input_type.?, right.input_type.?)) break :blk false;
+                    break :blk optionalNameIntersects(left.role, right.role) and left.owner.intersects(right.owner) and left.page_scope.intersects(right.page_scope);
+                },
                 else => false,
             },
             .property => |left| switch (other) {
@@ -269,4 +275,9 @@ fn resourceScopeEql(left: ResourceScope, right: ResourceScope) bool {
 fn optionalNameIntersects(left: ?[]const u8, right: ?[]const u8) bool {
     if (left == null or right == null) return true;
     return std.mem.eql(u8, left.?, right.?);
+}
+
+fn optionalTypeEql(left: ?Type, right: ?Type) bool {
+    if (left) |ty| return if (right) |other| Type.eql(ty, other) else false;
+    return right == null;
 }

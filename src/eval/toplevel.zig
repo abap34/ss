@@ -75,11 +75,15 @@ const ClosureStore = struct {
 const call_frames = @import("frames.zig");
 
 pub const EvalContext = struct {
+    allocator: std.mem.Allocator,
     io: std.Io,
     state: *core.DocumentState,
     functions: *const core.FunctionMap,
     closures: ClosureStore,
     module_id: core.SourceModuleId = 0,
+    execution_unit: ?usize = null,
+    display_inputs: std.ArrayList(std.ArrayList(core.NodeId)) = .empty,
+    display_entries: std.AutoHashMap(struct { producer: usize, call_id: u64 }, usize),
     frames: call_frames.Stack,
     elaboration_origin: ?core.SourceOrigin = null,
     declarations: *const declarations.DeclarationIndex,
@@ -89,10 +93,12 @@ pub const EvalContext = struct {
 
     pub fn init(allocator: std.mem.Allocator, state: *core.DocumentState, graph: *const execution.ExecutionGraph, options: ExecuteOptions) !EvalContext {
         var result = EvalContext{
+            .allocator = allocator,
             .io = options.io,
             .state = state,
             .functions = &state.functions,
             .closures = ClosureStore.init(allocator),
+            .display_entries = .init(allocator),
             .frames = call_frames.Stack.init(allocator, options.max_call_frames),
             .declarations = graph.declarations,
             .captures = &graph.captures,
@@ -102,10 +108,20 @@ pub const EvalContext = struct {
         errdefer result.deinit();
         try checkCancellation(&result);
         try result.name_resolution_cache.reserve(state);
+        try result.display_inputs.resize(allocator, graph.units.items.len);
+        @memset(result.display_inputs.items, .empty);
+        for (graph.units.items, 0..) |unit, index| {
+            if (unit.kind != .display or unit.kind.display.step != 0) continue;
+            const display = unit.kind.display;
+            try result.display_entries.put(.{ .producer = display.producer, .call_id = display.call_id }, index);
+        }
         return result;
     }
 
     pub fn deinit(self: *EvalContext) void {
+        for (self.display_inputs.items) |*inputs| inputs.deinit(self.allocator);
+        self.display_inputs.deinit(self.allocator);
+        self.display_entries.deinit();
         self.frames.deinit();
         self.closures.deinit();
         self.name_resolution_cache.deinit();
@@ -462,7 +478,11 @@ pub fn executeGraph(
     {
         const measure_start = utils.measure_profile.start();
         defer utils.measure_profile.recordWysiwyg(.execute_units, measure_start);
-        for (graph.order) |unit_index| try executeUnit(evaluation, &document_states, &page_states, graph.units.items[unit_index]);
+        for (graph.order) |unit_index| {
+            evaluation.execution_unit = unit_index;
+            try executeUnit(evaluation, &document_states, &page_states, graph.units.items[unit_index]);
+        }
+        evaluation.execution_unit = null;
     }
     {
         const measure_start = utils.measure_profile.start();
@@ -530,6 +550,22 @@ fn executeUnit(
     evaluation.module_id = unit.module_id;
     defer evaluation.module_id = previous_module_id;
     switch (unit.kind) {
+        .display => |display| {
+            const plan = state.displays.plans.items[display.plan];
+            const target = plan.steps.items[display.step].target;
+            const index = evaluation.execution_unit.?;
+            const inputs = evaluation.display_inputs.items[index].items;
+            // A plan's stages occupy consecutive graph units. Keep their inputs
+            // in the evaluator rather than rescanning every document node.
+            const next: ?*std.ArrayList(core.NodeId) = if (display.step + 1 < plan.steps.items.len)
+                &evaluation.display_inputs.items[index + 1]
+            else
+                null;
+            if (next) |pending| try pending.ensureUnusedCapacity(evaluation.allocator, inputs.len);
+            for (inputs) |id| {
+                if (try evaluation.expandDisplayTarget(id, target)) |child| next.?.appendAssumeCapacity(child);
+            }
+        },
         .document_statement => |document_statement| {
             const entry = try document_states.getOrPut(unit.module_id);
             if (!entry.found_existing) entry.value_ptr.* = DocumentExecutionState.init(state.allocator);
@@ -1317,6 +1353,20 @@ const BuiltinContext = struct {
 
     pub fn placeObjectOnPage(self: *BuiltinContext, page_id: core.NodeId, object_id: core.NodeId) !void {
         try self.state.placeObjectOnPage(page_id, object_id);
+    }
+
+    pub fn registerPlacement(self: *BuiltinContext, page_id: core.NodeId, input: core.Value, call_id: ?u64) !core.NodeId {
+        const call = call_id orelse return error.UnpreparedDisplay;
+        const plan_index = self.state.displays.call_targets.get(call) orelse return error.UnpreparedDisplay;
+        const plan = self.state.displays.plans.items[plan_index];
+        if (!ast.Type.eql(input.record.ty, plan.steps.items[0].input)) return error.InvalidValueTag;
+        const producer = self.evaluation.execution_unit orelse return error.UnpreparedDisplay;
+        const unit = self.evaluation.display_entries.get(.{ .producer = producer, .call_id = call }) orelse return error.UnpreparedDisplay;
+        const inputs = &self.evaluation.display_inputs.items[unit];
+        try inputs.ensureUnusedCapacity(self.evaluation.allocator, 1);
+        const id = try self.state.registerPlacement(page_id, input, self.current_origin);
+        inputs.appendAssumeCapacity(id);
+        return id;
     }
 
     pub fn setNodeFieldValue(self: *BuiltinContext, object_id: core.NodeId, key: []const u8, value: core.Value) !void {

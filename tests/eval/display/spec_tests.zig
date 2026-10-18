@@ -501,3 +501,190 @@ test "display plan: exact cycles and growing type arguments are rejected before 
         if (case.generic) try testing.expectEqual(@as(usize, 1), state.instantiations.entries.items.len);
     }
 }
+
+test "typed placement: source calls schedule distinct display units and preserve page ownership" {
+    const source = try std.Io.Dir.cwd().readFileAlloc(testing.io, "tests/fixtures/typed-display/slide.ss", testing.allocator, .limited(64 * 1024));
+    defer testing.allocator.free(source);
+    var state = try documentWithModules(source);
+    defer state.deinit();
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    var display_units: usize = 0;
+    for (graph.units.items) |unit| if (unit.kind == .display) {
+        display_units += 1;
+    };
+    try testing.expectEqual(@as(usize, 6), display_units);
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, initializeEvaluation, .{ &state, &graph });
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    var pages = try core.prepared.prepare(testing.allocator, &state);
+    defer pages.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 2), pages.pages.len);
+    const first_page = state.graph.page_order.items[0];
+    const second_page = state.graph.page_order.items[1];
+    const roots = state.placementRootsOf(first_page);
+    try testing.expectEqual(@as(usize, 2), roots.len);
+    try testing.expect(roots[0] != roots[1]);
+    for (roots) |root| {
+        const child = state.childrenOf(root).?[0];
+        try testing.expectEqualStrings("**Typed** heading / page 1", core.nodeDisplayContent(state.getNode(child).?));
+        try testing.expectEqual(first_page, state.getNode(child).?.placement.?.page_id);
+    }
+    const second = state.placementRootsOf(second_page)[0];
+    const second_child = state.childrenOf(second).?[0];
+    try testing.expectEqualStrings("Second / page 2", core.nodeDisplayContent(state.getNode(second_child).?));
+    try testing.expectEqual(second_page, state.getNode(second_child).?.placement.?.page_id);
+    var layout = try core.layout.solveDocument(&state, null, .{ .jobs = 1 });
+    defer layout.deinit(testing.allocator);
+    try layout.validate();
+    const first_frame = layout.nodeFrame(roots[0]).?;
+    const next_frame = layout.nodeFrame(roots[1]).?;
+    try testing.expect(first_frame.width > 1);
+    try testing.expectApproxEqAbs(@as(f32, 48), first_frame.x, core.layout.graph.ConstraintTolerance);
+    try testing.expectApproxEqAbs(first_frame.x + first_frame.width + 24, next_frame.x, core.layout.graph.ConstraintTolerance);
+    try testing.expectApproxEqAbs(first_frame.y + first_frame.height / 2, next_frame.y + next_frame.height / 2, core.layout.graph.ConstraintTolerance);
+    for (roots) |root| {
+        const parent_frame = layout.nodeFrame(root).?;
+        const child_frame = layout.nodeFrame(state.childrenOf(root).?[0]).?;
+        try testing.expectApproxEqAbs(parent_frame.x, child_frame.x, core.layout.graph.ConstraintTolerance);
+        try testing.expectApproxEqAbs(parent_frame.y, child_frame.y, core.layout.graph.ConstraintTolerance);
+        try testing.expectApproxEqAbs(parent_frame.width, child_frame.width, core.layout.graph.ConstraintTolerance);
+        try testing.expectApproxEqAbs(parent_frame.height, child_frame.height, core.layout.graph.ConstraintTolerance);
+    }
+}
+
+test "typed placement: display dependencies wait for page creation and retain callback captures" {
+    var state = try documentWithModules(
+        \\import std:text/content as native
+        \\type Input { value: () -> String }
+        \\type Callback { value: () -> String }
+        \\fn display(self: Placed<Input>) -> Callback
+        \\  let format = self.value.value
+        \\  return Callback { value = () |-> format() }
+        \\end
+        \\fn display(self: Placed<Callback>) -> native::Text
+        \\  return native::Text { content = self.value.value() }
+        \\end
+        \\document
+        \\  let page = new_page(docctx(), "First")
+        \\  let placed = place_on!(page, Input { value = () |-> str(page_count(docctx())) })
+        \\  let second = new_page(docctx(), "Second")
+        \\end
+    );
+    defer state.deinit();
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    var page_readers: usize = 0;
+    for (graph.units.items) |unit| {
+        for (unit.summary.reads.items) |read| {
+            if (read != .pages) continue;
+            try testing.expect(unit.kind == .display);
+            try testing.expectEqual(@as(usize, 1), unit.kind.display.step);
+            page_readers += 1;
+        }
+    }
+    try testing.expectEqual(@as(usize, 1), page_readers);
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    try testing.expectEqual(@as(usize, 2), state.graph.page_order.items.len);
+    const page = state.graph.page_order.items[0];
+    const root = state.placementRootsOf(page)[0];
+    const child = state.childrenOf(root).?[0];
+    const text = state.childrenOf(child).?[0];
+    try testing.expectEqualStrings("2", core.nodeDisplayContent(state.getNode(text).?));
+    try testing.expectEqual(page, state.getNode(text).?.placement.?.page_id);
+}
+
+test "typed placement: indirect display writes are rejected with the concrete input callback" {
+    var state = try documentWithModules(
+        \\import std:text/content as native
+        \\type Input { value: () -> String }
+        \\fn mutate() -> String
+        \\  new_page(docctx(), "Unexpected")
+        \\  return "bad"
+        \\end
+        \\fn display(self: Placed<Input>) -> native::Text
+        \\  return native::Text { content = self.value.value() }
+        \\end
+        \\page first
+        \\  place_on!(pagectx(), Input { value = mutate })
+        \\end
+    );
+    defer state.deinit();
+    try testing.expectError(error.ImpureDisplayFunction, compiler.analysis.analyzeDocumentState(testing.allocator, &state));
+    try testing.expectEqual(@as(usize, 0), state.graph.page_order.items.len);
+}
+
+test "typed membership: full input types and page scopes distinguish generated collections" {
+    const Resource = compiler.analysis.dependencies.Resource;
+    var text = try Type.recordType("Box").inModule(0).withArguments(testing.allocator, &.{Type.string});
+    defer text.deinit(testing.allocator);
+    var number = try Type.recordType("Box").inModule(0).withArguments(testing.allocator, &.{Type.number});
+    defer number.deinit(testing.allocator);
+    const first = Resource{ .objects = .{ .input_type = text, .page_scope = .{ .page = 1 } } };
+    const same = Resource{ .objects = .{ .input_type = text, .page_scope = .{ .page = 1 } } };
+    const different_type = Resource{ .objects = .{ .input_type = number, .page_scope = .{ .page = 1 } } };
+    const different_page = Resource{ .objects = .{ .input_type = text, .page_scope = .{ .page = 2 } } };
+    const all_text = Resource{ .objects = .{ .input_type = text } };
+    try testing.expect(first.eql(same));
+    try testing.expect(first.intersects(same));
+    try testing.expect(!first.eql(different_type));
+    try testing.expect(!first.intersects(different_type));
+    try testing.expect(!first.intersects(different_page));
+    try testing.expect(all_text.intersects(first));
+    try testing.expect(all_text.intersects(different_page));
+    try testing.expect(!all_text.intersects(different_type));
+}
+
+fn buildDisplayGraph(allocator: std.mem.Allocator, state: *core.DocumentState) !void {
+    var graph = try compiler.analysis.ExecutionGraph.build(allocator, state, state.declaration_index, .{ .page_id_mode = .synthetic });
+    defer graph.deinit();
+}
+
+test "typed placement: authored root order survives dependency ordering and graph allocation failure" {
+    var state = try documentWithModules(
+        \\import std:text/content as native
+        \\type Label { title: String }
+        \\fn display(self: Placed<Label>) -> native::Text
+        \\  return native::Text { content = self.value.title }
+        \\end
+        \\document
+        \\  let page = new_page(docctx(), "First")
+        \\  let first = place_on!(page, Label { title = str(page_count(docctx())) })
+        \\  let later = place_on!(page, Label { title = "Later" })
+        \\  let extra = new_page(docctx(), "Second")
+        \\end
+    );
+    defer state.deinit();
+    try compiler.analysis.analyzeDocumentState(testing.allocator, &state);
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, buildDisplayGraph, .{&state});
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const roots = state.placementRootsOf(state.graph.page_order.items[0]);
+    try testing.expectEqual(@as(usize, 2), roots.len);
+    try testing.expect(roots[0] > roots[1]);
+    try testing.expectEqualStrings("2", core.nodeDisplayContent(state.getNode(state.childrenOf(roots[0]).?[0]).?));
+    try testing.expectEqualStrings("Later", core.nodeDisplayContent(state.getNode(state.childrenOf(roots[1]).?[0]).?));
+}
+
+test "typed placement: generic displays run each concrete stage through the execution graph" {
+    var state = try documentWithModules(
+        \\import std:text/content as native
+        \\type Wrapper<T> { value: T }
+        \\fn display<T>(self: Placed<Wrapper<T>>) -> T = self.value.value
+        \\page first
+        \\  let text = native::Text { content = "Nested" }
+        \\  let input = Wrapper<Wrapper<native::Text>> { value = Wrapper<native::Text> { value = text } }
+        \\  place_on!(pagectx(), input)
+        \\end
+    );
+    defer state.deinit();
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const root = state.placementRootsOf(state.graph.page_order.items[0])[0];
+    const inner = state.childrenOf(root).?[0];
+    const text = state.childrenOf(inner).?[0];
+    try testing.expectEqualStrings("Nested", core.nodeDisplayContent(state.getNode(text).?));
+    try testing.expectEqual(@as(usize, 1), state.getNode(root).?.placement.?.value.record.ty.arguments[0].arguments.len);
+    try testing.expectEqual(core.native_display.Kind.text, state.getNode(text).?.placement.?.display.native);
+}
