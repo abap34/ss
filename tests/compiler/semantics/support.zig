@@ -558,6 +558,12 @@ pub fn expectDiagnostic(
         defer allocator.free(message);
         if (std.mem.indexOf(u8, message, expected_message) != null) return;
     }
+    std.debug.print("Expected diagnostic containing '{s}' in {s}\n", .{ expected_message, path });
+    for (state.diagnostics.entries.items) |diagnostic| {
+        const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
+        defer allocator.free(message);
+        std.debug.print("{s}\n", .{message});
+    }
     return error.ExpectedDiagnosticMissing;
 }
 
@@ -592,6 +598,12 @@ pub fn expectLoweringErrorDiagnostic(
         const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
         defer allocator.free(message);
         if (std.mem.indexOf(u8, message, expected_message) != null) return;
+    }
+    std.debug.print("Expected diagnostic containing '{s}' in {s}\n", .{ expected_message, path });
+    for (state.diagnostics.entries.items) |diagnostic| {
+        const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
+        defer allocator.free(message);
+        std.debug.print("{s}\n", .{message});
     }
     return error.ExpectedDiagnosticMissing;
 }
@@ -718,7 +730,7 @@ pub fn expectObjectState(
             if (!std.mem.eql(u8, node_role, role)) continue;
         }
         if (expected.content) |content| {
-            const node_content = node.content orelse continue;
+            const node_content = core.nodeContent(&node) orelse continue;
             if (!std.mem.eql(u8, node_content, content)) continue;
         }
         if (expected.attached) |attached| {

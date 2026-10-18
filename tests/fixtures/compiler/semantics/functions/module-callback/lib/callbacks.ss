@@ -1,7 +1,7 @@
 import std:prelude as *
 
-fn make_body!(page_value: Page, label: String) -> Object
-  return place_on!(page_value, new(label, "body", "text"))
+fn make_body!(page_value: Page, label: String) -> Placed<Text>
+  return place_on!(page_value, text(label))
 end
 
 fn add_to_pages!(doc: Document, label: String) -> Void
