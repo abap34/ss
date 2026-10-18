@@ -355,12 +355,12 @@ test "native text display: a user display reaches Markdown preparation through i
     try testing.expectError(error.InvalidNativeDisplay, evaluation.expandDisplayTarget(parent, .{ .native = .text }));
     try testing.expect(state.getNode(parent).?.placement.?.display == .pending);
     try testing.expectError(error.UnexpandedDisplay, core.prepared.prepare(testing.allocator, &state));
-    const child = (try evaluation.expandDisplayTarget(parent, target)).?;
+    const child = (try evaluation.expandDisplayTarget(parent, target))[0];
     const native = try prepareTarget(&state, state.getNode(child).?.placement.?.value.record.ty);
     try testing.expectEqual(core.native_display.Kind.text, native.native);
     const count = state.nodeCount();
-    try testing.expectEqual(@as(?core.NodeId, null), try evaluation.expandDisplayTarget(child, native));
-    try testing.expectEqual(@as(?core.NodeId, null), try evaluation.expandDisplayTarget(child, native));
+    try testing.expectEqual(@as(usize, 0), (try evaluation.expandDisplayTarget(child, native)).len);
+    try testing.expectEqual(@as(usize, 0), (try evaluation.expandDisplayTarget(child, native)).len);
     try testing.expectEqual(count, state.nodeCount());
     try testing.expect(state.childrenOf(child) == null);
     const node = state.getNode(child).?;
@@ -571,7 +571,13 @@ test "display plan: nested generic wrappers terminate at the native Text type" {
     var id = outer_placement;
     for (plan.steps.items, 0..) |step, index| {
         try testing.expect(Type.eql(step.input, state.getNode(id).?.placement.?.value.record.ty));
-        if (try evaluation.expandDisplayTarget(id, step.target)) |child| {
+        try testing.expectEqual(index, step.depth);
+        try testing.expectEqual(if (index == 0) null else @as(?usize, index - 1), step.parent);
+        const children = try evaluation.expandDisplayTarget(id, step.target);
+        try testing.expectEqual(step.children.items.len, children.len);
+        if (children.len != 0) {
+            try testing.expectEqualSlices(usize, &.{index + 1}, step.children.items);
+            const child = children[0];
             try testing.expectEqual(id, state.getNode(child).?.placement.?.parent_id);
             try testing.expectEqual(page, state.getNode(child).?.placement.?.page_id);
             id = child;

@@ -2157,25 +2157,29 @@ pub const Analyzer = struct {
             steps.deinit(self.allocator);
         }
         try steps.ensureTotalCapacity(self.allocator, plan.steps.items.len);
-        var input = args[1].values;
-        for (plan.steps.items, 0..) |step, depth| {
+        const inputs = try self.allocator.alloc(ValueFacts, plan.steps.items.len);
+        defer self.allocator.free(inputs);
+        inputs[0] = args[1].values;
+        for (plan.steps.items, 0..) |step, index| {
             switch (step.target) {
                 .native => steps.appendAssumeCapacity(AccessSummary.init(self.allocator)),
                 .function => |key| {
                     const state = self.sema.state.?;
                     const function = try self.newValueFacts(&.{.{ .named = .{ .key = key, .module_id = key.module_id, .decl = state.functions.get(key).? } }}, &.{});
                     var receiver = try self.newValueFacts(&.{}, &.{
-                        .{ .name = "value", .value = input },
+                        .{ .name = "value", .value = inputs[index] },
                         .{ .name = "page", .value = args[0].values },
                         .{ .name = "document", .value = try self.withPropertyTarget(.{}, PropertyTarget.document()) },
                     });
                     receiver.page_scope = page_scope;
                     receiver.placement_call = call_id;
-                    receiver.placement_depth = .exact(depth);
+                    receiver.placement_depth = .exact(step.depth);
                     var argument = CallArgFacts{ .summary = AccessSummary.init(self.allocator), .values = receiver };
                     defer argument.deinit();
                     steps.appendAssumeCapacity(try self.invokeValueFacts(function, &.{argument}));
-                    input = try self.returnedValueFacts(function, &.{argument});
+                    const output = try self.returnedValueFacts(function, &.{argument});
+                    std.debug.assert(step.children.items.len == 1);
+                    inputs[step.children.items[0]] = output;
                 },
             }
         }
