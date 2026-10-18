@@ -79,6 +79,7 @@ async function testCompositionOperatorSyntax() {
     ["a/=/b/=/c", ["/=/", "/=/"]],
     ["a |=| (b // c)", ["|=|", "//"]],
     ["a / 2", ["/"]],
+    ["a|b&c-d", ["|", "&", "-"]],
     ["a?.field ?? fallback", ["?.", "??"]],
     ["(a: Object) |-> a", [":", "|->"]],
   ]) {
@@ -94,6 +95,7 @@ async function testCompositionOperatorSyntax() {
     const query = await readFile(path.join(root, queryPath), "utf8");
     assert(query.includes('"||"') && query.includes('"//"'), `composition highlighting is missing: ${queryPath}`);
     assert(query.includes('"|=|"') && query.includes('"/=/"'), `equal composition highlighting is missing: ${queryPath}`);
+    assert(query.includes('"|"') && query.includes('"&"'), `selection highlighting is missing: ${queryPath}`);
   }
 }
 

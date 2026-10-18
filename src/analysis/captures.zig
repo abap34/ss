@@ -95,7 +95,7 @@ pub const Index = struct {
                 };
             },
             .call => |call| {
-                if (!call.callee.isQualified()) {
+                if (!call.callee.isQualified() and !call.callee.is_operator) {
                     if (references) |refs| try refs.add(call.callee.name);
                 }
                 for (call.args.items) |arg| try self.expr(arg, references);

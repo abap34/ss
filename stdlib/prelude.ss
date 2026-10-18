@@ -128,9 +128,6 @@ import std:query as {
   objs_all,
   doc_objs,
   page_of,
-  union,
-  intersect,
-  diff,
 }
 import std:graphics as {
   path_shape_unit,

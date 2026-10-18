@@ -37,8 +37,14 @@ fn queryWithAllocator(allocator: std.mem.Allocator, state: *core.DocumentState, 
     defer selection.deinit(allocator);
     try testing.expectEqual(@as(usize, 2), selection.ids.items.len);
     std.mem.reverse(core.NodeId, selection.ids.items);
-    try state.orderPlacementSelection(allocator, &selection);
+    try state.orderSelection(allocator, &selection);
     try testing.expectEqualStrings("First", state.getNode(selection.ids.items[0]).?.placement.?.value.record.field("title").?.string);
+    var pages = core.Selection.init(.page, "reversed pages");
+    defer pages.deinit(allocator);
+    try pages.ids.appendSlice(allocator, state.graph.page_order.items);
+    std.mem.reverse(core.NodeId, pages.ids.items);
+    try state.orderSelection(allocator, &pages);
+    try testing.expectEqualSlices(core.NodeId, state.graph.page_order.items, pages.ids.items);
 }
 
 test "typed queries: a preceding table of contents waits for generated headings and preserves construction order" {
@@ -78,16 +84,23 @@ test "typed queries: exact generic input types and selection algebra keep typed 
         \\  return native::Text { content = "Label" }
         \\end
         \\fn/! label<T>(value: T) -> Label<T> = Label<T> { value = value }
+        \\fn selection_union(left: Number, right: Number) -> Number = 99
+        \\fn difference<T>(left: Selection<Placed<T>>, right: Selection<Placed<T>>) -> Selection<Placed<T>> = left - right
         \\page main
+        \\  let sub = 7
         \\  let a = label!(1)
         \\  let b = label!("Second")
         \\  let numbers: Selection<Placed<Label<Number>>> = select<Label<Number>>(pagectx())
         \\  let words = select<Label<String>>(pagectx())
-        \\  let mixed: Selection<Placement> = selection_union(words, numbers)
-        \\  let remaining: Selection<Placed<Label<Number>>> = selection_difference(numbers, words)
-        \\  let common: Selection<Placed<Label<Number>>> = selection_intersection(mixed, numbers)
+        \\  let mixed: Selection<Placement> = words | numbers
+        \\  let remaining: Selection<Placed<Label<Number>>> = numbers - words
+        \\  let common: Selection<Placed<Label<Number>>> = mixed & numbers
         \\  let first_item: Placement = first(mixed)
         \\  ~ first_item.left == page.left + 12
+        \\  let empty = difference(numbers, numbers)
+        \\  let unique = numbers | numbers
+        \\  let result = str(selection_count(mixed)) ++ ":" ++ str(selection_count(remaining)) ++ ":" ++ str(selection_count(common)) ++ ":" ++ str(selection_count(empty)) ++ ":" ++ str(selection_count(unique)) ++ ":" ++ str(5 - 2) ++ ":" ++ str(selection_union(1, 2))
+        \\  place_on!(pagectx(), native::Text { content = result })
         \\end
     );
     defer state.deinit();
@@ -100,11 +113,12 @@ test "typed queries: exact generic input types and selection algebra keep typed 
     defer string_type.deinit(testing.allocator);
     const page = state.graph.page_order.items[0];
     const roots = state.placementRootsOf(page);
-    for ([_]Type{ number_type, string_type }, roots) |ty, root| {
+    for ([_]Type{ number_type, string_type }, roots[0..2]) |ty, root| {
         var selection = try state.selectTypedPlacements(testing.allocator, .{ .page = page }, ty);
         defer selection.deinit(testing.allocator);
         try testing.expectEqualSlices(core.NodeId, &.{root}, selection.ids.items);
     }
+    try testing.expectEqualStrings("2:1:1:0:1:3:99", core.nodeDisplayContent(state.getNode(roots[2]).?));
     var pages = try core.prepared.prepare(testing.allocator, &state);
     defer pages.deinit(testing.allocator);
     var layout = try core.layout.solveDocument(&state, null, .{ .jobs = 1 });
@@ -199,5 +213,21 @@ test "typed queries: invalid types scopes and arities fail before evaluation" {
         }
         if (!found) std.debug.print("Expected diagnostic {s} for {s}\n", .{ case.code, case.expression });
         try testing.expect(found);
+    }
+}
+
+test "typed queries: selection operators reject scalar operands before evaluation" {
+    for ([_][]const u8{ "3 | 4", "3 & 4", "select<Heading>(docctx()) | 4", "select<Heading>(docctx()) - 4", "4 - select<Heading>(docctx())" }) |expression| {
+        const source = try std.fmt.allocPrint(testing.allocator, "type Heading {{ title: String }}\npage Main\nlet result = {s}\nend\n", .{expression});
+        defer testing.allocator.free(source);
+        var state = try document(source);
+        defer state.deinit();
+        if (analyzeGraph(&state)) |_| return error.ExpectedInvalidOperator else |_| {}
+        var found = false;
+        for (state.diagnostics.entries.items) |entry| {
+            if (std.mem.eql(u8, entry.code(), "TypeMismatch")) found = true;
+        }
+        try testing.expect(found);
+        for (state.graph.page_order.items) |page| try testing.expectEqual(@as(usize, 0), state.placementRootsOf(page).len);
     }
 }

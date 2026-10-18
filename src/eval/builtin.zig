@@ -65,6 +65,9 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             var right = try ctx.evalExprValue(call.args.items[1]);
             defer right.deinit(ctx.state.allocator);
             const sign: f32 = if (descriptor.op == .add) 1 else -1;
+            if (descriptor.op == .sub and left == .selection and right == .selection) {
+                break :blk try selectionAlgebra(ctx, .selection_difference, left, right);
+            }
             if (left == .anchor) break :blk .{ .anchor = left.anchor.shifted(sign * try eval_value.number(right)) };
             if (descriptor.op == .add and right == .anchor) break :blk .{ .anchor = right.anchor.shifted(try eval_value.number(left)) };
             break :blk .{ .number = try eval_value.number(left) + sign * try eval_value.number(right) };
@@ -302,36 +305,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             defer left_value.deinit(ctx.state.allocator);
             var right_value = try ctx.evalExprValue(call.args.items[1]);
             defer right_value.deinit(ctx.state.allocator);
-            const left = switch (left_value) {
-                .selection => |selection| selection,
-                else => return error.ExpectedSelection,
-            };
-            const right = switch (right_value) {
-                .selection => |selection| selection,
-                else => return error.ExpectedSelection,
-            };
-            if (left.item_tag != right.item_tag) return error.InvalidSelectionItemType;
-            var result = core.Selection.init(left.item_tag, descriptor.name);
-            errdefer result.deinit(ctx.state.allocator);
-            switch (descriptor.op) {
-                .selection_union => {
-                    for (left.ids.items) |id| try result.appendUnique(ctx.state.allocator, id);
-                    for (right.ids.items) |id| try result.appendUnique(ctx.state.allocator, id);
-                },
-                .selection_intersection => {
-                    for (left.ids.items) |id| {
-                        if (right.contains(id)) try result.appendUnique(ctx.state.allocator, id);
-                    }
-                },
-                .selection_difference => {
-                    for (left.ids.items) |id| {
-                        if (!right.contains(id)) try result.appendUnique(ctx.state.allocator, id);
-                    }
-                },
-                else => unreachable,
-            }
-            try ctx.state.orderPlacementSelection(ctx.state.allocator, &result);
-            break :blk .{ .selection = result };
+            break :blk try selectionAlgebra(ctx, descriptor.op, left_value, right_value);
         },
         .page_index => blk: {
             const page_id = try evalPageArg(ctx, call, 0);
@@ -663,6 +637,34 @@ fn evalDocumentArg(ctx: anytype, call: ast.CallExpr, index: usize) !core.NodeId 
         .document => |id| id,
         else => error.InvalidValueTag,
     };
+}
+
+fn selectionAlgebra(ctx: anytype, op: registry.PrimitiveCall, left_value: core.Value, right_value: core.Value) !core.Value {
+    const left = switch (left_value) {
+        .selection => |selection| selection,
+        else => return error.ExpectedSelection,
+    };
+    const right = switch (right_value) {
+        .selection => |selection| selection,
+        else => return error.ExpectedSelection,
+    };
+    if (left.item_tag != right.item_tag) return error.InvalidSelectionItemType;
+    var result = core.Selection.init(left.item_tag, @tagName(op));
+    errdefer result.deinit(ctx.state.allocator);
+    switch (op) {
+        .selection_union => {
+            for (left.ids.items) |id| try result.appendUnique(ctx.state.allocator, id);
+            for (right.ids.items) |id| try result.appendUnique(ctx.state.allocator, id);
+        },
+        .selection_intersection, .selection_difference => {
+            for (left.ids.items) |id| {
+                if (right.contains(id) == (op == .selection_intersection)) try result.appendUnique(ctx.state.allocator, id);
+            }
+        },
+        else => unreachable,
+    }
+    try ctx.state.orderSelection(ctx.state.allocator, &result);
+    return .{ .selection = result };
 }
 
 fn evalExtraArgs(ctx: anytype, call: ast.CallExpr, start_index: usize) !std.ArrayList(core.Value) {

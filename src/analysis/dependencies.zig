@@ -1206,10 +1206,10 @@ pub const Analyzer = struct {
                 result.page_scope = selection.page_scope;
                 result.placement_call = selection.placement_call;
             },
-            .selection_union, .selection_intersection, .selection_difference => if (call.args.items.len == 2) {
+            .selection_union, .selection_intersection, .selection_difference, .sub => if (call.args.items.len == 2) {
                 const left = try self.valueFacts(call.args.items[0]);
                 const right = try self.valueFacts(call.args.items[1]);
-                const combined = if (primitive.op == .selection_difference) left else try self.joinValueFacts(left, right);
+                const combined = if (primitive.op == .selection_difference or primitive.op == .sub) left else try self.joinValueFacts(left, right);
                 result.page_scope = combined.page_scope;
                 result.placement_call = combined.placement_call;
             },
@@ -2402,6 +2402,7 @@ pub const Analyzer = struct {
                 else
                     PropertyTarget.any(),
                 .selection_union, .selection_intersection, .selection_difference => try self.propertyTargetSelectionAlgebra(call, primitive.op),
+                .sub => try self.propertyTargetSelectionAlgebra(call, .selection_difference),
                 .select => try self.propertyTargetSelect(call),
                 else => if (primitive.result_type) |ty| self.propertyTargetForType(ty) else null,
             },

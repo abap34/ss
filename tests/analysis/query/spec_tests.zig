@@ -660,6 +660,22 @@ test "analysis query spec: typed selections retain input fields through first an
     try testing.expect(std.mem.indexOf(u8, hover.markdown, "select<T>(scope) -> Selection<Placed<T>>") != null);
 }
 
+test "analysis query spec: selection operators retain concrete fields through direct expressions" {
+    for ([_][]const u8{ "|", "&", "-" }) |operator| {
+        const path = "stdlib/internal/selection-operator-query-test.ss";
+        const source = try std.fmt.allocPrint(testing.allocator, "type Heading {{ title: String }}\nfn title(a: Selection<Placed<Heading>>, b: Selection<Placed<Heading>>) -> String = first(a {s} b).value.title\n", .{operator});
+        defer testing.allocator.free(source);
+        var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+        defer sources.deinit();
+        try sources.put(path, source);
+        var snapshot = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{});
+        defer snapshot.deinit();
+        try testing.expect(!snapshot.diagnostics.hasErrors());
+        const expression = source[std.mem.indexOf(u8, source, "first(a").?..];
+        try expectAppliedField(&snapshot, path, source, std.mem.trim(u8, expression, "\n"), "title", "String", 0);
+    }
+}
+
 test "analysis query spec: unfinished placement access keeps the concrete input type" {
     const path = "stdlib/internal/unfinished-placement-query-test.ss";
     for ([_]struct { source: []const u8, needle: []const u8, expected: []const u8 }{

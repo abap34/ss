@@ -49,6 +49,20 @@ fn collectWithAllocationFailures(allocator: std.mem.Allocator, module: compiler.
     try index.collectModule(module);
 }
 
+test "captures: operators capture operands without their implementation names" {
+    var module = try compiler.syntax.parse(testing.allocator,
+        \\document
+        \\let calculate = (input: Number) |-> -(input + saved) - 1
+        \\end
+    );
+    defer module.deinit(testing.allocator);
+    var index = Index.init(testing.allocator);
+    defer index.deinit();
+    try index.collectModule(module);
+    const lambda = module.document_statements.items[0].kind.let_binding.expr.lambda;
+    try expectNames(&.{"saved"}, index.names(lambda).?);
+}
+
 test "captures: every declaration and statement boundary collects lambdas with allocation cleanup" {
     var module = try compiler.syntax.parse(testing.allocator,
         \\type Config {

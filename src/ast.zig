@@ -536,6 +536,8 @@ pub const ParamDecl = struct {
 
 pub const CallableName = struct {
     call_id: ?u64 = null,
+    // Operators resolve directly to the kernel operation, never lexical names.
+    is_operator: bool = false,
     qualifier: ?[]const u8 = null,
     name: []const u8,
     name_hole: ?HoleId = null,
@@ -574,6 +576,7 @@ pub const CallableName = struct {
             .name = try allocator.dupe(u8, self.name),
             .name_hole = self.name_hole,
             .call_id = self.call_id,
+            .is_operator = self.is_operator,
             .qualifier_span = self.qualifier_span,
             .name_span = self.name_span,
             .span = self.span,
