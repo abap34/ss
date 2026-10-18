@@ -74,8 +74,7 @@ pub fn nonNegativeRecordFloatProperty(state: anytype, node: *const Node, record_
 
 pub fn classId(state: anytype, node: *const Node) ?model.NominalId {
     return switch (node.kind) {
-        .document => state.builtinClass("Doc"),
-        .page => state.builtinClass("PageContext"),
+        .document, .page => null,
         .object => if (node.role) |role| roleClass(state, role) else null,
     };
 }
@@ -85,8 +84,16 @@ pub fn roleClass(state: anytype, role_name: []const u8) ?model.NominalId {
 }
 
 fn defaultValue(allocator: std.mem.Allocator, state: anytype, node: *const Node, key: []const u8) !?ValueSlot {
+    if (node.kind == .document or node.kind == .page) {
+        const descriptor = state.declaration_index.settingsField(key) orelse return null;
+        return descriptorDefault(allocator, state, descriptor);
+    }
     const class_name = classId(state, node) orelse return null;
     const descriptor = state.declaration_index.field(class_name, key) orelse return null;
+    return descriptorDefault(allocator, state, descriptor);
+}
+
+fn descriptorDefault(allocator: std.mem.Allocator, state: anytype, descriptor: anytype) !?ValueSlot {
     const text = descriptor.default_property_value orelse return null;
     if (!isNoneDefault(text) and value_text.typedPropertyValueOwnsTaggedText(descriptor.value_type)) {
         return .{ .value = try state.cachedFieldDefault(text, descriptor.value_type) };

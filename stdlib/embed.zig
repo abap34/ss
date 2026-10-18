@@ -15,6 +15,7 @@ pub const modules = [_]Module{
     .{ .spec = "std:components/toc", .path = "stdlib/components/toc.ss", .source = @embedFile("components/toc.ss") },
     .{ .spec = "std:document", .path = "stdlib/document.ss", .source = @embedFile("document.ss") },
     .{ .spec = "std:document/numbering", .path = "stdlib/document/numbering.ss", .source = @embedFile("document/numbering.ss") },
+    .{ .spec = "std:document/settings", .path = "stdlib/document/settings.ss", .source = @embedFile("document/settings.ss") },
     .{ .spec = "std:document/content", .path = "stdlib/document/content.ss", .source = @embedFile("document/content.ss") },
     .{ .spec = "std:graphics/content", .path = "stdlib/graphics/content.ss", .source = @embedFile("graphics/content.ss") },
     .{ .spec = "std:graphics/paint", .path = "stdlib/graphics/paint.ss", .source = @embedFile("graphics/paint.ss") },

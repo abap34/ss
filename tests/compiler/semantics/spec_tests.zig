@@ -8602,3 +8602,35 @@ test "compiler semantics: marked function defaults can place and recursive defau
         \\end
     , "case.ss:bytes:", "RecursiveFunction");
 }
+
+test "compiler semantics: document and page settings use the shared nominal value definition" {
+    try buildSource(
+        \\type PageSettings { layout_h: String = "Unrelated" }
+        \\fn offset(value: Number) -> Number = value
+        \\document
+        \\  let horizontal: LayoutPolicy = docctx().layout_h
+        \\  let vertical: LayoutPolicy = docctx().layout_v
+        \\  let x: Number = offset(docctx().layout_h_center_offset)
+        \\  let y: Number = offset(docctx().layout_v_center_offset)
+        \\  let fill: Color? = docctx().background_fill
+        \\end
+        \\page main
+        \\  let horizontal: LayoutPolicy = pagectx().layout_h
+        \\  let vertical: LayoutPolicy = pagectx().layout_v
+        \\  let x: Number = offset(pagectx().layout_h_center_offset)
+        \\  let y: Number = offset(pagectx().layout_v_center_offset)
+        \\  let fill: Color? = pagectx().background_fill
+        \\  pagectx().layout_h = LayoutPolicy.center
+        \\end
+    );
+    try expectDiagnostic(
+        \\page main
+        \\  pagectx().layout_h_center_offset = "Wrong"
+        \\end
+    , "case.ss:bytes:", "InvalidFieldValue: field 'layout_h_center_offset' expects Number, got String");
+    try expectDiagnostic(
+        \\page main
+        \\  let value = docctx().layout_h_center_offset ?? 0
+        \\end
+    , "case.ss:bytes:", "TypeMismatch: '??' expects an optional value");
+}

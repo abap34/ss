@@ -114,7 +114,7 @@ fn expectCyclePath(source: []const u8, statements: []const []const u8, keys: []c
         const location = diagnostic.origin.?.location().?;
         try testing.expectEqualStrings(statements[0], source[location.span.start..location.span.end]);
         const message = diagnostic.data.user_report.message;
-        try testing.expectEqual(keys.len, std.mem.count(u8, message, " via "));
+        try testing.expectEqual(statements.len, std.mem.count(u8, message, " via "));
         for (statements) |statement| {
             const start = std.mem.indexOf(u8, source, statement).?;
             const span = try std.fmt.allocPrint(testing.allocator, "execution.ss:bytes:{d}-{d}", .{ start, start + statement.len });
@@ -155,18 +155,17 @@ test "cycle diagnostics include the resource of a self dependency" {
 
 test "cycle diagnostics retain every edge of a longer closed path" {
     try expectCyclePath(
-        \\extend Doc { first: String? = none second: String? = none third: String? = none }
         \\document
-        \\  let downstream = docctx().first
-        \\  docctx().first = docctx().second
-        \\  docctx().second = docctx().third
-        \\  docctx().third = docctx().first
+        \\  let downstream = docctx().layout_h
+        \\  let third = docctx().layout_h
+        \\  docctx().layout_h = docctx().layout_v
+        \\  docctx().layout_v = third
         \\end
     , &.{
-        "docctx().first = docctx().second",
-        "docctx().second = docctx().third",
-        "docctx().third = docctx().first",
-    }, &.{ "first", "second", "third" });
+        "let third = docctx().layout_h",
+        "docctx().layout_h = docctx().layout_v",
+        "docctx().layout_v = third",
+    }, &.{ "layout_h", "layout_v" });
 }
 
 test "nested record anchors depend on both immutable root bindings" {

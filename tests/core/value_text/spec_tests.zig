@@ -137,20 +137,19 @@ fn initDocumentStateWithTaggedRecordDefault() !core.DocumentState {
     var program = ast.Module.init();
     errdefer program.deinit(allocator);
 
-    try program.objects.append(allocator, .{
-        .name = try allocator.dupe(u8, "Doc"),
-        .roles = .empty,
+    try program.records.append(allocator, .{
+        .name = try allocator.dupe(u8, "PageSettings"),
         .fields = .empty,
         .span = zeroSpan(),
     });
-    try program.objects.items[0].fields.append(allocator, .{
+    try program.records.items[0].fields.append(allocator, .{
         .name = try allocator.dupe(u8, "style"),
         .value_type = ast.Type.recordType("TextStyle"),
         .default_property_value = try allocator.dupe(u8, tagged_style_json),
         .span = zeroSpan(),
     });
     for (0..ConcurrentDefaultReads.field_count) |index| {
-        try program.objects.items[0].fields.append(allocator, .{
+        try program.records.items[0].fields.append(allocator, .{
             .name = try std.fmt.allocPrint(allocator, "style_{d}", .{index}),
             .value_type = ast.Type.recordType("TextStyle"),
             .default_property_value = try allocator.dupe(u8, tagged_style_json),
@@ -162,6 +161,7 @@ fn initDocumentStateWithTaggedRecordDefault() !core.DocumentState {
     program = ast.Module.init();
     errdefer state.deinit();
     try state.modules.order.append(allocator, state.modules.project_id);
+    state.declaration_index.settings_module_id = state.modules.project_id;
     return state;
 }
 

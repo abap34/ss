@@ -97,6 +97,7 @@ const DisplayMap = std.HashMap(ModuleNameKey, DisplayDescriptor, ModuleNameKeyCo
 
 pub const DeclarationIndex = struct {
     builtin_module_id: u32 = 0,
+    settings_module_id: ?u32 = null,
     allocator: std.mem.Allocator,
     types: std.ArrayList(TypeDescriptor),
     records: std.ArrayList(RecordDescriptor),
@@ -216,6 +217,11 @@ pub const DeclarationIndex = struct {
         return self.record_fields.items[index];
     }
 
+    pub fn settingsField(self: *const DeclarationIndex, field_name: []const u8) ?RecordFieldDescriptor {
+        const module_id = self.settings_module_id orelse return null;
+        return self.recordField(.{ .module_id = module_id, .name = "PageSettings" }, field_name);
+    }
+
     fn fieldInClass(self: *const DeclarationIndex, class_id: model.NominalId, field_name: []const u8) ?FieldDescriptor {
         const index = self.field_by_class.get(.{ .module_id = class_id.module_id, .owner = class_id.name, .member = field_name }) orelse return null;
         return self.fields.items[index];
@@ -250,6 +256,7 @@ pub fn build(allocator: std.mem.Allocator, state: anytype) !DeclarationIndex {
 
 fn indexModule(index: *DeclarationIndex, module: anytype) !void {
     if (std.mem.eql(u8, module.spec, "std:internal/classes")) index.builtin_module_id = module.id;
+    if (std.mem.eql(u8, module.spec, "std:document/settings")) index.settings_module_id = module.id;
     for (module.syntax.functions.items) |*function| {
         if (!function.isDisplay() or function.params.items.len != 1) continue;
         const input = function.params.items[0].ty.placedInput() orelse continue;

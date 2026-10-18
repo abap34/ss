@@ -157,11 +157,10 @@ pub fn isPropertyTarget(info: TypeInfo) bool {
     };
 }
 
-pub fn targetClassForInfo(info: TypeInfo, sema: *const @import("../language/env.zig").SemanticEnv) ?core.NominalId {
+pub fn targetClassForInfo(info: TypeInfo) ?core.NominalId {
     if (info.hole != null) return null;
     return switch (info.ty.kind) {
-        .document => sema.builtinClass("Doc"),
-        .page => sema.builtinClass("PageContext"),
+        .document, .page => null,
         .object => info.object_class,
         .selection => if (info.ty.selectionItem().kind == .object) info.object_class else null,
         else => null,

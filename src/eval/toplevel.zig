@@ -1970,13 +1970,18 @@ fn writePropertyPathToNode(
     }
     const node = state.getNode(node_id) orelse return error.UnknownNode;
     const sema = SemanticEnv.init(state, evaluation.declarations, functions).forModule(evaluation.module_id);
-    const maybe_field = if (core.fields.classId(state, node)) |class_name|
-        sema.field(class_name, property_name)
-    else
-        sema.fieldByName(property_name);
-    const field = maybe_field orelse return error.InvalidType;
-    if (field.value_type.kind != .record) return error.InvalidValueTag;
-    var record = core.Value{ .record = try materializePropertyRecord(evaluation, page_id, scope, origin, node, property_name, field.value_type) };
+    const field_type = if (node.kind == .document or node.kind == .page) blk: {
+        const field = sema.settingsField(property_name) orelse return error.InvalidType;
+        break :blk field.value_type;
+    } else blk: {
+        const field = (if (core.fields.classId(state, node)) |class_name|
+            sema.field(class_name, property_name)
+        else
+            sema.fieldByName(property_name)) orelse return error.InvalidType;
+        break :blk field.value_type;
+    };
+    if (field_type.kind != .record) return error.InvalidValueTag;
+    var record = core.Value{ .record = try materializePropertyRecord(evaluation, page_id, scope, origin, node, property_name, field_type) };
     defer record.deinit(state.allocator);
 
     var value_copy = try value.clone(state.allocator);

@@ -549,11 +549,11 @@ fn inferMemberInfoFromTargetInfo(
         }
         return infoFromType(Type.string);
     }
-    const field = lookupFieldForTarget(sema, target_info, member_name) orelse {
+    const field_type = fieldTypeForTarget(sema, target_info, member_name) orelse {
         try addUserReportAtSpan(state, origin, member_span, "UnknownField", "unknown field: {s}", .{member_name});
         return error.InvalidType;
     };
-    const field_type = field.value_type;
+    if (target_info.ty.kind == .document or target_info.ty.kind == .page) return infoFromType(field_type);
     var result_type = if (field_type.kind == .optional) try field_type.clone(allocator) else try Type.optional(allocator, field_type);
     errdefer result_type.deinit(allocator);
     return infoFromType(result_type);
@@ -1104,7 +1104,7 @@ fn validateKnownPropertyKeyCall(
         try addUserReport(state, origin, "InvalidProperty", "property reads require Document, Page, or Object", .{});
         return error.InvalidType;
     }
-    if (lookupFieldForTarget(sema, target_info, key) == null) {
+    if (fieldTypeForTarget(sema, target_info, key) == null) {
         try addUserReport(state, origin, "UnknownField", "unknown field: {s}", .{key});
         return error.InvalidType;
     }
@@ -1591,8 +1591,8 @@ fn validateSetPropCall(
         try addUserReport(state, origin, "InvalidProperty", "properties cannot contain functions or unconstrained Any values", .{});
         return error.InvalidType;
     }
-    if (lookupFieldForTarget(sema, target_info, key)) |field| {
-        try validateFieldValue(state, field, key, value_info, origin);
+    if (fieldTypeForTarget(sema, target_info, key)) |field| {
+        try validateExpectedFieldValue(state, field, key, value_info, origin);
         return;
     }
 
@@ -1664,24 +1664,18 @@ fn validateExtendRenderEnvCall(
     }
 }
 
-fn lookupFieldForTarget(sema: *const SemanticEnv, target_info: TypeInfo, key: []const u8) ?declarations.FieldDescriptor {
-    if (targetClassForInfo(target_info, sema)) |class_name| {
-        return sema.field(class_name, key);
+fn fieldTypeForTarget(sema: *const SemanticEnv, target_info: TypeInfo, key: []const u8) ?Type {
+    if (target_info.ty.kind == .document or target_info.ty.kind == .page) {
+        const field = sema.settingsField(key) orelse return null;
+        return field.value_type;
     }
-    if (target_info.ty.kind == .object or (target_info.ty.kind == .selection and target_info.ty.selectionItem().kind == .object)) {
-        return sema.fieldByName(key);
-    }
-    return null;
-}
-
-fn validateFieldValue(
-    state: *core.DocumentState,
-    field: declarations.FieldDescriptor,
-    key: []const u8,
-    value_info: TypeInfo,
-    origin: core.SourceOrigin,
-) !void {
-    return validateExpectedFieldValue(state, field.value_type, key, value_info, origin);
+    const field = if (targetClassForInfo(target_info)) |class_name|
+        sema.field(class_name, key)
+    else if (target_info.ty.kind == .object or (target_info.ty.kind == .selection and target_info.ty.selectionItem().kind == .object))
+        sema.fieldByName(key)
+    else
+        null;
+    return if (field) |descriptor| descriptor.value_type else null;
 }
 
 fn validateExpectedFieldValue(
@@ -1789,12 +1783,12 @@ fn validatePropertySetPath(
             try ensureType(sink, allocator, value_info, Type.string, origin, .UnmatchedArgumentType);
             return;
         }
-        if (lookupFieldForTarget(sema, target_info, first.name)) |field| {
+        if (fieldTypeForTarget(sema, target_info, first.name)) |field| {
             if (path.len == 1) {
-                try validateExpectedFieldValueAtSpan(sink, field.value_type, first.name, value_info, origin, first.span);
+                try validateExpectedFieldValueAtSpan(sink, field, first.name, value_info, origin, first.span);
                 return;
             }
-            try validateNestedPropertySetPath(allocator, sink, sema, path, field.value_type, value_info, origin);
+            try validateNestedPropertySetPath(allocator, sink, sema, path, field, value_info, origin);
             return;
         }
         try addUserReportAtSpan(state, origin, first.span, "UnknownField", "unknown field: {s}", .{first.name});

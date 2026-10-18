@@ -1,5 +1,5 @@
 import std:layout/types as { Align, LayoutPolicy, SplitAxis, WrapMode, FitPolicy, LayoutStyle }
-import std:internal/classes
+import std:document/settings as settings
 
 fn hflow(policy: LayoutPolicy, center_offset: Number = 0) -> Void
   pagectx().layout_h = policy
