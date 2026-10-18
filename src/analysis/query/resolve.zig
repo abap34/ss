@@ -211,6 +211,15 @@ fn typeForPrimitiveCall(allocator: std.mem.Allocator, budget: ?QueryBudget, snap
         defer item.deinit(allocator);
         return try ast.Type.selectionOf(allocator, item);
     }
+    if (descriptor.op == .select and call.type_args.items.len == 0 and call.args.items.len >= 2 and call.args.items[1] == .string) {
+        const query = registry.lookupQueryOp(call.args.items[1].string.text) orelse return null;
+        if (query.preserves_input_type) {
+            const input = (try typeForExpr(allocator, budget, snapshot, module_id, offset, call.args.items[0])) orelse return null;
+            if (input.kind != .placed and input.kind != .placement) return null;
+            return try ast.Type.selectionOf(allocator, input);
+        }
+        return registry.queryOutputType(query);
+    }
     if (descriptor.op == .first and call.args.items.len == 1) {
         const selection = (try typeForExpr(allocator, budget, snapshot, module_id, offset, call.args.items[0])) orelse return null;
         return if (selection.kind == .selection) selection.selectionItem() else null;

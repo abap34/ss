@@ -52,6 +52,13 @@ test "language registry spec: query output types are declared in the registry" {
     const pages = registry.lookupQueryOp("document_pages").?;
     try testing.expect(Type.eql(Type.selection(.page), registry.queryOutputType(pages)));
 
+    for ([_][]const u8{ "children", "descendants", "self_placement" }) |name| {
+        const query = registry.lookupQueryOp(name).?;
+        try testing.expect(Type.eql(Type.placement, registry.queryInputType(query)));
+        try testing.expect(Type.eql(Type.selection(.placement), registry.queryOutputType(query)));
+        try testing.expectEqual(std.mem.eql(u8, name, "self_placement"), query.preserves_input_type);
+    }
+
     const objects = registry.lookupQueryOp("page_objects_by_role").?;
     try testing.expect(Type.eql(Type.selection(.object), registry.queryOutputType(objects)));
     const parent = registry.lookupQueryOp("parent_page").?;

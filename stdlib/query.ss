@@ -12,11 +12,15 @@ fn objs_here(role_name: String) -> Selection<Object>
   return objs(pagectx(), role_name)
 end
 
-fn children(base: Object) -> Selection<Object>
+fn selection<T>(item: T) -> Selection<T>
+  return select(item, "self_placement")
+end
+
+fn children(base: Placement) -> Selection<Placement>
   return select(base, "children")
 end
 
-fn desc(base: Object) -> Selection<Object>
+fn descendants(base: Placement) -> Selection<Placement>
   return select(base, "descendants")
 end
 

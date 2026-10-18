@@ -728,3 +728,21 @@ test "analysis query spec: display receiver fields retain independent lexical sc
     try expectAppliedField(&snapshot, path, source, "second.value.count", "count", "Number", 1);
     for (snapshot.value_bindings) |binding| try testing.expect(!std.mem.eql(u8, binding.name, "display"));
 }
+
+test "analysis query spec: singleton selection preserves its input through first" {
+    const path = "stdlib/internal/singleton-selection-query-test.ss";
+    const source =
+        \\type Heading { title: String }
+        \\fn selection<T>(item: T) -> Selection<T> = select(item, "self_placement")
+        \\fn title(item: Placed<Heading>) -> String = first(selection(item)).value.title
+        \\fn direct(item: Placed<Heading>) -> String = first(select(item, "self_placement")).value.title
+    ;
+    var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+    defer sources.deinit();
+    try sources.put(path, source);
+    var snapshot = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{});
+    defer snapshot.deinit();
+    try testing.expect(!snapshot.diagnostics.hasErrors());
+    try expectAppliedField(&snapshot, path, source, "first(selection(item)).value.title", "title", "String", 0);
+    try expectAppliedField(&snapshot, path, source, "first(select(item, \"self_placement\")).value.title", "title", "String", 0);
+}
