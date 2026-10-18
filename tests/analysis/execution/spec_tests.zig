@@ -328,8 +328,11 @@ fn expectOwnedDiagnostic(source: []const u8, expected_code: []const u8, expected
     } else |_| {}
     for (state.diagnostics.entries.items) |diagnostic| {
         if (!std.mem.eql(u8, diagnostic.code(), expected_code)) continue;
-        try testing.expect(diagnostic.data == .user_report);
-        try testing.expectEqualStrings(expected_message, diagnostic.data.user_report.message);
+        switch (diagnostic.data) {
+            .user_report => |data| try testing.expectEqualStrings(expected_message, data.message),
+            .recursive_function => |data| try testing.expectEqualStrings(expected_message, data.function_name),
+            else => return error.UnexpectedDiagnosticPayload,
+        }
         return;
     }
     return error.ExpectedDiagnostic;
@@ -337,9 +340,10 @@ fn expectOwnedDiagnostic(source: []const u8, expected_code: []const u8, expected
 
 test "validation diagnostics own messages independently of analysis storage" {
     try expectOwnedDiagnostic(
-        \\fn label(item: Object) -> String = readlines("missing.txt")
+        \\type Label {}
+        \\fn display(self: Placed<Label>) -> Text = Text { content = readlines("missing.txt") }
         \\page main
-        \\  set_repr(body_obj!("A"), label)
+        \\  place!(Label {})
         \\end
     , "ImpureDisplayFunction", "display functions must be pure and read-only, including indirect calls");
     try expectOwnedDiagnostic(
@@ -349,15 +353,16 @@ test "validation diagnostics own messages independently of analysis storage" {
         \\}
         \\page main
         \\  let item = txt_obj("A", "holder")
-        \\  set_repr(item, item.format ?? ((value: Object) |-> content(value)))
         \\end
     , "InvalidPropertyType", "property 'format' must not contain functions or unconstrained Any values");
     try expectOwnedDiagnostic(
+        \\type Label {}
+        \\fn label() -> String = label()
+        \\fn display(self: Placed<Label>) -> Text = Text { content = label() }
         \\page main
-        \\  let item = body_obj!("A")
-        \\  set_repr(item, (self: Object) |-> repr(self))
+        \\  place!(Label {})
         \\end
-    , "RecursiveFunction", "recursive function value application");
+    , "RecursiveFunction", "label");
 }
 
 test "call analysis limit diagnostics survive temporary analysis storage" {
@@ -404,41 +409,43 @@ test "dependency summary deduplication preserves overlapping resources in either
     try testing.expect(deps.Resource.makeObjects(name).eql(deps.Resource.makeObjects("body")));
 }
 
-test "execution graph owns deferred display summaries and their computed resource names" {
+test "execution graph owns typed display summaries after temporary analysis storage is destroyed" {
     var poison = PoisonAllocator{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
     defer poison.arena.deinit();
     for ([_]std.mem.Allocator{ poison.allocator(), testing.allocator }) |allocator| {
         var state = try document(
-            \\fn label(item: Object) -> String = prop(docctx(), "footer_" ++ "text") ?? ""
+            \\type Label {}
+            \\fn display(self: Placed<Label>) -> Text
+            \\  return Text { content = self.document.footer_text ?? "" }
+            \\end
             \\page main
-            \\  let item = new("item", "body", "text")
-            \\  set_repr(item, label)
-            \\  let text = repr(item)
+            \\  place!(Label {})
             \\end
             \\document
-            \\  set_prop(docctx(), "footer_" ++ "text", "X")
+            \\  docctx().footer_text = "X"
             \\end
         );
         defer state.deinit();
-        var declarations = try compiler.declarations.build(testing.allocator, &state);
-        defer declarations.deinit();
-        var graph = try compiler.analysis.ExecutionGraph.build(allocator, &state, &declarations, .{});
+        // Build display plans first, then inspect a graph whose temporary
+        // summary allocations have already been freed and overwritten.
+        try compiler.analysis.analyzeDocumentState(testing.allocator, &state);
+        var graph = try compiler.analysis.ExecutionGraph.build(allocator, &state, state.declaration_index, .{});
         defer graph.deinit();
         var found = false;
-        for (graph.edges.items) |edge| {
-            if (edge.from == 3 and edge.to == 2) found = true;
-        }
-        try testing.expect(found);
-        const definitions = graph.units.items[1].summary.display_definitions.items;
-        try testing.expectEqual(@as(usize, 1), definitions.len);
-        var found_name = false;
-        for (definitions[0].reads.reads.items) |resource| {
-            if (resource == .property) {
-                if (resource.property.key.displayName()) |name| {
-                    if (std.mem.eql(u8, name, "footer_text")) found_name = true;
+        for (graph.units.items, 0..) |unit, index| {
+            if (unit.kind != .display) continue;
+            for (unit.summary.reads.items) |resource| {
+                if (resource != .property) continue;
+                const name = resource.property.key.displayName() orelse continue;
+                if (!std.mem.eql(u8, name, "footer_text")) continue;
+                found = true;
+                var found_edge = false;
+                for (graph.edges.items) |edge| {
+                    if (edge.to == index and graph.units.items[edge.from].kind == .document_statement) found_edge = true;
                 }
+                try testing.expect(found_edge);
             }
         }
-        try testing.expect(found_name);
+        try testing.expect(found);
     }
 }

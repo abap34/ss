@@ -1,11 +1,9 @@
-import std:themes/default as *
-
-fn make() -> Object = body_obj("A")
+type Label { content: String format: String -> String }
+fn make(content: String, suffix: String) -> Label
+  return Label { content = content format = (value: String) |-> value ++ suffix }
+end
+fn display(self: Placed<Label>) -> Text = text(self.value.format(self.value.content))
 page main
-  let a = make()
-  let b = make()
-  set_repr(a, (self: Object) |-> repr(b) ++ "!")
-  set_repr(b, (self: Object) |-> content(self))
-  place_on!(pagectx(), a)
-  place_on!(pagectx(), b)
+  place!(make("A", "!"))
+  place!(make("B", "?"))
 end

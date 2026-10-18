@@ -1033,7 +1033,6 @@ pub fn isExpectedCliError(err: anyerror) bool {
         error.ExecutionDependencyCycle,
         error.DuplicateContentDefinition,
         error.DuplicatePropertyDefinition,
-        error.DuplicateReprDefinition,
         error.ConstraintConflict,
         error.NegativeFrameSize,
         error.DiagnosticsFailed,

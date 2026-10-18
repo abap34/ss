@@ -156,7 +156,7 @@ test "document state spec: repeated input registration creates independent place
         try testing.expectEqual(page_id, state.parentPageOf(id).?);
         try testing.expectEqual(page_id, state.layoutPageOf(id).?);
         try testing.expect(node.role == null and node.payload_kind == null and node.object_kind == null);
-        try testing.expect(node.content == null and node.display_content == null);
+        try testing.expect(node.content == null);
     }
 }
 

@@ -1,8 +1,10 @@
-import std:themes/default as *
-fn label(item: Object) -> String = content(item) ++ (docctx().footer_text ?? "")
+type Label { format: () -> String }
+fn formatter(prefix: String) -> () -> String
+  return () |-> prefix ++ (docctx().footer_text ?? "missing")
+end
+fn display(self: Placed<Label>) -> Text = text(self.value.format())
 page main
-  let item = set_repr(txt_obj!("A", "claim"), label)
-  text!("repr=" ++ repr(item))
+  place!(Label { format = formatter("A") })
 end
 document
   docctx().footer_text = "!"

@@ -72,7 +72,6 @@ pub fn stateSource(state: *core.DocumentState, pages: *core.prepared.PreparedPag
         relocateOrigin(&node.origin, edit, state.projectPath(), syntax);
         for (node.fields.items) |*field| relocateOrigin(&field.origin, edit, state.projectPath(), syntax);
         for (node.content_provenance.items) |*entry| relocateOriginValue(&entry.origin, edit, state.projectPath(), syntax);
-        for (node.display_content_provenance.items) |*entry| relocateOriginValue(&entry.origin, edit, state.projectPath(), syntax);
     }
     var provenance = state.runtime.string_provenance.valueIterator();
     while (provenance.next()) |entries| for (entries.items) |*entry| relocateOriginValue(&entry.origin, edit, state.projectPath(), syntax);

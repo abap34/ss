@@ -384,12 +384,6 @@ fn reportDuplicateContentDefinition(state: *core.DocumentState, origin: core.Sou
     });
 }
 
-fn reportDuplicateReprDefinition(state: *core.DocumentState, origin: core.SourceOrigin) !void {
-    try state.addValidationDiagnostic(.@"error", null, null, origin, .{
-        .user_report = .{ .code = "DuplicateReprDefinition", .message = try state.allocator.dupe(u8, "object repr is already defined") },
-    });
-}
-
 fn reportRecordUpdateError(state: *core.DocumentState, origin: core.SourceOrigin, code: []const u8, comptime fmt: []const u8, args: anytype) !void {
     try state.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{
@@ -479,7 +473,6 @@ fn lowerErrorMessage(err: anyerror) ?[]const u8 {
         error.DuplicateObjectParent => "object occurs under multiple parents in the placed group",
         error.DuplicateContentDefinition => "object content is already defined",
         error.DuplicatePropertyDefinition => "property is already defined on this target",
-        error.DuplicateReprDefinition => "object repr is already defined",
         error.ExpectedSelection => "expected a selection value",
         error.ExpectedConstraintSet => "expected a constraint set",
         error.ExpectedStringArgument => "expected a string argument",
@@ -535,40 +528,6 @@ pub fn executeGraph(
             try executeUnit(evaluation, &document_states, &page_states, graph.units.items[unit_index]);
         }
         evaluation.execution_unit = null;
-    }
-    {
-        const measure_start = utils.measure_profile.start();
-        defer utils.measure_profile.recordWysiwyg(.materialize_display, measure_start);
-        try materializeDisplayContent(evaluation);
-    }
-}
-
-fn materializeDisplayContent(evaluation: *EvalContext) !void {
-    const state = evaluation.state;
-    var env = Environment.init(state.allocator);
-    defer env.deinit();
-
-    var index: usize = 0;
-    while (index < state.graph.nodes.items.len) : (index += 1) {
-        try checkCancellation(evaluation);
-        const node_id = state.graph.nodes.items[index].id;
-        const node = state.getNode(node_id) orelse continue;
-        if (node.kind != .object) continue;
-        const function = if (node.repr_function) |repr_function|
-            repr_function
-        else
-            continue;
-
-        const page_id = state.parentPageOf(node_id) orelse state.graph.document_id;
-        const scope: EvalScope = if (page_id == state.graph.document_id) .document else .page;
-        const origin: core.SourceOrigin = node.origin orelse .{};
-        const error_count = diagnosticErrorCount(state);
-        const text = evalNodeReprWithFunction(evaluation, page_id, scope, &env, origin, node_id, function) catch |err| {
-            if (err == error.Canceled) return err;
-            if (diagnosticErrorCount(state) == error_count) try reportLowerError(state, err, origin);
-            return err;
-        };
-        try state.setNodeDisplayContent(node_id, text);
     }
 }
 
@@ -1250,39 +1209,6 @@ fn evalCallArgs(
     return values;
 }
 
-fn evalNodeRepr(
-    evaluation: *EvalContext,
-    page_id: core.NodeId,
-    scope: EvalScope,
-    env: *Environment,
-    current_origin: core.SourceOrigin,
-    object_id: core.NodeId,
-) ![]const u8 {
-    const state = evaluation.state;
-    const node = state.getNode(object_id) orelse return error.UnknownNode;
-    const function = node.repr_function orelse return node.content orelse "";
-    return evalNodeReprWithFunction(evaluation, page_id, scope, env, current_origin, object_id, function);
-}
-
-fn evalNodeReprWithFunction(
-    evaluation: *EvalContext,
-    page_id: core.NodeId,
-    scope: EvalScope,
-    env: *Environment,
-    current_origin: core.SourceOrigin,
-    object_id: core.NodeId,
-    function: core.FunctionRef,
-) ![]const u8 {
-    const state = evaluation.state;
-    const args = [_]core.Value{.{ .object = object_id }};
-    var result = try invokeFunctionRef(evaluation, page_id, scope, env, function, current_origin, &args);
-    defer result.deinit(state.allocator);
-    return switch (result) {
-        .string => |text| text,
-        else => error.ExpectedStringArgument,
-    };
-}
-
 const BuiltinContext = struct {
     evaluation: *EvalContext,
     state: *core.DocumentState,
@@ -1450,16 +1376,6 @@ const BuiltinContext = struct {
         };
     }
 
-    pub fn setNodeReprFunction(self: *BuiltinContext, object_id: core.NodeId, function: core.FunctionRef) !void {
-        self.state.setNodeReprFunction(object_id, function) catch |err| switch (err) {
-            error.DuplicateReprDefinition => {
-                try reportDuplicateReprDefinition(self.state, self.current_origin);
-                return err;
-            },
-            else => return err,
-        };
-    }
-
     pub fn extendRenderEnv(self: *BuiltinContext, node_id: core.NodeId, op: []const u8, key: []const u8, value: []const u8) !void {
         try self.state.extendRenderEnv(node_id, op, key, value);
     }
@@ -1503,10 +1419,6 @@ const BuiltinContext = struct {
     pub fn nodeContent(self: *BuiltinContext, object_id: core.NodeId) ?[]const u8 {
         const node = self.state.getNode(object_id) orelse return null;
         return node.content;
-    }
-
-    pub fn reprNode(self: *BuiltinContext, object_id: core.NodeId) ![]const u8 {
-        return try evalNodeRepr(self.evaluation, self.page_id, self.scope, self.env, self.current_origin, object_id);
     }
 
     pub fn nodeField(self: *BuiltinContext, target: core.Value, key: []const u8) ?core.Value {

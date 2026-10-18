@@ -119,15 +119,16 @@ test "evaluation frames include lambdas and primitive callbacks" {
     try evaluate(source, 2, null);
 }
 
-test "evaluation frames include deferred display calls" {
+test "evaluation frames include typed displays and their captured callbacks" {
     const source = leaf ++
+        \\type Label { format: () -> String }
+        \\fn display(self: Placed<Label>) -> Text = Text { content = self.value.format() }
         \\page main
-        \\  let item = place_on!(pagectx(), new("A", "body", "text"))
-        \\  set_repr(item, (o: Object) |-> leaf())
+        \\  place!(Label { format = () |-> leaf() })
         \\end
     ;
-    try evaluate(source, 1, error.EvaluationResourceLimit);
-    try evaluate(source, 2, null);
+    try evaluate(source, 2, error.EvaluationResourceLimit);
+    try evaluate(source, 3, null);
 }
 
 test "evaluation frames release active environments when canceled inside a call" {

@@ -1164,7 +1164,7 @@ async function testHoleCallbackSuppressesInvalidCallback() {
     await writeFile(
       path.join(project, "slide.ss"),
       `page broken
-set_repr(text!("body"), )
+foreach(select<Text>(pagectx()), )
 end
 `,
       "utf8",

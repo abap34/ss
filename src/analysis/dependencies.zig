@@ -28,18 +28,12 @@ pub const AccessSummary = struct {
     writes: std.ArrayList(Resource),
     selection_reads: std.ArrayList(Resource),
     escaped_objects: std.ArrayList(ObjectIdentity) = .empty,
-    display_reads: std.ArrayList(PropertyOwner) = .empty,
-    display_definitions: std.ArrayList(DisplayDefinition) = .empty,
     placements: std.ArrayList(PlacementDefinition) = .empty,
     reads_layout: bool = false,
     writes_layout_input: bool = false,
     places_objects: bool = false,
     invalid_selection_mutation: ?InvalidSelectionMutation = null,
 
-    pub const DisplayDefinition = struct {
-        owner: PropertyOwner,
-        reads: *AccessSummary,
-    };
     pub const PlacementDefinition = struct {
         call_id: u64,
         steps: std.ArrayList(AccessSummary),
@@ -66,13 +60,7 @@ pub const AccessSummary = struct {
             placement.steps.deinit(self.allocator);
         }
         self.placements.deinit(self.allocator);
-        for (self.display_definitions.items) |definition| {
-            definition.reads.deinit();
-            self.allocator.destroy(definition.reads);
-        }
-        self.display_definitions.deinit(self.allocator);
         self.escaped_objects.deinit(self.allocator);
-        self.display_reads.deinit(self.allocator);
         self.reads.deinit(self.allocator);
         self.writes.deinit(self.allocator);
         self.selection_reads.deinit(self.allocator);
@@ -96,19 +84,9 @@ pub const AccessSummary = struct {
         try self.escaped_objects.append(self.allocator, identity);
     }
 
-    pub fn addDisplayDefinition(self: *AccessSummary, owner: PropertyOwner, reads: AccessSummary) !void {
-        const owned = try self.allocator.create(AccessSummary);
-        errdefer self.allocator.destroy(owned);
-        owned.* = try reads.clone(self.allocator);
-        errdefer owned.deinit();
-        try self.display_definitions.append(self.allocator, .{ .owner = owner, .reads = owned });
-    }
-
     pub fn merge(self: *AccessSummary, other: AccessSummary) !void {
         for (other.placements.items) |placement| try self.addPlacement(placement);
         for (other.escaped_objects.items) |identity| try self.addEscapedObject(identity);
-        try self.display_reads.appendSlice(self.allocator, other.display_reads.items);
-        for (other.display_definitions.items) |definition| try self.addDisplayDefinition(definition.owner, definition.reads.*);
         try self.reads.ensureUnusedCapacity(self.allocator, other.reads.items.len);
         try self.writes.ensureUnusedCapacity(self.allocator, other.writes.items.len);
         try self.selection_reads.ensureUnusedCapacity(self.allocator, other.selection_reads.items.len);
@@ -127,7 +105,6 @@ pub const AccessSummary = struct {
                 if (resource == .objects and (resource.objects.page_scope != .any or !resource.objects.placement.eql(.{}))) return true;
             }
         }
-        for (self.display_definitions.items) |definition| if (definition.reads.hasConcreteMembershipScope()) return true;
         for (self.placements.items) |placement| {
             if (placement.page_scope != .any) return true;
             for (placement.steps.items) |step| if (step.hasConcreteMembershipScope()) return true;
@@ -146,8 +123,6 @@ pub const AccessSummary = struct {
         copied.writes.appendSliceAssumeCapacity(self.writes.items);
         copied.selection_reads.appendSliceAssumeCapacity(self.selection_reads.items);
         try copied.escaped_objects.appendSlice(allocator, self.escaped_objects.items);
-        try copied.display_reads.appendSlice(allocator, self.display_reads.items);
-        for (self.display_definitions.items) |definition| try copied.addDisplayDefinition(definition.owner, definition.reads.*);
         copied.reads_layout = self.reads_layout;
         copied.writes_layout_input = self.writes_layout_input;
         copied.places_objects = self.places_objects;
@@ -1262,7 +1237,7 @@ pub const Analyzer = struct {
                     result.placement = .exact(call.callee.call_id.?, &.{});
                 } else result = input;
             },
-            .set_prop, .set_content, .set_repr, .require_asset_exists, .extend_render_env => if (call.args.items.len > 0) {
+            .set_prop, .set_content, .require_asset_exists, .extend_render_env => if (call.args.items.len > 0) {
                 result = try self.valueFacts(call.args.items[0]);
             },
             else => {},
@@ -2215,12 +2190,6 @@ pub const Analyzer = struct {
                 summary.reads_layout = true;
             },
             .content => try summary.addRead(Resource.makeContentProperty(propertyOwnerFromArgFacts(arg_facts, 0))),
-            .repr => {
-                const owner = propertyOwnerFromArgFacts(arg_facts, 0);
-                try summary.addRead(Resource.makeContentProperty(owner));
-                try summary.addRead(Resource.makeProperty(owner, "repr"));
-                try summary.display_reads.append(self.allocator, owner);
-            },
             .prop, .has_prop, .prop_eq => try summary.addRead(Resource.makeProperty(
                 propertyOwnerFromArgFacts(arg_facts, 0),
                 literalStringFromArgFacts(arg_facts, 1),
@@ -2228,18 +2197,6 @@ pub const Analyzer = struct {
             .set_content => {
                 try summary.addWrite(Resource.makeContentProperty(propertyOwnerFromArgFacts(arg_facts, 0)));
                 summary.writes_layout_input = true;
-            },
-            .set_repr => {
-                const owner = propertyOwnerFromArgFacts(arg_facts, 0);
-                try summary.addWrite(Resource.makeProperty(owner, "repr"));
-                summary.writes_layout_input = true;
-                if (arg_facts.len >= 2) {
-                    var reads = try self.invokeValueFacts(arg_facts[1].values, arg_facts[0..1]);
-                    defer reads.deinit();
-                    // Registration captures a verified display; its reads occur
-                    // when repr is evaluated, not while the callback is stored.
-                    try summary.addDisplayDefinition(owner, reads);
-                }
             },
             .group => {
                 for (arg_facts) |arg| try self.addEscapedObjects(&summary, arg.values);
@@ -2283,12 +2240,10 @@ pub const Analyzer = struct {
         return switch (op) {
             .select,
             .content,
-            .repr,
             .prop,
             .has_prop,
             .prop_eq,
             .set_content,
-            .set_repr,
             .new,
             .group,
             .place_on,
@@ -2441,7 +2396,7 @@ pub const Analyzer = struct {
                     try self.propertyTargetExpr(call.args.items[1])
                 else
                     PropertyTarget.any(),
-                .set_content, .set_repr, .require_asset_exists => if (call.args.items.len > 0)
+                .set_content, .require_asset_exists => if (call.args.items.len > 0)
                     try self.propertyTargetExpr(call.args.items[0])
                 else
                     PropertyTarget.any(),
