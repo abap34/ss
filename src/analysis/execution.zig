@@ -57,6 +57,7 @@ pub const ExecutionUnit = struct {
 pub const DependencyEdge = struct {
     from: usize,
     to: usize,
+    reason: enum { resource, display_input } = .resource,
 };
 
 pub const ExecutionGraph = struct {
@@ -119,7 +120,7 @@ pub const ExecutionGraph = struct {
         var cycle = std.ArrayList(usize).empty;
         defer cycle.deinit(allocator);
         graph.order = scheduleFromEdges(allocator, graph.units.items, graph.edges.items, &cycle) catch |err| {
-            if (err == error.ExecutionDependencyCycle) try addCycleDiagnostic(allocator, state, graph.units.items, cycle.items);
+            if (err == error.ExecutionDependencyCycle) try addCycleDiagnostic(allocator, state, graph.units.items, graph.edges.items, cycle.items);
             return err;
         };
         return graph;
@@ -169,6 +170,7 @@ pub const ExecutionGraph = struct {
                     try self.edges.append(self.allocator, .{
                         .from = if (step.parent) |parent| first_unit + parent else producer,
                         .to = unit,
+                        .reason = .display_input,
                     });
                 }
             }
@@ -552,7 +554,7 @@ fn findCycle(allocator: std.mem.Allocator, adjacency: Adjacency, done: []const b
     unreachable; // A finite graph left unfinished by Kahn's algorithm has a cycle.
 }
 
-fn addCycleDiagnostic(allocator: std.mem.Allocator, state: *core.DocumentState, units: []const ExecutionUnit, cycle: []const usize) !void {
+fn addCycleDiagnostic(allocator: std.mem.Allocator, state: *core.DocumentState, units: []const ExecutionUnit, edges: []const DependencyEdge, cycle: []const usize) !void {
     std.debug.assert(cycle.len != 0);
     var first: usize = 0;
     for (cycle, 0..) |unit, index| {
@@ -562,14 +564,22 @@ fn addCycleDiagnostic(allocator: std.mem.Allocator, state: *core.DocumentState, 
     defer message.deinit(allocator);
     try message.appendSlice(allocator, "document evaluation dependencies contain a cycle:");
     for (0..cycle.len) |offset| {
-        const from = units[cycle[(first + offset) % cycle.len]];
-        const to = units[cycle[(first + offset + 1) % cycle.len]];
+        const from_index = cycle[(first + offset) % cycle.len];
+        const to_index = cycle[(first + offset + 1) % cycle.len];
+        const from = units[from_index];
+        const to = units[to_index];
         const location = try std.fmt.allocPrint(allocator, "\n  {s}:bytes:{d}-{d} -> {s}:bytes:{d}-{d} via ", .{
             from.path, from.span.start, from.span.end, to.path, to.span.start, to.span.end,
         });
         defer allocator.free(location);
         try message.appendSlice(allocator, location);
-        try appendDependencyReason(allocator, &message, from.summary, to.summary);
+        const reason = for (edges) |edge| {
+            if (edge.from == from_index and edge.to == to_index) break edge.reason;
+        } else unreachable; // The cycle is recovered from these edges.
+        switch (reason) {
+            .resource => try appendDependencyReason(allocator, &message, from.summary, to.summary),
+            .display_input => try message.appendSlice(allocator, "display expansion input"),
+        }
     }
     try addUnitErrorDiagnostic(state, units[cycle[first]], "ExecutionDependencyCycle", message.items);
 }
@@ -587,7 +597,7 @@ fn appendDependencyReason(allocator: std.mem.Allocator, out: *std.ArrayList(u8),
             return;
         }
     }
-    unreachable; // Every dependency edge comes from an intersecting write/read pair.
+    unreachable; // Resource edges come from an intersecting write/read pair.
 }
 
 const Adjacency = struct {

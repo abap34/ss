@@ -69,6 +69,36 @@ test "dependency cycle diagnostics retain source locations in both graph constru
     }
 }
 
+test "display expansion cycles retain structural edge reasons after graph teardown" {
+    const source =
+        \\type Count<T> { amount: Number = selection_count(select<Text>(docctx())) }
+        \\page first
+        \\  let count = Count<Number> {}
+        \\  heading!(str(count.amount))
+        \\end
+        \\page second
+        \\  text!("Body")
+        \\end
+    ;
+    for ([_]compiler.analysis.AnalysisMode{ .diagnostics_only, .evaluation }) |mode| {
+        var state = try document(source);
+        defer state.deinit();
+        {
+            var arena = std.heap.ArenaAllocator.init(testing.allocator);
+            defer arena.deinit();
+            try testing.expectError(error.ExecutionDependencyCycle, compiler.analysis.analyzeDocumentStateWithMode(arena.allocator(), &state, mode));
+        }
+        const diagnostic = state.diagnostics.entries.items[state.diagnostics.entries.items.len - 1];
+        try testing.expectEqualStrings("ExecutionDependencyCycle", diagnostic.code());
+        const location = diagnostic.origin.?.location().?;
+        try testing.expectEqualStrings("execution.ss", location.path.?);
+        const message = diagnostic.data.user_report.message;
+        try testing.expect(std.mem.indexOf(u8, message, "via display expansion input") != null);
+        try testing.expect(std.mem.indexOf(u8, message, "Objects(") != null);
+        try testing.expect(std.mem.indexOf(u8, message, "Variable(") != null);
+    }
+}
+
 fn expectCyclePath(source: []const u8, statements: []const []const u8, keys: []const []const u8) !void {
     for ([_]compiler.analysis.AnalysisMode{ .diagnostics_only, .evaluation }) |mode| {
         var state = try document(source);
