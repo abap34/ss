@@ -6110,23 +6110,23 @@ test "compiler semantics: constant function values shadow primitive calls" {
 test "compiler semantics: unknown and conflicting return facts cannot recover a literal" {
     const bodies = [_][]const u8{
         \\  if flag
-        \\    return "parent_page"
+        \\    return "previous_page"
         \\  end
         \\  return str(1)
         ,
         \\  if flag
         \\    return str(1)
         \\  end
-        \\  return "parent_page"
+        \\  return "previous_page"
         ,
         \\  if flag
-        \\    return "parent_page"
+        \\    return "previous_page"
         \\  else
         \\    if flag
         \\      return "children"
         \\    end
         \\  end
-        \\  return "parent_page"
+        \\  return "previous_page"
         ,
     };
     for (bodies) |body| {
@@ -6135,8 +6135,7 @@ test "compiler semantics: unknown and conflicting return facts cannot recover a 
             \\{s}
             \\end
             \\page main
-            \\  let item = text!("x")
-            \\  let result = select(item, query_name(false))
+            \\  let result = select(pagectx(), query_name(false))
             \\end
         , .{body});
         defer testing.allocator.free(source);
@@ -6148,18 +6147,17 @@ test "compiler semantics: equal branch returns retain query facts and stop at re
     try buildSource(
         \\fn query_name(flag: Bool) -> String
         \\  if flag
-        \\    let query = "parent_page"
+        \\    let query = "previous_page"
         \\    return query
         \\    return "children"
         \\  else
-        \\    let query = "parent_page"
+        \\    let query = "previous_page"
         \\    return query
         \\  end
         \\  return "children"
         \\end
         \\page main
-        \\  let item = body_obj!("x")
-        \\  let result = select(item, query_name(false))
+        \\  let result = select(pagectx(), query_name(false))
         \\  let index = page_index(result ?? pagectx())
         \\end
     );
@@ -6167,13 +6165,12 @@ test "compiler semantics: equal branch returns retain query facts and stop at re
 
 test "compiler semantics: constant concatenation and argument facts resolve query kinds" {
     try buildSource(
-        \\const query: String = "parent_" ++ "page"
+        \\const query: String = "previous_" ++ "page"
         \\fn identity(value: String) -> String
         \\  return value
         \\end
         \\page main
-        \\  let item = body_obj!("x")
-        \\  let result = select(item, identity(query))
+        \\  let result = select(pagectx(), identity(query))
         \\  let index = page_index(result ?? pagectx())
         \\end
     );

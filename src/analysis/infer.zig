@@ -1522,7 +1522,7 @@ fn inferSelectCallInfo(
     }
     if (query.preserves_input_type) return infoFromType(try Type.selectionOf(allocator, base.ty));
     var info = infoFromType(registry.queryOutputType(query));
-    info.object_class = inferQueryOutputClass(sema, env, query, call, base);
+    info.object_class = inferQueryOutputClass(sema, env, query, call);
     if (info.ty.kind == .selection and info.ty.selectionItem().kind == .object) if (info.object_class) |id| {
         info.ty = try Type.selectionOf(allocator, Type.objectId(id));
     };
@@ -1534,17 +1534,15 @@ fn inferQueryOutputClass(
     env: *const TypeEnv,
     query: registry.QueryDescriptor,
     call: ast.CallExpr,
-    base: TypeInfo,
 ) ?core.NominalId {
     return switch (query.op) {
-        .self_object => base.object_class,
         .page_objects_by_role, .document_objects_by_role => blk: {
             if (call.args.items.len < 3) break :blk null;
             const role_name = resolveStringLiteral(env, call.args.items[2]) orelse break :blk null;
             if (sema.roleClass(role_name)) |class_name| break :blk class_name;
             break :blk null;
         },
-        .self_placement, .children, .descendants, .document_pages, .previous_page, .parent_page => null,
+        .self_placement, .children, .descendants, .document_pages, .previous_page => null,
     };
 }
 

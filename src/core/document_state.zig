@@ -1508,11 +1508,10 @@ pub const DocumentState = struct {
         }
 
         return switch (query.op) {
-            .self_object, .self_placement => .{
+            .self_placement => .{
                 .selection = try self.singletonSelection(allocator, .object, query.name, base.object),
             },
             .previous_page => if (self.previousPageOf(base.page)) |page_id| .{ .page = page_id } else .none,
-            .parent_page => if (self.parentPageOf(base.object)) |page_id| .{ .page = page_id } else .none,
             .children => .{
                 .selection = try self.selectChildren(allocator, base.object, query.name),
             },

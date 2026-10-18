@@ -2477,12 +2477,8 @@ pub const Analyzer = struct {
             },
             // A singleton snapshots the supplied identity, not a collection.
             // Its argument dependencies have already been collected.
-            .self_object, .self_placement => {},
+            .self_placement => {},
             .previous_page => try summary.addRead(Resource.makePages(null)),
-            .parent_page => {
-                const owner = propertyOwnerFromArgFacts(arg_facts, 0);
-                try summary.addRead(.{ .objects = .{ .owner = if (owner == .object) owner.object else .{} } });
-            },
         }
     }
 
@@ -2587,12 +2583,12 @@ pub const Analyzer = struct {
         const query_name = (try literalStringArg(self, call, 1)) orelse return PropertyTarget.any();
         const query = registry.lookupQueryOp(query_name) orelse return PropertyTarget.any();
         return switch (query.op) {
-            .document_pages, .previous_page, .parent_page => PropertyTarget.page(),
+            .document_pages, .previous_page => PropertyTarget.page(),
             .page_objects_by_role,
             .document_objects_by_role,
             => PropertyTarget.object(self.objectClassForRole(try literalStringArg(self, call, 2))),
             .children, .descendants => PropertyTarget.object(null),
-            .self_object, .self_placement => if (call.args.items.len > 0)
+            .self_placement => if (call.args.items.len > 0)
                 (try self.propertyTargetExpr(call.args.items[0])) orelse PropertyTarget.any()
             else
                 PropertyTarget.any(),

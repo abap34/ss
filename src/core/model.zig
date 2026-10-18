@@ -962,24 +962,14 @@ pub const Query = struct {
     op: Op,
 
     pub const Op = union(enum) {
-        self_object: void,
         self_placement: void,
         previous_page: void,
-        parent_page: void,
         children: void,
         descendants: void,
         page_objects_by_role: Role,
         document_objects_by_role: Role,
         document_pages: void,
     };
-
-    pub fn selfObject() Query {
-        return .{
-            .input = .object,
-            .name = "self-object",
-            .op = .{ .self_object = {} },
-        };
-    }
 
     pub fn selfPlacement() Query {
         return .{
@@ -994,14 +984,6 @@ pub const Query = struct {
             .input = .page,
             .name = "previous-page",
             .op = .{ .previous_page = {} },
-        };
-    }
-
-    pub fn parentPage() Query {
-        return .{
-            .input = .object,
-            .name = "parent-page",
-            .op = .{ .parent_page = {} },
         };
     }
 
