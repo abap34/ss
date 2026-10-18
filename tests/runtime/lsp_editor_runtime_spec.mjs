@@ -17,7 +17,7 @@ import {
 const textModule = path.join(root, "stdlib", "text.ss");
 const textModuleUri = pathToFileURL(textModule).toString();
 const textModuleSource = await readFile(textModule, "utf8");
-const titleDefinition = functionDefinitionLocation(textModuleUri, textModuleSource, "title");
+const textDefinition = functionDefinitionLocation(textModuleUri, textModuleSource, "text");
 const baseTheme = path.join(root, "stdlib", "theme", "types.ss");
 const baseThemeUri = pathToFileURL(baseTheme).toString();
 const baseThemeSource = await readFile(baseTheme, "utf8");
@@ -53,7 +53,7 @@ async function testStdlibDefinitionOutsideWorkspace() {
     const source = `import std:text as text_api
 
 page title
-text_api::title!("Hello")
+text_api::text!("Hello")
 end
 `;
     await writeFile(slide, source, "utf8");
@@ -65,12 +65,12 @@ end
       await diagnosticsPromise;
       const definition = await client.request("textDocument/definition", {
         textDocument: { uri },
-        position: positionAt(source, "title!", 2),
+        position: positionAt(source, "text!", 2),
       });
       assert(Array.isArray(definition), `expected outside definition array, got ${JSON.stringify(definition)}`);
       assert(
-        definition.some((location) => isDefinitionLocation(location, titleDefinition)),
-        `outside workspace definition did not jump to text module title: ${JSON.stringify(definition)}`,
+        definition.some((location) => isDefinitionLocation(location, textDefinition)),
+        `outside workspace definition did not jump to text module text: ${JSON.stringify(definition)}`,
       );
       const importDefinition = await client.request("textDocument/definition", {
         textDocument: { uri },
@@ -101,7 +101,7 @@ async function testDefinitionAfterOpeningUnrelatedFile() {
     const slideSource = `import std:text as text_api
 
 page title
-text_api::title!("Hello")
+text_api::text!("Hello")
 end
 `;
     const sideSource = `page side
@@ -122,12 +122,12 @@ end
 
       const definition = await client.request("textDocument/definition", {
         textDocument: { uri: slideUri },
-        position: positionAt(slideSource, "title!", 2),
+        position: positionAt(slideSource, "text!", 2),
       });
       assert(Array.isArray(definition), `expected definition array after snapshot switch, got ${JSON.stringify(definition)}`);
       assert(
-        definition.some((location) => isDefinitionLocation(location, titleDefinition)),
-        `definition after snapshot switch did not jump to text module title: ${JSON.stringify(definition)}`,
+        definition.some((location) => isDefinitionLocation(location, textDefinition)),
+        `definition after snapshot switch did not jump to text module text: ${JSON.stringify(definition)}`,
       );
     });
   } finally {
@@ -144,8 +144,8 @@ async function testLargeDocumentDefinitionUsesSnapshotFallback() {
     const themeUri = pathToFileURL(theme).toString();
     const themeSource = `import std:text as default
 
-fn/! ultra_big(content: String) -> Object
-  return default::h1(content)
+fn/! ultra_big(content: String) -> Text
+  return default::text(content, default_theme().h1)
 end
 `;
     const filler = Array.from({ length: 8000 }, (_, index) => `;; filler ${index}`).join("\n");
@@ -194,7 +194,7 @@ ${filler}
         position: positionAt(slideSource, "ultra_big!", 1),
       });
       assert(
-        hover.contents?.value?.includes("ultra_big!(content: String) -> Object"),
+        hover.contents?.value?.includes("ultra_big!(content: String) -> Placed<Text>"),
         `large hover did not use local theme signature: ${JSON.stringify(hover)}`,
       );
 
@@ -795,7 +795,7 @@ async function testDependencyQueryDiagnostic() {
     const source = `import std:prelude as *
 
 page sample
-let t = title!("A")
+let t = text!("A")
 ;; ^dep?
 end
 `;

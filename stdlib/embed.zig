@@ -23,7 +23,6 @@ pub const modules = [_]Module{
     .{ .spec = "std:graphics", .path = "stdlib/graphics.ss", .source = @embedFile("graphics.ss") },
     .{ .spec = "std:internal/classes", .path = "stdlib/internal/classes.ss", .source = @embedFile("internal/classes.ss") },
     .{ .spec = "std:internal/objects", .path = "stdlib/internal/objects.ss", .source = @embedFile("internal/objects.ss") },
-    .{ .spec = "std:internal/style", .path = "stdlib/internal/style.ss", .source = @embedFile("internal/style.ss") },
     .{ .spec = "std:layout/types", .path = "stdlib/layout/types.ss", .source = @embedFile("layout/types.ss") },
     .{ .spec = "std:layout", .path = "stdlib/layout.ss", .source = @embedFile("layout.ss") },
     .{ .spec = "std:markdown", .path = "stdlib/markdown.ss", .source = @embedFile("markdown.ss") },

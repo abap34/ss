@@ -180,13 +180,13 @@ function navigationFixture() {
   return `import std:themes/default as *
 
 page first
-let title = h1!("First page")
+let title = heading!("First page", 1, default_theme().h1)
 ~ title.left == page.left + 96
 ~ title.top == page.top - 72
 end
 
 page second
-let title = h1!("Second page")
+let title = heading!("Second page", 1, default_theme().h1)
 ~ title.left == page.left + 96
 ~ title.top == page.top - 72
 end

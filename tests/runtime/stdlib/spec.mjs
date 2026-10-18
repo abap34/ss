@@ -19,7 +19,7 @@ try {
 text!("**Literal**", default_theme().body with { text.parse = TextParseMode.plain })
 text!("**Formatted**")
 text("Unplaced")
-h3!("Third level")
+heading!("Third level", 3, default_theme().h3)
 end
 `);
   const raw = literal.nodes.find(n => n.content === '**Literal**');
@@ -30,8 +30,8 @@ end
   assert.equal(raw.placement.input.fields.find(f => f.name === 'style').value.fields.find(f => f.name === 'text').value.fields.find(f => f.name === 'parse').value.case, 'plain');
   assert.equal(formatted.placement.input.fields.find(f => f.name === 'style').value.fields.find(f => f.name === 'text').value.fields.find(f => f.name === 'parse').value.case, 'block');
   assert(!literal.nodes.some(n => n.content === 'Unplaced'));
-  const headingSemantics = JSON.parse(literal.nodes.find(n => n.content === 'Third level').fields.semantics);
-  assert.equal(headingSemantics.fields.find(f => f.name === 'heading_level').value.value, 3);
+  const headingInput = literal.nodes.find(n => n.placement?.input.type?.name === 'Heading').placement.input;
+  assert.equal(headingInput.fields.find(f => f.name === 'level').value.value, 3);
 
   const nested = await dump(`page nested
 text!("**Styled**", default_text_style with {

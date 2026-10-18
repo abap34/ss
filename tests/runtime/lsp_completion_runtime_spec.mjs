@@ -33,7 +33,6 @@ const source = await readFile(fixture, "utf8");
 const defaultThemeSource = await readFile(defaultTheme, "utf8");
 const baseThemeSource = await readFile(baseTheme, "utf8");
 const classesSource = await readFile(classes, "utf8");
-const defaultThemeH2Definition = functionDefinitionLocation(defaultThemeUri, defaultThemeSource, "h2");
 const defaultThemeTextDefinition = functionDefinitionLocation(defaultThemeUri, defaultThemeSource, "text");
 const baseThemeThemeDefinition = declarationDefinitionLocation(baseThemeUri, baseThemeSource, "type", "Theme");
 const baseThemeBodyFieldDefinition = recordFieldDefinitionLocation(baseThemeUri, baseThemeSource, "Theme", "body");
@@ -79,10 +78,10 @@ fn module_label!(text_value: String, color_name: Color = c"0.07,0.08,0.10") -> P
   })
 end
 
-fn/! ultra_big(content: String) -> Object
-  let t = default::h1(content)
-  t.link_id = "ultra-big"
-  return t
+fn/! ultra_big(content: String) -> Text
+  let t = default::text(content)
+  let styled = t with { style.text.size = 64 }
+  return styled
 end
 `;
     const libraryDiagnosticsPromise = client.waitForDiagnostics(partsUri);
@@ -90,14 +89,14 @@ end
     const libraryDiagnostics = await libraryDiagnosticsPromise;
     assert(libraryDiagnostics.params.diagnostics.length === 0, `library valid diagnostics: ${JSON.stringify(libraryDiagnostics.params.diagnostics)}`);
 
-    const libraryBrokenSource = libraryValidSource.replace('t.link_id = "ultra-big"', "t.");
+    const libraryBrokenSource = libraryValidSource.replace('let styled = t with { style.text.size = 64 }', "t.");
     const libraryBrokenDiagnostics = client.waitForDiagnostics(partsUri);
     client.changeDocument({ uri: partsUri, version: 2, text: libraryBrokenSource });
     const libraryMemberCompletion = await requestCompleteCompletion(client, {
       textDocument: { uri: partsUri },
       position: positionAfter(libraryBrokenSource, "  t."),
     });
-    assertPropertyCompletion(libraryMemberCompletion, "imported library member completion");
+    assertTextInputCompletion(libraryMemberCompletion, "imported library member completion");
     await libraryBrokenDiagnostics;
 
     const repeatedLibraryCompletion = await requestCompleteCompletion(client, {
@@ -139,10 +138,10 @@ end
 
     const unimportedLibraryValidSource = `import std:text as default
 
-fn/! ultra_big(content: String) -> Object
-  let t = default::h1(content)
-  t.link_id = "ultra-big"
-  return t
+fn/! ultra_big(content: String) -> Text
+  let t = default::text(content)
+  let styled = t with { style.text.size = 64 }
+  return styled
 end
 `;
     const unimportedDiagnosticsPromise = client.waitForDiagnostics(themeTempUri);
@@ -150,14 +149,14 @@ end
     const unimportedDiagnostics = await unimportedDiagnosticsPromise;
     assert(unimportedDiagnostics.params.diagnostics.length === 0, `unimported library valid diagnostics: ${JSON.stringify(unimportedDiagnostics.params.diagnostics)}`);
 
-    const unimportedLibraryBrokenSource = unimportedLibraryValidSource.replace('t.link_id = "ultra-big"', "t.");
+    const unimportedLibraryBrokenSource = unimportedLibraryValidSource.replace('let styled = t with { style.text.size = 64 }', "t.");
     const unimportedBrokenDiagnostics = client.waitForDiagnostics(themeTempUri);
     client.changeDocument({ uri: themeTempUri, version: 2, text: unimportedLibraryBrokenSource });
     const unimportedBrokenCompletion = await requestCompleteCompletion(client, {
       textDocument: { uri: themeTempUri },
       position: positionAfter(unimportedLibraryBrokenSource, "t."),
     });
-    assertPropertyCompletion(unimportedBrokenCompletion, "unimported library broken completion");
+    assertTextInputCompletion(unimportedBrokenCompletion, "unimported library broken completion");
     await unimportedBrokenDiagnostics;
 
     const brokenDiagnosticsPromise = client.waitForDiagnostics(
@@ -198,7 +197,7 @@ end
     const addedBrokenMemberSource = `import std:text as default
 
 page ok
-  let t = default::h1("body")
+  let t = default::text("body")
   t.
 end
 `;
@@ -207,7 +206,7 @@ end
       textDocument: { uri },
       position: positionAfter(addedBrokenMemberSource, "t."),
     });
-    assertPropertyCompletion(addedBrokenMemberCompletion, "added broken member completion");
+    assertTextInputCompletion(addedBrokenMemberCompletion, "added broken member completion");
 
     const memberValidSource = `import std:text as default
 import std:text as *
@@ -312,7 +311,7 @@ async function testQualifiedModuleCompletion() {
     const qualifiedSource = `import std:text as default
 
 page title
-  default::h2!("Qualified")
+  default::text!("Qualified")
 end
 `;
     await writeFile(slide, qualifiedSource, "utf8");
@@ -329,18 +328,18 @@ end
         position: positionAfter(qualifiedSource, "default::"),
       });
       assertUniqueCompletionLabels(completion, "qualified completion");
-      assertCompletionHas(completion, "h2", "qualified completion");
-      assertCompletionHas(completion, "h2!", "qualified completion");
+      assertCompletionHas(completion, "text", "qualified completion");
+      assertCompletionHas(completion, "text!", "qualified completion");
       assertCompletionMissing(completion, ["page", "text_size", "String", "Align"], "qualified completion");
 
       const definition = await client.request("textDocument/definition", {
         textDocument: { uri: localUri },
-        position: positionAt(qualifiedSource, "h2!", 1),
+        position: positionAt(qualifiedSource, "text!", 1),
       });
       assert(Array.isArray(definition), `expected qualified definition array, got ${JSON.stringify(definition)}`);
       assert(
-        definition.some((location) => isDefinitionLocation(location, defaultThemeH2Definition)),
-        `qualified definition did not jump to default h2: ${JSON.stringify(definition)}`,
+        definition.some((location) => isDefinitionLocation(location, defaultThemeTextDefinition)),
+        `qualified definition did not jump to text: ${JSON.stringify(definition)}`,
       );
 
       const aliasDefinition = await client.request("textDocument/definition", {
@@ -572,22 +571,22 @@ async function testColdBrokenEntryCompletion() {
   const coldBrokenSource = `import std:text as default
 
 page ok
-  let t = default::h1("body")
+  let t = default::text("body")
   t.
 end
 `;
   const completion = await completionInTempProject("ss-lsp-cold-broken-", coldBrokenSource, positionAfter(coldBrokenSource, "t."));
-  assertPropertyCompletion(completion, "cold broken entry completion");
+  assertTextInputCompletion(completion, "cold broken entry completion");
 }
 
 async function testMultilineEntryCompletion() {
   const multilineBrokenSource = `import std:text as default
 import std:text as *
 
-fn/! ultra_big(content: String) -> Object
-  let t = default::h1(content)
-  t.link_id = "ultra-big"
-  return t
+fn/! ultra_big(content: String) -> Text
+  let t = default::text(content)
+  let styled = t with { style.text.size = 64 }
+  return styled
 end
 
 page title
@@ -598,7 +597,7 @@ let t1 = ultra_big! <<
 >>
 
 
-let t2 = h2! <<
+let t2 = text! <<
 なにぬねの  はひふへほ
 >>
 
@@ -607,7 +606,7 @@ t2.
 end
 `;
   const completion = await completionInTempProject("ss-lsp-multiline-broken-", multilineBrokenSource, positionAfter(multilineBrokenSource, "t2."));
-  assertPropertyCompletion(completion, "multiline broken entry completion");
+  assertPlacedCompletion(completion, "multiline broken entry completion");
 }
 
 async function completionInTempProject(prefix, sourceText, position) {
@@ -636,17 +635,22 @@ asset_base_dir = "."
   }
 }
 
-function assertPropertyCompletion(completion, label) {
+function assertTextInputCompletion(completion, label) {
   assertUniqueCompletionLabels(completion, label);
-  assertCompletionHas(completion, "text", label);
-  assertCompletionHas(completion, "layout", label);
-  assertCompletionMissing(completion, ["page", "add", "String", "text_size"], label);
-  for (const item of completion.items ?? []) {
-    assert(
-      item.kind === 10,
-      `${label} included non-property completion ${item.label}: ${JSON.stringify(item)}`,
-    );
+  for (const field of ["content", "style", "config"]) {
+    assertCompletionHas(completion, field, label);
+    assertCompletionKind(completion, field, 10, label);
   }
+  assertCompletionMissing(completion, ["page", "layout", "add", "String", "text_size"], label);
+}
+
+function assertPlacedCompletion(completion, label) {
+  assertUniqueCompletionLabels(completion, label);
+  for (const field of ["value", "page", "document", "left", "right"]) {
+    assertCompletionHas(completion, field, label);
+    assertCompletionKind(completion, field, 10, label);
+  }
+  assertCompletionMissing(completion, ["content", "style", "text", "layout"], label);
 }
 
 function assertTextBlockCompletion(completion, label) {

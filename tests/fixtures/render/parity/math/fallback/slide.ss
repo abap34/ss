@@ -3,7 +3,7 @@ import std:themes/default as *
 const config: LatexConfig = LatexConfig { preamble = readlines("preamble.tex") }
 
 page fallback_baselines
-let heading = h1!("LaTeX baselines")
+let heading = heading!("LaTeX baselines", 1, default_theme().h1)
 ~ heading.left == page.left + 72
 ~ heading.top == page.top - 56
 

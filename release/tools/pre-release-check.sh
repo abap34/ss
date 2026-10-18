@@ -286,9 +286,9 @@ cat > "$render_workspace/slides/release-check.ss" <<'SS'
 import std:themes/default as *
 
 page release_check
-title!("Release check")
-subtitle!("release binary CLI")
-byline!("local")
+heading!("Release check")
+text!("release binary CLI")
+text!("local", default_theme().byline)
 pageno!()
 end
 SS

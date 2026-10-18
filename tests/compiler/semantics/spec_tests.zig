@@ -506,8 +506,8 @@ test "compiler semantics: default import introduces an alias and bare names" {
         \\import std:text
         \\
         \\page ok
-        \\  h2!("bare")
-        \\  text::h2!("qualified")
+        \\  text!("bare")
+        \\  text::text!("qualified")
         \\end
         \\
     );
@@ -616,7 +616,7 @@ test "compiler semantics: stdlib editor variable info keeps theme object classes
         \\import std:text
         \\
         \\fn/! h2(content: String) -> Object
-        \\  let t = text::h2(content)
+        \\  let t = sub_obj(content)
         \\  t.link_id = "heading"
         \\  return t
         \\end
@@ -630,6 +630,14 @@ test "compiler semantics: stdlib editor variable info keeps theme object classes
         .{ .name = "t", .scope_kind = "function", .scope_name = "h2", .object_class = "Sub" },
         .{ .name = "t", .scope_kind = "page", .scope_name = "ok", .object_class = "Body" },
     });
+}
+
+test "compiler semantics: obsolete text convenience constructors are not public" {
+    for ([_][]const u8{ "title", "subtitle", "note", "byline", "label", "h1", "h2", "h3", "h4", "h5", "h6" }) |name| {
+        const source = try std.fmt.allocPrint(testing.allocator, "page main\n  {s}!(\"Text\")\nend\n", .{name});
+        defer testing.allocator.free(source);
+        try expectDiagnostic(source, "case.ss:bytes:", "UnknownFunction");
+    }
 }
 
 test "compiler semantics: core prelude is implicitly open" {
@@ -646,9 +654,8 @@ test "compiler semantics: default alias supports theme override with prelude pla
     try expectObjectContent(
         \\import std:text
         \\
-        \\fn/! h2(content: String) -> Object
-        \\  let t = text::h2(content)
-        \\  t.link_id = "heading"
+        \\fn/! h2(content: String) -> Text
+        \\  let t = text::text(content, default_theme().h2)
         \\  return t
         \\end
         \\
@@ -691,7 +698,7 @@ test "compiler semantics: dependency query comments report statement summaries" 
         \\import std:themes/default as *
         \\
         \\page sample
-        \\  let t = title!("A")
+        \\  let t = heading!("A")
         \\  ;; ^dep?
         \\end
         \\
@@ -756,14 +763,14 @@ test "compiler semantics: stdlib core components build when called directly" {
         \\import std:prelude
         \\
         \\page text_components
-        \\  title!("Title")
-        \\  subtitle!("Subtitle")
+        \\  heading!("Title")
+        \\  text!("Subtitle")
         \\  text!("Body")
         \\  latex!("$x + y$")
         \\  code!("const x = 1", "zig")
         \\  code!("print('x')", "python")
         \\  code_file!("snippet.zig", "zig")
-        \\  note!("note")
+        \\  text!("note")
         \\  pageno!()
         \\end
         \\
@@ -885,7 +892,7 @@ test "compiler semantics: import as star introduces bare names" {
         \\import std:text as *
         \\
         \\page ok
-        \\  h2!("open")
+        \\  text!("open")
         \\end
         \\
     );
@@ -916,7 +923,7 @@ test "compiler semantics: import as star does not introduce an alias" {
         \\import std:text as *
         \\
         \\page bad
-        \\  text::h2!("qualified")
+        \\  text::text!("qualified")
         \\end
         \\
     , "case.ss:bytes:", "UnknownModuleAlias: unknown import alias: text");
@@ -926,13 +933,13 @@ test "compiler semantics: qualified calls bypass local shadowing" {
     const source =
         \\import std:text
         \\
-        \\fn/! h2(content: String) -> Text
-        \\  return text("local")
+        \\fn/! text(content: String) -> Text
+        \\  return Text { content = "local" }
         \\end
         \\
         \\page ok
-        \\  h2!("ignored")
-        \\  text::h2!("qualified")
+        \\  text!("ignored")
+        \\  text::text!("qualified")
         \\end
         \\
     ;
@@ -3562,7 +3569,7 @@ test "compiler semantics: repeated content definitions are rejected" {
 }
 
 test "compiler semantics: independent claim properties join before summary reads" {
-    try expectObjectState(
+    try expectObjectContent(
         \\import std:themes/default as *
         \\import std:internal/classes as { Text }
         \\
@@ -3593,7 +3600,7 @@ test "compiler semantics: independent claim properties join before summary reads
         \\end
         \\
         \\page summary
-        \\  note!(join(doc_objs(docctx(), "claim"), ",", claim_text))
+        \\  text!(join(doc_objs(docctx(), "claim"), ",", claim_text))
         \\end
         \\
         \\page one
@@ -3605,7 +3612,7 @@ test "compiler semantics: independent claim properties join before summary reads
         \\  claim!("B")
         \\end
         \\
-    , .{ .role = "note", .content = "1:A!,2:B" });
+    , "1:A!,2:B");
 }
 
 test "compiler semantics: repr functions materialize display content" {
@@ -3634,7 +3641,7 @@ test "compiler semantics: repr functions materialize display content" {
 }
 
 test "compiler semantics: repr reads wait for later property definitions" {
-    try expectObjectState(
+    try expectObjectContent(
         \\import std:themes/default as *
         \\import std:internal/classes as { Text }
         \\
@@ -3658,7 +3665,7 @@ test "compiler semantics: repr reads wait for later property definitions" {
         \\end
         \\
         \\page summary
-        \\  note!(join(doc_objs(docctx(), "claim"), ",", claim_text))
+        \\  text!(join(doc_objs(docctx(), "claim"), ",", claim_text))
         \\end
         \\
         \\page one
@@ -3670,7 +3677,7 @@ test "compiler semantics: repr reads wait for later property definitions" {
         \\  claim!("B")
         \\end
         \\
-    , .{ .role = "note", .content = "A!,B" });
+    , "A!,B");
 }
 
 test "compiler semantics: implicit display recursion is rejected before evaluation" {
@@ -4423,7 +4430,7 @@ test "compiler semantics: foreach_enumerate passes one-based indices" {
         \\end
         \\
         \\page summary
-        \\  note(join(doc_objs(docctx(), "body"), ",", link_text))
+        \\  text!(join(doc_objs(docctx(), "body"), ",", link_text))
         \\end
         \\
     , "1,2");
@@ -4501,13 +4508,13 @@ test "compiler semantics: document object counts wait for titles on any page" {
         \\
         \\page one
         \\  let bonus = 100
-        \\  let n_title_plus_bonus = selection_count(doc_objs(docctx(), "title")) + bonus
+        \\  let n_title_plus_bonus = selection_count(select<Heading>(docctx())) + bonus
         \\  text!(str(n_title_plus_bonus))
-        \\  title!("A")
+        \\  heading!("A")
         \\end
         \\
         \\page two
-        \\  title!("B")
+        \\  heading!("B")
         \\end
         \\
     , "102");
@@ -5175,44 +5182,34 @@ test "compiler semantics: function-returning lambda recursion is rejected" {
     );
 }
 
-test "compiler semantics: foreach cannot mutate the iterated object selection" {
+test "compiler semantics: foreach cannot add placements to its selected input type" {
     try expectBuildFails(
-        \\import std:themes/default as *
-        \\
-        \\fn duplicate_title(title_obj: Object) -> Object
-        \\  let page_value = page_of(title_obj) ?? pagectx()
-        \\  place_on!(page_value, new("copy", "title", "text"))
-        \\  return title_obj
+        \\fn duplicate(item: Placed<Heading>) -> Placed<Heading>
+        \\  place_on!(item.page, heading("copy"))
+        \\  return item
         \\end
-        \\
         \\page bad
-        \\  title("A")
-        \\  foreach(objs(pagectx(), "title"), duplicate_title)
+        \\  heading!("A")
+        \\  foreach(select<Heading>(pagectx()), duplicate)
         \\end
-        \\
     );
 }
 
-test "compiler semantics: foreach permits detached objects without changing membership" {
-    try buildSource(
-        \\import std:themes/default as *
-        \\
-        \\fn duplicate_title(title_obj: Object) -> Object
-        \\  let copy = new("copy", "title", "text")
-        \\  return title_obj
+test "compiler semantics: foreach permits unplaced values without changing membership" {
+    try expectObjectContent(
+        \\fn duplicate(item: Placed<Heading>) -> Placed<Heading>
+        \\  let copy = heading("copy")
+        \\  return item
         \\end
-        \\
-        \\fn mutate(selection: Selection<Object>) -> Selection<Object>
-        \\  return foreach(selection, duplicate_title)
+        \\fn visit(items: Selection<Placed<Heading>>) -> Selection<Placed<Heading>>
+        \\  return foreach(items, duplicate)
         \\end
-        \\
-        \\page bad
-        \\  title("A")
-        \\  let titles = objs(pagectx(), "title")
-        \\  mutate(titles)
+        \\page main
+        \\  heading!("A")
+        \\  let items = visit(select<Heading>(pagectx()))
+        \\  text!(str(selection_count(items)))
         \\end
-        \\
-    );
+    , "1");
 }
 
 test "compiler semantics: foreach cannot create pages while iterating pages" {
@@ -5327,7 +5324,7 @@ test "compiler semantics: page-only primitives are rejected in document context"
         \\import std:themes/default as *
         \\
         \\document
-        \\  title!("bad")
+        \\  heading!("bad")
         \\end
         \\
         \\page ok
@@ -5339,7 +5336,7 @@ test "compiler semantics: page-only primitives are rejected in document context"
         \\import std:themes/default as *
         \\
         \\document
-        \\  foreach(pages(docctx()), (page_value: Page) |-> title!("bad"))
+        \\  foreach(pages(docctx()), (page_value: Page) |-> heading!("bad"))
         \\end
         \\
         \\page ok
@@ -5360,17 +5357,12 @@ test "compiler semantics: missing page relationships return none" {
         \\end
     , "No previous page");
 
-    try expectObjectContent(
-        \\import std:themes/default as *
+    try expectDiagnostic(
         \\page detached
-        \\  let item = new("detached", "body", "text")
-        \\  if page_of(item)?
-        \\    note!("Unexpected page")
-        \\  else
-        \\    note!("No page")
-        \\  end
+        \\  let item = text("detached")
+        \\  let page = item.page
         \\end
-    , "No page");
+    , "case.ss:bytes:", "UnknownField");
 }
 
 test "compiler semantics: document callbacks may use explicit pages without current page" {
@@ -5412,8 +5404,8 @@ test "compiler semantics: document callbacks reject current page access" {
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\fn make_implicit!() -> Object
-        \\  return title!("bad")
+        \\fn make_implicit!() -> Placed<Heading>
+        \\  return heading!("bad")
         \\end
         \\
         \\document
@@ -5522,7 +5514,7 @@ test "compiler semantics: constraints resolve record member object anchors" {
         \\  let left = body_obj! "left"
         \\  let right = body_obj! "right"
         \\  let parts = make_parts(left, right)
-        \\  let caption = note! "caption"
+        \\  let caption = text! "caption"
         \\  ~ caption.top == parts.root.bottom - 16
         \\  ~ caption.left == parts.right.left
         \\end
@@ -6483,8 +6475,8 @@ test "compiler semantics: qualified calls bypass local values" {
     try expectObjectContent(
         \\import std:text as theme
         \\page main
-        \\  let h1 = 1
-        \\  theme::h1!("qualified")
+        \\  let text = 1
+        \\  theme::text!("qualified")
         \\end
     , "qualified");
 }
@@ -6630,7 +6622,7 @@ test "compiler semantics: dependency roles include nested and fallthrough return
         \\  return "aside"
         \\end
         \\page summary
-        \\  note!("claims=" ++ join(doc_objs(docctx(), "claim"), ",", (o: Object) |-> content(o)))
+        \\  text!("claims=" ++ join(doc_objs(docctx(), "claim"), ",", (o: Object) |-> content(o)))
         \\end
         \\page body
         \\  txt_obj!("A", role_for(true))
@@ -6648,7 +6640,7 @@ test "compiler semantics: dependency role joins include unknown return expressio
         \\  return "aside"
         \\end
         \\page summary
-        \\  note!("items=" ++ join(doc_objs(docctx(), "123"), ",", (o: Object) |-> content(o)))
+        \\  text!("items=" ++ join(doc_objs(docctx(), "123"), ",", (o: Object) |-> content(o)))
         \\end
         \\page body
         \\  txt_obj!("A", role_for(true))
@@ -6684,7 +6676,7 @@ test "compiler semantics: returned object roles join all branches before placeme
         \\  return txt_obj("B", "aside")
         \\end
         \\page summary
-        \\  note!("claims=" ++ join(doc_objs(docctx(), "claim"), ",", (o: Object) |-> content(o)))
+        \\  text!("claims=" ++ join(doc_objs(docctx(), "claim"), ",", (o: Object) |-> content(o)))
         \\end
         \\page body
         \\  place_on!(pagectx(), pick(true))
@@ -6721,7 +6713,7 @@ test "compiler semantics: returned closures keep captured property targets" {
         \\page main
         \\  let item = body_obj!("A")
         \\  let read = reader(item)
-        \\  note!(read())
+        \\  text!(read())
         \\  item.link_id = "marked"
         \\end
     , "marked");
@@ -6738,7 +6730,7 @@ test "compiler semantics: record and optional function calls retain write effect
         \\end
         \\page main
         \\  let item = body_obj!("A")
-        \\  note!(item.link_id ?? "missing")
+        \\  text!(item.link_id ?? "missing")
         \\  apply_to(item, Action { run = mark })
         \\end
     , "marked");
@@ -6751,7 +6743,7 @@ test "compiler semantics: unused closures do not execute property writes" {
         \\  let item = body_obj!("A")
         \\  let unused = () |-> set_prop(item, "link_id", "unused")
         \\  item.link_id = "marked"
-        \\  note!(item.link_id ?? "missing")
+        \\  text!(item.link_id ?? "missing")
         \\end
     , "marked");
 }
@@ -6763,7 +6755,7 @@ test "compiler semantics: selected callback aliases retain transitive reads" {
         \\page main
         \\  let item = body_obj!("A")
         \\  let callback = label
-        \\  note!(join(objs_here("body"), ",", callback))
+        \\  text!(join(objs_here("body"), ",", callback))
         \\  item.link_id = "marked"
         \\end
     , "marked");
@@ -6779,7 +6771,7 @@ test "compiler semantics: nested imported closures preserve callback effects and
         \\page main
         \\  let item = body_obj!("A")
         \\  let callback = a::wrap(mark)
-        \\  note!(a::reader(item)())
+        \\  text!(a::reader(item)())
         \\  b::invoke(callback, item)
         \\end
     ,
@@ -6802,7 +6794,7 @@ test "compiler semantics: default callbacks contribute effects in their definiti
         \\fn apply_to(item: Object, callback: Object -> Object = mark) -> Object = callback(item)
         \\page main
         \\  let item = body_obj!("A")
-        \\  note!(item.link_id ?? "missing")
+        \\  text!(item.link_id ?? "missing")
         \\  apply_to(item)
         \\end
     , "marked");
@@ -6817,8 +6809,8 @@ test "compiler semantics: unused default arguments still contribute writes" {
         \\fn initialize(item: Object, ignored: Object = set_prop(item, "link_id", "Ready")) -> String = "done"
         \\page main
         \\  let item = body_obj!("Target")
-        \\  note!(item.link_id ?? "missing")
-        \\  note!(initialize(item))
+        \\  text!(item.link_id ?? "missing")
+        \\  text!(initialize(item))
         \\end
     , "Ready");
 }
@@ -6829,7 +6821,7 @@ test "compiler semantics: default reads use preceding parameters and distinguish
         \\page main
         \\  let first = body_obj!("First")
         \\  let second = body_obj!("Second")
-        \\  note!(read(first) ++ ":" ++ read(second))
+        \\  text!(read(first) ++ ":" ++ read(second))
         \\  first.link_id = "A"
         \\  second.link_id = "B"
         \\end
@@ -6842,7 +6834,7 @@ test "compiler semantics: explicit arguments do not evaluate default effects" {
         \\page main
         \\  let item = body_obj!("Target")
         \\  item.link_id = label(item, "Ready")
-        \\  note!(item.link_id ?? "missing")
+        \\  text!(item.link_id ?? "missing")
         \\end
     , "Ready");
 }
@@ -6855,7 +6847,7 @@ test "compiler semantics: default object allocations retain distinct identities"
         \\  let second = make()
         \\  first.link_id = second.link_id ?? "missing"
         \\  second.link_id = "Ready"
-        \\  note!(first.link_id ?? "missing")
+        \\  text!(first.link_id ?? "missing")
         \\end
     , "Ready");
 }
@@ -6865,7 +6857,7 @@ test "compiler semantics: default selections retain collection dependencies" {
         \\fn label(item: Object) -> String = content(item)
         \\fn labels(items: Selection<Object> = objs_here("tagged")) -> String = join(items, ",", label)
         \\page main
-        \\  note!(labels())
+        \\  text!(labels())
         \\  txt_obj!("A", "tagged")
         \\end
     , "A");
@@ -6878,7 +6870,7 @@ test "compiler semantics: later parameters do not shadow names in earlier defaul
         \\fn read(item: Object, value: String = source(item), source: Object -> String = other) -> String = value
         \\page main
         \\  let item = body_obj!("Target")
-        \\  note!(read(item))
+        \\  text!(read(item))
         \\  item.link_id = "Ready"
         \\end
     , "Ready");
@@ -6891,7 +6883,7 @@ test "compiler semantics: default facts and effects use the definition module" {
         \\const selected_role: String = "other"
         \\page main
         \\  let item = body_obj!("Target")
-        \\  note!(b::read(item))
+        \\  text!(b::read(item))
         \\  item.link_id = "Ready"
         \\  txt_obj!("A", "tagged")
         \\end
@@ -6919,7 +6911,7 @@ test "compiler semantics: callback effects distinguish specializations and retur
         \\page main
         \\  let item = body_obj!("A")
         \\  apply_to(item, pack(identity))
-        \\  note!(item.link_id ?? "missing")
+        \\  text!(item.link_id ?? "missing")
         \\  apply_to(item, pack(identity) with { run = mark })
         \\end
     , "marked");
@@ -6950,7 +6942,7 @@ test "compiler semantics: finite higher order reentry retains inner callback eff
         \\fn indirect(item: Object) -> Object = apply_to(item, mark)
         \\page main
         \\  let item = body_obj!("A")
-        \\  note!(item.link_id ?? "missing")
+        \\  text!(item.link_id ?? "missing")
         \\  apply_to(item, indirect)
         \\end
     , "marked");
@@ -6966,7 +6958,7 @@ test "compiler semantics: finite higher order reentry preserves returned functio
         \\page main
         \\  let item = body_obj!("A")
         \\  let callback = apply_factory(nested)
-        \\  note!(callback(item))
+        \\  text!(callback(item))
         \\  item.link_id = "marked"
         \\end
     , "marked");
@@ -6987,7 +6979,7 @@ test "compiler semantics: broad reads survive narrower overlapping reads" {
         \\  let b = txt_obj!("B", "tagged")
         \\  a.summary = (a.badge ?? "-") ++ join(doc_objs(docctx(), "tagged"), ",", (item: Object) |-> item.badge ?? "-")
         \\  b.badge = "X"
-        \\  note!(a.summary ?? "missing")
+        \\  text!(a.summary ?? "missing")
         \\end
     , "--,X");
 }
@@ -7001,7 +6993,7 @@ test "compiler semantics: selected aliases retain object property dependencies" 
         \\  let label = a.link_id ?? "none"
         \\  let b = identity(first(objs(pagectx(), "tagged")))
         \\  b.link_id = "X"
-        \\  note!("label=" ++ label)
+        \\  text!("label=" ++ label)
         \\end
     , "label=X");
 }
@@ -7014,7 +7006,7 @@ test "compiler semantics: constant object aliases retain shared identity" {
         \\page main
         \\  let a = shared
         \\  let b = identity(shared)
-        \\  note!(a.link_id ?? "none")
+        \\  text!(a.link_id ?? "none")
         \\  b.link_id = "X"
         \\end
     , "X");
@@ -7032,7 +7024,7 @@ test "compiler semantics: separate constructor calls retain distinct identities"
         \\  let b = make()
         \\  a.link_id = "A"
         \\  b.link_id = a.link_id ?? "none"
-        \\  note!(b.link_id ?? "none")
+        \\  text!(b.link_id ?? "none")
         \\end
     , "A");
 }
@@ -7051,7 +7043,7 @@ test "compiler semantics: display closures retain transitive captured reads" {
         \\  let other = body_obj!("other")
         \\  let item = body_obj!("A")
         \\  set_repr(item, label(other))
-        \\  note!("repr=" ++ repr(item))
+        \\  text!("repr=" ++ repr(item))
         \\  other.link_id = "X"
         \\end
     , "repr=X");
@@ -7065,7 +7057,7 @@ test "compiler semantics: nested display calls propagate property reads" {
         \\  let outer = body_obj!("B")
         \\  set_repr(inner, (self: Object) |-> content(self) ++ (docctx().footer_text ?? ""))
         \\  set_repr(outer, (self: Object) |-> repr(inner))
-        \\  note!("repr=" ++ repr(outer))
+        \\  text!("repr=" ++ repr(outer))
         \\end
         \\document
         \\  docctx().footer_text = "!"
@@ -7093,7 +7085,7 @@ test "compiler semantics: selected aliases retain display dependencies" {
         \\  let item = txt_obj!("A", "claim")
         \\  set_repr(item, (self: Object) |-> content(self) ++ (docctx().footer_text ?? ""))
         \\  let alias = first(objs(pagectx(), "claim"))
-        \\  note!("repr=" ++ repr(alias))
+        \\  text!("repr=" ++ repr(alias))
         \\end
         \\document
         \\  docctx().footer_text = "!"
@@ -7107,7 +7099,7 @@ test "compiler semantics: dependency queries include deferred display reads" {
         \\page main
         \\  let item = body_obj!("A")
         \\  set_repr(item, (self: Object) |-> docctx().footer_text ?? "")
-        \\  note!(repr(item))
+        \\  text!(repr(item))
         \\  ;; ^dep?
         \\end
         \\document
@@ -7182,7 +7174,7 @@ test "compiler semantics: primitive callbacks accept broader parameter types" {
         \\fn label(item: Object?) -> String = "X"
         \\page main
         \\  txt_obj!("A", "tagged")
-        \\  note!(join(doc_objs(docctx(), "tagged"), "", label))
+        \\  text!(join(doc_objs(docctx(), "tagged"), "", label))
         \\end
     , "X");
 }
@@ -7216,7 +7208,7 @@ test "compiler semantics: selections remain writable and individual objects read
         \\page main
         \\  let item = txt_obj!("A", "tagged")
         \\  objs(pagectx(), "tagged").link_id = "X"
-        \\  note!(item.link_id ?? "missing")
+        \\  text!(item.link_id ?? "missing")
         \\end
     , "X");
 }
@@ -7324,7 +7316,7 @@ test "compiler semantics: optional object members retain property dependencies" 
         \\fn label(item: Object?) -> String = item?.link_id ?? "missing"
         \\page main
         \\  let item = body_obj!("Target")
-        \\  note!(label(item))
+        \\  text!(label(item))
         \\  item.link_id = "Ready"
         \\end
     , "Ready");
@@ -7394,7 +7386,7 @@ test "compiler semantics: void calls share direct indirect apply record and call
         \\  invoke(mark, e, "callback")
         \\  let lambda = (item: Object, value: String) |-> mark(item, value)
         \\  lambda(f, "lambda")
-        \\  note!((a.link_id ?? "missing") ++ ":" ++ (b.link_id ?? "missing") ++ ":" ++ (c.link_id ?? "missing") ++ ":" ++ (d.link_id ?? "missing") ++ ":" ++ (e.link_id ?? "missing") ++ ":" ++ (f.link_id ?? "missing"))
+        \\  text!((a.link_id ?? "missing") ++ ":" ++ (b.link_id ?? "missing") ++ ":" ++ (c.link_id ?? "missing") ++ ":" ++ (d.link_id ?? "missing") ++ ":" ++ (e.link_id ?? "missing") ++ ":" ++ (f.link_id ?? "missing"))
         \\end
     , "direct:indirect:apply:record:callback:lambda");
 }
@@ -7778,7 +7770,7 @@ test "compiler semantics: nested reads wait for whole property definitions" {
         \\import std:themes/default as *
         \\page main
         \\  let a = txt_obj!("A", "body")
-        \\  note!("x=" ++ str(a.layout?.x ?? 0))
+        \\  text!("x=" ++ str(a.layout?.x ?? 0))
         \\  a.layout = LayoutStyle { x = 300 }
         \\end
     , &.{"x=300"});
@@ -7790,7 +7782,7 @@ test "compiler semantics: whole property reads wait for sibling definitions" {
         \\page main
         \\  let a = txt_obj!("A", "body")
         \\  let style = a.layout ?? LayoutStyle {}
-        \\  note!("x=" ++ str(style.x) ++ ",y=" ++ str(style.right_inset))
+        \\  text!("x=" ++ str(style.x) ++ ",y=" ++ str(style.right_inset))
         \\  a.layout.x = 300
         \\  a.layout.right_inset = 200
         \\end
@@ -7807,7 +7799,7 @@ test "compiler semantics: property paths preserve objects carried through return
         \\page main
         \\  let a = txt_obj!("A", "body")
         \\  let box = wrap(a)
-        \\  note!("x=" ++ str(box.item.layout?.x ?? 0))
+        \\  text!("x=" ++ str(box.item.layout?.x ?? 0))
         \\  box.item.layout.x = 300
         \\end
     , &.{"x=300"});
@@ -7836,7 +7828,7 @@ test "compiler semantics: fresh local property definitions satisfy subsequent re
         \\  return "x=" ++ str(style.x)
         \\end
         \\page main
-        \\  note!(make_label())
+        \\  text!(make_label())
         \\end
     , &.{"x=123"});
 }
@@ -7851,7 +7843,7 @@ test "compiler semantics: fresh local reads cannot precede their definitions" {
         \\  return "x=" ++ str(x)
         \\end
         \\page main
-        \\  note!(make_label())
+        \\  text!(make_label())
         \\end
     , "ExecutionDependencyCycle");
 }
@@ -7873,7 +7865,7 @@ test "compiler semantics: optional nested reads retain sibling property precisio
         \\  let item = txt_obj!("A", "body")
         \\  item.layout.x = (item.layout?.right_inset ?? 0) + 1
         \\  item.layout.right_inset = 123
-        \\  note!(str(item.layout?.x ?? 0))
+        \\  text!(str(item.layout?.x ?? 0))
         \\end
     , &.{"124"});
 }
@@ -7906,7 +7898,7 @@ test "compiler semantics: returned initialized objects keep internal reads satis
         \\end
         \\page main
         \\  let item = make_item()
-        \\  note!(item.link_id ?? "missing")
+        \\  text!(item.link_id ?? "missing")
         \\  place_on!(pagectx(), item)
         \\end
     , &.{"123"});
@@ -7931,9 +7923,9 @@ test "compiler semantics: absent property values use string accessor fallbacks" 
         \\  let item = txt_obj!("A", "body")
         \\  set_prop(item, "optional_label", none)
         \\  if prop_eq(item, "optional_label", "none")
-        \\    note!("Unexpected equality")
+        \\    text!("Unexpected equality")
         \\  else
-        \\    note!(prop(item, "optional_label", "Missing"))
+        \\    text!(prop(item, "optional_label", "Missing"))
         \\  end
         \\end
     , &.{"Missing"});
@@ -7967,7 +7959,7 @@ test "compiler semantics: object-valued properties start a new property owner" {
         \\page main
         \\  let a = txt_obj!("A", "linked")
         \\  let b = txt_obj!("B", "body")
-        \\  note!("peer=" ++ str(a.peer?.layout?.x ?? 0))
+        \\  text!("peer=" ++ str(a.peer?.layout?.x ?? 0))
         \\  a.peer = b
         \\  b.layout.x = 432
         \\end
@@ -7988,19 +7980,14 @@ test "compiler semantics: numbering queries wait for nested typed group descenda
     try expectObjectContent(source, "items=First,Second");
 }
 
-test "compiler semantics: parent page reads wait for a later subtree placement" {
-    try expectDumpContains(
-        \\import std:themes/default as *
+test "compiler semantics: child page reads follow typed group display expansion" {
+    try expectObjectContent(
         \\page main
-        \\  let a = txt_obj("A", "body")
-        \\  if page_of(a)?
-        \\    note!("Found parent")
-        \\  else
-        \\    note!("No parent")
-        \\  end
-        \\  place_on!(pagectx(), group(a))
+        \\  let root = place!(group(text("A")))
+        \\  let child = first(children(root))
+        \\  text!(str(page_index(child.page)))
         \\end
-    , &.{"Found parent"});
+    , "1");
 }
 
 test "compiler semantics: unplaced objects do not belong to document queries" {
@@ -8008,7 +7995,7 @@ test "compiler semantics: unplaced objects do not belong to document queries" {
         \\import std:themes/default as *
         \\page main
         \\  let a = txt_obj("Detached", "body")
-        \\  note!("members=" ++ str(selection_count(doc_objs(docctx(), "body"))))
+        \\  text!("members=" ++ str(selection_count(doc_objs(docctx(), "body"))))
         \\end
     , &.{"members=0"});
 }
@@ -8024,7 +8011,7 @@ test "compiler semantics: placement facts follow returned groups and record alia
         \\  let a = txt_obj("A", "body")
         \\  let b = txt_obj("B", "body")
         \\  let parts = bundle(a, b)
-        \\  note!("members=" ++ str(selection_count(doc_objs(docctx(), "body"))))
+        \\  text!("members=" ++ str(selection_count(doc_objs(docctx(), "body"))))
         \\  place_on!(pagectx(), parts.root)
         \\end
     , &.{"members=2"});
@@ -8043,7 +8030,7 @@ test "compiler semantics: local placement satisfies a later parent page read" {
         \\end
         \\page main
         \\  let item = make_item!()
-        \\  note!(item.link_id ?? "missing")
+        \\  text!(item.link_id ?? "missing")
         \\end
     , &.{"placed"});
 }
@@ -8062,12 +8049,12 @@ test "compiler semantics: cached placement summaries retain their caller page" {
     try expectDumpContains(
         \\import std:themes/default as *
         \\page first
-        \\  note!("first=" ++ str(selection_count(select<Text>(pagectx()))))
-        \\  text!("A")
+        \\  text!("first=" ++ str(selection_count(select<Heading>(pagectx()))))
+        \\  heading!("A")
         \\end
         \\page second
-        \\  note!("second=" ++ str(selection_count(select<Text>(pagectx()))))
-        \\  text!("B")
+        \\  text!("second=" ++ str(selection_count(select<Heading>(pagectx()))))
+        \\  heading!("B")
         \\end
     , &.{ "first=1", "second=1" });
 }
@@ -8077,7 +8064,7 @@ test "compiler semantics: queries retain placement order across dependency sched
         \\page main
         \\  body_obj!(docctx().footer_text ?? "unset")
         \\  body_obj!("Second")
-        \\  note!("order=" ++ join(objs_here("body"), ",", (o: Object) |-> content(o)))
+        \\  text!("order=" ++ join(objs_here("body"), ",", (o: Object) |-> content(o)))
         \\end
         \\document
         \\  docctx().footer_text = "First"
@@ -8092,7 +8079,7 @@ test "compiler semantics: explicit group argument order determines descendant qu
         \\  let b = body_obj("B")
         \\  let c = body_obj("C")
         \\  place_on!(pagectx(), group(c, group(b, a)))
-        \\  note!("order=" ++ join(objs_here("body"), ",", (o: Object) |-> content(o)))
+        \\  text!("order=" ++ join(objs_here("body"), ",", (o: Object) |-> content(o)))
         \\end
     , &.{"order=C,B,A"});
 }
@@ -8104,7 +8091,7 @@ test "compiler semantics: dynamic pages retain authored positions among static p
         \\  place_on!(first, body_obj("Dynamic first"))
         \\end
         \\page middle
-        \\  note!("middle=" ++ str(page_index(pagectx())))
+        \\  text!("middle=" ++ str(page_index(pagectx())))
         \\end
         \\document
         \\  let last = new_page(docctx(), "last")
@@ -8113,7 +8100,7 @@ test "compiler semantics: dynamic pages retain authored positions among static p
         \\  docctx().watermark = "order=" ++ join(doc_objs(docctx(), "body"), ",", (o: Object) |-> content(o))
         \\end
         \\page report
-        \\  note!(docctx().watermark ?? "missing")
+        \\  text!(docctx().watermark ?? "missing")
         \\end
     , &.{ "middle=2", "order=Dynamic first,Dynamic last" });
 }
@@ -8473,14 +8460,14 @@ test "compiler semantics: generic type defaults cannot expand without terminatio
 
 test "compiler semantics: type defaults read document collections in dependency order" {
     try expectDumpContains(
-        \\type Count<T> { amount: Number = selection_count(select<Text>(docctx())) }
+        \\type Count<T> { amount: Number = selection_count(select<Heading>(docctx())) }
         \\page first
         \\  let count = Count<Number> {}
-        \\  title!(str(count.amount))
+        \\  text!(str(count.amount))
         \\end
         \\page second
-        \\  text!("First body")
-        \\  text!("Second body")
+        \\  heading!("First heading")
+        \\  heading!("Second heading")
         \\end
     , &.{"\"content\":\"2\""});
 }
@@ -8519,7 +8506,7 @@ test "compiler semantics: type defaults use their definition module and concrete
         \\page main
         \\  let number = a::Label<Number> {}
         \\  let string = b::Label<String> {}
-        \\  note!(number.apply(3) ++ ":" ++ string.apply("Value"))
+        \\  text!(number.apply(3) ++ ":" ++ string.apply("Value"))
         \\end
     ,
         \\fn label<T>(value: T) -> String = "First"
