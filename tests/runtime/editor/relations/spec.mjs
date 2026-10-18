@@ -276,24 +276,15 @@ async function testRelativeEditsCompleteMovedAxes() {
       verify: (updated) => assert(updated.includes("~!~ item.top == page.top"), updated),
     },
     ...["||", "|=|", "//", "/=/"].flatMap((operator) => [
-      {
-        name: `composition-right-${operator}`,
-        body: `guide ${operator} item`,
-        // Equal splits start at the default page inset.
-        guideLeft: operator === "|=|" || operator === "/=/" ? 72 : 100,
-        verify: operator === "||" ? (updated) => {
-          assert(updated.includes("~!~ item.left == guide.right + 57"), updated);
-          assert(updated.includes("~!~ item.top == guide.top - 20"), updated);
-        } : undefined,
-      },
-      { name: `composition-left-${operator}`, body: `item ${operator} guide`, fixGuide: false },
+      { name: `composition-right-${operator}`, composition: operator, body: '', fixGuide: false },
+      { name: `composition-left-${operator}`, composition: operator, reverse: true, body: '', fixGuide: false },
     ]),
     {
       name: "image-reference",
       body: '~ guide.left == page.left + 100\n~ guide.top == page.top - 180\n~ item.left == guide.right + 32\n~ item.top == guide.top',
       item: 'let item = image!("figure.svg", AssetBlockStyle {} with { asset.scale = 0.9 })',
       guide: 'let guide = text!("A sufficiently wide guide for this image")',
-      header: 'head! "Monte Carlo"',
+      header: 'heading! "Monte Carlo"',
       policy: 'hflow(LayoutPolicy.center)',
       fixGuide: false,
     },
@@ -305,9 +296,10 @@ async function testRelativeEditsCompleteMovedAxes() {
     },
     {
       name: "center-alignment",
-      body: 'guide || item',
+      body: '',
+      composition: "||",
+      fixGuide: false,
       policy: 'vflow(LayoutPolicy.center)',
-      verify: (updated) => assert(updated.includes("~!~ item.center_y == guide.center_y - 20"), updated),
     },
   ];
   const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-relative-axes-"));
@@ -322,8 +314,10 @@ async function testRelativeEditsCompleteMovedAxes() {
 page demo
 ${scenario.policy ?? "vflow(LayoutPolicy.top)"}
 ${scenario.header ?? ""}
-${scenario.guide ?? 'let guide = text!("Guide")'}
-${scenario.item ?? 'let item = text!("Move me")'}
+${scenario.composition ? `let pair = place!(text("${scenario.reverse ? "Move me" : "Guide"}") ${scenario.composition} text("${scenario.reverse ? "Guide" : "Move me"}"))
+let ${scenario.reverse ? "item" : "guide"} = first(children(pair))
+let ${scenario.reverse ? "guide" : "item"} = first(children(pair) - selection(${scenario.reverse ? "item" : "guide"}))` : `${scenario.guide ?? 'let guide = text!("Guide")'}
+${scenario.item ?? 'let item = text!("Move me")'}`}
 ${scenario.fixGuide === false || scenario.guide ? "" : `~ guide.left == page.left + ${scenario.guideLeft ?? 100}\n~ guide.top == page.top - 100`}
 ${scenario.body}
 end

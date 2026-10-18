@@ -66,6 +66,10 @@ pub fn collect(state: anytype, node: *const model.Node, constraints: *std.ArrayL
 }
 
 fn collectAdjacency(state: anytype, node: *const model.Node, config: Settings, constraints: *std.ArrayList(model.Constraint)) !void {
+    // Equal cuts already determine each cell's position and extent. Adding a
+    // sibling relation would keep the previous cell pinned after its cuts are
+    // replaced by a caller's position update.
+    if (node.placement != null and config.mode.equal()) return;
     const horizontal = if (node.placement != null) config.mode.isHorizontal() else legacy: {
         const axis = try readAxis(state, node, "join_axis");
         if (std.mem.eql(u8, axis, "none")) return;
