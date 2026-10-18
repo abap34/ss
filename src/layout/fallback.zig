@@ -43,12 +43,11 @@ pub fn defaultSplitGroupWidth(state: *Workspace, workspace: *const graph.AxisWor
 }
 
 fn isPageSplit(state: *Workspace, workspace: *const graph.AxisWorkspace, node_id: NodeId) bool {
-    // Individually placed operands can give an unplaced composition group a
-    // page-local frame. Such a top-level frame uses the page width too.
+    // A root equal split uses the page width unless explicitly constrained.
     if (workspace.graph.parentGroupIndexes(node_id).len != 0) return false;
     const node = state.source.getNode(node_id) orelse return false;
     if (!groups.isGroupNode(node)) return false;
-    const config = @import("../core/group_composition.zig").settings(state.source, node) catch return false;
+    const config = @import("../core/group_composition.zig").settings(node);
     return config.mode.equal();
 }
 

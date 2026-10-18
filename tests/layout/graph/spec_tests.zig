@@ -2933,17 +2933,31 @@ fn inspectIndexedPageGraph(allocator: std.mem.Allocator, state: *core.DocumentSt
     try testing.expectEqualSlices(usize, &.{ 3, 0, 1, 4, 2 }, subgraph.indexes.items);
 }
 
+fn compositionInput(allocator: std.mem.Allocator, inputs: []const core.Value, mode: ast.GroupComposition, gap: f32) !core.Value {
+    const types = try allocator.alloc(ast.Type, inputs.len);
+    defer allocator.free(types);
+    for (inputs, types) |input, *ty| ty.* = input.presentationType().?;
+    var result = core.Value{ .group = .{ .ty = try (ast.Type{ .kind = .group }).withArguments(allocator, types), .composition = mode, .gap = gap } };
+    errdefer result.deinit(allocator);
+    for (inputs) |input| {
+        try result.group.children.ensureUnusedCapacity(allocator, 1);
+        result.group.children.appendAssumeCapacity(try input.clone(allocator));
+    }
+    return result;
+}
+
 test "layout graph: normalized split constraints need no preliminary frames" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
     const page = try state.addPage("Split");
-    const a = try state.makeObject(page, "a", .text, .text, "A");
-    const b = try state.makeObject(page, "b", .text, .text, "B");
-    const c = try state.makeObject(page, "c", .text, .text, "C");
-    const inner = try state.makeGroupWithOrigin(page, true, &.{ b, c }, null);
-    const outer = try state.makeGroupWithOrigin(page, true, &.{ a, inner }, null);
-    try state.setNodeFieldValue(inner, "split_axis", .{ .string = "vertical" });
-    try state.setNodeFieldValue(outer, "split_axis", .{ .string = "horizontal" });
+    var input = core.Value{ .record = core.RecordValue.init(ast.Type.recordType("Label")) };
+    defer input.deinit(testing.allocator);
+    var inner_value = try compositionInput(testing.allocator, &.{ input, input }, .equal_vertical, 32);
+    defer inner_value.deinit(testing.allocator);
+    var outer_value = try compositionInput(testing.allocator, &.{ input, inner_value }, .equal_horizontal, 32);
+    defer outer_value.deinit(testing.allocator);
+    const outer = try state.registerPlacement(page, outer_value, null);
+    const inner = state.childrenOf(outer).?[1];
     try state.collectDefaultAlignments();
     var inputs = try core.layout.partition.Document.init(testing.allocator, &state);
     defer inputs.deinit(testing.allocator);
@@ -2959,9 +2973,12 @@ fn inspectSplitGraph(allocator: std.mem.Allocator, state: *core.DocumentState, i
     try testing.expect(split.hasSplitChildren(outer));
     try testing.expect(split.hasSplitChildren(inner));
     for (split.constraints) |constraint| try testing.expect(constraint.role != .size);
-    try testing.expectEqual(@as(usize, 3), split.default_alignment_constraints.len);
+    try testing.expectEqual(@as(usize, 4), split.default_alignment_constraints.len);
     for (split.default_alignment_constraints) |constraint| {
-        try testing.expect(constraint.group_split);
+        if (!constraint.group_split) {
+            try testing.expectEqual(model.Anchor.top, constraint.target_anchor);
+            continue;
+        }
         const parent = constraint.source.node.node_id;
         try testing.expect(parent == inner or parent == outer);
         try testing.expectEqual(if (parent == inner) model.Anchor.left else model.Anchor.top, constraint.target_anchor);
@@ -2969,17 +2986,20 @@ fn inspectSplitGraph(allocator: std.mem.Allocator, state: *core.DocumentState, i
 }
 
 test "layout groups: required split height does not assign page coordinates" {
-    for ([_][]const u8{ "horizontal", "vertical" }) |direction| {
+    for ([_]ast.GroupComposition{ .equal_horizontal, .equal_vertical }) |direction| {
         var state = try initEmptyDocumentState();
         defer state.deinit();
         var fixture = LayoutFixture.init(&state);
         defer fixture.deinit();
         const page = try state.addPage("Measured split");
-        const a = try state.makeObject(page, "a", .text, .text, "A");
-        const b = try state.makeObject(page, "b", .text, .text, "B");
-        const group = try state.makeGroupWithOrigin(page, true, &.{ a, b }, null);
-        try state.setNodeFieldValue(group, "split_axis", .{ .string = direction });
-        try setRecordPathValue(&state, group, "chrome", &.{"pad_y"}, .{ .number = 5 });
+        var input = core.Value{ .record = core.RecordValue.init(ast.Type.recordType("Label")) };
+        defer input.deinit(testing.allocator);
+        var value = try compositionInput(testing.allocator, &.{ input, input }, direction, 32);
+        defer value.deinit(testing.allocator);
+        const group = try state.registerPlacement(page, value, null);
+        const children = state.childrenOf(group).?;
+        const a = children[0];
+        const b = children[1];
         try state.collectDefaultAlignments();
         (try fixture.frame(a)).height = 40;
         (try fixture.frame(b)).height = 100;
@@ -2989,7 +3009,7 @@ test "layout groups: required split height does not assign page coordinates" {
         defer vertical.deinit();
         _ = try core.layout.groups.updateAxisStates(try fixture.work(), &vertical);
         const measured = vertical.stateOf(group).?.*;
-        try expectFloat(if (std.mem.eql(u8, direction, "horizontal")) 110 else 242, measured.size.?);
+        try expectFloat(if (direction == .equal_horizontal) 100 else 232, measured.size.?);
         try testing.expect(measured.size_is_default);
         try testing.expect(measured.start == null and measured.end == null and measured.center == null);
     }

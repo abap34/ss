@@ -1,4 +1,4 @@
-import std:layout/types as { Align, LayoutPolicy, SplitAxis, WrapMode, FitPolicy, LayoutStyle }
+import std:layout/types as { Align, LayoutPolicy, WrapMode, FitPolicy, LayoutStyle }
 import std:document/settings as settings
 
 fn hflow(policy: LayoutPolicy, center_offset: Number = 0) -> Void

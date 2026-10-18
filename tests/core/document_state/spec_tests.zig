@@ -841,100 +841,134 @@ test "document state spec: node field writes retain their scope and origin" {
     defer state.deinit();
     const group = try state.createGroupWithOrigin(&.{}, null);
     const origin = core.SourceOrigin.at("group.ss", .{ .start = 12, .end = 14 });
-    try state.setNodeFieldValueWithOrigin(group, "align_children_y", .{ .boolean = true }, 3, origin);
+    try state.setNodeFieldValueWithOrigin(group, "enabled", .{ .boolean = true }, 3, origin);
     const field = state.getNode(group).?.fields.items[0];
     try testing.expectEqual(@as(u32, 3), field.scope_depth);
     try testing.expect(field.origin.?.eql(origin));
-    try testing.expectError(error.DuplicatePropertyDefinition, state.setNodeFieldValueWithOrigin(group, "align_children_y", .{ .boolean = false }, 0, null));
+    try testing.expectError(error.DuplicatePropertyDefinition, state.setNodeFieldValueWithOrigin(group, "enabled", .{ .boolean = false }, 0, null));
     try testing.expect(state.getNode(group).?.fields.items[0].origin.?.eql(origin));
-    try testing.expectError(error.DuplicatePropertyDefinition, state.setNodeFieldValue(group, "align_children_y", .none));
+    try testing.expectError(error.DuplicatePropertyDefinition, state.setNodeFieldValue(group, "enabled", .none));
     try testing.expectEqual(@as(u32, 3), state.getNode(group).?.fields.items[0].scope_depth);
     try testing.expect(state.getNode(group).?.fields.items[0].origin.?.eql(origin));
 }
 
-test "document state spec: default group alignments connect consecutive children without placing the group" {
+test "document state spec: selection ordering rejects nodes outside typed placements" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
     const page = try state.addPage("Page");
     const a = try state.makeObject(page, "a", .text, .text, "A");
     const b = try state.makeObject(page, "b", .text, .text, "B");
-    const c = try state.makeObject(page, "c", .text, .text, "C");
-    const group = try state.createGroupWithOrigin(&.{ a, b, c }, null);
+    var selection = core.Selection.init(.object, "invalid placements");
+    defer selection.deinit(testing.allocator);
+    try selection.ids.appendSlice(testing.allocator, &.{ b, a });
+    try testing.expectError(error.InvalidSelectionScope, state.orderSelection(testing.allocator, &selection));
+    try testing.expectEqualSlices(core.NodeId, &.{ b, a }, selection.ids.items);
+    _ = selection.ids.pop();
+    try testing.expectError(error.InvalidSelectionScope, state.orderSelection(testing.allocator, &selection));
+}
+
+fn compositionInput(allocator: std.mem.Allocator, inputs: []const core.Value, mode: ast.GroupComposition, gap: f32) !core.Value {
+    const types = try allocator.alloc(ast.Type, inputs.len);
+    defer allocator.free(types);
+    for (inputs, types) |input, *ty| ty.* = input.presentationType().?;
+    var result = core.Value{ .group = .{ .ty = try (ast.Type{ .kind = .group }).withArguments(allocator, types), .composition = mode, .gap = gap } };
+    errdefer result.deinit(allocator);
+    for (inputs) |input| {
+        try result.group.children.ensureUnusedCapacity(allocator, 1);
+        result.group.children.appendAssumeCapacity(try input.clone(allocator));
+    }
+    return result;
+}
+
+fn placeComposition(state: *core.DocumentState, page: core.NodeId, count: usize, mode: ast.GroupComposition, gap: f32, origin: ?core.SourceOrigin) !core.NodeId {
+    var input = try placementInput(state.allocator);
+    defer input.deinit(state.allocator);
+    const inputs = try state.allocator.alloc(core.Value, count);
+    defer state.allocator.free(inputs);
+    @memset(inputs, input);
+    var value = try compositionInput(state.allocator, inputs, mode, gap);
+    defer value.deinit(state.allocator);
+    return state.registerPlacement(page, value, origin);
+}
+
+test "document state spec: group alignments retain construction origin without adding placements" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page = try state.addPage("Page");
     const origin = core.SourceOrigin.at("group.ss", .{ .start = 12, .end = 14 });
-    try state.setNodeFieldValueWithOrigin(group, "align_children_y", .{ .boolean = true }, 2, origin);
+    const group = try placeComposition(&state, page, 3, .horizontal, 32, origin);
+    const children = state.childrenOf(group).?;
     const page_child_count = state.childrenOf(page).?.len;
     const node_count = state.nodeCount();
     try state.collectDefaultAlignments();
     try state.collectDefaultAlignments();
-    try testing.expectEqual(@as(usize, 2), state.constraints.active.items.len);
-    for (state.constraints.active.items, [_]core.NodeId{ a, b }, [_]core.NodeId{ b, c }) |constraint, source, target| {
-        try testing.expect(constraint.default_alignment);
-        try testing.expectEqual(target, constraint.target_node);
-        try testing.expectEqual(source, constraint.source.node.node_id);
+    try testing.expectEqual(@as(usize, 4), state.constraints.active.items.len);
+    var index: usize = 0;
+    for (state.constraints.active.items) |constraint| {
+        if (!constraint.default_alignment) continue;
+        try testing.expectEqual(children[index], constraint.source.node.node_id);
+        try testing.expectEqual(children[index + 1], constraint.target_node);
         try testing.expectEqual(core.Anchor.top, constraint.target_anchor);
         try testing.expectEqual(core.Anchor.top, constraint.source.node.anchor);
         try testing.expectEqual(@as(f32, 0), constraint.offset);
         try testing.expectEqual(core.ConstraintRole.position, constraint.role);
-        try testing.expectEqual(@as(u32, 2), constraint.scope_depth);
+        try testing.expectEqual(@as(u32, 0), constraint.scope_depth);
         try testing.expect(constraint.origin.?.eql(origin));
         try testing.expect(!constraint.from_update);
+        index += 1;
     }
-    try testing.expect(!state.getNode(group).?.attached);
+    try testing.expectEqual(@as(usize, 2), index);
     try testing.expectEqual(page_child_count, state.childrenOf(page).?.len);
     try testing.expectEqual(node_count, state.nodeCount());
 }
 
-test "document state spec: default alignments skip discarded children and inactive groups" {
+test "document state spec: composition ignores discarded children roots and overlay groups" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
     const page = try state.addPage("Page");
-    const a = try state.makeObject(page, "a", .text, .text, "A");
-    const ignored = try state.createObjectWithOrigin("ignored", .text, .text, "", null);
-    try state.discardObjectSubtree(ignored);
-    const b = try state.makeObject(page, "b", .text, .text, "B");
-    const active = try state.createGroupWithOrigin(&.{ a, ignored, b }, null);
-    try state.setNodeFieldValue(active, "align_children_y", .{ .boolean = true });
-    const disabled = try state.createGroupWithOrigin(&.{ a, b }, null);
-    try state.setNodeFieldValue(disabled, "align_children_y", .{ .boolean = false });
-    _ = try state.createGroupWithOrigin(&.{ a, b }, null);
-    const empty = try state.createGroupWithOrigin(&.{}, null);
-    try state.setNodeFieldValue(empty, "align_children_y", .{ .boolean = true });
-    const single = try state.createGroupWithOrigin(&.{a}, null);
-    try state.setNodeFieldValue(single, "align_children_y", .{ .boolean = true });
-    const discarded = try state.createGroupWithOrigin(&.{ignored}, null);
-    try state.setNodeFieldValue(discarded, "align_children_y", .{ .boolean = true });
+    const active = try placeComposition(&state, page, 3, .horizontal, 32, null);
+    const children = state.childrenOf(active).?;
+    try state.discardObjectSubtree(children[1]);
+    _ = try placeComposition(&state, page, 2, .overlay, 32, null);
+    const discarded = try placeComposition(&state, page, 2, .horizontal, 32, null);
     try state.discardObjectSubtree(discarded);
-    try state.setNodeFieldValue(a, "align_children_y", .{ .boolean = true });
-    try state.collectDefaultAlignments();
-    try testing.expectEqual(@as(usize, 1), state.constraints.active.items.len);
-    try testing.expectEqual(a, state.constraints.active.items[0].source.node.node_id);
-    try testing.expectEqual(b, state.constraints.active.items[0].target_node);
-}
-
-test "document state spec: an empty child group remains an ordinary alignment endpoint" {
-    var state = try initEmptyDocumentState();
-    defer state.deinit();
-    const page = try state.addPage("Page");
-    const a = try state.makeObject(page, "a", .text, .text, "A");
-    const empty = try state.createGroupWithOrigin(&.{}, null);
-    const b = try state.makeObject(page, "b", .text, .text, "B");
-    const group = try state.createGroupWithOrigin(&.{ a, empty, b }, null);
-    try state.setNodeFieldValue(group, "align_children_y", .{ .boolean = true });
     try state.collectDefaultAlignments();
     try testing.expectEqual(@as(usize, 2), state.constraints.active.items.len);
-    try testing.expectEqual(empty, state.constraints.active.items[0].target_node);
-    try testing.expectEqual(empty, state.constraints.active.items[1].source.node.node_id);
+    for (state.constraints.active.items) |constraint| {
+        try testing.expectEqual(children[0], constraint.source.node.node_id);
+        try testing.expectEqual(children[2], constraint.target_node);
+    }
+}
+
+test "document state spec: nested groups remain ordinary alignment endpoints" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page = try state.addPage("Page");
+    var input = try placementInput(testing.allocator);
+    defer input.deinit(testing.allocator);
+    var nested = try compositionInput(testing.allocator, &.{ input, input }, .overlay, 32);
+    defer nested.deinit(testing.allocator);
+    var value = try compositionInput(testing.allocator, &.{ input, nested, input }, .horizontal, 32);
+    defer value.deinit(testing.allocator);
+    const group = try state.registerPlacement(page, value, null);
+    const children = state.childrenOf(group).?;
+    try state.collectDefaultAlignments();
+    try testing.expectEqual(@as(usize, 4), state.constraints.active.items.len);
+    var alignments: usize = 0;
+    for (state.constraints.active.items) |constraint| {
+        if (!constraint.default_alignment) continue;
+        try testing.expect(constraint.source.node.node_id == children[1] or constraint.target_node == children[1]);
+        alignments += 1;
+    }
+    try testing.expectEqual(@as(usize, 2), alignments);
 }
 
 test "document state spec: updates mask default alignments without recreating candidates" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
     const page = try state.addPage("Page");
-    const a = try state.makeObject(page, "a", .text, .text, "A");
-    const b = try state.makeObject(page, "b", .text, .text, "B");
-    const group = try state.createGroupWithOrigin(&.{ a, b }, null);
-    try state.setNodeFieldValueWithOrigin(group, "align_children_y", .{ .boolean = true }, 2, .{ .label = "group-default" });
-    try state.constraints.addAnchorAtScope(state.allocator, b, .left, .{ .node = .{ .node_id = a, .anchor = .right } }, 32, null, 2);
+    const group = try placeComposition(&state, page, 2, .horizontal, 32, .{ .label = "group-default" });
+    const b = state.childrenOf(group).?[1];
     try state.constraints.addUpdate(state.allocator, b, .center_y, .position, 0, .{ .page = .center_y }, 10, .{ .label = "caller-update" });
     try state.collectDefaultAlignments();
     try core.constraint_updates.resolve(&state);
@@ -944,7 +978,7 @@ test "document state spec: updates mask default alignments without recreating ca
     try testing.expectEqual(@as(usize, 1), state.constraints.overridden.items.len);
     const overridden = state.constraints.overridden.items[0];
     try testing.expect(overridden.default_alignment);
-    try testing.expectEqual(@as(u32, 2), overridden.scope_depth);
+    try testing.expectEqual(@as(u32, 0), overridden.scope_depth);
     try testing.expectEqualStrings("group-default", overridden.origin.?.label.?);
     try expectConstraint(&state, b, .left, .position, false);
     try expectConstraint(&state, b, .center_y, .position, true);
@@ -955,10 +989,7 @@ test "document state spec: default alignment collection is atomic on allocation 
         var state = try initEmptyDocumentState();
         defer state.deinit();
         const page = try state.addPage("Page");
-        const a = try state.makeObject(page, "a", .text, .text, "A");
-        const b = try state.makeObject(page, "b", .text, .text, "B");
-        const group = try state.createGroupWithOrigin(&.{ a, b }, null);
-        try state.setNodeFieldValue(group, "align_children_y", .{ .boolean = true });
+        _ = try placeComposition(&state, page, 2, .horizontal, 32, null);
         var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index });
         const result = blk: {
             state.allocator = failing.allocator();
@@ -969,29 +1000,26 @@ test "document state spec: default alignment collection is atomic on allocation 
         try testing.expectEqual(@as(usize, 0), state.constraints.active.items.len);
         try testing.expect(!state.constraints.default_alignments_collected);
         try state.collectDefaultAlignments();
-        try testing.expectEqual(@as(usize, 1), state.constraints.active.items.len);
+        try testing.expectEqual(@as(usize, 2), state.constraints.active.items.len);
     }
 }
 
-test "document state spec: group split cuts carry source scope and survive only unmasked axes" {
+test "document state spec: group split cuts retain origin and survive only unmasked axes" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
     const page = try state.addPage("Page");
-    const a = try state.makeObject(page, "a", .text, .text, "A");
-    const b = try state.makeObject(page, "b", .text, .text, "B");
-    const group = try state.createGroupWithOrigin(&.{ a, b }, null);
-    try state.setNodeFieldValueWithOrigin(group, "split_axis", .{ .string = "horizontal" }, 2, .{ .label = "split" });
-    try state.setNodeFieldValue(group, "split_gap", .{ .number = 20 });
+    const group = try placeComposition(&state, page, 2, .equal_horizontal, 20, .{ .label = "split" });
+    const b = state.childrenOf(group).?[1];
     try state.collectDefaultAlignments();
-    try testing.expectEqual(@as(usize, 6), state.constraints.active.items.len);
-    const cut = state.constraints.active.items[1];
+    try testing.expectEqual(@as(usize, 7), state.constraints.active.items.len);
+    const cut = state.constraints.active.items[2];
     try testing.expectEqual(core.Anchor.right, cut.target_anchor);
     try testing.expectEqual(core.Anchor.center_x, cut.source.node.anchor);
     try testing.expectEqual(@as(f32, -10), cut.offset);
     for (state.constraints.active.items) |constraint| {
-        try testing.expect(constraint.group_split);
+        if (!constraint.group_split) continue;
         try testing.expectEqual(group, constraint.source.node.node_id);
-        try testing.expectEqual(@as(u32, 2), constraint.scope_depth);
+        try testing.expectEqual(@as(u32, 0), constraint.scope_depth);
         try testing.expectEqualStrings("split", constraint.origin.?.label.?);
     }
     try state.constraints.addUpdate(state.allocator, b, .left, .position, 0, .{ .page = .left }, 200, null);
@@ -1011,20 +1039,16 @@ test "document state spec: n-ary cuts preserve fractional extents before update 
     var state = try initEmptyDocumentState();
     defer state.deinit();
     const page = try state.addPage("Page");
-    const a = try state.makeObject(page, "a", .text, .text, "A");
-    const b = try state.makeObject(page, "b", .text, .text, "B");
-    const c = try state.makeObject(page, "c", .text, .text, "C");
-    const group = try state.createGroupWithOrigin(&.{ a, b, c }, null);
-    try state.setNodeFieldValueWithOrigin(group, "split_axis", .{ .string = "horizontal" }, 3, .{ .label = "ternary" });
-    try state.setNodeFieldValue(group, "split_gap", .{ .number = 30 });
+    const group = try placeComposition(&state, page, 3, .equal_horizontal, 30, .{ .label = "ternary" });
+    const b = state.childrenOf(group).?[1];
     try state.collectDefaultAlignments();
-    try testing.expectEqual(@as(usize, 9), state.constraints.active.items.len);
-    const cut = state.constraints.active.items[1];
+    try testing.expectEqual(@as(usize, 11), state.constraints.active.items.len);
+    const cut = state.constraints.active.items[3];
     try testing.expectEqual(core.Anchor.right, cut.target_anchor);
     try testing.expectEqual(core.Anchor.left, cut.source.node.anchor);
-    try testing.expectApproxEqAbs(@as(f32, 1.0 / 3.0), cut.source_extent_factor, 0.00001);
-    try testing.expectApproxEqAbs(@as(f32, -20), cut.offset, 0.00001);
-    try testing.expectEqual(@as(u32, 3), cut.scope_depth);
+    try testing.expectApproxEqAbs(@as(f32, 1.0 / 3.0), cut.source_extent_factor, core.layout.graph.ConstraintTolerance);
+    try testing.expectApproxEqAbs(@as(f32, -20), cut.offset, core.layout.graph.ConstraintTolerance);
+    try testing.expectEqual(@as(u32, 0), cut.scope_depth);
     try state.constraints.addUpdate(state.allocator, b, .left, .position, 0, .{ .page = .left }, 200, null);
     try core.constraint_updates.resolve(&state);
     try state.collectDefaultAlignments();
@@ -1040,10 +1064,7 @@ test "document state spec: group split collection is atomic on allocation failur
         var state = try initEmptyDocumentState();
         defer state.deinit();
         const page = try state.addPage("Page");
-        const a = try state.makeObject(page, "a", .text, .text, "A");
-        const b = try state.makeObject(page, "b", .text, .text, "B");
-        const group = try state.createGroupWithOrigin(&.{ a, b }, null);
-        try state.setNodeFieldValue(group, "split_axis", .{ .string = "vertical" });
+        _ = try placeComposition(&state, page, 2, .equal_vertical, 32, null);
         var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index });
         const result = blk: {
             state.allocator = failing.allocator();
@@ -1062,11 +1083,8 @@ test "document state spec: invalid split settings report their group origin" {
     for ([_]f32{ -1, std.math.inf(f32), std.math.nan(f32) }) |gap| {
         var state = try initEmptyDocumentState();
         defer state.deinit();
-        const a = try state.createObjectWithOrigin("a", .text, .text, "A", null);
-        const b = try state.createObjectWithOrigin("b", .text, .text, "B", null);
-        const group = try state.createGroupWithOrigin(&.{ a, b }, .{ .label = "split" });
-        try state.setNodeFieldValue(group, "split_axis", .{ .string = "horizontal" });
-        try state.setNodeFieldValue(group, "split_gap", .{ .number = gap });
+        const page = try state.addPage("Page");
+        _ = try placeComposition(&state, page, 2, .equal_horizontal, gap, .{ .label = "split" });
         try testing.expectError(error.InvalidGroupSplit, state.collectDefaultAlignments());
         try testing.expectEqual(@as(usize, 0), state.constraints.active.items.len);
         try testing.expectEqualStrings("InvalidGroupSplit", state.diagnostics.entries.items[0].data.user_report.code);
