@@ -1139,6 +1139,7 @@ fn returnTypeNeedsInferredFacts(ty: Type) bool {
         .placement,
         .path,
         .parameter,
+        .unresolved,
         .void,
         => false,
     };

@@ -522,7 +522,7 @@ const Parser = struct {
         errdefer type_args.deinit(self.allocator);
         try type_args.ensureTotalCapacity(self.allocator, func.type_params.items.len);
         for (func.type_params.items) |parameter| {
-            type_args.appendAssumeCapacity(ast.Type.objectClassAt(self.source[parameter.span.start..parameter.span.end], parameter.span));
+            type_args.appendAssumeCapacity(ast.Type.unresolvedNameAt(self.source[parameter.span.start..parameter.span.end], parameter.span));
         }
         outer_args.appendAssumeCapacity(.{ .call = .{
             .callee = .{ .name = try self.allocator.dupe(u8, func.name) },
@@ -990,7 +990,7 @@ const Parser = struct {
         }
         const class_name = self.source[name.span.start..name.span.end];
         self.allocator.free(name.text);
-        return try self.parseNamedTypeArguments(ast.Type.objectClassAt(class_name, name.span));
+        return try self.parseNamedTypeArguments(ast.Type.unresolvedNameAt(class_name, name.span));
     }
 
     fn parseQualifiedTypeName(self: *Parser) anyerror![]const u8 {

@@ -42,6 +42,41 @@ fn styleDefault(state: *core.DocumentState) !core.Value {
     return state.cachedFieldDefault(descriptor.default_property_value.?, descriptor.value_type);
 }
 
+test "declaration index: source type names resolve in their lexical declaration environment" {
+    var state = try documentFromSource(
+        \\type Value { amount: Number }
+        \\enum Mode { case first }
+        \\type Box<T> { value: T }
+        \\fn identity<T>(value: Box<T>, mode: Mode) -> Box<T> = value
+    );
+    defer state.deinit();
+    try compiler.analysis.analyzeDocumentState(testing.allocator, &state);
+    const sema = compiler.semantic_env.SemanticEnv.init(&state, state.declaration_index, &state.functions);
+    const function = sema.function("identity").?;
+    const input = function.params.items[0].ty;
+    const mode = function.params.items[1].ty;
+    const result = function.result_type;
+    try testing.expectEqual(.record, input.kind);
+    try testing.expectEqualStrings("Box", input.class_name.?);
+    try testing.expectEqual(@as(core.SourceModuleId, 0), input.nominal_module_id.?);
+    try testing.expectEqual(.enum_type, mode.kind);
+    try testing.expectEqualStrings("Mode", mode.enum_name.?);
+    try testing.expectEqual(@as(core.SourceModuleId, 0), mode.nominal_module_id.?);
+    try testing.expect(compiler.language.Type.eql(input, result));
+    try testing.expect(!input.containsUnresolvedName());
+    try testing.expect(!mode.containsUnresolvedName());
+    try testing.expect(!result.containsUnresolvedName());
+    try testing.expect(input.class_name_span != null);
+    try testing.expect(mode.enum_name_span != null);
+    const parameter = input.arguments[0];
+    try testing.expectEqual(.parameter, parameter.kind);
+    try testing.expectEqual(function.span.start, parameter.parameter_id.?.declaration_start);
+    const field = state.declaration_index.recordField(.{ .module_id = 0, .name = "Box" }, "value").?.value_type;
+    try testing.expectEqual(.parameter, field.kind);
+    try testing.expect(!field.containsUnresolvedName());
+    try testing.expect(!compiler.language.Type.eql(parameter, field));
+}
+
 fn evaluatedDocument() !struct { state: core.DocumentState, graph: compiler.analysis.ExecutionGraph } {
     var state = try documentFromSource(source);
     errdefer state.deinit();

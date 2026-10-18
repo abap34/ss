@@ -343,3 +343,39 @@ test "type spec: groups retain child order, arity and nested nominal types" {
     try testing.expect(!Type.accepts(pair, nested));
     try testing.expect(!Type.accepts(Type.placement, pair));
 }
+
+fn exerciseUnresolvedNames(allocator: std.mem.Allocator) !void {
+    const name = Type.unresolvedNameAt("library::Box", .{ .start = 12, .end = 24 });
+    var applied = try name.withArguments(allocator, &.{Type.number});
+    defer applied.deinit(allocator);
+    var optional = try Type.optional(allocator, applied);
+    defer optional.deinit(allocator);
+    var callback = try Type.functionType(allocator, &.{optional}, applied);
+    defer callback.deinit(allocator);
+    var cloned = try callback.clone(allocator);
+    defer cloned.deinit(allocator);
+    try testing.expect(Type.eql(callback, cloned));
+    try testing.expect(callback.fn_params.ptr != cloned.fn_params.ptr);
+    try testing.expect(callback.containsUnresolvedName());
+    try testing.expect(applied.nominalId() == null);
+    try testing.expect(!Type.accepts(optional, Type.none));
+    try testing.expect(!Type.accepts(Type.any, callback));
+    try testing.expect(!Type.accepts(callback, Type.any));
+    const formatted = try callback.formatAlloc(allocator);
+    defer allocator.free(formatted);
+    try testing.expectEqualStrings("library::Box<Number>? -> library::Box<Number>", formatted);
+}
+
+test "type spec: unresolved source names retain structure and cannot act as semantic types" {
+    const name = Type.unresolvedNameAt("Box", .{ .start = 2, .end = 5 });
+    const same = Type.unresolvedNameAt("Box", .{ .start = 20, .end = 23 });
+    try testing.expect(Type.eql(name, same));
+    try testing.expect(!Type.eql(name, Type.unresolvedNameAt("Other", .{ .start = 2, .end = 7 })));
+    try testing.expect(!Type.eql(name, Type.recordType("Box").inModule(0)));
+    try testing.expect(!Type.accepts(name, same));
+    const id = Type.ParameterId{ .module_id = 1, .declaration_start = 0, .index = 0 };
+    var unchanged = try name.substitute(testing.allocator, &.{.{ .parameter = id, .replacement = Type.number }});
+    defer unchanged.deinit(testing.allocator);
+    try testing.expect(Type.eql(name, unchanged));
+    try testing.checkAllAllocationFailures(testing.allocator, exerciseUnresolvedNames, .{});
+}

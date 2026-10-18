@@ -81,7 +81,7 @@ pub fn ensureValueConformsToType(
 }
 
 pub fn valueConformsToType(state: anytype, value: core.Value, expected: ast.Type) bool {
-    if (expected.kind == .hole) return false;
+    if (expected.kind == .hole or expected.containsUnresolvedName()) return false;
     if (expected.kind == .any) return true;
     if (expected.kind == .optional) {
         if (runtimeKind(value) == .none) return true;
@@ -171,7 +171,7 @@ fn expectedRuntimeKind(expected: ast.Type) ?core.ValueTag {
         .boolean => .boolean,
         .constraints => .constraints,
         .void => .void,
-        .optional, .any, .hole, .parameter => null,
+        .optional, .any, .hole, .parameter, .unresolved => null,
     };
 }
 

@@ -11,7 +11,7 @@ pub fn append(allocator: std.mem.Allocator, out: *std.ArrayList(u8), ty: Type) a
 
 /// Writes into an existing JSON object so diagnostics can reuse the type format.
 pub fn write(object: *json.Object, ty: Type) anyerror!void {
-    if (ty.kind == .parameter or ty.kind == .hole) return error.InvalidValueTag;
+    if (ty.kind == .parameter or ty.kind == .hole or ty.kind == .unresolved) return error.InvalidValueTag;
     try object.enumTagField("kind", ty.kind);
     if (ty.class_name orelse ty.enum_name) |name| try object.stringField("name", name);
     if (ty.nominal_module_id) |id| try object.intField("module", id);
@@ -45,7 +45,7 @@ pub fn parse(allocator: std.mem.Allocator, value: json.Value) anyerror!Type {
     const object = &value.object;
     const tag = json.stringField(object, "kind") orelse return error.InvalidValueTag;
     const kind = std.meta.stringToEnum(Type.Kind, tag) orelse return error.InvalidValueTag;
-    if (kind == .parameter or kind == .hole) return error.InvalidValueTag;
+    if (kind == .parameter or kind == .hole or kind == .unresolved) return error.InvalidValueTag;
     var ty = Type{ .kind = kind };
     errdefer deinit(allocator, &ty);
     if (json.fieldValue(object, "name")) |name_value| {

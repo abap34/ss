@@ -161,15 +161,15 @@ test "analysis queries: definition fallback still honors cancellation" {
 
 test "analysis completion: composition remains independent of lexical function names" {
     var case = try CompletionCase.init(
-        \\import std:internal/objects as layout
+        \\import std:layout as layout
         \\const hjoin: Number = 9
-        \\fn vjoin(a: Object, b: Object) -> Number
+        \\fn vjoin(a: Text, b: Text) -> Number
         \\  return 1
         \\end
         \\page main
         \\  let a = text("A")
         \\  let b = text("B")
-        \\  let hjoin = (left: Object, right: Object) |-> 1
+        \\  let hjoin = (left: Text, right: Text) |-> 1
         \\  let combined = a || b
         \\  let label = (a || b).gap
         \\end
@@ -366,7 +366,7 @@ test "analysis completion: normal positions include builtin and source type name
         \\import std:text as *
         \\
         \\enum SourceOnly { alpha beta }
-        \\type SourceCard = object {
+        \\type SourceCard {
         \\}
         \\
         \\fn keep(value: ) -> SourceOnly
@@ -700,8 +700,8 @@ fn checkNominalQueries(imports: []const u8) !void {
         \\  let second = b::make()
         \\  let ar = a::record_value()
         \\  let br = b::record_value()
-        \\  let ax = first.object_a
-        \\  let bx = second.object_b
+        \\  let ax = first.base.base_a
+        \\  let bx = second.base.base_b
         \\  let av = ar.value.only_a
         \\  let bv = br.value.only_b
         \\  let am = a::Mode.alpha
@@ -714,12 +714,11 @@ fn checkNominalQueries(imports: []const u8) !void {
     try sources.put(root ++ "/a.ss",
         \\type Style { only_a: Number = 1 }
         \\type Box { value: Style = Style {} }
-        \\type Base = object { object_a: Number = 1 }
-        \\type Card = object { base = Base
-        \\  roles = ["query-a"] }
+        \\type Base { base_a: Number = 1 }
+        \\type Card { base: Base = Base {} }
         \\enum Mode { alpha }
         \\fn make() -> Card
-        \\  return new("", "query-a", "text")
+        \\  return Card {}
         \\end
         \\fn record_value() -> Box
         \\  return Box {}
@@ -728,12 +727,11 @@ fn checkNominalQueries(imports: []const u8) !void {
     try sources.put(root ++ "/b.ss",
         \\type Style { only_b: String = "b" }
         \\type Box { value: Style = Style {} }
-        \\type Base = object { object_b: String = "b" }
-        \\type Card = object { base = Base
-        \\  roles = ["query-b"] }
+        \\type Base { base_b: String = "b" }
+        \\type Card { base: Base = Base {} }
         \\enum Mode { beta }
         \\fn make() -> Card
-        \\  return new("", "query-b", "text")
+        \\  return Card {}
         \\end
         \\fn record_value() -> Box
         \\  return Box {}
@@ -746,8 +744,8 @@ fn checkNominalQueries(imports: []const u8) !void {
     for (snapshot.variable_bindings) |*binding| @memset(binding.type_label, '!');
     for (snapshot.record_fields) |*field| @memset(field.type_label, '!');
     const queries = .{
-        .{ "first.", "object_a", "object_b" },
-        .{ "second.", "object_b", "object_a" },
+        .{ "first.base.", "base_a", "base_b" },
+        .{ "second.base.", "base_b", "base_a" },
         .{ "ar.value.", "only_a", "only_b" },
         .{ "br.value.", "only_b", "only_a" },
         .{ "a::Mode.", "alpha", "beta" },
@@ -759,7 +757,7 @@ fn checkNominalQueries(imports: []const u8) !void {
         try expectHas(result, query[1]);
         try expectMissing(result, query[2]);
     }
-    inline for (.{ .{ "ar.value.only_a", "a.ss" }, .{ "br.value.only_b", "b.ss" }, .{ "first.object_a", "a.ss" }, .{ "second.object_b", "b.ss" } }) |query| {
+    inline for (.{ .{ "ar.value.only_a", "a.ss" }, .{ "br.value.only_b", "b.ss" }, .{ "first.base.base_a", "a.ss" }, .{ "second.base.base_b", "b.ss" } }) |query| {
         const targets = try snapshot_api.definitionAt(allocator, &snapshot, .{ .path = path, .source = source, .offset = offsetAfter(source, query[0]) - 1 }, .{ .budget_ms = 100 });
         defer allocator.free(targets);
         try testing.expectEqual(@as(usize, 1), targets.len);

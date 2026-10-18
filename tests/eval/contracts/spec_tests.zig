@@ -92,3 +92,22 @@ test "runtime contracts: placement references validate the complete registered i
     try testing.expect(!contracts.valueConformsToType(&state, selected, selection_type));
     try testing.expect(!contracts.valueConformsToType(&state, selected, Type.selection(.placement)));
 }
+
+test "runtime contracts: unresolved names reject values even inside optional and generic types" {
+    const allocator = testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const storage = arena.allocator();
+    var state = try core.DocumentState.init(storage, try storage.dupe(u8, "."), try storage.dupe(u8, "unresolved.ss"), try storage.dupe(u8, ""), ast.Module.init());
+    defer state.deinit();
+    const name = Type.unresolvedNameAt("Missing", .{ .start = 0, .end = 7 });
+    var optional = try Type.optional(allocator, name);
+    defer optional.deinit(allocator);
+    var generic = try Type.recordType("Box").inModule(0).withArguments(allocator, &.{name});
+    defer generic.deinit(allocator);
+    var value = core.Value{ .record = .init(try generic.clone(allocator)) };
+    defer value.deinit(allocator);
+    try testing.expect(!contracts.valueConformsToType(&state, .{ .string = "value" }, name));
+    try testing.expect(!contracts.valueConformsToType(&state, .none, optional));
+    try testing.expect(!contracts.valueConformsToType(&state, value, generic));
+}

@@ -778,7 +778,7 @@ fn resolveTypeReference(
 ) !void {
     for (ty.mutableArguments()) |*argument| try resolveTypeReference(argument, module_id, sema);
     switch (ty.kind) {
-        .object => if (ty.class_name) |name| {
+        .object, .unresolved => if (ty.class_name) |name| {
             if (sema.resolveTypeNameInContext(module_id, name)) |resolved| {
                 const class_name_span = ty.class_name_span;
                 const arguments = ty.arguments;
@@ -991,6 +991,7 @@ fn checkTypeAnnotation(
         });
         return error.InvalidType;
     }
+    if (ty.kind == .unresolved) return reportUnknownType(state, origin, ty.class_name orelse "");
     for (ty.arguments) |argument| try checkTypeAnnotation(state, sema, module_id, argument, origin);
     if (ty.kind == .selection or ty.kind == .placed) try semantic_types.ensureTypeArgumentCount(state, 1, ty.arguments.len, origin);
     if (ty.kind != .selection and ty.kind != .placed and ty.kind != .group and ty.kind != .record and ty.kind != .object) try semantic_types.ensureTypeArgumentCount(state, 0, ty.arguments.len, origin);
