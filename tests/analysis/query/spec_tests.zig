@@ -637,6 +637,29 @@ test "analysis query spec: paired typed constructors expose placing signatures a
     try testing.expectEqual(@as(usize, 3), definitions[0].line);
 }
 
+test "analysis query spec: typed selections retain input fields through first and advertise generic syntax" {
+    const path = "stdlib/internal/typed-selection-query-test.ss";
+    const source =
+        \\type Heading { title: String }
+        \\fn title(scope: Document) -> String = first(select<Heading>(scope)).value.title
+    ;
+    var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+    defer sources.deinit();
+    try sources.put(path, source);
+    var snapshot = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{});
+    defer snapshot.deinit();
+    try testing.expect(!snapshot.diagnostics.hasErrors());
+    try expectAppliedField(&snapshot, path, source, "first(select<Heading>(scope)).value.title", "title", "String", 0);
+    const request = analysis.query.types.SourceRequest{
+        .path = path,
+        .source = source,
+        .offset = std.mem.indexOf(u8, source, "select<Heading>").? + 2,
+    };
+    var hover = (try analysis.snapshot.hoverAt(testing.allocator, &snapshot, request, .{ .budget_ms = 1000 })) orelse return error.ExpectedHover;
+    defer hover.deinit(testing.allocator);
+    try testing.expect(std.mem.indexOf(u8, hover.markdown, "select<T>(scope) -> Selection<Placed<T>>") != null);
+}
+
 test "analysis query spec: unfinished placement access keeps the concrete input type" {
     const path = "stdlib/internal/unfinished-placement-query-test.ss";
     for ([_]struct { source: []const u8, needle: []const u8, expected: []const u8 }{

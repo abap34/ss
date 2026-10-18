@@ -1,0 +1,203 @@
+const std = @import("std");
+const compiler = @import("compiler");
+const allocation_testing = @import("allocation_testing");
+const core = compiler.core;
+const Type = compiler.language.Type;
+const testing = std.testing;
+
+fn document(text: []const u8) !core.DocumentState {
+    const allocator = testing.allocator;
+    var source = try allocator.dupe(u8, text);
+    defer allocator.free(source);
+    var syntax = try compiler.syntax.parseWithSourceName(allocator, source, "typed-query-spec.ss");
+    defer syntax.deinit(allocator);
+    var index = try compiler.analysis.loadModuleIndex(allocator, testing.io, ".", syntax, .{});
+    defer index.deinit();
+    return compiler.analysis.buildDocumentState(allocator, "typed-query-spec.ss", ".", &source, &syntax, &index);
+}
+
+fn analyzeGraph(state: *core.DocumentState) !void {
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, state, .evaluation)).?;
+    defer graph.deinit();
+}
+
+fn checkedGraph(state: *core.DocumentState) !compiler.analysis.ExecutionGraph {
+    const graph = compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, state, .evaluation) catch |err| {
+        for (state.diagnostics.entries.items) |entry| {
+            std.debug.print("{s}\n", .{entry.code()});
+            if (entry.data == .user_report) std.debug.print("{s}\n", .{entry.data.user_report.message});
+        }
+        return err;
+    };
+    return graph.?;
+}
+
+fn queryWithAllocator(allocator: std.mem.Allocator, state: *core.DocumentState, input: Type) !void {
+    var selection = try state.selectTypedPlacements(allocator, .{ .document = state.graph.document_id }, input);
+    defer selection.deinit(allocator);
+    try testing.expectEqual(@as(usize, 2), selection.ids.items.len);
+    std.mem.reverse(core.NodeId, selection.ids.items);
+    try state.orderPlacementSelection(allocator, &selection);
+    try testing.expectEqualStrings("First", state.getNode(selection.ids.items[0]).?.placement.?.value.record.field("title").?.string);
+}
+
+test "typed queries: a preceding table of contents waits for generated headings and preserves construction order" {
+    const source = try std.Io.Dir.cwd().readFileAlloc(testing.io, "tests/fixtures/typed-query/slide.ss", testing.allocator, .limited(64 * 1024));
+    defer testing.allocator.free(source);
+    var state = try document(source);
+    defer state.deinit();
+    var graph = try checkedGraph(&state);
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const toc = state.placementRootsOf(state.graph.page_order.items[0])[0];
+    const text = state.getNode(state.childrenOf(toc).?[0]).?;
+    try testing.expectEqualStrings("First, Second", core.nodeDisplayContent(text));
+    const input = Type.recordType("Heading").inModule(0);
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, queryWithAllocator, .{ &state, input });
+    const body_page = state.graph.page_order.items[1];
+    var page_items = try state.selectTypedPlacements(testing.allocator, .{ .page = body_page }, input);
+    defer page_items.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 2), page_items.ids.items.len);
+    const wrapper = state.placementRootsOf(body_page)[0];
+    var subtree = try state.selectTypedPlacements(testing.allocator, .{ .object = wrapper }, input);
+    defer subtree.deinit(testing.allocator);
+    try testing.expectEqualSlices(core.NodeId, page_items.ids.items[0..1], subtree.ids.items);
+    var excluding_self = try state.selectTypedPlacements(testing.allocator, .{ .object = subtree.ids.items[0] }, input);
+    defer excluding_self.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 0), excluding_self.ids.items.len);
+    var other_module = try state.selectTypedPlacements(testing.allocator, .{ .document = state.graph.document_id }, Type.recordType("Heading").inModule(1));
+    defer other_module.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 0), other_module.ids.items.len);
+}
+
+test "typed queries: exact generic input types and selection algebra keep typed results" {
+    var state = try document(
+        \\import std:text/content as native
+        \\type Label<T> { value: T }
+        \\fn display<T>(self: Placed<Label<T>>) -> native::Text
+        \\  return native::Text { content = "Label" }
+        \\end
+        \\fn/! label<T>(value: T) -> Label<T> = Label<T> { value = value }
+        \\page main
+        \\  let a = label!(1)
+        \\  let b = label!("Second")
+        \\  let numbers: Selection<Placed<Label<Number>>> = select<Label<Number>>(pagectx())
+        \\  let words = select<Label<String>>(pagectx())
+        \\  let mixed: Selection<Placement> = selection_union(words, numbers)
+        \\  let remaining: Selection<Placed<Label<Number>>> = selection_difference(numbers, words)
+        \\  let common: Selection<Placed<Label<Number>>> = selection_intersection(mixed, numbers)
+        \\  let first_item: Placement = first(mixed)
+        \\  ~ first_item.left == page.left + 12
+        \\end
+    );
+    defer state.deinit();
+    var graph = try checkedGraph(&state);
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    var number_type = try Type.recordType("Label").inModule(0).withArguments(testing.allocator, &.{Type.number});
+    defer number_type.deinit(testing.allocator);
+    var string_type = try Type.recordType("Label").inModule(0).withArguments(testing.allocator, &.{Type.string});
+    defer string_type.deinit(testing.allocator);
+    const page = state.graph.page_order.items[0];
+    const roots = state.placementRootsOf(page);
+    for ([_]Type{ number_type, string_type }, roots) |ty, root| {
+        var selection = try state.selectTypedPlacements(testing.allocator, .{ .page = page }, ty);
+        defer selection.deinit(testing.allocator);
+        try testing.expectEqualSlices(core.NodeId, &.{root}, selection.ids.items);
+    }
+    var pages = try core.prepared.prepare(testing.allocator, &state);
+    defer pages.deinit(testing.allocator);
+    var layout = try core.layout.solveDocument(&state, null, .{ .jobs = 1 });
+    defer layout.deinit(testing.allocator);
+    try testing.expectApproxEqAbs(@as(f32, 12), layout.nodeFrame(roots[0]).?.x, core.layout.graph.ConstraintTolerance);
+}
+
+test "typed queries: querying the collection produced by the same display is a dependency cycle" {
+    var state = try document(
+        \\import std:text/content as native
+        \\type Summary {}
+        \\fn display(self: Placed<Summary>) -> native::Text
+        \\  let items = select<native::Text>(self.document)
+        \\  return native::Text { content = str(selection_count(items)) }
+        \\end
+        \\page main
+        \\  place_on!(pagectx(), Summary {})
+        \\end
+    );
+    defer state.deinit();
+    try testing.expectError(error.ExecutionDependencyCycle, analyzeGraph(&state));
+    try testing.expect(state.diagnostics.entries.items.len != 0);
+    try testing.expectEqual(@as(usize, 0), state.placementRootsOf(state.graph.page_order.items[0]).len);
+}
+
+test "typed queries: shared display helpers retain each input subtree without depending on their own output" {
+    var state = try document(
+        \\import std:text/content as native
+        \\type Label { title: String }
+        \\type Reader { target: Placement }
+        \\fn/! label(title: String) -> Label = Label { title = title }
+        \\fn display(self: Placed<Label>) -> native::Text
+        \\  return native::Text { content = self.value.title }
+        \\end
+        \\fn texts(scope: Placement) -> Selection<Placed<native::Text>> = select<native::Text>(scope)
+        \\fn display(self: Placed<Reader>) -> native::Text
+        \\  let selected = texts(self.value.target)
+        \\  return native::Text { content = join(selected, ",", (t: Placed<native::Text>) |-> t.value.content) }
+        \\end
+        \\page main
+        \\  let first_target = label!("First")
+        \\  let second_target = label!("Second")
+        \\  place_on!(pagectx(), Reader { target = first_target })
+        \\  place_on!(pagectx(), Reader { target = second_target })
+        \\end
+    );
+    defer state.deinit();
+    var graph = try checkedGraph(&state);
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const roots = state.placementRootsOf(state.graph.page_order.items[0]);
+    try testing.expectEqual(@as(usize, 4), roots.len);
+    for (roots[2..], [_][]const u8{ "First", "Second" }) |root, expected| {
+        const reader_text = state.getNode(state.childrenOf(root).?[0]).?;
+        try testing.expectEqualStrings(expected, core.nodeDisplayContent(reader_text));
+    }
+}
+
+test "typed queries: iterating a completed collection cannot add matching placements" {
+    var state = try document(
+        \\import std:text/content as native
+        \\type Label { title: String }
+        \\fn display(self: Placed<Label>) -> native::Text
+        \\  return native::Text { content = self.value.title }
+        \\end
+        \\fn/! label(title: String) -> Label = Label { title = title }
+        \\page main
+        \\  label!("Initial")
+        \\  foreach(select<Label>(pagectx()), (item: Placed<Label>) |-> label!(item.value.title))
+        \\end
+    );
+    defer state.deinit();
+    try testing.expectError(error.InvalidSelectionMutation, analyzeGraph(&state));
+}
+
+test "typed queries: invalid types scopes and arities fail before evaluation" {
+    for ([_]struct { expression: []const u8, code: []const u8 }{
+        .{ .expression = "select<Number>(document)", .code = "InvalidSelectionType" },
+        .{ .expression = "select<Heading>(Heading { title = \"Input\" })", .code = "InvalidSelectionScope" },
+        .{ .expression = "select<Heading>(document, \"children\")", .code = "InvalidArity" },
+        .{ .expression = "select<Heading, Heading>(document)", .code = "InvalidTypeArity" },
+        .{ .expression = "select(document)", .code = "MissingTypeArguments" },
+    }) |case| {
+        const source = try std.fmt.allocPrint(testing.allocator, "type Heading {{ title: String }}\npage main\n  let document = docctx()\n  let items = {s}\nend\n", .{case.expression});
+        defer testing.allocator.free(source);
+        var state = try document(source);
+        defer state.deinit();
+        if (analyzeGraph(&state)) |_| return error.ExpectedInvalidQuery else |_| {}
+        var found = false;
+        for (state.diagnostics.entries.items) |entry| {
+            if (std.mem.eql(u8, entry.code(), case.code)) found = true;
+        }
+        if (!found) std.debug.print("Expected diagnostic {s} for {s}\n", .{ case.code, case.expression });
+        try testing.expect(found);
+    }
+}

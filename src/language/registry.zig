@@ -159,6 +159,7 @@ pub const PrimitiveDescriptor = struct {
     arg_names: []const []const u8,
     arg_types: []const Type,
     type_module: ?[]const u8 = null,
+    type_parameter_count: u8 = 0,
     result_type: ?Type,
     result_policy: PrimitiveResultPolicy = .declared,
     result_arg_index: usize = 0,
@@ -206,7 +207,7 @@ pub const QueryDescriptor = struct {
 const primitive_descriptors = [_]PrimitiveDescriptor{
     .{ .op = .pagectx, .name = "pagectx", .min_arity = 0, .max_arity = 0, .arg_names = &.{}, .arg_types = &.{}, .result_type = Type.page, .context = .page, .summary = "Return the current page context" },
     .{ .op = .docctx, .name = "docctx", .min_arity = 0, .max_arity = 0, .arg_names = &.{}, .arg_types = &.{}, .result_type = Type.document, .summary = "Return the current document context" },
-    .{ .op = .select, .name = "select", .min_arity = 2, .max_arity = 255, .arg_names = &.{ "base", "query_name" }, .arg_types = &.{ Type.any, Type.string }, .result_type = Type.selection(.any), .result_policy = .select_query, .summary = "Build a Selection using the query registry" },
+    .{ .op = .select, .name = "select", .min_arity = 1, .max_arity = 255, .arg_names = &.{ "scope", "query_name" }, .arg_types = &.{ Type.any, Type.string }, .type_parameter_count = 1, .result_type = Type.selection(.any), .result_policy = .select_query, .summary = "Select typed placements within a document, page, or placement subtree" },
     .{ .op = .anchor, .name = "anchor", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "object", "anchor_name" }, .arg_types = &.{ Type.object, Type.string }, .result_type = Type.anchor, .summary = "Return an object anchor" },
     .{ .op = .page_anchor, .name = "page_anchor", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "page", "anchor_name" }, .arg_types = &.{ Type.page, Type.string }, .result_type = Type.anchor, .summary = "Return a page anchor" },
     .{ .op = .num_eq, .name = "num_eq", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.boolean, .summary = "Return whether left is equal to right" },

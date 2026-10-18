@@ -652,6 +652,7 @@ fn inferCallInfo(
     if (call.type_args.items.len != 0) {
         const expected_count = switch (binding) {
             .function => |resolved| resolved.decl.type_params.items.len,
+            .primitive => |primitive| primitive.type_parameter_count,
             .unknown => call.type_args.items.len,
             else => 0,
         };
@@ -1332,9 +1333,10 @@ fn primitiveResultTypeInfo(
 fn selectionItemType(state: ?*core.DocumentState, info: TypeInfo, origin: core.SourceOrigin) !Type {
     return switch (info.ty.selectionItem().kind) {
         .page => Type.page,
+        .placed, .placement => info.ty.selectionItem(),
         .object => if (info.object_class orelse info.ty.selectionItemId()) |id| Type.objectId(id) else Type.object,
         else => {
-            try addUserReport(state, origin, "UnknownSelectionItemType", "this operation requires Selection<Page> or Selection<Object>; specify the element type in the Selection annotation", .{});
+            try addUserReport(state, origin, "UnknownSelectionItemType", "this operation requires a Selection of pages or placements; specify the element type in the Selection annotation", .{});
             return error.InvalidType;
         },
     };
@@ -1420,6 +1422,20 @@ fn inferSelectionAlgebraInfo(
     _ = try selectionItemType(state, left, origin);
     _ = try selectionItemType(state, right, origin);
 
+    const left_item = left.ty.selectionItem();
+    const right_item = right.ty.selectionItem();
+    if ((left_item.kind == .placed or left_item.kind == .placement) and
+        (right_item.kind == .placed or right_item.kind == .placement))
+    {
+        const item = switch (op) {
+            .selection_union => if (Type.eql(left_item, right_item)) left_item else Type.placement,
+            .selection_intersection => if (left_item.kind == .placement) right_item else left_item,
+            .selection_difference => left_item,
+            else => unreachable,
+        };
+        return infoFromType(try Type.selectionOf(allocator, item));
+    }
+
     if (left.ty.selectionItem().kind != right.ty.selectionItem().kind) {
         const left_label = try typeLabelAlloc(allocator, left.ty);
         defer allocator.free(left_label);
@@ -1457,7 +1473,33 @@ fn inferSelectCallInfo(
     origin: core.SourceOrigin,
     argument_infos: []const TypeInfo,
 ) !TypeInfo {
-    if (call.args.items.len < 2) return infoFromType(Type.selection(.any));
+    if (call.type_args.items.len != 0) {
+        if (call.args.items.len != 1) {
+            try addUserReport(state, origin, "InvalidArity", "select<T> expects one scope argument, got {d}", .{call.args.items.len});
+            return error.InvalidArity;
+        }
+        const input = call.type_args.items[0];
+        if (input.kind != .record) {
+            try addUserReport(state, origin, "InvalidSelectionType", "select<T> requires an ordinary input type", .{});
+            return error.InvalidType;
+        }
+        const scope = argument_infos[0];
+        if (scope.hole != null) return scope;
+        switch (scope.ty.kind) {
+            .document, .page, .placed, .placement => {},
+            else => {
+                try addUserReport(state, origin, "InvalidSelectionScope", "select<T> requires a Document, Page, or placement scope", .{});
+                return error.InvalidType;
+            },
+        }
+        var item = try Type.placedOf(allocator, input);
+        defer item.deinit(allocator);
+        return infoFromType(try Type.selectionOf(allocator, item));
+    }
+    if (call.args.items.len < 2) {
+        try addUserReport(state, origin, "MissingTypeArguments", "select<T>(scope) requires an explicit input type", .{});
+        return error.InvalidType;
+    }
     const query_info = argument_infos[1];
     if (query_info.hole != null) return query_info;
     const query_name = query_info.string_literal orelse {

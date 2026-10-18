@@ -1553,4 +1553,81 @@ pub const DocumentState = struct {
             },
         };
     }
+
+    /// Search registered input values in document construction order. The
+    /// execution graph has already waited for every relevant producer.
+    pub fn selectTypedPlacements(self: *DocumentState, allocator: Allocator, scope: Value, input: ast.Type) !Selection {
+        if (input.kind != .record) return error.InvalidSelectionType;
+        var result = Selection.init(.object, "typed placements");
+        errdefer result.deinit(allocator);
+        switch (scope) {
+            .document => |id| {
+                if (id != self.graph.document_id) return error.InvalidSelectionScope;
+                for (self.graph.page_order.items) |page| {
+                    try self.appendMatchingPlacements(allocator, self.placementRootsOf(page), input, null, &result.ids);
+                }
+            },
+            .page => |id| {
+                const node = self.getNode(id) orelse return error.UnknownNode;
+                if (node.kind != .page) return error.InvalidSelectionScope;
+                try self.appendMatchingPlacements(allocator, self.placementRootsOf(id), input, null, &result.ids);
+            },
+            .object => |id| {
+                const node = self.getNode(id) orelse return error.UnknownNode;
+                if (node.placement == null) return error.InvalidSelectionScope;
+                try self.appendMatchingPlacements(allocator, self.childrenOf(id) orelse &.{}, input, null, &result.ids);
+            },
+            else => return error.InvalidSelectionScope,
+        }
+        return result;
+    }
+
+    /// Set algebra must not make operand order determine numbering order.
+    /// Legacy unattached objects retain their old ordering during migration.
+    pub fn orderPlacementSelection(self: *DocumentState, allocator: Allocator, selection: *Selection) !void {
+        if (selection.item_tag != .object or selection.ids.items.len < 2) return;
+        for (selection.ids.items) |id| {
+            const node = self.getNode(id) orelse return error.UnknownNode;
+            if (node.placement == null) return;
+        }
+        var wanted = std.AutoHashMap(NodeId, void).init(allocator);
+        defer wanted.deinit();
+        for (selection.ids.items) |id| try wanted.put(id, {});
+        var ordered = std.ArrayList(NodeId).empty;
+        errdefer ordered.deinit(allocator);
+        try ordered.ensureTotalCapacity(allocator, wanted.count());
+        for (self.graph.page_order.items) |page| {
+            try self.appendMatchingPlacements(allocator, self.placementRootsOf(page), null, &wanted, &ordered);
+        }
+        if (ordered.items.len != wanted.count()) return error.InvalidSelectionScope;
+        selection.ids.deinit(allocator);
+        selection.ids = ordered;
+    }
+
+    fn appendMatchingPlacements(
+        self: *DocumentState,
+        allocator: Allocator,
+        roots: []const NodeId,
+        input: ?ast.Type,
+        wanted: ?*const std.AutoHashMap(NodeId, void),
+        result: *std.ArrayList(NodeId),
+    ) !void {
+        var pending = std.ArrayList(NodeId).empty;
+        defer pending.deinit(allocator);
+        try pending.appendSlice(allocator, roots);
+        std.mem.reverse(NodeId, pending.items);
+        while (pending.pop()) |id| {
+            const node = self.getNode(id) orelse return error.UnknownNode;
+            const placement = node.placement orelse return error.InvalidSelectionScope;
+            if (node.discarded) continue;
+            const matches = if (input) |ty|
+                placement.value == .record and ast.Type.eql(placement.value.record.ty, ty)
+            else if (wanted) |ids| ids.contains(id) else true;
+            if (matches) try result.append(allocator, id);
+            const children = self.childrenOf(id) orelse continue;
+            const start = pending.items.len;
+            try pending.appendSlice(allocator, children);
+            std.mem.reverse(NodeId, pending.items[start..]);
+        }
+    }
 };
