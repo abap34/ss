@@ -16,7 +16,7 @@ async function testVectorShapesAndConnectors() {
     await writeFile(path.join(project, "slide.ss"), `import std:themes/default as *
 
 page vector
-let patterned = place!(rounded_rectangle(
+let patterned = place_on!(pagectx(), rounded_rectangle(
   240,
   150,
   0.15,
@@ -28,7 +28,7 @@ let patterned = place!(rounded_rectangle(
 ~ patterned.left == page.left + 80
 ~ patterned.top == page.top - 80
 
-let gradient = place!(star(
+let gradient = place_on!(pagectx(), star(
   180,
   vector_style(
     linear_gradient_fill(c"#38bdf8", c"#4f46e5", gradient_down_right()),
@@ -38,7 +38,7 @@ let gradient = place!(star(
 ~ gradient.left == page.left + 500
 ~ gradient.top == page.top - 70
 
-let custom = place!(path_shape(
+let custom = place_on!(pagectx(), path_shape(
   path(
     move_to(0, 0.5),
     quadratic_to(0.25, 0, 0.5, 0.5),
@@ -201,7 +201,7 @@ let annotation = callout_parts(target, "note", CalloutStyle { left_bracket = tru
 ~ annotation.note.left == page.left + 650
 ~ annotation.note.top == page.top - 390
 ~ annotation.note.width == 220
-place!(annotation.root)
+place_on!(pagectx(), annotation.root)
 end
 `, "utf8");
     expectSuccess(await runSs(["dump", "slide.ss", "dump.json"], project), "callout connector dump");

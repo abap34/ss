@@ -553,7 +553,7 @@ test "compiler semantics: return inference preserves facts for imprecise object 
         \\page ok
         \\  let direct = make_card()
         \\  let source = make_card()
-        \\  place!(source)
+        \\  place_on!(pagectx(), source)
         \\  let selected = first(cards())
         \\end
         \\
@@ -624,8 +624,9 @@ test "compiler semantics: stdlib editor variable info keeps theme object classes
 
 test "compiler semantics: core prelude is implicitly open" {
     try buildSource(
+        \\import std:text as { Text }
         \\page ok
-        \\  place!(new("prelude", "body", "text"))
+        \\  place!(Text { content = "prelude" })
         \\end
         \\
     );
@@ -804,7 +805,7 @@ test "compiler semantics: stdlib core components build when called directly" {
         \\  ~ annotation.note.left == page.left + 560
         \\  ~ annotation.note.top == page.top - 140
         \\  ~ annotation.note.width == 220
-        \\  place!(annotation.root)
+        \\  place_on!(pagectx(), annotation.root)
         \\  annotate!("before target after", "target", "note", MarkedCalloutStyle {
         \\    x = 160
         \\    top_y = 320
@@ -849,7 +850,7 @@ test "compiler semantics: latex is the only public explicit LaTeX constructor" {
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  place!(math_obj("x + y"))
+        \\  place_on!(pagectx(), math_obj("x + y"))
         \\end
         \\
     , "case.ss:bytes:", "UnknownFunction: unknown function: math_obj");
@@ -858,7 +859,7 @@ test "compiler semantics: latex is the only public explicit LaTeX constructor" {
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  place!(tex_obj("$x + y$"))
+        \\  place_on!(pagectx(), tex_obj("$x + y$"))
         \\end
         \\
     , "case.ss:bytes:", "UnknownFunction: unknown function: tex_obj");
@@ -1293,7 +1294,7 @@ test "compiler semantics: singleton selections do not depend on object collectio
         \\  let b = text("B")
         \\  let items = selection_union(wrap(a), wrap(b))
         \\  let combined = group(items, text("C"))
-        \\  place!(combined)
+        \\  place_on!(pagectx(), combined)
         \\end
     );
 }
@@ -3393,7 +3394,7 @@ test "compiler semantics: chained member assignment writes through record fields
         \\
         \\page ok
         \\  let parts = make_parts()
-        \\  place!(parts.root)
+        \\  place_on!(pagectx(), parts.root)
         \\  parts.middle.link_id = "changed"
         \\  parts.middle.text.color = c"#ff0000"
         \\end
@@ -3756,7 +3757,7 @@ test "compiler semantics: repr functions materialize display content" {
         \\  let item = txt_obj("A", "claim")
         \\  item.claim_suffix = "!"
         \\  set_repr(item, claim_repr)
-        \\  place!(item)
+        \\  place_on!(pagectx(), item)
         \\end
         \\
     , "A!");
@@ -4100,7 +4101,7 @@ test "compiler semantics: aliases of an object constant support read-only displa
         \\  let a = shared
         \\  let b = shared
         \\  set_repr(a, (self: Object) |-> content(b) ++ "!")
-        \\  place!(a)
+        \\  place_on!(pagectx(), a)
         \\end
     , "A!");
 }
@@ -4131,7 +4132,7 @@ test "compiler semantics: repr functions are single definitions" {
         \\  let item = txt_obj("A", "claim")
         \\  set_repr(item, label)
         \\  set_repr(item, label)
-        \\  place!(item)
+        \\  place_on!(pagectx(), item)
         \\end
         \\
     , "DuplicateReprDefinition: object repr is already defined");
@@ -4436,7 +4437,7 @@ test "compiler semantics: constants are evaluated once as value bindings" {
         \\page ok
         \\  parts.middle.link_id = "changed"
         \\  parts.middle.text.color = c"#ff0000"
-        \\  place!(parts.root)
+        \\  place_on!(pagectx(), parts.root)
         \\end
         \\
     ;
@@ -4623,7 +4624,7 @@ test "compiler semantics: stdlib numbering waits for placed numbered items" {
         \\
         \\page one
         \\  let item = numbered_item("claim", "A")
-        \\  place!(item)
+        \\  place_on!(pagectx(), item)
         \\end
         \\
         \\document
@@ -5593,7 +5594,7 @@ test "compiler semantics: detached objects are valid values" {
         \\import std:themes/default as *
         \\
         \\page placed
-        \\  place!(new("placed", "body", "text"))
+        \\  place_on!(pagectx(), new("placed", "body", "text"))
         \\end
         \\
     , "UnplacedObject");
@@ -5685,7 +5686,7 @@ test "compiler semantics: placing or discarding a group covers its children" {
         \\import std:themes/default as *
         \\
         \\page placed
-        \\  place!(group(
+        \\  place_on!(pagectx(), group(
         \\    new("one", "body", "text"),
         \\    new("two", "note", "text")
         \\  ))
@@ -5736,7 +5737,7 @@ test "compiler semantics: returned object placement covers connected generated o
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  place!(head("Connected helper"))
+        \\  place_on!(pagectx(), head("Connected helper"))
         \\end
         \\
     , "UnplacedObject");
@@ -5751,7 +5752,7 @@ test "compiler semantics: returned object placement covers connected generated o
         \\end
         \\
         \\page loose
-        \\  place!(make_card())
+        \\  place_on!(pagectx(), make_card())
         \\end
         \\
     , "UnplacedObject");
@@ -5779,13 +5780,13 @@ test "compiler semantics: page overflow points at generated object call site" {
         \\end
         \\
         \\page overflow
-        \\  let box = place!(make_box())
+        \\  let box = place_on!(pagectx(), make_box())
         \\  ~ box.left == page.right + 10
         \\  ~ box.bottom == page.bottom + 20
         \\end
         \\
     ;
-    const marker = "let box = place!(make_box())";
+    const marker = "let box = place_on!(pagectx(), make_box())";
     const start = std.mem.indexOf(u8, source, marker) orelse return error.ExpectedMarker;
 
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -5807,7 +5808,7 @@ test "compiler semantics: returned objects place only explicit group children" {
         \\end
         \\
         \\page ok
-        \\  place!(connected_pair())
+        \\  place_on!(pagectx(), connected_pair())
         \\end
         \\
     ;
@@ -5823,7 +5824,7 @@ test "compiler semantics: returned objects place only explicit group children" {
         \\end
         \\
         \\page ok
-        \\  place!(grouped_pair())
+        \\  place_on!(pagectx(), grouped_pair())
         \\end
         \\
     ;
@@ -5864,7 +5865,7 @@ test "compiler semantics: disconnected generated objects are not hidden by placi
         \\end
         \\
         \\page loose
-        \\  place!(disconnected_pair())
+        \\  place_on!(pagectx(), disconnected_pair())
         \\end
         \\
     ;
@@ -5929,7 +5930,7 @@ test "compiler semantics: placing calls require bang-marked functions" {
         \\import std:themes/default as *
         \\
         \\fn bad() -> Object
-        \\  return place!(new("bad", "body", "text"))
+        \\  return place_on!(pagectx(), new("bad", "body", "text"))
         \\end
         \\
         \\page ok
@@ -5999,7 +6000,7 @@ test "compiler semantics: paired placement functions desugar through existing ch
         \\import std:themes/default as *
         \\
         \\fn/! bad() -> Object
-        \\  return place!(new("bad", "body", "text"))
+        \\  return place_on!(pagectx(), new("bad", "body", "text"))
         \\end
         \\
         \\page ok
@@ -6094,7 +6095,7 @@ test "compiler semantics: non-placement effects do not require bang-marked funct
         \\end
         \\
         \\page ok
-        \\  let item = place!(new("body", "body", "text"))
+        \\  let item = place_on!(pagectx(), new("body", "body", "text"))
         \\  mark(item)
         \\end
         \\
@@ -6156,7 +6157,7 @@ test "compiler semantics: aliased object self-anchor constraints are rejected" {
         \\
         \\page bad
         \\  let a = text("a")
-        \\  place!(a)
+        \\  place_on!(pagectx(), a)
         \\  let b = a
         \\  ~ b.top == a.top + 100
         \\end
@@ -6170,7 +6171,7 @@ test "compiler semantics: aliased tautological self-anchor constraints are accep
         \\
         \\page ok
         \\  let a = text("a")
-        \\  place!(a)
+        \\  place_on!(pagectx(), a)
         \\  let b = a
         \\  ~ b.top == a.top
         \\end
@@ -6184,7 +6185,7 @@ test "compiler semantics: explicit layout conflicts are rejected" {
         \\
         \\page bad
         \\  let a = text("a")
-        \\  place!(a)
+        \\  place_on!(pagectx(), a)
         \\  ~ a.left == page.left + 100
         \\  ~ a.left == page.left + 120
         \\end
@@ -6196,7 +6197,7 @@ test "compiler semantics: explicit layout conflicts are rejected" {
         \\
         \\page bad
         \\  let a = text("a")
-        \\  place!(a)
+        \\  place_on!(pagectx(), a)
         \\  ~ a.left == a.right + 10
         \\end
         \\
@@ -6309,7 +6310,7 @@ test "compiler semantics: object class annotations are checked through selection
         \\end
         \\
         \\page ok
-        \\  place!(obj("A", "card", "text"))
+        \\  place_on!(pagectx(), obj("A", "card", "text"))
         \\  let card_obj = first_card(objs_here("card"))
         \\  text(content(card_obj))
         \\end
@@ -6328,7 +6329,7 @@ test "compiler semantics: object class annotations are checked through selection
         \\end
         \\
         \\page bad
-        \\  place!(obj("A", "card", "text"))
+        \\  place_on!(pagectx(), obj("A", "card", "text"))
         \\  foreach(select(pagectx(), "page_objects_by_role", "card"), accept_body)
         \\end
         \\
@@ -6570,7 +6571,7 @@ test "compiler semantics: scheduled local object wins over same-named constructo
     try expectObjectContent(
         \\page main
         \\  let figure = text(docctx().footer_text ?? "unset")
-        \\  place!(figure)
+        \\  place_on!(pagectx(), figure)
         \\end
         \\document
         \\  docctx().footer_text = "after"
@@ -6838,7 +6839,7 @@ test "compiler semantics: returned object roles join all branches before placeme
         \\  note!("claims=" ++ join(doc_objs(docctx(), "claim"), ",", (o: Object) |-> content(o)))
         \\end
         \\page body
-        \\  place!(pick(true))
+        \\  place_on!(pagectx(), pick(true))
         \\end
     , "claims=A");
 }
@@ -7231,7 +7232,7 @@ test "compiler semantics: display registration defers collection reads until mat
         \\  return set_repr(item, (self: Object) |-> str(selection_count(doc_objs(docctx(), "body"))))
         \\end
         \\page main
-        \\  place!(make())
+        \\  place_on!(pagectx(), make())
         \\end
     , "1");
 }
@@ -8040,7 +8041,7 @@ test "compiler semantics: escaping local objects retain unresolved final propert
         \\page main
         \\  let item = make_item()
         \\  item.layout.x = 123
-        \\  place!(item)
+        \\  place_on!(pagectx(), item)
         \\end
     , "ExecutionDependencyCycle");
 }
@@ -8057,7 +8058,7 @@ test "compiler semantics: returned initialized objects keep internal reads satis
         \\page main
         \\  let item = make_item()
         \\  note!(item.link_id ?? "missing")
-        \\  place!(item)
+        \\  place_on!(pagectx(), item)
         \\end
     , &.{"123"});
 }
@@ -8131,7 +8132,7 @@ test "compiler semantics: page queries wait for all descendants of an explicitly
         \\  let a = numbered_item("fig", "First")
         \\  let b = numbered_item("fig", "Second")
         \\  note!("items=" ++ join(doc_objs(docctx(), "__ss.std.numbered:fig"), ",", (o: Object) |-> content(o)))
-        \\  place!(group(a, group(b)))
+        \\  place_on!(pagectx(), group(a, group(b)))
         \\end
     , &.{ "1. First", "2. Second" });
 }
@@ -8146,7 +8147,7 @@ test "compiler semantics: parent page reads wait for a later subtree placement" 
         \\  else
         \\    note!("No parent")
         \\  end
-        \\  place!(group(a))
+        \\  place_on!(pagectx(), group(a))
         \\end
     , &.{"Found parent"});
 }
@@ -8173,7 +8174,7 @@ test "compiler semantics: placement facts follow returned groups and record alia
         \\  let b = txt_obj("B", "body")
         \\  let parts = bundle(a, b)
         \\  note!("members=" ++ str(selection_count(doc_objs(docctx(), "body"))))
-        \\  place!(parts.root)
+        \\  place_on!(pagectx(), parts.root)
         \\end
     , &.{"members=2"});
 }
@@ -8183,7 +8184,7 @@ test "compiler semantics: local placement satisfies a later parent page read" {
         \\import std:themes/default as *
         \\fn make_item!() -> Object
         \\  let item = txt_obj("A", "body")
-        \\  place!(item)
+        \\  place_on!(pagectx(), item)
         \\  if page_of(item)?
         \\    item.link_id = "placed"
         \\  end
@@ -8201,7 +8202,7 @@ test "compiler semantics: repeated placement is rejected" {
         \\import std:themes/default as *
         \\page main
         \\  let a = txt_obj!("A", "body")
-        \\  place!(a)
+        \\  place_on!(pagectx(), a)
         \\end
     , "DuplicatePlacement");
 }
@@ -8239,7 +8240,7 @@ test "compiler semantics: explicit group argument order determines descendant qu
         \\  let a = text("A")
         \\  let b = text("B")
         \\  let c = text("C")
-        \\  place!(group(c, group(b, a)))
+        \\  place_on!(pagectx(), group(c, group(b, a)))
         \\  note!("order=" ++ join(objs_here("body"), ",", (o: Object) |-> content(o)))
         \\end
     , &.{"order=C,B,A"});

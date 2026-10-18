@@ -6,10 +6,6 @@ type Heading {
 
 fn/! heading(title: String) -> Heading = Heading { title = title }
 
-fn place!<T>(value: T) -> Placed<T>
-  return place_on!(pagectx(), value)
-end
-
 fn display(self: Placed<Heading>) -> content::Text
   return content::Text {
     content = self.value.title ++ " / page " ++ str(page_index(self.page))

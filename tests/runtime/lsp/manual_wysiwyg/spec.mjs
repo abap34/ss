@@ -609,7 +609,7 @@ async function testPageSpaceFillForcesFullDisplay() {
     let source = `import std:themes/default as *
 
 page demo
-let item = place!(rounded_rectangle(
+let item = place_on!(pagectx(), rounded_rectangle(
   180,
   100,
   0.15,

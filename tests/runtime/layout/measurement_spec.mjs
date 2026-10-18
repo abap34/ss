@@ -325,11 +325,11 @@ async function testPdfFactorScalesMeasuredAssetFrame() {
 page pdf_scale
   let small = pdf("asset.pdf", 0.3, 1, PdfPageBox.crop, AssetBlockStyle {})
   small.link_id = "small"
-  place!(small)
+  place_on!(pagectx(), small)
 
   let large = pdf("asset.pdf", 2, 1, PdfPageBox.crop, AssetBlockStyle {})
   large.link_id = "large"
-  place!(large)
+  place_on!(pagectx(), large)
 end
 `,
       "utf8",
@@ -360,7 +360,7 @@ function bodyBoxSource() {
   return `import std:themes/default as *
 
 fn body_box!(body_text: String) -> Object
-  let chrome = place!(new("", "panel", "text"))
+  let chrome = place_on!(pagectx(), new("", "panel", "text"))
   chrome.chrome = ChromeStyle {
     fill = c"0.97,0.98,1"
     stroke = c"0.80,0.84,0.90"

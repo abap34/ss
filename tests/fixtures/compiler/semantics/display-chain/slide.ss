@@ -16,7 +16,7 @@ page main
   let b = txt_obj("B", "link")
   b.peer = a
   set_repr(b, formatter(leaf))
-  place!(leaf)
-  place!(a)
-  place!(b)
+  place_on!(pagectx(), leaf)
+  place_on!(pagectx(), a)
+  place_on!(pagectx(), b)
 end

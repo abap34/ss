@@ -70,6 +70,6 @@ fn surround(panel: Object, inner: Object, pad_x: Number, pad_y: Number) -> Void
   ~ panel.bottom == inner.bottom - pad_y
 end
 
-fn place!(obj: Object) -> Object
-  return place_on!(pagectx(), obj)
+fn place!<T>(value: T) -> Placed<T>
+  return place_on!(pagectx(), value)
 end

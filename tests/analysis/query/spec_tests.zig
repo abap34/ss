@@ -764,3 +764,27 @@ test "analysis query spec: filtering preserves generic placement input fields" {
     try expectAppliedField(&snapshot, path, source, "first(filter(items, (h: Placed<Heading>) |-> true)).value.title", "title", "String", 0);
     try expectAppliedField(&snapshot, path, source, "first(selection_filter(items, (h: Placed<Heading>) |-> true)).value.title", "title", "String", 0);
 }
+
+test "analysis query spec: public placement retains concrete input fields through imports" {
+    const path = "public-placement-query.ss";
+    const source =
+        \\import std:layout as layout
+        \\import std:text as text_api
+        \\type Heading { title: String }
+        \\fn display(self: Placed<Heading>) -> text_api::Text = text_api::Text { content = self.value.title }
+        \\page main
+        \\  let inferred = place!(Heading { title = "Inferred" })
+        \\  let explicit = layout::place!<Heading>(Heading { title = "Explicit" })
+        \\  let first = inferred.value.title
+        \\  let second = explicit.value.title
+        \\end
+    ;
+    var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+    defer sources.deinit();
+    try sources.put(path, source);
+    var snapshot = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{});
+    defer snapshot.deinit();
+    try testing.expect(!snapshot.diagnostics.hasErrors());
+    try expectAppliedField(&snapshot, path, source, "inferred.value.title", "title", "String", 2);
+    try expectAppliedField(&snapshot, path, source, "explicit.value.title", "title", "String", 2);
+}

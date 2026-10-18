@@ -18,8 +18,8 @@ fn box(label: String, width: Number, height: Number) -> Object
   return item
 end
 `;
-const pair = `let a = place!(box("A", 240, 80))
-let b = place!(box("B", 120, 60))
+const pair = `let a = place_on!(pagectx(), box("A", 240, 80))
+let b = place_on!(pagectx(), box("B", 120, 60))
 a // b`;
 let count = 0;
 
@@ -54,8 +54,8 @@ end`);
 for (const policy of ["left", "center", "right"]) {
   const dump = await runCase(`page-${policy}`, `page example
 hflow(LayoutPolicy.${policy}, 25)
-let a = place!(box("A", 120, 80))
-let b = place!(box("B", 240, 60))
+let a = place_on!(pagectx(), box("A", 120, 80))
+let b = place_on!(pagectx(), box("B", 240, 60))
 a // b
 end`);
   const a = node(dump, "A"), b = node(dump, "B");
@@ -68,10 +68,10 @@ end`);
 for (const policy of ["left", "center", "right"]) {
   const dump = await runCase(`cell-${policy}`, `page example
 hflow(LayoutPolicy.${policy})
-let a = place!(box("A", 240, 80))
-let b = place!(box("B", 120, 60))
-let c = place!(box("C", 160, 180))
-let d = place!(box("D", 100, 40))
+let a = place_on!(pagectx(), box("A", 240, 80))
+let b = place_on!(pagectx(), box("B", 120, 60))
+let c = place_on!(pagectx(), box("C", 160, 180))
+let d = place_on!(pagectx(), box("D", 100, 40))
 let column = a // b
 let row = column |=| (c // d)
 ~ row.left == page.left + 80
@@ -106,18 +106,18 @@ const pages = await runCase("page-overrides", `document
 hflow_doc(LayoutPolicy.center, 40)
 end
 page inherited
-let a = place!(box("Inherited", 120, 80))
+let a = place_on!(pagectx(), box("Inherited", 120, 80))
 end
 page overridden
 hflow(LayoutPolicy.left)
-let b = place!(box("Overridden", 120, 80))
+let b = place_on!(pagectx(), box("Overridden", 120, 80))
 end
 page reset_offset
 hflow(LayoutPolicy.center)
-let c = place!(box("Reset", 120, 80))
+let c = place_on!(pagectx(), box("Reset", 120, 80))
 end
 page inherited_again
-let d = place!(box("Inherited again", 120, 80))
+let d = place_on!(pagectx(), box("Inherited again", 120, 80))
 end`);
 close(anchor(node(pages, "Inherited"), "center"), 680, "document center offset");
 close(node(pages, "Overridden").x, 96, "page left override");
@@ -126,8 +126,8 @@ close(anchor(node(pages, "Inherited again"), "center"), 680, "page override did 
 
 const row = await runCase("horizontal-row", `page example
 hflow(LayoutPolicy.center)
-let a = place!(box("A", 120, 80))
-let b = place!(box("B", 240, 60))
+let a = place_on!(pagectx(), box("A", 120, 80))
+let b = place_on!(pagectx(), box("B", 240, 60))
 a || b
 end`);
 close(node(row, "B").x, node(row, "A").x + 152, "horizontal adjacency");
@@ -144,8 +144,8 @@ close(anchor(node(fixedTarget, "A"), "center"), 640, "fixed target did not pull 
 const manyStacks = await runCase("many-independent-stacks", `page example
 hflow(LayoutPolicy.center)
 ${Array.from({ length: 12 }, (_, index) => `
-let a${index} = place!(box("A${index}", 240, 80))
-let b${index} = place!(box("B${index}", 120, 60))
+let a${index} = place_on!(pagectx(), box("A${index}", 240, 80))
+let b${index} = place_on!(pagectx(), box("B${index}", 120, 60))
 a${index} // b${index}
 ~ a${index}.top == page.top - 80`).join("\n")}
 end`);
@@ -157,10 +157,10 @@ for (let index = 0; index < 12; index++) {
 for (const operator of ["||", "|=|"]) {
   const dump = await runCase(operator === "||" ? "natural-columns" : "natural-equal-columns", `page example
 hflow(LayoutPolicy.center)
-let a = place!(box("A", 240, 80))
-let b = place!(box("B", 120, 60))
-let c = place!(box("C", 240, 180))
-let d = place!(box("D", 100, 40))
+let a = place_on!(pagectx(), box("A", 240, 80))
+let b = place_on!(pagectx(), box("B", 120, 60))
+let c = place_on!(pagectx(), box("C", 240, 180))
+let d = place_on!(pagectx(), box("D", 100, 40))
 (a // b) ${operator} (c // d)
 end`);
   const a = node(dump, "A"), b = node(dump, "B"), c = node(dump, "C"), d = node(dump, "D");
@@ -187,7 +187,7 @@ const code = "```ss\n" + 'let value = text!("Example line")\n'.repeat(12) + "```
 const naturalText = await runCase("natural-text-columns", `page example
 hflow(LayoutPolicy.center)
 let a = text!("A description above an illustration")
-let b = place!(box("B", 160, 160))
+let b = place_on!(pagectx(), box("B", 160, 160))
 let c = text! <<
 ${code}
 >>

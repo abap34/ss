@@ -109,7 +109,7 @@ async function writeOffPageSlide(slide) {
 
 page offpage
 page_bg(c"1,1,1")
-let marker = place!(new("", "panel", "text"))
+let marker = place_on!(pagectx(), new("", "panel", "text"))
 marker.chrome.fill = c"1,0,0"
 marker.chrome.stroke = none
 marker.chrome.line_width = 0

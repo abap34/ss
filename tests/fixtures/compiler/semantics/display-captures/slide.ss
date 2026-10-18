@@ -6,6 +6,6 @@ page main
   let b = make()
   set_repr(a, (self: Object) |-> repr(b) ++ "!")
   set_repr(b, (self: Object) |-> content(self))
-  place!(a)
-  place!(b)
+  place_on!(pagectx(), a)
+  place_on!(pagectx(), b)
 end

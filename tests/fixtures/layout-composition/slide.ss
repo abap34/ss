@@ -25,7 +25,7 @@ let caption = text("The caption sits below the figure in the right column.")
 ~ caption.width == 360
 
 let content = explanation || (figure // caption)
-place!(content)
+place_on!(pagectx(), content)
 ~ content.left == page.left + 110
 ~ content.top == page.top - 190
 end
@@ -56,7 +56,7 @@ let caption = text("The left column aligns with the center of this figure and ca
 let content = explanation |=| (figure /=/ caption)
 ~ content.width == 1000
 ~ content.height == 440
-place!(content)
+place_on!(pagectx(), content)
 ~ content.left == page.left + 110
 ~ content.top == page.top - 190
 end
