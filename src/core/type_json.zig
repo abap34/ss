@@ -4,42 +4,39 @@ const json = @import("utils").json;
 
 /// Serializes semantic type structure, excluding source locations and ownership.
 pub fn append(allocator: std.mem.Allocator, out: *std.ArrayList(u8), ty: Type) anyerror!void {
-    if (ty.kind == .parameter or ty.kind == .hole) return error.InvalidValueTag;
-    try out.appendSlice(allocator, "{\"kind\":");
-    try json.appendString(allocator, out, @tagName(ty.kind));
-    if (ty.class_name orelse ty.enum_name) |name| {
-        try out.appendSlice(allocator, ",\"name\":");
-        try json.appendString(allocator, out, name);
-    }
-    if (ty.nominal_module_id) |id| {
-        const text = try std.fmt.allocPrint(allocator, ",\"module\":{d}", .{id});
-        defer allocator.free(text);
-        try out.appendSlice(allocator, text);
-    }
-    if (ty.arguments.len != 0) {
-        try out.appendSlice(allocator, ",\"arguments\":");
-        try appendTypes(allocator, out, ty.arguments);
-    }
-    if (ty.optional_child) |child| {
-        try out.appendSlice(allocator, ",\"child\":");
-        try append(allocator, out, child.*);
-    }
-    if (ty.kind == .function) {
-        try out.appendSlice(allocator, ",\"parameters\":");
-        try appendTypes(allocator, out, ty.fn_params);
-        try out.appendSlice(allocator, ",\"result\":");
-        try append(allocator, out, (ty.fn_result orelse return error.InvalidValueTag).*);
-    }
-    try out.append(allocator, '}');
+    var object = try json.Object.beginBuffer(allocator, out);
+    try write(&object, ty);
+    try object.end();
 }
 
-fn appendTypes(allocator: std.mem.Allocator, out: *std.ArrayList(u8), types: []const Type) !void {
-    try out.append(allocator, '[');
-    for (types, 0..) |ty, index| {
-        if (index != 0) try out.append(allocator, ',');
-        try append(allocator, out, ty);
+/// Writes into an existing JSON object so diagnostics can reuse the type format.
+pub fn write(object: *json.Object, ty: Type) anyerror!void {
+    if (ty.kind == .parameter or ty.kind == .hole) return error.InvalidValueTag;
+    try object.enumTagField("kind", ty.kind);
+    if (ty.class_name orelse ty.enum_name) |name| try object.stringField("name", name);
+    if (ty.nominal_module_id) |id| try object.intField("module", id);
+    if (ty.arguments.len != 0) try writeTypes(object, "arguments", ty.arguments);
+    if (ty.optional_child) |child| try writeField(object, "child", child.*);
+    if (ty.kind == .function) {
+        try writeTypes(object, "parameters", ty.fn_params);
+        try writeField(object, "result", (ty.fn_result orelse return error.InvalidValueTag).*);
     }
-    try out.append(allocator, ']');
+}
+
+pub fn writeField(object: *json.Object, key: []const u8, ty: Type) !void {
+    var field = try object.objectField(key);
+    try write(&field, ty);
+    try field.end();
+}
+
+fn writeTypes(object: *json.Object, key: []const u8, types: []const Type) !void {
+    var array = try object.arrayField(key);
+    for (types) |ty| {
+        var item = try array.objectItem();
+        try write(&item, ty);
+        try item.end();
+    }
+    try array.end();
 }
 
 /// The returned type owns both its structure and all nominal-name strings.

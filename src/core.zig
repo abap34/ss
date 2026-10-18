@@ -86,6 +86,7 @@ pub const render_env = @import("core/render_env.zig");
 pub const markdown = @import("core/markdown.zig");
 pub const prepared = @import("core/prepared.zig");
 pub const constraint_updates = @import("core/constraint_updates.zig");
+pub const type_json = @import("core/type_json.zig");
 pub const value_text = @import("core/value_text.zig");
 pub const render_text_measure = @import("render/text/measure.zig");
 

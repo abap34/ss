@@ -3,6 +3,7 @@ const core = @import("core");
 
 const utils = @import("utils");
 const json = utils.json;
+const values = @import("values.zig");
 
 pub fn writeNodesField(allocator: std.mem.Allocator, root: *json.Object, state: *core.DocumentState, layouts: *const core.layout.Document) !void {
     var nodes = try root.arrayField("nodes");
@@ -16,7 +17,8 @@ pub fn writeNodesField(allocator: std.mem.Allocator, root: *json.Object, state: 
 fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, state: *core.DocumentState, node: core.Node, layouts: *const core.layout.Document) !void {
     const render = core.render_policy.resolve(state, &node);
     const display_content = core.nodeDisplayContent(&node);
-    const has_display_content = display_content.len != 0 or node.content != null or node.display_content != null;
+    const native_content = if (node.placement) |placement| placement.display == .native else false;
+    const has_display_content = native_content or display_content.len != 0 or node.content != null or node.display_content != null;
     const should_parse_blocks = core.markdown.shouldParseBlocksNode(state, &node) and has_display_content;
     const should_parse_inline = core.markdown.shouldParseInlineNode(state, &node) and has_display_content and !should_parse_blocks;
 
@@ -48,7 +50,8 @@ fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, state: *core.Docu
     try item.optionalStringField("role", node.role);
     try item.optionalEnumTagField("object_kind", node.object_kind);
     try item.optionalEnumTagField("payload_kind", node.payload_kind);
-    try item.optionalStringField("content", node.content);
+    try item.optionalStringField("content", if (native_content) display_content else node.content);
+    try writePlacement(&item, state, &node);
     if (node.display_content != null) {
         try item.stringField("display_content", display_content);
     }
@@ -95,6 +98,40 @@ fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, state: *core.Docu
     }
     try writeRender(&item, render);
     try item.end();
+}
+
+fn writePlacement(item: *json.Object, state: *core.DocumentState, node: *const core.Node) !void {
+    const placement = node.placement orelse return;
+    var out = try item.objectField("placement");
+    try values.writeField(&out, "input", placement.value);
+    try out.intField("document", state.graph.document_id);
+    try out.intField("page", placement.page_id);
+    try out.intField("parent", placement.parent_id);
+    var children = try out.arrayField("children");
+    for (state.childrenOf(node.id) orelse &.{}) |child| try children.intItem(child);
+    try children.end();
+    if (node.composition_order) |order| {
+        var position = try out.objectField("order");
+        try position.intField("source_order", order.source_order);
+        try position.intField("sequence", order.sequence);
+        try position.end();
+    }
+    var display = try out.objectField("display");
+    try display.enumTagField("state", placement.display);
+    switch (placement.display) {
+        .pending, .running => {},
+        .native => |kind| try display.enumTagField("kind", kind),
+        .expanded => |expanded| {
+            var target = try display.objectField("target");
+            try target.stringField("name", expanded.target.name);
+            try target.intField("module", expanded.target.module_id);
+            try target.optionalIntField("instance", expanded.target.instance_id);
+            try target.optionalIntField("declaration_start", expanded.target.declaration_start);
+            try target.end();
+        },
+    }
+    try display.end();
+    try out.end();
 }
 
 fn writeMeasurementBounds(parent: *json.Object, key: []const u8, bounds: core.LayoutBounds) !void {
