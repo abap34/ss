@@ -774,7 +774,7 @@ test "compiler semantics: stdlib core components build when called directly" {
         \\
         \\page citation_component
         \\  let target = text!("body [1]")
-        \\  citation!(1, "reference")
+        \\  text!("[1] reference")
         \\end
         \\
     );
@@ -3404,35 +3404,25 @@ test "compiler semantics: logical not inverts optional presence checks" {
     , "case.ss:bytes:", "TypeMismatch: expected Bool, got Number");
 }
 
-test "compiler semantics: generated page numbers keep optional format semantics" {
+test "compiler semantics: page numbers accept default and custom format functions" {
     try expectObjectContent(
-        \\import std:themes/default as *
-        \\
         \\document
-        \\  pagenos!(none)
+        \\  foreach(pages(docctx()), (p: Page) |-> place_on!(p, pageno()))
         \\end
-        \\
         \\page one
         \\end
-        \\
         \\page two
         \\end
-        \\
     , "1/2");
-
     try expectObjectContent(
-        \\import std:themes/default as *
-        \\
+        \\fn label(p: Page, d: Document) -> String = str(page_index(p)) ++ " of " ++ str(page_count(d))
         \\document
-        \\  pagenos!("{page} of {total}")
+        \\  foreach(pages(docctx()), (p: Page) |-> place_on!(p, pageno(TextBlockStyle {}, label)))
         \\end
-        \\
         \\page one
         \\end
-        \\
         \\page two
         \\end
-        \\
     , "1 of 2");
 }
 
@@ -3464,20 +3454,13 @@ test "compiler semantics: pass annotation is rejected" {
     );
 }
 
-test "compiler semantics: generated page numbers run after page graph exists" {
+test "compiler semantics: page number display reads the completed page graph" {
     try expectObjectContent(
-        \\import std:themes/default as *
-        \\
-        \\document
-        \\  pagenos!()
-        \\end
-        \\
         \\page one
+        \\  pageno!()
         \\end
-        \\
         \\page two
         \\end
-        \\
     , "1/2");
 }
 
@@ -4462,63 +4445,53 @@ test "compiler semantics: foreach_enumerate checks callback argument order" {
     );
 }
 
-test "compiler semantics: stdlib numbering formats numbered items" {
-    try expectObjectContent(
-        \\import std:themes/default as *
-        \\
+const numbered_claim_source =
+    \\type Claim {
+    \\  series: Number = 1
+    \\  label: String = "Claim"
+    \\  title: String
+    \\  style: TextBlockStyle = default_text_style
+    \\}
+    \\fn display(self: Placed<Claim>) -> Text
+    \\  let series = self.value.series
+    \\  let items = filter(select<Claim>(self.document), (item: Placed<Claim>) |-> item.value.series == series)
+    \\  return text(self.value.label ++ " " ++ str(number_of(self, items) ?? 0) ++ ": " ++ self.value.title, self.value.style)
+    \\end
+    \\fn/! claim(title: String) -> Claim = Claim { title = title }
+    \\
+;
+
+test "compiler semantics: number_of formats typed placements across pages" {
+    try expectObjectContent(numbered_claim_source ++
         \\page one
-        \\  numbered_item!("claim", "A")
+        \\  claim!("A")
         \\end
-        \\
         \\page two
-        \\  numbered_item!("claim", "B")
+        \\  claim!("B")
         \\end
-        \\
-        \\document
-        \\  numbering!("claim", "Claim {number}: {text}")
-        \\end
-        \\
     , "Claim 2: B");
 }
 
-test "compiler semantics: stdlib numbering waits for wrapped numbered items" {
-    try expectObjectContent(
-        \\import std:themes/default as *
-        \\
-        \\fn/! captioned(text_value: String) -> Object
-        \\  let item = numbered_item("claim", text_value)
-        \\  item.text.size = 12
-        \\  return item
+test "compiler semantics: number_of includes inputs returned by user constructors" {
+    try expectObjectContent(numbered_claim_source ++
+        \\fn/! captioned(title: String) -> Claim
+        \\  return claim(title) with { style.text.size = 12 }
         \\end
-        \\
-        \\document
-        \\  numbering!("claim", "Claim {number}: {text}")
-        \\end
-        \\
         \\page one
         \\  captioned!("A")
         \\end
-        \\
         \\page two
         \\  captioned!("B")
         \\end
-        \\
     , "Claim 2: B");
 }
 
-test "compiler semantics: stdlib numbering waits for placed numbered items" {
-    try expectObjectContent(
-        \\import std:themes/default as *
-        \\
+test "compiler semantics: number_of includes explicitly placed inputs" {
+    try expectObjectContent(numbered_claim_source ++
         \\page one
-        \\  let item = numbered_item("claim", "A")
+        \\  let item = claim("A")
         \\  place_on!(pagectx(), item)
         \\end
-        \\
-        \\document
-        \\  numbering!("claim", "Claim {number}: {text}")
-        \\end
-        \\
     , "Claim 1: A");
 }
 
@@ -4540,36 +4513,24 @@ test "compiler semantics: document object counts wait for titles on any page" {
     , "102");
 }
 
-test "compiler semantics: stdlib numbering rejects repeated formatting" {
-    try expectLoweringErrorDiagnostic(
-        \\import std:themes/default as *
-        \\
+test "compiler semantics: number_of can be read repeatedly without mutating the input" {
+    try expectObjectContent(numbered_claim_source ++
         \\page one
-        \\  numbered_item!("claim", "A")
+        \\  let item = claim!("A")
+        \\  let items = select<Claim>(docctx())
+        \\  let first = number_of(item, items) ?? 0
+        \\  let again = number_of(item, items) ?? 0
+        \\  text!(str(first) ++ ":" ++ str(again) ++ ":" ++ item.value.title)
         \\end
-        \\
-        \\document
-        \\  numbering!("claim", "First {number}: {text}")
-        \\  numbering!("claim", "Second {number}: {text}")
-        \\end
-        \\
-    , "DuplicatePropertyDefinition: property 'numbered_item_number' is already defined on this target");
+    , "1:1:A");
 }
 
-test "compiler semantics: stdlib numbering keeps counters separate" {
-    const source =
-        \\import std:themes/default as *
-        \\
+test "compiler semantics: number_of keeps filtered series separate" {
+    const source = numbered_claim_source ++
         \\page one
-        \\  numbered_item!("claim", "A")
-        \\  numbered_item!("definition", "B")
+        \\  claim!("A")
+        \\  place!(Claim { series = 2 label = "Definition" title = "B" })
         \\end
-        \\
-        \\document
-        \\  numbering!("claim", "Claim {number}: {text}")
-        \\  numbering!("definition", "Definition {number}: {text}")
-        \\end
-        \\
     ;
     try expectObjectContent(source, "Claim 1: A");
     try expectObjectContent(source, "Definition 1: B");
@@ -7791,10 +7752,10 @@ test "compiler semantics: property definitions reject overlapping paths in both 
         "a.layout.x = 100\na.layout = LayoutStyle { x = 200 }",
         "a.text.font = FontFace {}\na.text.font.family = \"Avenir\"",
         "a.text.markdown.bold_color = none\na.text.markdown.bold_color = none",
-        "a.numbered_item_source = none\nset_prop(select(a, \"self_object\"), \"numbered_item_source\", none)",
+        "a.optional_label = none\nset_prop(select(a, \"self_object\"), \"optional_label\", none)",
     };
     for (pairs) |pair| {
-        const source = try std.fmt.allocPrint(testing.allocator, "import std:themes/default as *\npage main\nlet a = txt_obj!(\"A\", \"body\")\n{s}\nend\n", .{pair});
+        const source = try std.fmt.allocPrint(testing.allocator, "import std:themes/default as *\nextend Flow {{ optional_label: String? = none }}\npage main\nlet a = txt_obj!(\"A\", \"body\")\n{s}\nend\n", .{pair});
         defer testing.allocator.free(source);
         try expectLoweringErrorDiagnostic(source, "DuplicatePropertyDefinition");
     }
@@ -7954,23 +7915,25 @@ test "compiler semantics: returned initialized objects keep internal reads satis
 test "compiler semantics: dump preserves explicitly absent optional properties" {
     try expectDumpContains(
         \\import std:themes/default as *
+        \\extend Flow { optional_label: String? = none }
         \\page main
         \\  let item = txt_obj!("A", "body")
-        \\  item.numbered_item_source = none
+        \\  item.optional_label = none
         \\end
-    , &.{"\"numbered_item_source\":null"});
+    , &.{"\"optional_label\":null"});
 }
 
 test "compiler semantics: absent property values use string accessor fallbacks" {
     try expectDumpContains(
         \\import std:themes/default as *
+        \\extend Flow { optional_label: String? = none }
         \\page main
         \\  let item = txt_obj!("A", "body")
-        \\  set_prop(item, "numbered_item_source", none)
-        \\  if prop_eq(item, "numbered_item_source", "none")
+        \\  set_prop(item, "optional_label", none)
+        \\  if prop_eq(item, "optional_label", "none")
         \\    note!("Unexpected equality")
         \\  else
-        \\    note!(prop(item, "numbered_item_source", "Missing"))
+        \\    note!(prop(item, "optional_label", "Missing"))
         \\  end
         \\end
     , &.{"Missing"});
@@ -8011,19 +7974,18 @@ test "compiler semantics: object-valued properties start a new property owner" {
     , &.{"peer=432"});
 }
 
-test "compiler semantics: page queries wait for all descendants of an explicitly placed group" {
-    try expectDumpContains(
-        \\import std:themes/default as *
-        \\document
-        \\  numbering!("fig")
-        \\end
+test "compiler semantics: numbering queries wait for nested typed group descendants" {
+    const source = numbered_claim_source ++
         \\page main
-        \\  let a = numbered_item("fig", "First")
-        \\  let b = numbered_item("fig", "Second")
-        \\  note!("items=" ++ join(doc_objs(docctx(), "__ss.std.numbered:fig"), ",", (o: Object) |-> content(o)))
+        \\  let a = claim("First")
+        \\  let b = claim("Second")
+        \\  text!("items=" ++ join(select<Claim>(docctx()), ",", (item: Placed<Claim>) |-> item.value.title))
         \\  place_on!(pagectx(), group(a, group(b)))
         \\end
-    , &.{ "1. First", "2. Second" });
+    ;
+    try expectObjectContent(source, "Claim 1: First");
+    try expectObjectContent(source, "Claim 2: Second");
+    try expectObjectContent(source, "items=First,Second");
 }
 
 test "compiler semantics: parent page reads wait for a later subtree placement" {
@@ -8784,4 +8746,12 @@ test "compiler semantics: mutable document theme APIs are unavailable" {
         \\  let theme = current_theme()
         \\end
     , "bytes:", "UnknownFunction");
+}
+
+test "compiler semantics: obsolete document generation helpers are unavailable" {
+    for ([_][]const u8{ "pagenos!()", "numbered_item!(\"claim\", \"A\")", "numbering!(\"claim\")", "need_titles()", "citation!(1, \"A\")", "page_bg(none)", "doc_bg(none)" }) |call| {
+        const source = try std.fmt.allocPrint(testing.allocator, "page example\n{s}\nend", .{call});
+        defer testing.allocator.free(source);
+        try expectDiagnostic(source, "bytes:", "UnknownFunction");
+    }
 }

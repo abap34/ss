@@ -125,17 +125,18 @@ test "cycle diagnostics include the resource of a self dependency" {
 
 test "cycle diagnostics retain every edge of a longer closed path" {
     try expectCyclePath(
+        \\extend Doc { first: String? = none second: String? = none third: String? = none }
         \\document
-        \\  let downstream = docctx().footer_text
-        \\  docctx().footer_text = docctx().watermark
-        \\  docctx().watermark = docctx().pageno_fmt
-        \\  docctx().pageno_fmt = docctx().footer_text
+        \\  let downstream = docctx().first
+        \\  docctx().first = docctx().second
+        \\  docctx().second = docctx().third
+        \\  docctx().third = docctx().first
         \\end
     , &.{
-        "docctx().footer_text = docctx().watermark",
-        "docctx().watermark = docctx().pageno_fmt",
-        "docctx().pageno_fmt = docctx().footer_text",
-    }, &.{ "footer_text", "watermark", "pageno_fmt" });
+        "docctx().first = docctx().second",
+        "docctx().second = docctx().third",
+        "docctx().third = docctx().first",
+    }, &.{ "first", "second", "third" });
 }
 
 test "nested record anchors depend on both immutable root bindings" {

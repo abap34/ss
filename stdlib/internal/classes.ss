@@ -12,7 +12,6 @@ type Doc = object {
   layout_v: LayoutPolicy = LayoutPolicy.center
   layout_v_center_offset: Number = 0
   background_fill: Color? = none
-  pageno_fmt: String? = none
   footer_text: String? = none
   logo_path: String? = none
   logo_scale: Number = 1
@@ -42,9 +41,6 @@ type Flow = object {
   layout: LayoutStyle = LayoutStyle {}
   chrome: ChromeStyle = ChromeStyle {}
   link_id: String = ""
-  numbered_item_source: String? = none
-  numbered_item_number: String? = none
-  numbered_item_format: String? = none
 }
 
 type Text = object {
@@ -351,20 +347,6 @@ type Connector = object {
   }
 }
 
-type Pageno = object {
-  base = Text
-  roles = ["pageno"]
-
-  pageno_format: String? = none
-  text: TextStyle = TextStyle {
-    size = 11
-  }
-  layout: LayoutStyle = LayoutStyle {
-    spacing_after = 0
-    wrap = WrapMode.off
-  }
-}
-
 type Footer = object {
   base = Text
   roles = ["footer"]
@@ -404,11 +386,6 @@ type Watermark = object {
     spacing_after = 0
     wrap = WrapMode.off
   }
-}
-
-type Toc = object {
-  base = Body
-  roles = ["toc"]
 }
 
 type ObjectGroup = object {
