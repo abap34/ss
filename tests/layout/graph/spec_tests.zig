@@ -1402,6 +1402,45 @@ test "layout graph: row defaults choose the first eligible target candidate and 
     try testing.expectEqual(a, defaults.items[1].source.node.node_id);
 }
 
+test "layout solver: positioned nested groups preserve internal default alignment" {
+    for ([_][]const u8{ "top", "center" }) |policy| {
+        var state = try initEmptyDocumentState();
+        defer state.deinit();
+        var state_layout = LayoutFixture.init(&state);
+        defer state_layout.deinit();
+        const page = try state.addPage("Nested positioned group");
+        try setLayoutPolicy(&state, page, policy);
+        const a_leaf = try state.createObjectWithOrigin("a", null, .text, .text, "A", null);
+        const b_leaf = try state.createObjectWithOrigin("b", null, .text, .text, "B", null);
+        const c_leaf = try state.createObjectWithOrigin("c", null, .text, .text, "C", null);
+        try addFixedSize(&state, a_leaf, 120, 80);
+        try addFixedSize(&state, b_leaf, 180, 60);
+        try addFixedSize(&state, c_leaf, 90, 50);
+        const a = try state.createGroupWithOrigin(&.{a_leaf}, null);
+        const b = try state.createGroupWithOrigin(&.{b_leaf}, null);
+        const c = try state.createGroupWithOrigin(&.{c_leaf}, null);
+        const inner = try state.createGroupWithOrigin(&.{ a, b }, null);
+        const outer = try state.createGroupWithOrigin(&.{ inner, c }, null);
+        try state.placeObjectOnPage(page, outer);
+        try state.constraints.addAnchor(state.allocator, outer, .left, .{ .page = .left }, 80, null);
+        try state.constraints.addAnchor(state.allocator, outer, .top, .{ .page = .top }, -80, null);
+        try state.constraints.addAnchor(state.allocator, b, .left, .{ .node = .{ .node_id = a, .anchor = .right } }, 32, null);
+        try state.constraints.addAnchor(state.allocator, c, .left, .{ .node = .{ .node_id = inner, .anchor = .right } }, 32, null);
+        try addDefaultAlignment(&state, b, a);
+        try addDefaultAlignment(&state, c, inner);
+
+        try finalizeDocumentState(&state_layout);
+
+        const anchor: model.Anchor = if (std.mem.eql(u8, policy, "center")) .center_y else .top;
+        const a_frame = (try state_layout.frame(a)).*;
+        for ([_]model.NodeId{ b, c }) |id| {
+            try expectFloat(graph.anchorValue(a_frame, anchor), graph.anchorValue((try state_layout.frame(id)).*, anchor));
+        }
+        try expectFloat(80, (try state_layout.frame(inner)).*.height);
+        try expectFloat(80, (try state_layout.frame(outer)).*.height);
+    }
+}
+
 test "layout solver: positioned ancestors preserve internal defaults but exclude external alignment" {
     for ([_]bool{ false, true }) |source_inside| {
         var state = try initEmptyDocumentState();
