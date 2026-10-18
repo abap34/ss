@@ -23,6 +23,7 @@ pub const Adjustment = struct {
     source_anchor: []const u8,
     evaluated_offset: f64,
     delta: f64,
+    insertion_before: ?usize = null,
 };
 
 pub fn appendAdjusted(
@@ -241,6 +242,7 @@ fn outerParenthesesCover(expression: []const u8) bool {
 
 fn formatNumber(allocator: std.mem.Allocator, value: f64) ![]u8 {
     const text = try std.fmt.allocPrint(allocator, "{d:.2}", .{value});
+    errdefer allocator.free(text);
     var end = text.len;
     while (end > 0 and text[end - 1] == '0') end -= 1;
     if (end > 0 and text[end - 1] == '.') end -= 1;
