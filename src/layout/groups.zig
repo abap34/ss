@@ -201,7 +201,9 @@ fn applyGroupTargetConstraintSlice(
         // group. Fallback must neither replace that position nor resize the
         // group by supplying a different anchor on the same axis.
         if (is_soft and (temp.start != null or temp.end != null or temp.center != null)) continue;
-        if (is_soft and hasPositionedAncestor(workspace, group_id)) continue;
+        // Internal alignment remains necessary after an ancestor is positioned.
+        // Candidate selection already excludes alignments crossing that frame.
+        if (is_soft and !constraint.default_alignment and hasPositionedAncestor(workspace, group_id)) continue;
         used.* = true;
         last_constraint.* = constraint;
 
