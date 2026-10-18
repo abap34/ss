@@ -1,7 +1,11 @@
 import std:math/types as { MathFit, LatexEngine, LatexStyle, LatexConfig }
-import std:math/content as { Latex }
+import std:math/content as { Latex, Math }
 import std:math/style as { LatexBlockStyle }
 import std:internal/objects as objects
+
+fn/! math(source: String, style: LatexBlockStyle = LatexBlockStyle {}, config: LatexConfig = LatexConfig {}) -> Math
+  return Math { source = source style = style config = config }
+end
 
 fn latex_engine(engine: LatexEngine) -> Void
   extend_render_env(docctx(), "set", "latex.engine", engine)

@@ -45,6 +45,9 @@ import std:code as {
   code_file!,
 }
 import std:math as {
+  Math,
+  math,
+  math!,
   latex,
   latex!,
   latex_engine,

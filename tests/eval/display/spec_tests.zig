@@ -1234,6 +1234,92 @@ test "native latex display: immutable body and configuration survive reuse and d
     }
 }
 
+test "math display: public constructors preserve source, configuration and typed queries" {
+    var state = try documentWithModules(
+        \\import std:math as formulas
+        \\import std:text as t
+        \\type Formula { value: Math }
+        \\fn display(self: Placed<Formula>) -> Math = self.value.value
+        \\const shared: Math = math("x^2", formulas::LatexBlockStyle {} with { chrome.pad_x = 8 }, formulas::LatexConfig { preamble = "Original preamble" })
+        \\page first
+        \\  let original: Placed<Math> = place!(shared)
+        \\  let updated = place!(shared with {
+        \\    style.latex.scale = 2
+        \\    config.engine = formulas::LatexEngine.lualatex
+        \\    config.preamble = "Other preamble"
+        \\  })
+        \\  let direct: Placed<Math> = math!("y^2")
+        \\  place!(t::Text { content = str(selection_count(select<Math>(pagectx()))) ++ ":" ++ str(selection_count(select<formulas::Latex>(pagectx()))) })
+        \\end
+        \\page second
+        \\  place!(Formula { value = shared })
+        \\end
+    );
+    defer state.deinit();
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const pages = state.graph.page_order.items;
+    const roots = state.placementRootsOf(pages[0]);
+    try testing.expectEqual(@as(usize, 4), roots.len);
+    try testing.expectEqualStrings("3:3", core.nodeDisplayContent(state.getNode(roots[3]).?));
+    const wrapper = state.placementRootsOf(pages[1])[0];
+    const wrapped = state.childrenOf(wrapper).?[0];
+    for ([_]core.NodeId{ roots[0], roots[1], roots[2], wrapped }, 0..) |id, index| {
+        const input = state.getNode(id).?.placement.?;
+        try testing.expectEqualStrings("Math", input.value.record.ty.class_name.?);
+        try testing.expectEqualStrings(if (index == 2) "y^2" else "x^2", input.value.record.field("source").?.string);
+        try testing.expectEqual(if (index == 3) pages[1] else pages[0], input.page_id);
+        const children = state.childrenOf(id).?;
+        try testing.expectEqual(@as(usize, 1), children.len);
+        const leaf = state.getNode(children[0]).?;
+        try testing.expectEqual(core.native_display.Kind.latex, leaf.placement.?.display.native);
+        try testing.expectEqual(input.page_id, leaf.placement.?.page_id);
+        try testing.expect(leaf.role == null);
+        const paint = core.render_policy.resolve(&state, leaf);
+        try testing.expectEqual(@as(f32, if (index == 1) 2 else 1), paint.latex.?.scale);
+        try testing.expectEqual(@as(f32, if (index == 2) 0 else 8), paint.chrome.pad_x);
+        var prepared = try core.prepared.prepareObject(testing.allocator, &state, leaf);
+        defer prepared.deinit(testing.allocator);
+        try testing.expectEqualStrings(if (index == 2) "$\\displaystyle y^2\n$" else "$\\displaystyle x^2\n$", prepared.content);
+        try testing.expectEqual(core.markdown.ParseMode.none, prepared.parse_mode);
+        try testing.expectEqual(if (index == 1) core.render_env.LatexEngine.lualatex else .pdflatex, prepared.latex_engine);
+        if (index == 2) {
+            try testing.expectEqual(@as(usize, 0), prepared.latex_preamble.len);
+        } else {
+            try testing.expectEqual(@as(usize, 1), prepared.latex_preamble.len);
+            try testing.expectEqualStrings(if (index == 1) "Other preamble" else "Original preamble", prepared.latex_preamble[0].value);
+        }
+    }
+    try testing.expect(state.childrenOf(roots[0]).?[0] != state.childrenOf(wrapped).?[0]);
+}
+
+test "math display: complete formula and Latex examples evaluate without external tools" {
+    for ([_][]const u8{ "math", "latex" }) |name| {
+        const path = try std.fmt.allocPrint(testing.allocator, "tests/fixtures/typed-display/{s}.ss", .{name});
+        defer testing.allocator.free(path);
+        const source = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, testing.allocator, .limited(64 * 1024));
+        defer testing.allocator.free(source);
+        var state = try documentWithModules(source);
+        defer state.deinit();
+        var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+        defer graph.deinit();
+        try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+        try testing.expectEqual(@as(usize, 3), state.graph.page_order.items.len);
+        var bodies: usize = 0;
+        for (state.graph.nodes.items) |*node| {
+            const placement = node.placement orelse continue;
+            if (placement.display != .native or placement.display.native != .latex) continue;
+            var prepared = try core.prepared.prepareObject(testing.allocator, &state, node);
+            defer prepared.deinit(testing.allocator);
+            try testing.expectEqual(@as(usize, 1), prepared.asset_deps.len);
+            try testing.expectEqual(.latex_body, prepared.asset_deps[0].kind);
+            bodies += 1;
+        }
+        try testing.expectEqual(@as(usize, if (std.mem.eql(u8, name, "math")) 5 else 3), bodies);
+    }
+}
+
 test "native latex display: configuration must have the declared nominal type" {
     var state = try documentWithModules(
         \\import std:math as math
