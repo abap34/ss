@@ -26,6 +26,8 @@ module.exports = grammar({
   conflicts: $ => [
     [$.source_file],
     [$.qualified_identifier, $.bare_callable_identifier],
+    [$._bang_bare_callable, $.bare_callable_identifier],
+    [$._bang_qualified_callable, $.qualified_callable_identifier],
     [$.bare_callable_identifier, $._type_name],
     [$._expression, $.bare_callable_identifier, $._type_name],
     [$._expression, $.bare_callable_identifier],
@@ -224,6 +226,8 @@ module.exports = grammar({
       $.list_expression,
       $.identifier,
       $.qualified_identifier,
+      alias($._bang_bare_callable, $.bare_callable_identifier),
+      alias($._bang_qualified_callable, $.qualified_callable_identifier),
       $.string,
       $.color_string,
       $.number,

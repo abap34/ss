@@ -70,6 +70,10 @@
       "required": true,
       "types": [
         {
+          "type": "bare_callable_identifier",
+          "named": true
+        },
+        {
           "type": "binary_expression",
           "named": true
         },
@@ -127,6 +131,10 @@
         },
         {
           "type": "property_exists_expression",
+          "named": true
+        },
+        {
+          "type": "qualified_callable_identifier",
           "named": true
         },
         {
@@ -180,6 +188,10 @@
       "required": true,
       "types": [
         {
+          "type": "bare_callable_identifier",
+          "named": true
+        },
+        {
           "type": "binary_expression",
           "named": true
         },
@@ -237,6 +249,10 @@
         },
         {
           "type": "property_exists_expression",
+          "named": true
+        },
+        {
+          "type": "qualified_callable_identifier",
           "named": true
         },
         {
@@ -329,6 +345,10 @@
       "required": false,
       "types": [
         {
+          "type": "bare_callable_identifier",
+          "named": true
+        },
+        {
           "type": "binary_expression",
           "named": true
         },
@@ -386,6 +406,10 @@
         },
         {
           "type": "property_exists_expression",
+          "named": true
+        },
+        {
+          "type": "qualified_callable_identifier",
           "named": true
         },
         {
@@ -447,6 +471,10 @@
         "required": true,
         "types": [
           {
+            "type": "bare_callable_identifier",
+            "named": true
+          },
+          {
             "type": "binary_expression",
             "named": true
           },
@@ -504,6 +532,10 @@
           },
           {
             "type": "property_exists_expression",
+            "named": true
+          },
+          {
+            "type": "qualified_callable_identifier",
             "named": true
           },
           {
@@ -559,6 +591,10 @@
         "required": true,
         "types": [
           {
+            "type": "bare_callable_identifier",
+            "named": true
+          },
+          {
             "type": "binary_expression",
             "named": true
           },
@@ -616,6 +652,10 @@
           },
           {
             "type": "property_exists_expression",
+            "named": true
+          },
+          {
+            "type": "qualified_callable_identifier",
             "named": true
           },
           {
@@ -675,6 +715,10 @@
         "required": true,
         "types": [
           {
+            "type": "bare_callable_identifier",
+            "named": true
+          },
+          {
             "type": "binary_expression",
             "named": true
           },
@@ -732,6 +776,10 @@
           },
           {
             "type": "property_exists_expression",
+            "named": true
+          },
+          {
+            "type": "qualified_callable_identifier",
             "named": true
           },
           {
@@ -771,6 +819,10 @@
         "required": false,
         "types": [
           {
+            "type": "bare_callable_identifier",
+            "named": true
+          },
+          {
             "type": "binary_expression",
             "named": true
           },
@@ -828,6 +880,10 @@
           },
           {
             "type": "property_exists_expression",
+            "named": true
+          },
+          {
+            "type": "qualified_callable_identifier",
             "named": true
           },
           {
@@ -861,6 +917,10 @@
         "required": true,
         "types": [
           {
+            "type": "bare_callable_identifier",
+            "named": true
+          },
+          {
             "type": "binary_expression",
             "named": true
           },
@@ -918,6 +978,10 @@
           },
           {
             "type": "property_exists_expression",
+            "named": true
+          },
+          {
+            "type": "qualified_callable_identifier",
             "named": true
           },
           {
@@ -957,6 +1021,10 @@
         "required": false,
         "types": [
           {
+            "type": "bare_callable_identifier",
+            "named": true
+          },
+          {
             "type": "binary_expression",
             "named": true
           },
@@ -1014,6 +1082,10 @@
           },
           {
             "type": "property_exists_expression",
+            "named": true
+          },
+          {
+            "type": "qualified_callable_identifier",
             "named": true
           },
           {
@@ -1144,6 +1216,10 @@
       "required": true,
       "types": [
         {
+          "type": "bare_callable_identifier",
+          "named": true
+        },
+        {
           "type": "binary_expression",
           "named": true
         },
@@ -1204,6 +1280,10 @@
           "named": true
         },
         {
+          "type": "qualified_callable_identifier",
+          "named": true
+        },
+        {
           "type": "qualified_identifier",
           "named": true
         },
@@ -1258,6 +1338,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "bare_callable_identifier",
+            "named": true
+          },
           {
             "type": "binary_expression",
             "named": true
@@ -1316,6 +1400,10 @@
           },
           {
             "type": "property_exists_expression",
+            "named": true
+          },
+          {
+            "type": "qualified_callable_identifier",
             "named": true
           },
           {
@@ -1537,6 +1625,10 @@
         "required": true,
         "types": [
           {
+            "type": "bare_callable_identifier",
+            "named": true
+          },
+          {
             "type": "binary_expression",
             "named": true
           },
@@ -1594,6 +1686,10 @@
           },
           {
             "type": "property_exists_expression",
+            "named": true
+          },
+          {
+            "type": "qualified_callable_identifier",
             "named": true
           },
           {
@@ -1627,6 +1723,10 @@
         "required": true,
         "types": [
           {
+            "type": "bare_callable_identifier",
+            "named": true
+          },
+          {
             "type": "binary_expression",
             "named": true
           },
@@ -1684,6 +1784,10 @@
           },
           {
             "type": "property_exists_expression",
+            "named": true
+          },
+          {
+            "type": "qualified_callable_identifier",
             "named": true
           },
           {
@@ -1717,6 +1821,10 @@
         "required": true,
         "types": [
           {
+            "type": "bare_callable_identifier",
+            "named": true
+          },
+          {
             "type": "binary_expression",
             "named": true
           },
@@ -1774,6 +1882,10 @@
           },
           {
             "type": "property_exists_expression",
+            "named": true
+          },
+          {
+            "type": "qualified_callable_identifier",
             "named": true
           },
           {
@@ -1813,6 +1925,10 @@
         "required": true,
         "types": [
           {
+            "type": "bare_callable_identifier",
+            "named": true
+          },
+          {
             "type": "binary_expression",
             "named": true
           },
@@ -1870,6 +1986,10 @@
           },
           {
             "type": "property_exists_expression",
+            "named": true
+          },
+          {
+            "type": "qualified_callable_identifier",
             "named": true
           },
           {
@@ -2007,6 +2127,10 @@
         "required": true,
         "types": [
           {
+            "type": "bare_callable_identifier",
+            "named": true
+          },
+          {
             "type": "binary_expression",
             "named": true
           },
@@ -2064,6 +2188,10 @@
           },
           {
             "type": "property_exists_expression",
+            "named": true
+          },
+          {
+            "type": "qualified_callable_identifier",
             "named": true
           },
           {
@@ -2164,6 +2292,10 @@
         "required": true,
         "types": [
           {
+            "type": "bare_callable_identifier",
+            "named": true
+          },
+          {
             "type": "binary_expression",
             "named": true
           },
@@ -2221,6 +2353,10 @@
           },
           {
             "type": "property_exists_expression",
+            "named": true
+          },
+          {
+            "type": "qualified_callable_identifier",
             "named": true
           },
           {
@@ -2286,6 +2422,10 @@
       "required": false,
       "types": [
         {
+          "type": "bare_callable_identifier",
+          "named": true
+        },
+        {
           "type": "binary_expression",
           "named": true
         },
@@ -2346,6 +2486,10 @@
           "named": true
         },
         {
+          "type": "qualified_callable_identifier",
+          "named": true
+        },
+        {
           "type": "qualified_identifier",
           "named": true
         },
@@ -2390,6 +2534,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "bare_callable_identifier",
+            "named": true
+          },
           {
             "type": "binary_expression",
             "named": true
@@ -2448,6 +2596,10 @@
           },
           {
             "type": "property_exists_expression",
+            "named": true
+          },
+          {
+            "type": "qualified_callable_identifier",
             "named": true
           },
           {
@@ -2578,6 +2730,10 @@
       "required": false,
       "types": [
         {
+          "type": "bare_callable_identifier",
+          "named": true
+        },
+        {
           "type": "binary_expression",
           "named": true
         },
@@ -2635,6 +2791,10 @@
         },
         {
           "type": "property_exists_expression",
+          "named": true
+        },
+        {
+          "type": "qualified_callable_identifier",
           "named": true
         },
         {
@@ -2833,6 +2993,10 @@
       "required": false,
       "types": [
         {
+          "type": "bare_callable_identifier",
+          "named": true
+        },
+        {
           "type": "binary_expression",
           "named": true
         },
@@ -2890,6 +3054,10 @@
         },
         {
           "type": "property_exists_expression",
+          "named": true
+        },
+        {
+          "type": "qualified_callable_identifier",
           "named": true
         },
         {
@@ -2943,6 +3111,10 @@
       "required": true,
       "types": [
         {
+          "type": "bare_callable_identifier",
+          "named": true
+        },
+        {
           "type": "binary_expression",
           "named": true
         },
@@ -3000,6 +3172,10 @@
         },
         {
           "type": "property_exists_expression",
+          "named": true
+        },
+        {
+          "type": "qualified_callable_identifier",
           "named": true
         },
         {
@@ -3065,6 +3241,10 @@
         "required": true,
         "types": [
           {
+            "type": "bare_callable_identifier",
+            "named": true
+          },
+          {
             "type": "binary_expression",
             "named": true
           },
@@ -3122,6 +3302,10 @@
           },
           {
             "type": "property_exists_expression",
+            "named": true
+          },
+          {
+            "type": "qualified_callable_identifier",
             "named": true
           },
           {
@@ -3223,6 +3407,10 @@
         "required": true,
         "types": [
           {
+            "type": "bare_callable_identifier",
+            "named": true
+          },
+          {
             "type": "binary_expression",
             "named": true
           },
@@ -3280,6 +3468,10 @@
           },
           {
             "type": "property_exists_expression",
+            "named": true
+          },
+          {
+            "type": "qualified_callable_identifier",
             "named": true
           },
           {
@@ -3397,6 +3589,10 @@
         "required": false,
         "types": [
           {
+            "type": "bare_callable_identifier",
+            "named": true
+          },
+          {
             "type": "binary_expression",
             "named": true
           },
@@ -3454,6 +3650,10 @@
           },
           {
             "type": "property_exists_expression",
+            "named": true
+          },
+          {
+            "type": "qualified_callable_identifier",
             "named": true
           },
           {
@@ -3696,6 +3896,10 @@
       "required": true,
       "types": [
         {
+          "type": "bare_callable_identifier",
+          "named": true
+        },
+        {
           "type": "binary_expression",
           "named": true
         },
@@ -3753,6 +3957,10 @@
         },
         {
           "type": "property_exists_expression",
+          "named": true
+        },
+        {
+          "type": "qualified_callable_identifier",
           "named": true
         },
         {
@@ -3835,6 +4043,10 @@
         "required": true,
         "types": [
           {
+            "type": "bare_callable_identifier",
+            "named": true
+          },
+          {
             "type": "binary_expression",
             "named": true
           },
@@ -3892,6 +4104,10 @@
           },
           {
             "type": "property_exists_expression",
+            "named": true
+          },
+          {
+            "type": "qualified_callable_identifier",
             "named": true
           },
           {
@@ -4006,6 +4222,10 @@
         "required": true,
         "types": [
           {
+            "type": "bare_callable_identifier",
+            "named": true
+          },
+          {
             "type": "binary_expression",
             "named": true
           },
@@ -4063,6 +4283,10 @@
           },
           {
             "type": "property_exists_expression",
+            "named": true
+          },
+          {
+            "type": "qualified_callable_identifier",
             "named": true
           },
           {

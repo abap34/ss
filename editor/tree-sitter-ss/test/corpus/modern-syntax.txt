@@ -292,3 +292,30 @@ end
         (bare_callable_identifier
           (identifier)))
       (block_text))))
+
+==================
+Bang-marked function references
+==================
+page References
+  let local = mark!
+  let imported = actions::mark!
+  apply(mark!)
+end
+
+---
+
+(source_file
+  (page_declaration
+    (identifier)
+    (let_statement
+      (identifier)
+      (bare_callable_identifier (identifier)))
+    (let_statement
+      (identifier)
+      (qualified_callable_identifier
+        (identifier)
+        (bare_callable_identifier (identifier))))
+    (expression_statement
+      (call_expression
+        (callable_identifier (bare_callable_identifier (identifier)))
+        (bare_callable_identifier (identifier))))))
