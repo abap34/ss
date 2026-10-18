@@ -7,12 +7,13 @@ const implementation =
     \\const suffix: String = "original"
     \\type Item { value: String = "original" }
     \\enum Choice { first second }
-    \\type Card = object { roles = ["exported-card"] }
+    \\type Card { content: String }
+    \\fn display(self: Placed<Card>) -> Text = text(self.value.content)
     \\fn default_item() -> Item
     \\  return Item { value = suffix }
     \\end
-    \\fn/! make(item: Item = default_item()) -> Object
-    \\  return new(item.value, "exported-card", "text")
+    \\fn/! make(item: Item = default_item()) -> Card
+    \\  return Card { content = item.value }
     \\end
     \\fn hidden() -> Number
     \\  return 99
@@ -73,9 +74,19 @@ fn verifyOriginalDeclarations(state: *core.DocumentState) !void {
     const original_type = sema.resolveTypeNameInContext(0, "a::Item") orelse return error.MissingType;
     const exported_type = sema.resolveTypeNameInContext(0, "b::Item") orelse return error.MissingType;
     try testing.expectEqual(original_type.nominal_module_id, exported_type.nominal_module_id);
-    for (state.graph.nodes.items) |*node| {
-        if (node.kind != .object) continue;
-        try testing.expectEqualStrings("original", core.nodeDisplayContent(node));
+    const original_card = sema.resolveTypeNameInContext(0, "a::Card") orelse return error.MissingType;
+    const exported_card = sema.resolveTypeNameInContext(0, "b::Card") orelse return error.MissingType;
+    try testing.expect(compiler.language.Type.eql(original_card, exported_card));
+    const display = sema.displayForType(exported_card) orelse return error.MissingDisplay;
+    try testing.expectEqual(direct.module_id, display.module_id);
+    const roots = state.placementRootsOf(state.graph.page_order.items[0]);
+    try testing.expectEqual(@as(usize, 3), roots.len);
+    for (roots) |root| {
+        const node = state.getNode(root).?;
+        try testing.expect(compiler.language.Type.eql(original_card, node.placement.?.value.record.ty));
+        const children = state.childrenOf(root).?;
+        try testing.expectEqual(@as(usize, 1), children.len);
+        try testing.expectEqualStrings("original", core.nodeDisplayContent(state.getNode(children[0]).?));
     }
 }
 
@@ -91,7 +102,7 @@ test "selected imports preserve declarations, default environments and placement
         \\page main
         \\  let item: a::Item = Item {}
         \\  let choice: a::Choice = Choice.first
-        \\  let card: Card = new("original", "exported-card", "text")
+        \\  let card: Card = make()
         \\  make!()
         \\  b::make!()
         \\  a::make!()
@@ -141,7 +152,15 @@ test "prelude exports use the canonical parameters without forwarding functions"
             const function = sema.resolvedFunction(.{ .qualifier = "prelude", .name = "text!" }) orelse return error.MissingFunction;
             const generated = state.moduleByPathOrSpec("std:text") orelse return error.MissingModule;
             try testing.expectEqual(generated.id, function.module_id);
-            try testing.expectEqual(@as(usize, 2), function.decl.params.items.len);
+            const text_sema = sema.forModule(generated.id);
+            const direct = text_sema.resolvedFunction(.bare("text!")) orelse return error.MissingFunction;
+            try testing.expect(direct.key.eql(function.key));
+            try testing.expect(direct.decl.params.items.ptr == function.decl.params.items.ptr);
+            try testing.expect(direct.decl.statements.items.ptr == function.decl.statements.items.ptr);
+            try testing.expectEqual(@as(usize, 3), function.decl.params.items.len);
+            for (function.decl.params.items, [_][]const u8{ "content", "style", "config" }) |parameter, name| {
+                try testing.expectEqualStrings(name, parameter.name);
+            }
             var found_custom = false;
             for (state.graph.nodes.items) |*node| {
                 if (std.mem.eql(u8, core.nodeDisplayContent(node), "custom")) found_custom = true;

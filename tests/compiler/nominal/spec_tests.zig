@@ -7,7 +7,6 @@ const testing = std.testing;
 
 const ExerciseOptions = struct {
     diagnostic: ?[]const u8 = null,
-    evaluation_error: ?anyerror = null,
     verify: ?*const fn (*core.DocumentState) anyerror!void = null,
 };
 
@@ -45,10 +44,6 @@ fn exerciseWithOptions(source: []const u8, first: []const u8, second: []const u8
     }
     var graph = (try compiler.analysis.analyzeDocumentStateWithMode(allocator, &state, .evaluation)).?;
     defer graph.deinit();
-    if (options.evaluation_error) |expected| {
-        try testing.expectError(expected, compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io }));
-        return;
-    }
     try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
     if (options.verify) |verify| try verify(&state);
     for (state.diagnostics.entries.items) |diagnostic| {
@@ -161,28 +156,22 @@ test "nominal enums: invalid record syntax keeps its qualified declaration" {
     , "enum Mode { first }", "", "InvalidTypeConstruction:");
 }
 
-test "nominal records: object defaults and nested writes preserve record ownership" {
+test "nominal values: placed inputs and nested updates preserve the defining module" {
     try exercise(
         \\import "a" as a
         \\import "b" as b
         \\page main
-        \\  let first = new("", "first_nominal", "text")
-        \\  let second = new("", "second_nominal", "text")
-        \\  first.style.value = 23
-        \\  second.style.value = "updated"
-        \\  let number: Number = a::accept(first.style ?? a::Style {})
-        \\  text!(b::accept(second.style ?? b::Style {}))
+        \\  let first = place!(a::Caption {} with { style.value = 23 })
+        \\  let second = place!(b::Caption {} with { style.value = "updated" })
+        \\  let number: Number = a::accept(first.value.style)
+        \\  text!(b::accept(second.value.style))
         \\end
     , number_record ++ "\n" ++
-        \\type FirstNominal = object {
-        \\  roles = ["first_nominal"]
-        \\  style: Style = Style {}
-        \\}
+        \\type Caption { style: Style = Style {} }
+        \\fn display(self: Placed<Caption>) -> Text = text("Caption")
     , string_record ++ "\n" ++
-        \\type SecondNominal = object {
-        \\  roles = ["second_nominal"]
-        \\  style: Style = Style {}
-        \\}
+        \\type Caption { style: Style = Style {} }
+        \\fn display(self: Placed<Caption>) -> Text = text("Caption")
     , null);
 }
 
@@ -260,127 +249,103 @@ test "nominal types: partially cloned function parameters are released on alloca
     try allocation_testing.checkAllAllocationFailures(testing.allocator, cloneNestedTypes, .{});
 }
 
-const first_object =
-    \\type Base = object {
-    \\  amount: Number = 12
-    \\}
-    \\type Box = object {
-    \\  base = Base
-    \\  roles = ["a-box"]
-    \\}
-    \\fn make() -> Box
-    \\  return new("", "a-box", "text")
-    \\end
-    \\fn accept(value: Box) -> Number
-    \\  return value.amount ?? 0
-    \\end
+const first_placed =
+    \\type Base { amount: Number = 12 }
+    \\type Box { base: Base = Base {} }
+    \\fn make() -> Box = Box {}
+    \\fn/! box() -> Box = make()
+    \\fn display(self: Placed<Box>) -> Text = text(str(self.value.base.amount))
+    \\fn accept(value: Placed<Box>) -> Number = value.value.base.amount
 ;
-const second_object =
-    \\type Base = object {
-    \\  amount: String = "second"
-    \\}
-    \\type Box = object {
-    \\  base = Base
-    \\  roles = ["b-box"]
-    \\}
-    \\fn make() -> Box
-    \\  return new("", "b-box", "text")
-    \\end
-    \\fn accept(value: Box) -> String
-    \\  return value.amount ?? ""
-    \\end
+const second_placed =
+    \\type Base { amount: String = "second" }
+    \\type Box { base: Base = Base {} }
+    \\fn make() -> Box = Box {}
+    \\fn/! box() -> Box = make()
+    \\fn display(self: Placed<Box>) -> Text = text(self.value.base.amount)
+    \\fn accept(value: Placed<Box>) -> String = value.value.base.amount
 ;
 
-test "nominal objects: inherited fields and function arguments ignore import order" {
+test "nominal placements: nested inputs and function arguments ignore import order" {
     const body =
         \\page main
-        \\  let first: a::Box = a::make()
-        \\  let second: b::Box = b::make()
-        \\  first.amount = 24
-        \\  second.amount = "changed"
+        \\  let first: Placed<a::Box> = place!(a::make() with { base.amount = 24 })
+        \\  let second: Placed<b::Box> = place!(b::make() with { base.amount = "changed" })
         \\  let amount: Number = a::accept(first)
         \\  text!(b::accept(second))
         \\end
     ;
-    try exercise("import \"a\" as a\nimport \"b\" as b\n" ++ body, first_object, second_object, null);
-    try exercise("import \"b\" as b\nimport \"a\" as a\n" ++ body, first_object, second_object, null);
+    try exercise("import \"a\" as a\nimport \"b\" as b\n" ++ body, first_placed, second_placed, null);
+    try exercise("import \"b\" as b\nimport \"a\" as a\n" ++ body, first_placed, second_placed, null);
 }
 
-test "nominal objects: same named imported classes are not interchangeable" {
+test "nominal placements: same named imported inputs are not interchangeable" {
     try exercise(
         \\import "a" as a
         \\import "b" as b
         \\page main
-        \\  let invalid: a::Box = b::make()
+        \\  let invalid: Placed<a::Box> = b::box!()
         \\end
-    , first_object, second_object, "TypeMismatch:");
+    , first_placed, second_placed, "TypeMismatch:");
     try exercise(
         \\import "a" as a
         \\page main
         \\  let invalid: Box = a::make()
         \\end
-    , first_object, "", "UnknownType:");
+    , first_placed, "", "UnknownType:");
 }
 
-test "nominal objects: qualified bases and extensions retain their target module" {
+test "nominal values: qualified nested updates preserve both modules and their defaults" {
     try exerciseWithOptions(
         \\import "a" as a
         \\import "b" as b
-        \\type Derived = object {
-        \\  base = a::Base
-        \\  roles = ["derived"]
-        \\}
-        \\extend a::Box {
-        \\  amount: Number = 35
-        \\}
-        \\extend b::Box {
-        \\  amount: String = "extended"
-        \\}
         \\page main
-        \\  let child = new("", "derived", "text")
-        \\  let number: Number = child.amount ?? 0
-        \\  let first: Number = a::accept(a::make())
-        \\  text!(b::accept(b::make()))
+        \\  place!(a::make() with { base.amount = 35 })
+        \\  place!(b::make() with { base.amount = "updated" })
+        \\  a::box!()
+        \\  b::box!()
         \\end
-    , first_object, second_object, .{ .verify = struct {
+    , first_placed, second_placed, .{ .verify = struct {
         fn verify(state: *core.DocumentState) !void {
-            var found: usize = 0;
-            for (state.graph.nodes.items) |*node| {
-                const role = node.role orelse continue;
-                if (std.mem.eql(u8, role, "a-box")) {
-                    var field = (try core.fields.get(state.allocator, state, node, "amount")).?;
-                    defer field.deinit(state.allocator);
-                    try testing.expectEqual(@as(f32, 35), field.value.number);
-                    found += 1;
-                } else if (std.mem.eql(u8, role, "b-box")) {
-                    var field = (try core.fields.get(state.allocator, state, node, "amount")).?;
-                    defer field.deinit(state.allocator);
-                    try testing.expectEqualStrings("extended", field.value.string);
-                    found += 1;
+            const roots = state.placementRootsOf(state.graph.page_order.items[0]);
+            try testing.expectEqual(@as(usize, 4), roots.len);
+            const a_type = state.getNode(roots[0]).?.placement.?.value.record.ty;
+            const b_type = state.getNode(roots[1]).?.placement.?.value.record.ty;
+            try testing.expect(!Type.eql(a_type, b_type));
+            for (roots, 0..) |root, index| {
+                const value = state.getNode(root).?.placement.?.value.record;
+                try testing.expect(Type.eql(if (index % 2 == 0) a_type else b_type, value.ty));
+                const base = value.field("base").?.record;
+                try testing.expectEqual(value.ty.nominal_module_id, base.ty.nominal_module_id);
+                const amount = base.field("amount").?;
+                switch (index) {
+                    0 => try testing.expectEqual(@as(f32, 35), amount.number),
+                    1 => try testing.expectEqualStrings("updated", amount.string),
+                    2 => try testing.expectEqual(@as(f32, 12), amount.number),
+                    3 => try testing.expectEqualStrings("second", amount.string),
+                    else => unreachable,
                 }
             }
-            try testing.expectEqual(@as(usize, 2), found);
         }
     }.verify });
 }
 
-test "nominal objects: a shadowing base name does not create an inheritance cycle" {
+test "nominal values: a shadowing type name does not capture its imported field type" {
     try exercise(
         \\import "a" as a
-        \\type Base = object {
-        \\  base = a::Base
-        \\  roles = ["derived"]
-        \\}
+        \\type Base { parent: a::Base = a::Base {} }
         \\page main
-        \\  let child = new("", "derived", "text")
-        \\  let number: Number = child.amount ?? 0
+        \\  let child = Base {}
+        \\  let number: Number = child.parent.amount
         \\end
-    , first_object, "", null);
+    , first_placed, "", null);
 }
 
-test "nominal objects: selections retain their element module" {
-    const first = Type.objectClass("Box").inModule(1);
-    const second = Type.objectClass("Box").inModule(2);
+test "nominal placements: selections retain their input declaration module" {
+    var first = try Type.placedOf(testing.allocator, Type.recordType("Box").inModule(1));
+    defer first.deinit(testing.allocator);
+    var second = try Type.placedOf(testing.allocator, Type.recordType("Box").inModule(2));
+    defer second.deinit(testing.allocator);
     var selection = try Type.selectionOf(testing.allocator, first);
     defer selection.deinit(testing.allocator);
     var other_selection = try Type.selectionOf(testing.allocator, second);
@@ -391,29 +356,27 @@ test "nominal objects: selections retain their element module" {
     try testing.expect(!Type.accepts(selection, other_selection));
     var cloned = try selection.clone(testing.allocator);
     defer cloned.deinit(testing.allocator);
-    try testing.expect(selection.selectionItemId().?.eql(cloned.selectionItemId().?));
+    try testing.expect(selection.selectionItem().placedInput().?.nominalId().?.eql(cloned.selectionItem().placedInput().?.nominalId().?));
 }
 
-test "nominal objects: unknown receivers do not select an arbitrary field type" {
+test "nominal placements: erased receivers do not select an arbitrary input field" {
     try exercise(
         \\import "a" as a
         \\import "b" as b
-        \\fn read(value: Object) -> String
-        \\  return value.amount ?? ""
+        \\fn read(value: Placement) -> String
+        \\  return value.amount
         \\end
-    , first_object, second_object, "UnknownField:");
+    , first_placed, second_placed, "UnknownField:");
 }
 
-test "nominal objects: dynamic object arguments are checked at runtime" {
-    try exerciseWithOptions(
+test "nominal placements: erasure cannot defer incompatible input arguments to evaluation" {
+    try exercise(
         \\import "a" as a
         \\import "b" as b
-        \\fn create(role: String) -> Object
-        \\  return new("", role, "text")
-        \\end
+        \\fn erase(value: Placed<b::Box>) -> Placement = value
         \\page main
-        \\  let value: Object = create("b-box")
+        \\  let value = erase(b::box!())
         \\  let invalid = a::accept(value)
         \\end
-    , first_object, second_object, .{ .evaluation_error = error.InvalidValueTag });
+    , first_placed, second_placed, "TypeMismatch:");
 }
