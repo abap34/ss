@@ -12,8 +12,6 @@ const Anchor = model.Anchor;
 const Constraint = model.Constraint;
 const ConstraintSource = model.ConstraintSource;
 const Frame = model.Frame;
-const GroupRole = model.GroupRole;
-const roleEq = model.roleEq;
 
 pub const ConstraintTolerance: f32 = 0.01;
 

@@ -1539,7 +1539,7 @@ fn constraintSourceLabel(allocator: std.mem.Allocator, state: *Workspace, constr
 
 fn nodeLabel(state: *Workspace, node_id: NodeId) []const u8 {
     const node = state.source.getNode(node_id) orelse return "unknown";
-    return node.role orelse node.name;
+    return node.name;
 }
 
 fn anchorConflictPropagation(state: *Workspace, workspace: *graph.AxisWorkspace, target_index: usize, constraint: Constraint, incoming_value: f32) !?model.ConstraintPropagation {

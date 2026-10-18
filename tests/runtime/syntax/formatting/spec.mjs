@@ -150,7 +150,7 @@ function profile(dump, name) {
   }
   return {
     // Creation order also checks exactly-once, left-to-right evaluation.
-    nodes: nodes.map((node) => ({ role: node.role, content: node.content, payload: node.payload_kind, frame: [node.x, node.y, node.width, node.height], measurement: node.measurement })),
+    nodes: nodes.map((node) => ({ content: node.content, payload: node.payload_kind, frame: [node.x, node.y, node.width, node.height], measurement: node.measurement })),
     children: nodes.map((node) => (children.get(node.id) ?? []).map(identity)),
     roots: (dump.placement_roots.find((entry) => entry.page === page.id)?.roots ?? []).map(identity),
     diagnostics: dump.diagnostics.filter((diagnostic) => diagnostic.page_id === page.id).map(({ origin, page_id, node_id, ...diagnostic }) => ({

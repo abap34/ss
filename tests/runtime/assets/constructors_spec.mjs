@@ -83,7 +83,7 @@ end
       const scale = index === 1 ? 0.5 : 1;
       close(node.width, width * scale);
       close(node.height, height * scale);
-      assert.equal(node.role, null);
+      assert(!Object.hasOwn(node, "role"));
       assert.deepEqual(node.fields, {});
       assert.equal(node.content, input);
       assert.equal(node.placement.display.kind, name);

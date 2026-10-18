@@ -39,7 +39,7 @@ end
     for (const node of bodies) {
       assert.equal(node.content, bodies[0].content);
       assert(node.content.includes(String.raw`\textbf{LaTeX body}`));
-      assert.equal(node.role, null);
+      assert(!Object.hasOwn(node, "role"));
       assert.deepEqual(node.fields, {});
       assert.equal(node.blocks, null);
       assert.equal(node.inline_lines, null);

@@ -320,7 +320,6 @@ fn appendStateArray(object: *json.Object, state: *Workspace, field_name: []const
         var item = try states.objectItem();
         try item.intField("id", child_id);
         try item.stringField("name", node.name);
-        try item.optionalStringField("role", node.role);
         try item.stringField("kind", @tagName(node.kind));
         try appendAxisState(&item, axis_state);
         try item.end();
@@ -464,7 +463,6 @@ fn appendNodeEndpoint(object: *json.Object, state: *Workspace, node_id: model.No
     try object.stringField("type", "node");
     try object.intField("id", node_id);
     try object.stringField("name", if (node) |value| value.name else "unknown");
-    try object.optionalStringField("role", if (node) |value| value.role else null);
     try object.stringField("anchor", anchorName(anchor));
 }
 

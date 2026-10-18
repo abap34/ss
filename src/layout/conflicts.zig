@@ -340,7 +340,6 @@ pub fn toJson(allocator: std.mem.Allocator, state: anytype, layouts: *const Docu
             try item.intField("id", node.id);
             try item.intField("page_id", page_id);
             try item.stringField("name", node.name);
-            try item.optionalStringField("role", node.role);
             try item.floatField("x", frame.x, "{d:.4}");
             try item.floatField("y", frame.y, "{d:.4}");
             try item.floatField("width", frame.width, "{d:.4}");
@@ -549,7 +548,7 @@ fn appendOriginObject(object: *json.Object, field_name: []const u8, state: anyty
 
 fn nodeLabel(state: anytype, node_id: NodeId) []const u8 {
     const node = state.getNode(node_id) orelse return "unknown";
-    return node.role orelse node.name;
+    return node.name;
 }
 
 fn constraintIndex(state: anytype, needle: Constraint) ?usize {

@@ -12,7 +12,6 @@ const Allocator = model.Allocator;
 const NodeId = model.NodeId;
 const Node = model.Node;
 const NodeKind = model.NodeKind;
-const Role = model.Role;
 const ObjectKind = model.ObjectKind;
 const PayloadKind = model.PayloadKind;
 const Constraint = model.Constraint;
@@ -26,8 +25,6 @@ const Query = model.Query;
 
 const Diagnostic = model.Diagnostic;
 const DiagnosticSeverity = model.DiagnosticSeverity;
-const GroupRole = model.GroupRole;
-const roleEq = model.roleEq;
 const nodeField = model.nodeField;
 
 pub const SourceModuleId = u32;
@@ -684,17 +681,16 @@ pub const DocumentState = struct {
         self: *DocumentState,
         page_id: NodeId,
         name: []const u8,
-        role: ?Role,
         object_kind: ObjectKind,
         payload_kind: PayloadKind,
         content: ?[]const u8,
     ) !NodeId {
-        return self.makeNodeWithOrigin(page_id, true, .object, name, role, object_kind, payload_kind, content, null);
+        return self.makeNodeWithOrigin(page_id, true, .object, name, object_kind, payload_kind, content, null);
     }
 
     /// Register a fresh placement without evaluating its display. The caller
     /// has checked the input's display contract and keeps borrowed Value data
-    /// alive for the document. No rendering kind or legacy role is inferred.
+    /// alive for the document. No rendering kind is inferred.
     pub fn registerPlacement(
         self: *DocumentState,
         parent_id: NodeId,
@@ -807,13 +803,12 @@ pub const DocumentState = struct {
     pub fn createObjectWithOrigin(
         self: *DocumentState,
         name: []const u8,
-        role: ?Role,
         object_kind: ObjectKind,
         payload_kind: PayloadKind,
         content: ?[]const u8,
         origin: ?model.SourceOrigin,
     ) !NodeId {
-        return self.makeNodeWithOrigin(self.graph.document_id, false, .object, name, role, object_kind, payload_kind, content, origin);
+        return self.makeNodeWithOrigin(self.graph.document_id, false, .object, name, object_kind, payload_kind, content, origin);
     }
 
     pub fn makeGroupWithOrigin(
@@ -828,8 +823,7 @@ pub const DocumentState = struct {
             attached,
             .object,
             "group",
-            GroupRole,
-            .overlay,
+            .group,
             .text,
             "",
             origin,
@@ -1049,7 +1043,6 @@ pub const DocumentState = struct {
         attached: bool,
         kind: NodeKind,
         name: []const u8,
-        role: ?Role,
         object_kind: ObjectKind,
         payload_kind: PayloadKind,
         content: ?[]const u8,
@@ -1057,7 +1050,6 @@ pub const DocumentState = struct {
     ) !NodeId {
         const obj_id = try self.freshId();
         const owned_name = try self.copyString(name);
-        const owned_role = try self.copyOptionalString(role);
         const owned_content = try self.copyOptionalString(content);
         const owned_origin = if (origin) |value| try self.copyOrigin(value) else null;
         var content_provenance = if (content) |value|
@@ -1074,7 +1066,6 @@ pub const DocumentState = struct {
             .kind = kind,
             .name = owned_name,
             .attached = attached,
-            .role = owned_role,
             .object_kind = object_kind,
             .payload_kind = payload_kind,
             .content = owned_content,
@@ -1207,14 +1198,12 @@ pub const DocumentState = struct {
             if (node.kind != .object or node.discarded) continue;
             const ownership = self.directPageOwnershipInfo(node.id);
             if (ownership.count > 1) {
-                const role = node.role orelse node.name;
-                const message = try std.fmt.allocPrint(self.allocator, "object '{s}' belongs to multiple pages", .{role});
+                const message = try std.fmt.allocPrint(self.allocator, "object '{s}' belongs to multiple pages", .{node.name});
                 try self.addValidationDiagnostic(.@"error", null, node.id, node.origin, .{
                     .user_report = .{ .code = "PageOwnershipConflict", .message = message },
                 });
             } else if (node.attached and ownership.count == 0) {
-                const role = node.role orelse node.name;
-                const message = try std.fmt.allocPrint(self.allocator, "attached object '{s}' is not contained by a page", .{role});
+                const message = try std.fmt.allocPrint(self.allocator, "attached object '{s}' is not contained by a page", .{node.name});
                 try self.addValidationDiagnostic(.@"error", null, node.id, node.origin, .{
                     .user_report = .{ .code = "PageOwnershipConflict", .message = message },
                 });
@@ -1239,7 +1228,7 @@ pub const DocumentState = struct {
         if (direct.count == 1) return direct.first;
         if (direct.count > 1) return null;
         const node = self.getNode(node_id) orelse return null;
-        if (!roleEq(node.role, GroupRole)) return null;
+        if (!model.isGroupNode(node)) return null;
         // A group can describe the bounds of already placed children without
         // itself becoming a drawing object or a page placement root.
         return self.uniqueAttachedDescendantPage(node_id, remaining_nodes - 1);
@@ -1274,11 +1263,11 @@ pub const DocumentState = struct {
         if (self.hasCrossPageConstraintDiagnostic(constraint)) return;
 
         const target_node = self.getNode(constraint.target_node);
-        const target_role = if (target_node) |node| node.role orelse node.name else "unknown";
+        const target_name = if (target_node) |node| node.name else "unknown";
         const message = try std.fmt.allocPrint(
             self.allocator,
             "constraint target object '{s}' belongs to page {d}, source belongs to page {d}, and registration belongs to page {d}",
-            .{ target_role, self.pageIndexOf(target_page), self.pageIndexOf(source_page), self.pageIndexOf(registered_page) },
+            .{ target_name, self.pageIndexOf(target_page), self.pageIndexOf(source_page), self.pageIndexOf(registered_page) },
         );
         try self.addValidationDiagnostic(.@"error", target_page, constraint.target_node, constraint.origin, .{
             .user_report = .{ .code = "CrossPageConstraint", .message = message },
@@ -1293,18 +1282,17 @@ pub const DocumentState = struct {
         }
     }
 
-    fn addConstraintEndpointOwnershipDiagnostic(self: *DocumentState, node_id: NodeId, role: []const u8, origin: ?model.SourceOrigin) !void {
+    fn addConstraintEndpointOwnershipDiagnostic(self: *DocumentState, node_id: NodeId, endpoint: []const u8, origin: ?model.SourceOrigin) !void {
         if (self.layoutPageOf(node_id) != null) return;
         const ownership = self.directPageOwnershipInfo(node_id);
         if (ownership.count > 1) return;
         const node = self.getNode(node_id) orelse return;
         if (node.kind != .object or node.discarded) return;
         if (self.hasUnownedLayoutObjectDiagnostic(node_id, origin)) return;
-        const node_role = node.role orelse node.name;
         const message = try std.fmt.allocPrint(
             self.allocator,
             "constraint {s} object '{s}' does not belong to a page",
-            .{ role, node_role },
+            .{ endpoint, node.name },
         );
         try self.addValidationDiagnostic(.@"error", null, node_id, origin orelse node.origin, .{
             .user_report = .{ .code = "UnownedLayoutObject", .message = message },

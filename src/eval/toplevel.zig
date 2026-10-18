@@ -169,7 +169,7 @@ pub const EvalContext = struct {
         try checkCancellation(self);
         const child = try self.state.registerPlacement(id, output, origin);
         const parent = self.state.getNode(id).?;
-        parent.object_kind = .overlay;
+        parent.object_kind = .group;
         parent.placement.?.display = .{ .expanded = .{ .target = target, .child = child } };
         return child;
     }
@@ -188,7 +188,7 @@ pub const EvalContext = struct {
                 }
                 const children = try self.state.registerPlacementChildren(id, placement.value.group.children.items, node.origin);
                 const parent = self.state.getNode(id).?;
-                parent.object_kind = .overlay;
+                parent.object_kind = .group;
                 parent.placement.?.display = .group;
                 return children;
             },

@@ -456,8 +456,8 @@ test "layout graph spec: page graph indexes direct page children and filters axi
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const a = try state.makeObject(page, "a", null, .text, .text, "A");
-    const b = try state.makeObject(page, "b", null, .text, .text, "B");
+    const a = try state.makeObject(page, "a", .text, .text, "A");
+    const b = try state.makeObject(page, "b", .text, .text, "B");
     _ = try state.makeGroupWithOrigin(page, true, &.{ a, b }, .{ .label = "group" });
 
     try state.constraints.addAnchor(state.allocator, a, .left, .{ .page = .left }, 10, .{ .label = "a-left" });
@@ -489,9 +489,9 @@ test "layout graph spec: implicit constraint objects stay page local" {
 
     const first_page = try state.addPage("First");
     const second_page = try state.addPage("Second");
-    const placed = try state.makeObject(first_page, "placed", null, .text, .text, "placed");
-    const helper = try state.createObjectWithOrigin("helper", null, .text, .text, "helper", null);
-    const foreign = try state.makeObject(second_page, "foreign", null, .text, .text, "foreign");
+    const placed = try state.makeObject(first_page, "placed", .text, .text, "placed");
+    const helper = try state.createObjectWithOrigin("helper", .text, .text, "helper", null);
+    const foreign = try state.makeObject(second_page, "foreign", .text, .text, "foreign");
     try state.constraints.addAnchor(state.allocator, placed, .top, .{ .node = .{ .node_id = helper, .anchor = .top } }, 10, .{ .label = "helper-top" });
     try state.constraints.addAnchor(state.allocator, placed, .left, .{ .node = .{ .node_id = foreign, .anchor = .left } }, 20, .{ .label = "foreign-left" });
 
@@ -514,8 +514,8 @@ test "layout graph spec: constraint classification names layout dependency roles
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const a = try state.makeObject(page, "a", null, .text, .text, "A");
-    const b = try state.makeObject(page, "b", null, .text, .text, "B");
+    const a = try state.makeObject(page, "a", .text, .text, "A");
+    const b = try state.makeObject(page, "b", .text, .text, "B");
     const group_id = try state.makeGroupWithOrigin(page, true, &.{ a, b }, .{ .label = "group" });
 
     var page_graph = try initPageGraph(&state, page);
@@ -585,8 +585,8 @@ test "layout graph spec: axis workspaces seed known frames only without target c
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const unconstrained = try state.makeObject(page, "free", null, .text, .text, "Free");
-    const constrained = try state.makeObject(page, "fixed", null, .text, .text, "Fixed");
+    const unconstrained = try state.makeObject(page, "free", .text, .text, "Free");
+    const constrained = try state.makeObject(page, "fixed", .text, .text, "Fixed");
 
     (try state_layout.frame(unconstrained)).* = .{ .x = 10, .y = 20, .width = 30, .height = 40, .x_set = true, .y_set = true };
     (try state_layout.frame(constrained)).* = .{ .x = 100, .y = 200, .width = 50, .height = 60, .x_set = true, .y_set = true };
@@ -619,7 +619,7 @@ test "axis propagation completes long dependency chains in either constraint ord
         defer state_layout.deinit();
         const page = try state.addPage("Long chain");
         var nodes: [count]model.NodeId = undefined;
-        for (&nodes) |*node| node.* = try state.makeObject(page, "cell", null, .text, .text, "x");
+        for (&nodes) |*node| node.* = try state.makeObject(page, "cell", .text, .text, "x");
         for (1..count) |position| {
             const index = if (reversed) count - position else position;
             try state.constraints.addAnchor(state.allocator, nodes[index], .left, .{ .node = .{ .node_id = nodes[index - 1], .anchor = .right } }, 1, .{ .label = "chain" });
@@ -651,7 +651,7 @@ test "axis propagation resolves deep groups in either node order" {
     var state_layout = LayoutFixture.init(&state);
     defer state_layout.deinit();
     const page = try state.addPage("Deep groups");
-    const leaf = try state.makeObject(page, "leaf", null, .text, .text, "x");
+    const leaf = try state.makeObject(page, "leaf", .text, .text, "x");
     var outer = leaf;
     for (0..128) |_| outer = try state.makeGroupWithOrigin(page, true, &.{outer}, .{ .label = "group" });
     try state.constraints.addAnchor(state.allocator, outer, .left, .{ .page = .left }, 100, .{ .label = "outer-left" });
@@ -684,7 +684,7 @@ test "layout exhaustion survives isolated jobs and cannot be applied" {
             defer state_layout.deinit();
             for (0..2) |_| {
                 const page = try state.addPage("Unconverged group");
-                const child = try state.makeObject(page, "child", null, .text, .text, "x");
+                const child = try state.makeObject(page, "child", .text, .text, "x");
                 const group = try state.makeGroupWithOrigin(page, true, &.{child}, .{ .label = "group" });
                 try state.constraints.addAnchor(state.allocator, child, .left, .{ .page = .left }, 0, .{ .label = "child-left" });
                 try state.constraints.addAnchor(state.allocator, child, .right, .{ .node = .{ .node_id = child, .anchor = .left } }, 10, .{ .label = "child-width" });
@@ -727,7 +727,7 @@ test "layout solver: final validation rejects unsatisfied hard constraints" {
     defer self_conflict_layout.deinit();
 
     const self_page = try self_conflict.addPage("Page");
-    const object = try self_conflict.makeObject(self_page, "body", null, .text, .text, "A");
+    const object = try self_conflict.makeObject(self_page, "body", .text, .text, "A");
     try self_conflict.constraints.addAnchor(self_conflict.allocator, object, .top, .{ .node = .{ .node_id = object, .anchor = .top } }, 100, .{ .label = "self-top" });
     try testing.expectError(error.ConstraintConflict, finalizeDocumentState(&self_conflict_layout));
 
@@ -737,8 +737,8 @@ test "layout solver: final validation rejects unsatisfied hard constraints" {
     defer cycle_layout.deinit();
 
     const cycle_page = try cycle.addPage("Page");
-    const a = try cycle.makeObject(cycle_page, "a", null, .text, .text, "A");
-    const b = try cycle.makeObject(cycle_page, "b", null, .text, .text, "B");
+    const a = try cycle.makeObject(cycle_page, "a", .text, .text, "A");
+    const b = try cycle.makeObject(cycle_page, "b", .text, .text, "B");
     try cycle.constraints.addAnchor(cycle.allocator, a, .top, .{ .node = .{ .node_id = b, .anchor = .top } }, 10, .{ .label = "a-top" });
     try cycle.constraints.addAnchor(cycle.allocator, b, .top, .{ .node = .{ .node_id = a, .anchor = .top } }, 10, .{ .label = "b-top" });
     try testing.expectError(error.ConstraintConflict, finalizeDocumentState(&cycle_layout));
@@ -751,8 +751,8 @@ test "layout solver: consistent constraint cycles are fixed by fallback placemen
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const a = try state.makeObject(page, "a", null, .text, .text, "A");
-    const b = try state.makeObject(page, "b", null, .text, .text, "B");
+    const a = try state.makeObject(page, "a", .text, .text, "A");
+    const b = try state.makeObject(page, "b", .text, .text, "B");
     try state.constraints.addAnchor(state.allocator, a, .top, .{ .node = .{ .node_id = b, .anchor = .top } }, 0, .{ .label = "a-top" });
     try state.constraints.addAnchor(state.allocator, b, .top, .{ .node = .{ .node_id = a, .anchor = .top } }, 0, .{ .label = "b-top" });
 
@@ -771,7 +771,7 @@ test "layout solver: tautological self-anchor constraints do not block fallback 
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "body", null, .text, .text, "A");
+    const object = try state.makeObject(page, "body", .text, .text, "A");
     try state.constraints.addAnchor(state.allocator, object, .top, .{ .node = .{ .node_id = object, .anchor = .top } }, 0, .{ .label = "self-top" });
 
     try finalizeDocumentState(&state_layout);
@@ -788,8 +788,8 @@ test "layout solver: vertical fallback tries alternate roots in incomplete compo
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const panel = try state.makeObject(page, "panel", null, .text, .text, "");
-    const body = try state.makeObject(page, "body", null, .text, .text, "content");
+    const panel = try state.makeObject(page, "panel", .text, .text, "");
+    const body = try state.makeObject(page, "body", .text, .text, "content");
     try state.constraints.addAnchor(state.allocator, panel, .left, .{ .page = .left }, 52, .{ .label = "panel-left" });
     try state.constraints.addAnchor(state.allocator, panel, .right, .{ .page = .right }, -52, .{ .label = "panel-right" });
     try state.constraints.addAnchor(state.allocator, body, .left, .{ .page = .left }, 72, .{ .label = "body-left" });
@@ -813,8 +813,8 @@ test "layout solver: constraint-referenced objects participate in fallback place
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const placed = try state.makeObject(page, "placed", null, .text, .text, "placed");
-    const referenced = try state.makeObject(page, "referenced", null, .text, .text, "referenced");
+    const placed = try state.makeObject(page, "placed", .text, .text, "placed");
+    const referenced = try state.makeObject(page, "referenced", .text, .text, "referenced");
     try state.constraints.addAnchor(state.allocator, placed, .top, .{ .node = .{ .node_id = referenced, .anchor = .top } }, 10, .{ .label = "placed-top" });
 
     try finalizeDocumentState(&state_layout);
@@ -832,7 +832,7 @@ test "layout solver: size-only constraints still receive fallback placement" {
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "body", null, .text, .text, "content");
+    const object = try state.makeObject(page, "body", .text, .text, "content");
     try state.constraints.addAnchor(state.allocator, object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, 240, .{ .label = "object-width" });
     try state.constraints.addAnchor(state.allocator, object, .top, .{ .node = .{ .node_id = object, .anchor = .bottom } }, 96, .{ .label = "object-height" });
 
@@ -852,9 +852,9 @@ test "layout solver: page-dependent group children receive local vertical fallba
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const ruler = try state.makeObject(page, "rule", null, .text, .text, "");
-    const title = try state.makeObject(page, "title", null, .text, .text, "Title");
-    const body = try state.makeObject(page, "body", null, .text, .text, "Body");
+    const ruler = try state.makeObject(page, "rule", .text, .text, "");
+    const title = try state.makeObject(page, "title", .text, .text, "Title");
+    const body = try state.makeObject(page, "body", .text, .text, "Body");
     _ = try state.makeGroupWithOrigin(page, true, &.{ ruler, title }, .{ .label = "head" });
     try setLayoutLineHeight(&state, ruler, "4");
     try setLayoutSpacingAfter(&state, ruler, "12");
@@ -877,9 +877,9 @@ test "layout solver: fallback does not conflict with a nested group target" {
         var state_layout = LayoutFixture.init(&state);
         defer state_layout.deinit();
         const page = try state.addPage("Nested group");
-        const a = try state.createObjectWithOrigin("a", null, .text, .text, "A", null);
-        const b = try state.createObjectWithOrigin("b", null, .text, .text, "B", null);
-        const c = try state.createObjectWithOrigin("c", null, .text, .text, "C", null);
+        const a = try state.createObjectWithOrigin("a", .text, .text, "A", null);
+        const b = try state.createObjectWithOrigin("b", .text, .text, "B", null);
+        const c = try state.createObjectWithOrigin("c", .text, .text, "C", null);
         const inner = try state.createGroupWithOrigin(&.{ b, c }, null);
         const outer = try state.createGroupWithOrigin(&.{ a, inner }, null);
         if (place_outer) {
@@ -920,7 +920,7 @@ test "layout graph: affine cuts wait for and use the source axis extent" {
     var state_layout = LayoutFixture.init(&state);
     defer state_layout.deinit();
     const page = try state.addPage("Affine cuts");
-    const child = try state.makeObject(page, "body", null, .text, .text, "A");
+    const child = try state.makeObject(page, "body", .text, .text, "A");
     const group = try state.makeGroupWithOrigin(page, true, &.{child}, null);
     var page_graph = try initPageGraph(&state, page);
     defer page_graph.deinit();
@@ -949,7 +949,7 @@ test "layout groups: soft positions preserve hard anchors and tight sizes" {
         var state_layout = LayoutFixture.init(&state);
         defer state_layout.deinit();
         const page = try state.addPage("Group fallback");
-        const child = try state.makeObject(page, "body", null, .text, .text, "A");
+        const child = try state.makeObject(page, "body", .text, .text, "A");
         const group = try state.makeGroupWithOrigin(page, true, &.{child}, null);
         try state.constraints.addAnchor(state.allocator, group, hard_anchor, .{ .page = .bottom }, 400, null);
         var page_graph = try initPageGraph(&state, page);
@@ -982,10 +982,10 @@ test "layout solver: a page-positioned object does not affect page flow" {
     defer baseline_layout.deinit();
 
     const baseline_page = try baseline.addPage("Page");
-    const baseline_title = try baseline.createObjectWithOrigin("title", null, .text, .text, "Title", null);
-    const baseline_rule = try baseline.createObjectWithOrigin("rule", null, .text, .text, "", null);
+    const baseline_title = try baseline.createObjectWithOrigin("title", .text, .text, "Title", null);
+    const baseline_rule = try baseline.createObjectWithOrigin("rule", .text, .text, "", null);
     const baseline_head = try baseline.createGroupWithOrigin(&.{ baseline_title, baseline_rule }, .{ .label = "head" });
-    const baseline_body = try baseline.createObjectWithOrigin("body", null, .text, .text, "Body", null);
+    const baseline_body = try baseline.createObjectWithOrigin("body", .text, .text, "Body", null);
     try baseline.placeObjectOnPage(baseline_page, baseline_head);
     try baseline.placeObjectOnPage(baseline_page, baseline_body);
     try setLayoutLineHeight(&baseline, baseline_title, "44");
@@ -1002,16 +1002,16 @@ test "layout solver: a page-positioned object does not affect page flow" {
     defer decorated_layout.deinit();
 
     const decorated_page = try decorated.addPage("Page");
-    const page_number = try decorated.createObjectWithOrigin("pageno", null, .text, .text, "1", null);
+    const page_number = try decorated.createObjectWithOrigin("pageno", .text, .text, "1", null);
     try decorated.placeObjectOnPage(decorated_page, page_number);
     try setLayoutLineHeight(&decorated, page_number, "16");
     try setLayoutSpacingAfter(&decorated, page_number, "0");
     try decorated.constraints.addAnchor(decorated.allocator, page_number, .bottom, .{ .page = .bottom }, 20, .{ .label = "pageno-bottom" });
 
-    const decorated_title = try decorated.createObjectWithOrigin("title", null, .text, .text, "Title", null);
-    const decorated_rule = try decorated.createObjectWithOrigin("rule", null, .text, .text, "", null);
+    const decorated_title = try decorated.createObjectWithOrigin("title", .text, .text, "Title", null);
+    const decorated_rule = try decorated.createObjectWithOrigin("rule", .text, .text, "", null);
     const decorated_head = try decorated.createGroupWithOrigin(&.{ decorated_title, decorated_rule }, .{ .label = "head" });
-    const decorated_body = try decorated.createObjectWithOrigin("body", null, .text, .text, "Body", null);
+    const decorated_body = try decorated.createObjectWithOrigin("body", .text, .text, "Body", null);
     try decorated.placeObjectOnPage(decorated_page, decorated_head);
     try decorated.placeObjectOnPage(decorated_page, decorated_body);
     try setLayoutLineHeight(&decorated, decorated_title, "44");
@@ -1041,11 +1041,11 @@ test "layout solver: page-positioned components leave unrelated vertical flow un
                 const page = try state.addPage("Page anchors");
                 try setLayoutPolicy(&state, page, policy);
 
-                const heading = try state.createObjectWithOrigin("heading", null, .text, .text, "Heading", null);
-                const note = try state.createObjectWithOrigin("note", null, .text, .text, "Note", null);
+                const heading = try state.createObjectWithOrigin("heading", .text, .text, "Heading", null);
+                const note = try state.createObjectWithOrigin("note", .text, .text, "Note", null);
                 const fixed = try state.createGroupWithOrigin(&.{ heading, note }, null);
-                const first = try state.createObjectWithOrigin("body", null, .text, .text, "First", null);
-                const second = try state.createObjectWithOrigin("body", null, .text, .text, "Second", null);
+                const first = try state.createObjectWithOrigin("body", .text, .text, "First", null);
+                const second = try state.createObjectWithOrigin("body", .text, .text, "Second", null);
                 if (place_fixed_first) try state.placeObjectOnPage(page, fixed);
                 try state.placeObjectOnPage(page, first);
                 try state.placeObjectOnPage(page, second);
@@ -1091,8 +1091,8 @@ test "layout solver: page-dependent group children before fixed anchors receive 
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const title = try state.makeObject(page, "title", null, .text, .text, "Title");
-    const ruler = try state.makeObject(page, "rule", null, .text, .text, "");
+    const title = try state.makeObject(page, "title", .text, .text, "Title");
+    const ruler = try state.makeObject(page, "rule", .text, .text, "");
     _ = try state.makeGroupWithOrigin(page, true, &.{ title, ruler }, .{ .label = "head" });
     try setLayoutSpacingAfter(&state, title, "12");
     try setLayoutLineHeight(&state, ruler, "4");
@@ -1113,9 +1113,9 @@ test "layout solver: page-dependent vertical cycles receive fallback placement" 
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const ruler = try state.makeObject(page, "rule", null, .text, .text, "");
-    const first = try state.makeObject(page, "first", null, .text, .text, "A");
-    const second = try state.makeObject(page, "second", null, .text, .text, "B");
+    const ruler = try state.makeObject(page, "rule", .text, .text, "");
+    const first = try state.makeObject(page, "first", .text, .text, "A");
+    const second = try state.makeObject(page, "second", .text, .text, "B");
     _ = try state.makeGroupWithOrigin(page, true, &.{ ruler, first, second }, .{ .label = "head" });
     try setLayoutLineHeight(&state, ruler, "4");
     try setLayoutSpacingAfter(&state, ruler, "12");
@@ -1139,9 +1139,9 @@ test "layout solver: page-dependent horizontal cycles receive fallback placement
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const ruler = try state.makeObject(page, "rule", null, .text, .text, "");
-    const first = try state.makeObject(page, "first", null, .text, .text, "A");
-    const second = try state.makeObject(page, "second", null, .text, .text, "B");
+    const ruler = try state.makeObject(page, "rule", .text, .text, "");
+    const first = try state.makeObject(page, "first", .text, .text, "A");
+    const second = try state.makeObject(page, "second", .text, .text, "B");
     _ = try state.makeGroupWithOrigin(page, true, &.{ ruler, first, second }, .{ .label = "head" });
     try setLayoutLineHeight(&state, ruler, "4");
     try state.constraints.addAnchor(state.allocator, ruler, .left, .{ .page = .left }, 100, .{ .label = "rule-left" });
@@ -1165,9 +1165,9 @@ test "layout solver: centered page-dependent group children receive local vertic
     try setLayoutPolicy(&state, state.graph.document_id, "center");
 
     const page = try state.addPage("Page");
-    const ruler = try state.makeObject(page, "rule", null, .text, .text, "");
-    const title = try state.makeObject(page, "title", null, .text, .text, "Title");
-    const body = try state.makeObject(page, "body", null, .text, .text, "Body");
+    const ruler = try state.makeObject(page, "rule", .text, .text, "");
+    const title = try state.makeObject(page, "title", .text, .text, "Title");
+    const body = try state.makeObject(page, "body", .text, .text, "Body");
     _ = try state.makeGroupWithOrigin(page, true, &.{ ruler, title }, .{ .label = "head" });
     try setLayoutLineHeight(&state, ruler, "4");
     try setLayoutSpacingAfter(&state, ruler, "12");
@@ -1191,8 +1191,8 @@ test "layout solver: horizontal alignment alone does not imply vertical row alig
     defer stacked_layout.deinit();
 
     const stacked_page = try stacked.addPage("Page");
-    const first = try stacked.makeObject(stacked_page, "first", null, .text, .text, "A");
-    const second = try stacked.makeObject(stacked_page, "second", null, .text, .text, "B");
+    const first = try stacked.makeObject(stacked_page, "first", .text, .text, "A");
+    const second = try stacked.makeObject(stacked_page, "second", .text, .text, "B");
     _ = try stacked.makeGroupWithOrigin(stacked_page, true, &.{ first, second }, .{ .label = "group" });
     try stacked.constraints.addAnchor(stacked.allocator, second, .left, .{ .node = .{ .node_id = first, .anchor = .left } }, 0, .{ .label = "same-left" });
 
@@ -1208,8 +1208,8 @@ test "layout solver: horizontal alignment alone does not imply vertical row alig
     defer row_layout.deinit();
 
     const row_page = try row.addPage("Page");
-    const left = try row.makeObject(row_page, "left", null, .text, .text, "A");
-    const right = try row.makeObject(row_page, "right", null, .text, .text, "B");
+    const left = try row.makeObject(row_page, "left", .text, .text, "A");
+    const right = try row.makeObject(row_page, "right", .text, .text, "B");
     try row.constraints.addAnchor(row.allocator, right, .left, .{ .node = .{ .node_id = left, .anchor = .right } }, 30, .{ .label = "right-of-left" });
     try row.constraints.addAnchor(row.allocator, right, .center_y, .{ .node = .{ .node_id = left, .anchor = .center_y } }, 0, .{ .label = "same-center-y" });
 
@@ -1246,8 +1246,8 @@ test "layout solver: row defaults follow effective page policy independently of 
             const page = try state.addPage("Row policy");
             try setLayoutPolicy(&state, state.graph.document_id, case.document);
             if (case.page) |policy| try setLayoutPolicy(&state, page, policy);
-            const first = try state.makeObject(page, "first", null, .text, .text, "A");
-            const second = try state.makeObject(page, "second", null, .text, .text, "B");
+            const first = try state.makeObject(page, "first", .text, .text, "A");
+            const second = try state.makeObject(page, "second", .text, .text, "B");
             const a = if (reverse) second else first;
             const b = if (reverse) first else second;
             try addFixedSize(&state, a, 120, 80);
@@ -1275,8 +1275,8 @@ test "layout solver: explicit target anchors override row defaults without rever
         var state_layout = LayoutFixture.init(&state);
         defer state_layout.deinit();
         const page = try state.addPage("Explicit target");
-        const a = try state.makeObject(page, "a", null, .text, .text, "A");
-        const b = try state.makeObject(page, "b", null, .text, .text, "B");
+        const a = try state.makeObject(page, "a", .text, .text, "A");
+        const b = try state.makeObject(page, "b", .text, .text, "B");
         try addFixedSize(&state, a, 120, 80);
         try addFixedSize(&state, b, 180, 160);
         try state.constraints.addAnchor(state.allocator, b, .left, .{ .node = .{ .node_id = a, .anchor = .right } }, 32, null);
@@ -1303,9 +1303,9 @@ test "layout solver: row defaults align nested column bounds with fixed or flowi
                 defer state_layout.deinit();
                 const page = try state.addPage("Nested default alignment");
                 try setLayoutPolicy(&state, state.graph.document_id, policy);
-                const a = try state.createObjectWithOrigin("a", null, .text, .text, "A", null);
-                const b = try state.createObjectWithOrigin("b", null, .text, .text, "B", null);
-                const c = try state.createObjectWithOrigin("c", null, .text, .text, "C", null);
+                const a = try state.createObjectWithOrigin("a", .text, .text, "A", null);
+                const b = try state.createObjectWithOrigin("b", .text, .text, "B", null);
+                const c = try state.createObjectWithOrigin("c", .text, .text, "C", null);
                 const inner = try state.createGroupWithOrigin(&.{ b, c }, null);
                 const outer = try state.createGroupWithOrigin(&.{ a, inner }, null);
                 if (place_outer) {
@@ -1348,9 +1348,9 @@ test "layout solver: row defaults do not translate explicitly positioned group d
     var state_layout = LayoutFixture.init(&state);
     defer state_layout.deinit();
     const page = try state.addPage("Positioned column");
-    const a = try state.makeObject(page, "a", null, .text, .text, "A");
-    const b = try state.makeObject(page, "b", null, .text, .text, "B");
-    const c = try state.makeObject(page, "c", null, .text, .text, "C");
+    const a = try state.makeObject(page, "a", .text, .text, "A");
+    const b = try state.makeObject(page, "b", .text, .text, "B");
+    const c = try state.makeObject(page, "c", .text, .text, "C");
     const column = try state.createGroupWithOrigin(&.{ b, c }, null);
     try addFixedSize(&state, a, 120, 80);
     try addFixedSize(&state, b, 180, 60);
@@ -1374,10 +1374,10 @@ test "layout graph: row defaults choose the first eligible target candidate and 
     var state_layout = LayoutFixture.init(&state);
     defer state_layout.deinit();
     const page = try state.addPage("Default selection");
-    const a = try state.makeObject(page, "a", null, .text, .text, "A");
-    const b = try state.makeObject(page, "b", null, .text, .text, "B");
-    const c = try state.makeObject(page, "c", null, .text, .text, "C");
-    const d = try state.makeObject(page, "d", null, .text, .text, "D");
+    const a = try state.makeObject(page, "a", .text, .text, "A");
+    const b = try state.makeObject(page, "b", .text, .text, "B");
+    const c = try state.makeObject(page, "c", .text, .text, "C");
+    const d = try state.makeObject(page, "d", .text, .text, "D");
     try addDefaultAlignment(&state, b, a);
     try addDefaultAlignment(&state, b, c);
     try addDefaultAlignment(&state, a, b);
@@ -1410,9 +1410,9 @@ test "layout solver: positioned nested groups preserve internal default alignmen
         defer state_layout.deinit();
         const page = try state.addPage("Nested positioned group");
         try setLayoutPolicy(&state, page, policy);
-        const a_leaf = try state.createObjectWithOrigin("a", null, .text, .text, "A", null);
-        const b_leaf = try state.createObjectWithOrigin("b", null, .text, .text, "B", null);
-        const c_leaf = try state.createObjectWithOrigin("c", null, .text, .text, "C", null);
+        const a_leaf = try state.createObjectWithOrigin("a", .text, .text, "A", null);
+        const b_leaf = try state.createObjectWithOrigin("b", .text, .text, "B", null);
+        const c_leaf = try state.createObjectWithOrigin("c", .text, .text, "C", null);
         try addFixedSize(&state, a_leaf, 120, 80);
         try addFixedSize(&state, b_leaf, 180, 60);
         try addFixedSize(&state, c_leaf, 90, 50);
@@ -1448,8 +1448,8 @@ test "layout solver: positioned ancestors preserve internal defaults but exclude
         var state_layout = LayoutFixture.init(&state);
         defer state_layout.deinit();
         const page = try state.addPage("Positioned ancestor");
-        const a = try state.makeObject(page, "a", null, .text, .text, "A");
-        const b = try state.makeObject(page, "b", null, .text, .text, "B");
+        const a = try state.makeObject(page, "a", .text, .text, "A");
+        const b = try state.makeObject(page, "b", .text, .text, "B");
         const group = try state.makeGroupWithOrigin(page, true, if (source_inside) &.{ a, b } else &.{b}, null);
         try addFixedSize(&state, a, 120, 80);
         try addFixedSize(&state, b, 180, 160);
@@ -1471,8 +1471,8 @@ test "layout graph: row defaults reject a cycle through an explicit vertical rel
     var state_layout = LayoutFixture.init(&state);
     defer state_layout.deinit();
     const page = try state.addPage("Hard dependency cycle");
-    const a = try state.makeObject(page, "a", null, .text, .text, "A");
-    const b = try state.makeObject(page, "b", null, .text, .text, "B");
+    const a = try state.makeObject(page, "a", .text, .text, "A");
+    const b = try state.makeObject(page, "b", .text, .text, "B");
     try state.constraints.addAnchor(state.allocator, a, .top, .{ .node = .{ .node_id = b, .anchor = .bottom } }, -32, null);
     try addDefaultAlignment(&state, b, a);
     var page_graph = try initPageGraph(&state, page);
@@ -1494,9 +1494,9 @@ test "layout graph: row defaults reject cycles through ancestor group translatio
     var state_layout = LayoutFixture.init(&state);
     defer state_layout.deinit();
     const page = try state.addPage("Group translation cycle");
-    const a = try state.makeObject(page, "a", null, .text, .text, "A");
-    const b = try state.makeObject(page, "b", null, .text, .text, "B");
-    const c = try state.makeObject(page, "c", null, .text, .text, "C");
+    const a = try state.makeObject(page, "a", .text, .text, "A");
+    const b = try state.makeObject(page, "b", .text, .text, "B");
+    const c = try state.makeObject(page, "c", .text, .text, "C");
     const group = try state.makeGroupWithOrigin(page, true, &.{ b, c }, null);
     try addFixedSize(&state, a, 120, 80);
     try addFixedSize(&state, b, 180, 60);
@@ -1525,8 +1525,8 @@ test "layout solver: horizontal fallback seeds unconstrained peer anchors" {
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const title = try state.makeObject(page, "title", null, .text, .text, "Title");
-    const byline = try state.makeObject(page, "byline", null, .text, .text, "Byline");
+    const title = try state.makeObject(page, "title", .text, .text, "Title");
+    const byline = try state.makeObject(page, "byline", .text, .text, "Byline");
     try state.constraints.addAnchor(state.allocator, title, .left, .{ .node = .{ .node_id = byline, .anchor = .left } }, 0, .{ .label = "same-left" });
 
     try finalizeDocumentState(&state_layout);
@@ -1543,8 +1543,8 @@ test "layout solver: horizontal policy measures the complete row through display
             defer state_layout.deinit();
             const page = try state.addPage("Wrapped row");
             try setEnumField(&state, page, "layout_h", "LayoutPolicy", policy);
-            var a = try state.createObjectWithOrigin("a", null, .text, .text, "A", null);
-            var b = try state.createObjectWithOrigin("b", null, .text, .text, "B", null);
+            var a = try state.createObjectWithOrigin("a", .text, .text, "A", null);
+            var b = try state.createObjectWithOrigin("b", .text, .text, "B", null);
             try addFixedSize(&state, a, 120, 80);
             try addFixedSize(&state, b, 240, 60);
             for (0..depth) |_| {
@@ -1575,9 +1575,9 @@ test "layout solver: same-target peer equalities form one fallback unit" {
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const a = try state.makeObject(page, "a", null, .text, .text, "A");
-    const b = try state.makeObject(page, "b", null, .text, .text, "B");
-    const c = try state.makeObject(page, "c", null, .text, .text, "C");
+    const a = try state.makeObject(page, "a", .text, .text, "A");
+    const b = try state.makeObject(page, "b", .text, .text, "B");
+    const c = try state.makeObject(page, "c", .text, .text, "C");
     try state.constraints.addAnchor(state.allocator, a, .top, .{ .node = .{ .node_id = b, .anchor = .top } }, 0, .{ .label = "a-is-b" });
     try state.constraints.addAnchor(state.allocator, a, .top, .{ .node = .{ .node_id = c, .anchor = .top } }, 0, .{ .label = "a-is-c" });
 
@@ -1595,9 +1595,9 @@ test "layout solver: chained peer equalities form one fallback unit" {
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const a = try state.makeObject(page, "a", null, .text, .text, "A");
-    const b = try state.makeObject(page, "b", null, .text, .text, "B");
-    const c = try state.makeObject(page, "c", null, .text, .text, "C");
+    const a = try state.makeObject(page, "a", .text, .text, "A");
+    const b = try state.makeObject(page, "b", .text, .text, "B");
+    const c = try state.makeObject(page, "c", .text, .text, "C");
     try state.constraints.addAnchor(state.allocator, a, .top, .{ .node = .{ .node_id = b, .anchor = .top } }, 0, .{ .label = "a-is-b" });
     try state.constraints.addAnchor(state.allocator, b, .top, .{ .node = .{ .node_id = c, .anchor = .top } }, 0, .{ .label = "b-is-c" });
 
@@ -1615,8 +1615,8 @@ test "layout solver: hard peer equality conflicts are independent of direction a
     defer forward_layout.deinit();
 
     const forward_page = try forward.addPage("Page");
-    const forward_a = try forward.makeObject(forward_page, "a", null, .text, .text, "A");
-    const forward_b = try forward.makeObject(forward_page, "b", null, .text, .text, "B");
+    const forward_a = try forward.makeObject(forward_page, "a", .text, .text, "A");
+    const forward_b = try forward.makeObject(forward_page, "b", .text, .text, "B");
     try forward.constraints.addAnchor(forward.allocator, forward_a, .top, .{ .page = .top }, -100, .{ .label = "a-top" });
     try forward.constraints.addAnchor(forward.allocator, forward_b, .top, .{ .page = .top }, -200, .{ .label = "b-top" });
     try forward.constraints.addAnchor(forward.allocator, forward_a, .top, .{ .node = .{ .node_id = forward_b, .anchor = .top } }, 0, .{ .label = "a-is-b" });
@@ -1628,8 +1628,8 @@ test "layout solver: hard peer equality conflicts are independent of direction a
     defer reverse_layout.deinit();
 
     const reverse_page = try reverse.addPage("Page");
-    const reverse_a = try reverse.makeObject(reverse_page, "a", null, .text, .text, "A");
-    const reverse_b = try reverse.makeObject(reverse_page, "b", null, .text, .text, "B");
+    const reverse_a = try reverse.makeObject(reverse_page, "a", .text, .text, "A");
+    const reverse_b = try reverse.makeObject(reverse_page, "b", .text, .text, "B");
     try reverse.constraints.addAnchor(reverse.allocator, reverse_a, .top, .{ .page = .top }, -100, .{ .label = "a-top" });
     try reverse.constraints.addAnchor(reverse.allocator, reverse_b, .top, .{ .page = .top }, -200, .{ .label = "b-top" });
     try reverse.constraints.addAnchor(reverse.allocator, reverse_b, .top, .{ .node = .{ .node_id = reverse_a, .anchor = .top } }, 0, .{ .label = "b-is-a" });
@@ -1641,9 +1641,9 @@ test "layout solver: hard peer equality conflicts are independent of direction a
     defer chain_layout.deinit();
 
     const chain_page = try chain.addPage("Page");
-    const chain_a = try chain.makeObject(chain_page, "a", null, .text, .text, "A");
-    const chain_b = try chain.makeObject(chain_page, "b", null, .text, .text, "B");
-    const chain_c = try chain.makeObject(chain_page, "c", null, .text, .text, "C");
+    const chain_a = try chain.makeObject(chain_page, "a", .text, .text, "A");
+    const chain_b = try chain.makeObject(chain_page, "b", .text, .text, "B");
+    const chain_c = try chain.makeObject(chain_page, "c", .text, .text, "C");
     try chain.constraints.addAnchor(chain.allocator, chain_a, .top, .{ .page = .top }, -100, .{ .label = "a-top" });
     try chain.constraints.addAnchor(chain.allocator, chain_c, .top, .{ .page = .top }, -200, .{ .label = "c-top" });
     try chain.constraints.addAnchor(chain.allocator, chain_a, .top, .{ .node = .{ .node_id = chain_b, .anchor = .top } }, 0, .{ .label = "a-is-b" });
@@ -1658,8 +1658,8 @@ test "layout solver: horizontal fallback does not seed inconsistent hard cycles"
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const a = try state.makeObject(page, "a", null, .text, .text, "aa");
-    const b = try state.makeObject(page, "b", null, .text, .text, "bb");
+    const a = try state.makeObject(page, "a", .text, .text, "aa");
+    const b = try state.makeObject(page, "b", .text, .text, "bb");
     try state.constraints.addAnchor(state.allocator, a, .left, .{ .node = .{ .node_id = b, .anchor = .left } }, 100, .{ .label = "a-left" });
     try state.constraints.addAnchor(state.allocator, b, .left, .{ .node = .{ .node_id = a, .anchor = .left } }, 200, .{ .label = "b-left" });
 
@@ -1675,9 +1675,9 @@ test "layout solver: constrained group source forms one fallback unit" {
     try setLayoutPolicy(&state, state.graph.document_id, "center");
 
     const page = try state.addPage("Page");
-    const left_title = try state.makeObject(page, "left-title", null, .text, .text, "Left");
-    const left_body = try state.makeObject(page, "left-body", null, .text, .text, "Body");
-    const right = try state.makeObject(page, "right", null, .text, .text, "Right");
+    const left_title = try state.makeObject(page, "left-title", .text, .text, "Left");
+    const left_body = try state.makeObject(page, "left-body", .text, .text, "Body");
+    const right = try state.makeObject(page, "right", .text, .text, "Right");
     const left_group = try state.makeGroupWithOrigin(state.graph.document_id, false, &.{ left_title, left_body }, .{ .label = "left-group" });
 
     try state.constraints.addAnchor(state.allocator, right, .left, .{ .node = .{ .node_id = left_group, .anchor = .right } }, 30, .{ .label = "right-of-group" });
@@ -1704,10 +1704,10 @@ test "layout solver: centered vflow treats vertically aligned groups as one row"
     try setLayoutPolicy(&state, state.graph.document_id, "center");
 
     const page = try state.addPage("Page");
-    const left_title = try state.makeObject(page, "left-title", null, .text, .text, "Left");
-    const left_body = try state.makeObject(page, "left-body", null, .text, .text, "Body");
-    const right_title = try state.makeObject(page, "right-title", null, .text, .text, "Right");
-    const right_body = try state.makeObject(page, "right-body", null, .text, .text, "Body");
+    const left_title = try state.makeObject(page, "left-title", .text, .text, "Left");
+    const left_body = try state.makeObject(page, "left-body", .text, .text, "Body");
+    const right_title = try state.makeObject(page, "right-title", .text, .text, "Right");
+    const right_body = try state.makeObject(page, "right-body", .text, .text, "Body");
     const left_group = try state.makeGroupWithOrigin(state.graph.document_id, false, &.{ left_title, left_body }, .{ .label = "left-group" });
     const right_group = try state.makeGroupWithOrigin(state.graph.document_id, false, &.{ right_title, right_body }, .{ .label = "right-group" });
 
@@ -1743,8 +1743,8 @@ test "layout solver: centered vflow ignores the space occupied by fixed top comp
     try setLayoutPolicy(&state, state.graph.document_id, "center");
 
     const page = try state.addPage("Page");
-    const header = try state.makeObject(page, "title", null, .text, .text, "Title");
-    const body = try state.makeObject(page, "body", null, .text, .text, "Body");
+    const header = try state.makeObject(page, "title", .text, .text, "Title");
+    const body = try state.makeObject(page, "body", .text, .text, "Body");
 
     try setLayoutLineHeight(&state, header, "44");
     try setLayoutSpacingAfter(&state, header, "40");
@@ -1768,10 +1768,10 @@ test "layout solver: document centered vflow is not shadowed by page default pol
     try setLayoutCenterOffset(&state, state.graph.document_id, "40");
 
     const page = try state.addPage("Page");
-    const pageno = try state.createObjectWithOrigin("pageno", null, .text, .text, "1", null);
+    const pageno = try state.createObjectWithOrigin("pageno", .text, .text, "1", null);
     try state.placeObjectOnPage(page, pageno);
-    const title = try state.makeObject(page, "title", null, .text, .text, "Title");
-    const subtitle = try state.makeObject(page, "subtitle", null, .text, .text, "Subtitle");
+    const title = try state.makeObject(page, "title", .text, .text, "Title");
+    const subtitle = try state.makeObject(page, "subtitle", .text, .text, "Subtitle");
 
     try setLayoutLineHeight(&state, pageno, "16");
     try setLayoutSpacingAfter(&state, pageno, "0");
@@ -1798,10 +1798,10 @@ test "layout solver: centered vflow preserves page center for side-by-side rows"
     try setLayoutPolicy(&state, state.graph.document_id, "center");
 
     const page = try state.addPage("Page");
-    const title = try state.makeObject(page, "title", null, .text, .text, "Title");
-    const rule = try state.makeObject(page, "rule", null, .text, .text, "");
-    const body = try state.makeObject(page, "body", null, .text, .text, "Body");
-    const pipe_child = try state.makeObject(page, "pipe", null, .text, .text, "Pipe");
+    const title = try state.makeObject(page, "title", .text, .text, "Title");
+    const rule = try state.makeObject(page, "rule", .text, .text, "");
+    const body = try state.makeObject(page, "body", .text, .text, "Body");
+    const pipe_child = try state.makeObject(page, "pipe", .text, .text, "Pipe");
     const pipe = try state.makeGroupWithOrigin(page, true, &.{pipe_child}, .{ .label = "pipe-group" });
 
     try setLayoutLineHeight(&state, title, "44");
@@ -1829,7 +1829,7 @@ test "layout solver: explicit anchor conflicts and negative frame sizes are reje
     defer conflict_layout.deinit();
 
     const conflict_page = try conflict.addPage("Page");
-    const conflict_object = try conflict.makeObject(conflict_page, "body", null, .text, .text, "A");
+    const conflict_object = try conflict.makeObject(conflict_page, "body", .text, .text, "A");
     try conflict.constraints.addAnchor(conflict.allocator, conflict_object, .left, .{ .page = .left }, 100, .{ .label = "left-a" });
     try conflict.constraints.addAnchor(conflict.allocator, conflict_object, .left, .{ .page = .left }, 120, .{ .label = "left-b" });
     try testing.expectError(error.ConstraintConflict, finalizeDocumentState(&conflict_layout));
@@ -1840,7 +1840,7 @@ test "layout solver: explicit anchor conflicts and negative frame sizes are reje
     defer negative_layout.deinit();
 
     const negative_page = try negative.addPage("Page");
-    const negative_object = try negative.makeObject(negative_page, "body", null, .text, .text, "A");
+    const negative_object = try negative.makeObject(negative_page, "body", .text, .text, "A");
     try negative.constraints.addAnchor(negative.allocator, negative_object, .left, .{ .node = .{ .node_id = negative_object, .anchor = .right } }, 10, .{ .label = "negative-width" });
     try testing.expectError(error.NegativeFrameSize, finalizeDocumentState(&negative_layout));
 }
@@ -1852,7 +1852,7 @@ test "layout solver: group width propagation must preserve child hard widths" {
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const child = try state.makeObject(page, "body", null, .text, .text, "this text can be wrapped");
+    const child = try state.makeObject(page, "body", .text, .text, "this text can be wrapped");
     try setLayoutWrap(&state, child, "on");
     const group = try state.makeGroupWithOrigin(page, true, &.{child}, .{ .label = "group" });
 
@@ -1873,12 +1873,11 @@ test "layout solver: wrapped width cap propagates through dependent anchors" {
     const wrapped = try state.makeObject(
         page,
         "wrapped",
-        null,
         .text,
         .text,
         "this is intentionally long enough to produce a wide intrinsic text box",
     );
-    const follower = try state.makeObject(page, "follower", null, .text, .text, "B");
+    const follower = try state.makeObject(page, "follower", .text, .text, "B");
     try setLayoutWrap(&state, wrapped, "on");
 
     try state.constraints.addAnchor(state.allocator, wrapped, .left, .{ .page = .left }, 1100, .{ .label = "wrapped-left" });
@@ -1903,7 +1902,6 @@ test "layout solver: vertical axis observes width-dependent wrapped height" {
     const wrapped = try state.makeObject(
         page,
         "wrapped",
-        null,
         .text,
         .text,
         "this sentence should wrap into multiple lines once the horizontal solver caps its width",
@@ -1948,7 +1946,7 @@ test "layout diagnostics preserve the direction of ink outside the page" {
         var state_layout = LayoutFixture.init(&state);
         defer state_layout.deinit();
         const page = try state.addPage("Ink overflow");
-        const object = try state.makeObject(page, "text", null, .text, .text, "j");
+        const object = try state.makeObject(page, "text", .text, .text, "j");
         try state.constraints.addAnchor(state.allocator, object, .left, .{ .page = .left }, case.left, .{ .label = "left" });
         try state.constraints.addAnchor(state.allocator, object, .top, .{ .page = .top }, 0, .{ .label = "top" });
         var measurement = InkMeasurement{ .ink = case.ink };
@@ -2085,14 +2083,14 @@ test "nested layout traces keep independent sessions" {
     var outer_state_layout = LayoutFixture.init(&outer_state);
     defer outer_state_layout.deinit();
     const outer_page = try outer_state.addPage("Outer");
-    _ = try outer_state.makeObject(outer_page, "outer-only", null, .text, .text, "outer");
+    _ = try outer_state.makeObject(outer_page, "outer-only", .text, .text, "outer");
 
     var inner_state = try initEmptyDocumentState();
     defer inner_state.deinit();
     var inner_state_layout = LayoutFixture.init(&inner_state);
     defer inner_state_layout.deinit();
     const inner_page = try inner_state.addPage("Inner");
-    _ = try inner_state.makeObject(inner_page, "inner-only", null, .text, .text, "inner");
+    _ = try inner_state.makeObject(inner_page, "inner-only", .text, .text, "inner");
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -2127,7 +2125,7 @@ test "layout solver uses render measurement provider for intrinsic object size" 
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "body", null, .text, .text, "provider measured text");
+    const object = try state.makeObject(page, "body", .text, .text, "provider measured text");
     var measurement = FakeMeasurementContext{ .target = object };
 
     try solveDocumentStateWithOptions(&state_layout, null, .{
@@ -2151,7 +2149,7 @@ test "layout solver preserves render measurement errors after horizontal solving
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "body", null, .text, .text, "provider measured text");
+    const object = try state.makeObject(page, "body", .text, .text, "provider measured text");
     try setLayoutWrap(&state, object, "on");
     var measurement = FailingMeasurementContext{ .target = object };
 
@@ -2189,12 +2187,12 @@ test "layout solver runs page jobs with configured job count" {
     defer state_layout.deinit();
 
     const first_page = try state.addPage("First");
-    const first = try state.makeObject(first_page, "first", null, .text, .text, "First");
+    const first = try state.makeObject(first_page, "first", .text, .text, "First");
     try state.constraints.addAnchor(state.allocator, first, .left, .{ .page = .left }, 40, .{ .label = "first-left" });
     try state.constraints.addAnchor(state.allocator, first, .top, .{ .page = .top }, -80, .{ .label = "first-top" });
 
     const second_page = try state.addPage("Second");
-    const second = try state.makeObject(second_page, "second", null, .text, .text, "Second");
+    const second = try state.makeObject(second_page, "second", .text, .text, "Second");
     try state.constraints.addAnchor(state.allocator, second, .left, .{ .page = .left }, 80, .{ .label = "second-left" });
     try state.constraints.addAnchor(state.allocator, second, .top, .{ .page = .top }, -120, .{ .label = "second-top" });
 
@@ -2234,12 +2232,12 @@ test "layout solver cooperatively cancels parallel page jobs" {
     defer state_layout.deinit();
 
     const first_page = try state.addPage("First");
-    const first = try state.makeObject(first_page, "first", null, .text, .text, "First");
+    const first = try state.makeObject(first_page, "first", .text, .text, "First");
     try state.constraints.addAnchor(state.allocator, first, .left, .{ .page = .left }, 40, .{ .label = "first-left" });
     try state.constraints.addAnchor(state.allocator, first, .top, .{ .page = .top }, -80, .{ .label = "first-top" });
 
     const second_page = try state.addPage("Second");
-    const second = try state.makeObject(second_page, "second", null, .text, .text, "Second");
+    const second = try state.makeObject(second_page, "second", .text, .text, "Second");
     try state.constraints.addAnchor(state.allocator, second, .left, .{ .page = .left }, 80, .{ .label = "second-left" });
     try state.constraints.addAnchor(state.allocator, second, .top, .{ .page = .top }, -120, .{ .label = "second-top" });
 
@@ -2261,10 +2259,10 @@ test "layout metrics prefer render measurement provider for asset size" {
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const pdf = try state.makeObject(page, "pdf", null, .asset, .pdf_ref, "chart.pdf");
+    const pdf = try state.makeObject(page, "pdf", .asset, .pdf_ref, "chart.pdf");
     try setNumberField(&state, pdf, "asset_width", 220);
     try setNumberField(&state, pdf, "asset_height", 70);
-    const image = try state.makeObject(page, "image", null, .asset, .image_ref, "chart.png");
+    const image = try state.makeObject(page, "image", .asset, .image_ref, "chart.png");
 
     var measurement = FakeAllMeasurementContext{};
     try solveDocumentStateWithOptions(&state_layout, null, .{
@@ -2288,7 +2286,7 @@ test "asset payloads ignore text wrap requests" {
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const image = try state.makeObject(page, "image", null, .asset, .image_ref, "chart.png");
+    const image = try state.makeObject(page, "image", .asset, .image_ref, "chart.png");
     try setLayoutWrap(&state, image, "on");
 
     try testing.expect(!metrics.shouldWrapNode(try state_layout.work(), state.getNode(image).?));
@@ -2301,7 +2299,7 @@ test "layout metrics use measured font width for wrapped text height" {
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "body", null, .text, .text, "0123456789012345678901234567");
+    const object = try state.makeObject(page, "body", .text, .text, "0123456789012345678901234567");
     try setLayoutWrap(&state, object, "on");
     try setTextFontFamily(&state, object, "Helvetica");
     try setTextSize(&state, object, "30");
@@ -2319,7 +2317,7 @@ test "layout metrics use render atom widths for CJK emoji markdown text" {
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "body", null, .text, .text, "✅ 最初のエラー報告までの時間が短縮できる");
+    const object = try state.makeObject(page, "body", .text, .text, "✅ 最初のエラー報告までの時間が短縮できる");
     try setLayoutWrap(&state, object, "on");
     try setTextParse(&state, object, "block");
     try setTextFontFamily(&state, object, "Helvetica");
@@ -2342,7 +2340,7 @@ test "layout solver keeps CJK emoji markdown text on one line when measured atom
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "body", null, .text, .text, "✅ 最初のエラー報告までの時間が短縮できる");
+    const object = try state.makeObject(page, "body", .text, .text, "✅ 最初のエラー報告までの時間が短縮できる");
     try setLayoutWrap(&state, object, "on");
     try setTextParse(&state, object, "block");
     try setTextFontFamily(&state, object, "Helvetica");
@@ -2366,8 +2364,8 @@ test "layout metrics: chrome padding is part of visual bounds and yields a conte
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const plain = try state.makeObject(page, "plain", null, .text, .text, "Hello");
-    const padded = try state.makeObject(page, "padded", null, .text, .text, "Hello");
+    const plain = try state.makeObject(page, "plain", .text, .text, "Hello");
+    const padded = try state.makeObject(page, "padded", .text, .text, "Hello");
     try setChromePadX(&state, padded, "12");
     try setChromePadY(&state, padded, "8");
 
@@ -2391,7 +2389,7 @@ test "layout metrics: unwrapped text width includes visual glyph bounds" {
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "body", null, .text, .text, "コンポーネントの集合と絶対位置");
+    const object = try state.makeObject(page, "body", .text, .text, "コンポーネントの集合と絶対位置");
     try setTextSize(&state, object, "24");
     try setChromePadX(&state, object, "20");
 
@@ -2415,7 +2413,7 @@ test "layout solver: group chrome padding expands tight group bounds" {
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const child = try state.makeObject(page, "child", null, .text, .text, "Hello");
+    const child = try state.makeObject(page, "child", .text, .text, "Hello");
     const group = try state.makeGroupWithOrigin(page, true, &.{child}, .{ .label = "group" });
     try setChromePadX(&state, group, "12");
     try setChromePadY(&state, group, "8");
@@ -2443,7 +2441,6 @@ test "layout solver: target group width leaves room for chrome padding" {
     const child = try state.makeObject(
         page,
         "child",
-        null,
         .text,
         .text,
         "this sentence is intentionally long enough to wrap when the group width is constrained",
@@ -2470,7 +2467,7 @@ test "layout diagnostics: fixed-height object reports frame too small" {
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "short-box", null, .text, .text, "line one\nline two");
+    const object = try state.makeObject(page, "short-box", .text, .text, "line one\nline two");
     try state.constraints.addAnchor(state.allocator, object, .left, .{ .page = .left }, 20, .{ .label = "left" });
     try state.constraints.addAnchor(state.allocator, object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, 200, .{ .label = "width" });
     try state.constraints.addAnchor(state.allocator, object, .bottom, .{ .page = .bottom }, 20, .{ .label = "bottom" });
@@ -2510,7 +2507,7 @@ test "layout diagnostics: one-pixel text reports frame too small" {
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "toc-marker", null, .text, .text, "hidden section title");
+    const object = try state.makeObject(page, "toc-marker", .text, .text, "hidden section title");
     try setLayoutFontSize(&state, object, "1");
     try setLayoutLineHeight(&state, object, "1");
     try setTextSize(&state, object, "1");
@@ -2537,7 +2534,7 @@ test "layout font size resolves consistently for measurement and rendering" {
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "body", null, .text, .text, "one\ntwo");
+    const object = try state.makeObject(page, "body", .text, .text, "one\ntwo");
     try setLayoutFontSize(&state, object, "20");
     try setTextSize(&state, object, "30");
     try setTextLineHeight(&state, object, "45");
@@ -2556,7 +2553,7 @@ test "layout metrics derive line height from explicit text size" {
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "body", null, .text, .text, "one\ntwo");
+    const object = try state.makeObject(page, "body", .text, .text, "one\ntwo");
     try setTextSize(&state, object, "30");
 
     const node = state.getNode(object).?;
@@ -2574,12 +2571,12 @@ test "layout metrics honor explicit text and layout line heights" {
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const text_only = try state.makeObject(page, "text-only", null, .text, .text, "one\ntwo");
+    const text_only = try state.makeObject(page, "text-only", .text, .text, "one\ntwo");
     try setTextSize(&state, text_only, "30");
     try setTextLineHeight(&state, text_only, "45");
     try expectFloat(90, metrics.intrinsicHeight(try state_layout.work(), state.getNode(text_only).?, (try state_layout.frame(text_only)).*));
 
-    const layout_override = try state.makeObject(page, "layout-override", null, .text, .text, "one\ntwo");
+    const layout_override = try state.makeObject(page, "layout-override", .text, .text, "one\ntwo");
     try setTextSize(&state, layout_override, "30");
     try setTextLineHeight(&state, layout_override, "45");
     try setLayoutLineHeight(&state, layout_override, "50");
@@ -2596,7 +2593,7 @@ test "layout metrics treat zero line heights as automatic" {
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "body", null, .text, .text, "one\ntwo");
+    const object = try state.makeObject(page, "body", .text, .text, "one\ntwo");
     try setTextSize(&state, object, "30");
     try setTextLineHeight(&state, object, "0");
     try setLayoutLineHeight(&state, object, "0");
@@ -2615,7 +2612,7 @@ test "render policy: invalid numeric properties fall back before rendering" {
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "bad-numbers", null, .text, .text, "Hello");
+    const object = try state.makeObject(page, "bad-numbers", .text, .text, "Hello");
     try setTextSize(&state, object, "-1");
     try setTextLineHeight(&state, object, "nan");
     try setTextMathScale(&state, object, "0");
@@ -2646,7 +2643,7 @@ test "render policy: font face properties resolve structurally" {
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "font", null, .text, .text, "Hello");
+    const object = try state.makeObject(page, "font", .text, .text, "Hello");
     try setTextFontFamily(&state, object, "Avenir Next");
     try setTextFontWeight(&state, object, "650");
     try setTextFontStyle(&state, object, "oblique");
@@ -2675,7 +2672,7 @@ test "render policy: markdown bold color is optional and resolves as text paint"
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "body", null, .text, .text, "**Hello**");
+    const object = try state.makeObject(page, "body", .text, .text, "**Hello**");
 
     var resolved = core.render_policy.resolve(&state, state.getNode(object).?);
     try testing.expect(resolved.text.?.markdown_bold_color == null);
@@ -2692,7 +2689,7 @@ test "render policy: markdown underline style resolves as text paint" {
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "body", null, .text, .text, "_Hello_");
+    const object = try state.makeObject(page, "body", .text, .text, "_Hello_");
     try setRecordPathValue(&state, object, "text", &.{ "markdown", "underline", "color" }, .{ .string = "0.2,0.4,0.6" });
     try setRecordPathValue(&state, object, "text", &.{ "markdown", "underline", "opacity" }, .{ .number = 0.35 });
     try setRecordPathValue(&state, object, "text", &.{ "markdown", "underline", "width" }, .{ .number = 5 });
@@ -2716,7 +2713,7 @@ test "render policy: markdown quote style resolves as text paint" {
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "body", null, .text, .text, "> Hello");
+    const object = try state.makeObject(page, "body", .text, .text, "> Hello");
     try setRecordPathValue(&state, object, "text", &.{ "markdown", "quote", "color" }, .{ .string = "0.2,0.3,0.4" });
     try setRecordPathValue(&state, object, "text", &.{ "markdown", "quote", "inset" }, .{ .number = 12 });
     try setRecordPathValue(&state, object, "text", &.{ "markdown", "quote", "pad_x" }, .{ .number = 18 });
@@ -2747,8 +2744,8 @@ test "layout metrics include markdown quote padding" {
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const compact = try state.makeObject(page, "compact", null, .text, .text, "> Quoted paragraph");
-    const padded = try state.makeObject(page, "padded", null, .text, .text, "> Quoted paragraph");
+    const compact = try state.makeObject(page, "compact", .text, .text, "> Quoted paragraph");
+    const padded = try state.makeObject(page, "padded", .text, .text, "> Quoted paragraph");
     for ([_]model.NodeId{ compact, padded }) |object| {
         try setLayoutWrap(&state, object, "on");
         try setTextParse(&state, object, "block");
@@ -2774,8 +2771,8 @@ test "layout metrics wrap Markdown cells using annotated column widths" {
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const narrow = try state.makeObject(page, "narrow", null, .text, .text, "| Name | Value |\n| ---{75pt} | ---{1fr} |\n| Several words wrap inside the first column | 123 |");
-    const wide = try state.makeObject(page, "wide", null, .text, .text, "| Name | Value |\n| ---{300pt} | ---{1fr} |\n| Several words wrap inside the first column | 123 |");
+    const narrow = try state.makeObject(page, "narrow", .text, .text, "| Name | Value |\n| ---{75pt} | ---{1fr} |\n| Several words wrap inside the first column | 123 |");
+    const wide = try state.makeObject(page, "wide", .text, .text, "| Name | Value |\n| ---{300pt} | ---{1fr} |\n| Several words wrap inside the first column | 123 |");
     for ([_]model.NodeId{ narrow, wide }) |object| {
         try setLayoutWrap(&state, object, "on");
         try setTextParse(&state, object, "block");
@@ -2796,7 +2793,7 @@ test "render policy: markdown headings resolve their own text paint" {
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "body", null, .text, .text, "## Heading");
+    const object = try state.makeObject(page, "body", .text, .text, "## Heading");
     try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "size" }, .{ .number = 35 });
     try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "line_height" }, .{ .number = 42 });
     try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "color" }, .{ .string = "0.1,0.6,0.2" });
@@ -2836,8 +2833,8 @@ test "layout metrics use the markdown block gap after a heading" {
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const compact = try state.makeObject(page, "compact", null, .text, .text, "## Heading\n\nBody");
-    const relaxed = try state.makeObject(page, "relaxed", null, .text, .text, "## Heading\n\nBody");
+    const compact = try state.makeObject(page, "compact", .text, .text, "## Heading\n\nBody");
+    const relaxed = try state.makeObject(page, "relaxed", .text, .text, "## Heading\n\nBody");
     for ([_]model.NodeId{ compact, relaxed }) |object| {
         try setLayoutWrap(&state, object, "on");
         try setTextParse(&state, object, "block");
@@ -2863,17 +2860,17 @@ test "render policy: math alignment is read from each content style" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
     const page = try state.addPage("Page");
-    const text_object = try state.makeObject(page, "body", null, .text, .text, "$$x^2$$");
+    const text_object = try state.makeObject(page, "body", .text, .text, "$$x^2$$");
     try setRecordPathValue(&state, text_object, "text", &.{ "math", "align" }, .{ .enum_case = .{ .enum_name = "Align", .case_name = "left" } });
     const resolved_text = core.render_policy.resolve(&state, state.getNode(text_object).?);
     try testing.expectEqual(core.render_policy.HorizontalAlign.left, resolved_text.text.?.math_align);
 
-    const invalid_text_object = try state.makeObject(page, "body", null, .text, .text, "$$z^2$$");
+    const invalid_text_object = try state.makeObject(page, "body", .text, .text, "$$z^2$$");
     try setRecordPathValue(&state, invalid_text_object, "text", &.{ "math", "align" }, .{ .string = "sideways" });
     const resolved_invalid = core.render_policy.resolve(&state, state.getNode(invalid_text_object).?);
     try testing.expectEqual(core.render_policy.HorizontalAlign.center, resolved_invalid.text.?.math_align);
 
-    const latex_object = try state.makeObject(page, "latex", null, .asset, .latex, "$x^2$");
+    const latex_object = try state.makeObject(page, "latex", .asset, .latex, "$x^2$");
     try setRenderKind(&state, latex_object, "latex");
     try setRecordPathValue(&state, latex_object, "latex", &.{"align"}, .{ .enum_case = .{ .enum_name = "Align", .case_name = "right" } });
     const resolved_latex = core.render_policy.resolve(&state, state.getNode(latex_object).?);
@@ -2897,9 +2894,9 @@ test "layout graph: adjacency preserves shared parents and component order acros
     var state_layout = LayoutFixture.init(&state);
     defer state_layout.deinit();
     const page = try state.addPage("page");
-    const a = try state.makeObject(page, "a", null, .text, .text, "a");
-    const b = try state.makeObject(page, "b", null, .text, .text, "b");
-    const c = try state.makeObject(page, "c", null, .text, .text, "c");
+    const a = try state.makeObject(page, "a", .text, .text, "a");
+    const b = try state.makeObject(page, "b", .text, .text, "b");
+    const c = try state.makeObject(page, "c", .text, .text, "c");
     const left = try state.makeGroupWithOrigin(page, true, &.{ a, b }, null);
     const right = try state.makeGroupWithOrigin(page, true, &.{ b, c }, null);
     const outer = try state.makeGroupWithOrigin(page, true, &.{ left, right }, null);
@@ -2940,9 +2937,9 @@ test "layout graph: normalized split constraints need no preliminary frames" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
     const page = try state.addPage("Split");
-    const a = try state.makeObject(page, "a", null, .text, .text, "A");
-    const b = try state.makeObject(page, "b", null, .text, .text, "B");
-    const c = try state.makeObject(page, "c", null, .text, .text, "C");
+    const a = try state.makeObject(page, "a", .text, .text, "A");
+    const b = try state.makeObject(page, "b", .text, .text, "B");
+    const c = try state.makeObject(page, "c", .text, .text, "C");
     const inner = try state.makeGroupWithOrigin(page, true, &.{ b, c }, null);
     const outer = try state.makeGroupWithOrigin(page, true, &.{ a, inner }, null);
     try state.setNodeFieldValue(inner, "split_axis", .{ .string = "vertical" });
@@ -2978,8 +2975,8 @@ test "layout groups: required split height does not assign page coordinates" {
         var fixture = LayoutFixture.init(&state);
         defer fixture.deinit();
         const page = try state.addPage("Measured split");
-        const a = try state.makeObject(page, "a", null, .text, .text, "A");
-        const b = try state.makeObject(page, "b", null, .text, .text, "B");
+        const a = try state.makeObject(page, "a", .text, .text, "A");
+        const b = try state.makeObject(page, "b", .text, .text, "B");
         const group = try state.makeGroupWithOrigin(page, true, &.{ a, b }, null);
         try state.setNodeFieldValue(group, "split_axis", .{ .string = direction });
         try setRecordPathValue(&state, group, "chrome", &.{"pad_y"}, .{ .number = 5 });
@@ -3017,8 +3014,8 @@ fn expectHeightAtFinalWidth(width: f32, wrap: []const u8) !void {
     var state_layout = LayoutFixture.init(&state);
     defer state_layout.deinit();
     const page = try state.addPage("Final width");
-    const object = try state.makeObject(page, "body", null, .text, .text, "width-dependent content");
-    const follower = try state.makeObject(page, "following", null, .text, .text, "following content");
+    const object = try state.makeObject(page, "body", .text, .text, "width-dependent content");
+    const follower = try state.makeObject(page, "following", .text, .text, "following content");
     try setLayoutWrap(&state, object, wrap);
     try state.constraints.addAnchor(state.allocator, object, .left, .{ .page = .left }, 0, .{ .label = "body-left" });
     try state.constraints.addAnchor(state.allocator, object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, width, .{ .label = "body-width" });
@@ -3046,7 +3043,7 @@ fn finalizeWithAllocationFailures(allocator: std.mem.Allocator, conflict: bool) 
     var state = try initEmptyDocumentStateWithAllocator(allocator);
     defer state.deinit();
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "body", null, .text, .text, "");
+    const object = try state.makeObject(page, "body", .text, .text, "");
     try state.constraints.addAnchor(state.allocator, object, .left, .{ .page = .left }, 100, null);
     if (conflict) try state.constraints.addAnchor(state.allocator, object, .left, .{ .page = .left }, 120, null);
     var result = try solver.finalizeDocument(&state, null, .{ .jobs = 1 });
@@ -3074,7 +3071,7 @@ test "layout results preserve source and prior generations across sequential and
     var objects: [3]model.NodeId = undefined;
     for (&objects, 0..) |*object, index| {
         const page = try state.addPage("Page");
-        object.* = try state.makeObject(page, "body", null, .text, .text, "Hello");
+        object.* = try state.makeObject(page, "body", .text, .text, "Hello");
         try state.constraints.addAnchor(state.allocator, object.*, .left, .{ .page = .left }, if (index == 0) -40 else 60, .{ .label = "left" });
         if (index == 1) try state.constraints.addAnchor(state.allocator, object.*, .left, .{ .page = .left }, 80, .{ .label = "conflicting-left" });
     }

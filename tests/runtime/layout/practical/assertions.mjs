@@ -61,7 +61,7 @@ export function assertHealthy(dump) {
     assert(nodes.length > 3, `${page.name}: empty content`);
     for (const node of nodes) {
       assert(node.placement, `${page.name}/${node.id}: legacy object in typed fixture`);
-      assert.equal(node.role, null, `${page.name}/${node.id}: legacy role`);
+      assert(!Object.hasOwn(node, "role"), `${page.name}/${node.id}: legacy role`);
       for (const [key, value] of Object.entries(frame(node))) assert(Number.isFinite(value), `${page.name}/${node.id}: non-finite ${key}`);
       assert(node.width > 0 && node.height > 0, `${page.name}/${node.id}: collapsed frame`);
       contains(page, node, `${page.name}/${node.id}: page bounds`);

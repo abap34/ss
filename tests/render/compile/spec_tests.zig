@@ -18,7 +18,7 @@ test "final-width measurements retain ink origins and baselines through the file
     var state_layout = LayoutFixture.init(&state);
     defer state_layout.deinit();
     const page_id = try state.addPage("measurement-geometry");
-    const object_id = try state.makeObject(page_id, "italic", null, .text, .text, "j");
+    const object_id = try state.makeObject(page_id, "italic", .text, .text, "j");
     const object = state.getNode(object_id).?;
     (try state_layout.frame(object_id)).* = .{ .x = 0, .y = 684, .width = 47.995, .height = 36 };
     var prepared = try core.prepared.prepare(testing.allocator, &state);
@@ -74,7 +74,7 @@ test "code measurement includes empty logical lines and keeps its ink offset" {
     var state_layout = LayoutFixture.init(&state);
     defer state_layout.deinit();
     const page_id = try state.addPage("code-geometry");
-    const object_id = try state.makeObject(page_id, "code", null, .source, .code, "j\n\nj");
+    const object_id = try state.makeObject(page_id, "code", .source, .code, "j\n\nj");
     try state.setNodeFieldValue(object_id, "render_kind", .{ .string = "code" });
     const object = state.getNode(object_id).?;
     (try state_layout.frame(object_id)).* = .{ .width = 240, .height = 108 };
@@ -105,7 +105,7 @@ test "natural measurement includes tables beside ordinary paragraphs" {
     var state_layout = LayoutFixture.init(&state);
     defer state_layout.deinit();
     const page_id = try state.addPage("mixed-block-geometry");
-    const object_id = try state.makeObject(page_id, "mixed blocks", null, .text, .text, "Introduction\n\n| column | value |\n| --- | --- |\n| first | second |");
+    const object_id = try state.makeObject(page_id, "mixed blocks", .text, .text, "Introduction\n\n| column | value |\n| --- | --- |\n| first | second |");
     var text_style = core.RecordValue.init(ast.Type.recordType("TextStyle"));
     defer text_style.deinit(testing.allocator);
     try text_style.fields.append(testing.allocator, .{
@@ -141,7 +141,7 @@ fn markdownGeometry(content: []const u8, family: []const u8, width: f32) !Markdo
     var state_layout = LayoutFixture.init(&state);
     defer state_layout.deinit();
     const page_id = try state.addPage("block-geometry");
-    const object_id = try state.makeObject(page_id, "blocks", null, .text, .text, content);
+    const object_id = try state.makeObject(page_id, "blocks", .text, .text, content);
     var style = core.RecordValue.init(ast.Type.recordType("TextStyle"));
     defer style.deinit(testing.allocator);
     try style.fields.append(testing.allocator, .{
@@ -445,7 +445,6 @@ test "captured measurement items keep page order and annotations" {
     const object_id = try state.makeObject(
         page_id,
         "linked text",
-        null,
         .text,
         .text,
         "[linked text](https://example.com)",
@@ -486,7 +485,7 @@ test "render compiler shares highlight work across objects and compilations" {
     defer state_layout.deinit();
     const page_id = try state.addPage("highlight");
     for (0..2) |index| {
-        const object_id = try state.makeObject(page_id, "code", null, .text, .text, "def hello():\n  return 1\n");
+        const object_id = try state.makeObject(page_id, "code", .text, .text, "def hello():\n  return 1\n");
         try state.setNodeFieldValue(object_id, "render_kind", .{ .string = "code" });
         try state.setNodeFieldValue(object_id, "language", .{ .string = "python" });
         (try state_layout.frame(object_id)).* = .{ .x = 40, .y = 60 + @as(f32, @floatFromInt(index)) * 160, .width = 400, .height = 120 };
@@ -524,7 +523,7 @@ test "measurement cache observes changed highlight query contents" {
     var state_layout = LayoutFixture.init(&state);
     defer state_layout.deinit();
     const page_id = try state.addPage("measurement-highlight");
-    const object_id = try state.makeObject(page_id, "code", null, .source, .code, "T-T");
+    const object_id = try state.makeObject(page_id, "code", .source, .code, "T-T");
     try state.setNodeFieldValue(object_id, "render_kind", .{ .string = "code" });
     try state.setNodeFieldValue(object_id, "language", .{ .string = "python" });
     const object = state.getNode(object_id) orelse return error.MissingTestObject;
@@ -585,7 +584,7 @@ test "measurement cache observes the inline math engine with an empty preamble" 
     var state_layout = LayoutFixture.init(&state);
     defer state_layout.deinit();
     const page_id = try state.addPage("measurement-engine");
-    const object_id = try state.makeObject(page_id, "inline math", null, .text, .text, "$\\ifdefined\\directlua\\rule{36pt}{10pt}\\else\\rule{12pt}{10pt}\\fi$");
+    const object_id = try state.makeObject(page_id, "inline math", .text, .text, "$\\ifdefined\\directlua\\rule{36pt}{10pt}\\else\\rule{12pt}{10pt}\\fi$");
     const object = state.getNode(object_id) orelse return error.MissingTestObject;
     (try state_layout.frame(object_id)).* = .{ .x = 40, .y = 60, .width = 400, .height = 120 };
     var prepared = try core.prepared.prepare(testing.allocator, &state);
@@ -624,7 +623,7 @@ test "measurement and page caches observe transitive TeX inputs" {
     var state_layout = LayoutFixture.init(&state);
     defer state_layout.deinit();
     const page_id = try state.addPage("measurement-inputs");
-    const object_id = try state.makeObject(page_id, "inline math", null, .text, .text, "$\\input{" ++ input_path ++ "}$");
+    const object_id = try state.makeObject(page_id, "inline math", .text, .text, "$\\input{" ++ input_path ++ "}$");
     const object = state.getNode(object_id) orelse return error.MissingTestObject;
     (try state_layout.frame(object_id)).* = .{ .x = 40, .y = 60, .width = 400, .height = 120 };
     var prepared = try core.prepared.prepare(testing.allocator, &state);
@@ -677,7 +676,7 @@ test "render compiler rejects unavailable PDF pages" {
     var state_layout = LayoutFixture.init(&state);
     defer state_layout.deinit();
     const page_id = try state.addPage("pdf-page");
-    const object_id = try state.makeObject(page_id, "pdf", null, .asset, .pdf_ref, pdf_path);
+    const object_id = try state.makeObject(page_id, "pdf", .asset, .pdf_ref, pdf_path);
     try state.setNodeFieldValue(object_id, "render_kind", .{ .string = "vector_asset" });
     (try state_layout.frame(object_id)).* = .{ .x = 40, .y = 60, .width = 240, .height = 120, .x_set = true, .y_set = true };
 
@@ -2039,7 +2038,7 @@ test "paragraph measurement and emission retain the same final-width glyph layou
         var state_layout = LayoutFixture.init(&state);
         defer state_layout.deinit();
         const page_id = try state.addPage("paragraph");
-        const object_id = try state.makeObject(page_id, "paragraph", null, .text, .text, content);
+        const object_id = try state.makeObject(page_id, "paragraph", .text, .text, content);
         const object = state.getNode(object_id).?;
         (try state_layout.frame(object_id)).* = .{ .x = 0, .y = 0, .width = 100, .height = 720 };
         var prepared = try core.prepared.prepare(testing.allocator, &state);
@@ -2088,7 +2087,7 @@ test "paint boundaries preserve contextual glyphs and visual positions" {
     defer state_layout.deinit();
     const page_id = try state.addPage("contextual");
     for ([_][]const u8{ "\u{633}\u{644}\u{627}\u{645}", "\u{633}\u{644}[\u{627}\u{645}](https://example.com)" }) |content| {
-        const object_id = try state.makeObject(page_id, "contextual", null, .text, .text, content);
+        const object_id = try state.makeObject(page_id, "contextual", .text, .text, content);
         (try state_layout.frame(object_id)).* = .{ .width = 500, .height = 720 };
     }
     var prepared = try core.prepared.prepare(testing.allocator, &state);
@@ -2141,7 +2140,7 @@ test "Markdown highlight backgrounds wrap behind glyphs and inline icons without
         defer fixture.deinit();
         const page_id = try state.addPage("highlight");
         for ([_][]const u8{ scenario.plain, scenario.marked }) |content| {
-            const id = try state.makeObject(page_id, "body", null, .text, .text, content);
+            const id = try state.makeObject(page_id, "body", .text, .text, content);
             (try fixture.frame(id)).* = .{ .width = 180, .height = 720 };
         }
         var prepared = try core.prepared.prepare(testing.allocator, &state);
@@ -2241,7 +2240,7 @@ test "Markdown code line backgrounds cover source rows without changing glyphs o
             .explicit = true,
         });
         for ([_][]const u8{ plain, marked }) |content| {
-            const id = try state.makeObject(page_id, "code", null, .text, .text, content);
+            const id = try state.makeObject(page_id, "code", .text, .text, content);
             try state.setNodeFieldValue(id, "text", .{ .record = style });
             (try fixture.frame(id)).* = .{ .width = 180, .height = 720 };
         }
@@ -2340,7 +2339,7 @@ test "inline math shares measured paragraph baselines with bidirectional text" {
     var state_layout = LayoutFixture.init(&state);
     defer state_layout.deinit();
     const page_id = try state.addPage("inline-math");
-    const object_id = try state.makeObject(page_id, "inline-math", null, .text, .text, "\u{633}\u{644}\u{627}\u{645} $x^2$ \u{633}\u{644}\u{627}\u{645}");
+    const object_id = try state.makeObject(page_id, "inline-math", .text, .text, "\u{633}\u{644}\u{627}\u{645} $x^2$ \u{633}\u{644}\u{627}\u{645}");
     const object = state.getNode(object_id).?;
     (try state_layout.frame(object_id)).* = .{ .width = 250, .height = 720 };
     var prepared = try core.prepared.prepare(testing.allocator, &state);
@@ -2395,7 +2394,7 @@ fn verifyTableGeometry(source: []const u8) !void {
     var state_layout = LayoutFixture.init(&state);
     defer state_layout.deinit();
     const page_id = try state.addPage("retained-table");
-    const object_id = try state.makeObject(page_id, "table", null, .text, .text, source);
+    const object_id = try state.makeObject(page_id, "table", .text, .text, source);
     var text_style = core.RecordValue.init(ast.Type.recordType("TextStyle"));
     defer text_style.deinit(testing.allocator);
     try text_style.fields.append(testing.allocator, .{ .name = "parse", .value = .{ .enum_case = .{ .enum_name = "TextParseMode", .case_name = "block" } }, .explicit = true });
@@ -2460,7 +2459,7 @@ test "artifact preparation modes produce identical IR without caller text caches
     var state_layout = LayoutFixture.init(&state);
     defer state_layout.deinit();
     const page = try state.addPage("preparation");
-    const object = try state.makeObject(page, "body", null, .text, .text, "Prepared text");
+    const object = try state.makeObject(page, "body", .text, .text, "Prepared text");
     (try state_layout.frame(object)).* = .{ .x = 32, .y = 48, .width = 240, .height = 64 };
     var pages = try core.prepared.prepare(testing.allocator, &state);
     defer pages.deinit(testing.allocator);

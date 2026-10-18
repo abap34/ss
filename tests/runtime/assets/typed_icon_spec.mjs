@@ -30,7 +30,7 @@ try {
   const byPage = dump.page_order.map(id => icons.filter(node => node.placement.page === id).sort((a, b) => a.x - b.x));
   assert.deepEqual(byPage.map(nodes => nodes.length), [3, 2]);
   for (const node of icons) {
-    assert.equal(node.role, null);
+    assert(!Object.hasOwn(node, "role"));
     assert.deepEqual(node.fields, {});
     assert.equal(node.placement.input.type.name, "Icon");
     assert.equal(node.render.kind, "vector_asset");
