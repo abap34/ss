@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { root, ssBin, withLspClient } from "../../harness.mjs";
 import { editorSnapshot } from "../../editor/support.mjs";
-import { assertPractical, close, frame, geometry, item } from "./assertions.mjs";
+import { assertPractical, close, frame, geometry, item, pageObjects } from "./assertions.mjs";
 
 const exec = promisify(execFile);
 const outputRoot = path.join(root, ".ss-cache/tests/layout/practical");
@@ -28,7 +28,7 @@ const variants = [
   { name: "center", source: source.replace("column_policy: LayoutPolicy = LayoutPolicy.top", "column_policy: LayoutPolicy = LayoutPolicy.center"), options: { centered: true } },
   { name: "narrow", source: source.replace("column_width: Number = 1000", "column_width: Number = 880"), options: { width: 880 } },
   { name: "longer", source: source.replace("A synthetic paragraph explains how a small collection is checked before processing.", "A synthetic paragraph explains how a small collection is checked before processing. Additional records require careful review so that every missing value is reported with enough context."), options: {} },
-  { name: "larger-font", source: source.replace("body.text.size = 24", "body.text.size = 28"), options: {} },
+  { name: "larger-font", source: source.replace("theme.body with { text.size = 24 }", "theme.body with { text.size = 28 }"), options: {} },
   { name: "moved", source: source.replace("~ row.left == page.left + 150", "~ row.left == page.left + 150\n  ~!~ row.left == page.left + 190").replace("~ row.top == page.top - 210", "~ row.top == page.top - 210\n  ~!~ row.top == page.top - 250"), options: { cardShift: 40, cardDrop: 40 } },
 ];
 for (const variant of variants) {
@@ -50,7 +50,7 @@ const corruptions = [
   ["non-finite", (d) => { item(d, "cards", "## Collect\n").y = NaN; }, /non-finite/],
   ["overflow", (d) => { item(d, "table_code", "| stage |").height = 10; }, /exceeds fixture frame/],
   ["invalid ink", (d) => { item(d, "columns", "## Collection notes").measurement.ink_bounds.width = NaN; }, /invalid ink bounds/],
-  ["overlap", (d) => { const a = item(d, "cards", "## Collect\n"); item(d, "cards", "## Transform\n").x = a.x; }, /overlapping/],
+  ["overlap", (d) => { const a = item(d, "flow", "Flow introduction:"); const b = item(d, "flow", "- First,"); b.x = a.x; b.y = a.y; }, /overlapping/],
   ["off-page", (d) => { item(d, "image_caption", "Diagram caption:").x = 1300; }, /page bounds/],
   ["stale measurement", (d) => { item(d, "columns", "## Collection notes").measurement.measured_width = 700; }, /stale measured width/],
   ["spacing", (d) => { item(d, "cards", "Card summary:").y -= 10; }, /summary follows moved group/],
@@ -72,6 +72,7 @@ await run(["check", "--quiet", slide]);
 await run(["render", "--quiet", slide, path.join(project, "practical.pdf")]);
 await run(["render", "--quiet", "--format", "html", slide, path.join(project, "practical.html")]);
 const html = await readFile(path.join(project, "practical.html"), "utf8");
+assertCardPaintOrder(html, baseline);
 assert.equal((html.match(/<section class="ss-page"/g) ?? []).length, 6, "HTML omitted a practical page");
 
 // Exercise source updates in one editor session, then revisit the original
@@ -99,7 +100,21 @@ await withLspClient({ cwd: project }, async (client) => {
 console.log(`practical layout: ${runs} document solves, ${variants.length + 2} editor states, ${corruptions.length} detector checks passed (6 synthetic pages)`);
 console.log(`practical layout artifacts: ${project}`);
 
+function assertCardPaintOrder(html, expected) {
+  const nodes = pageObjects(expected, "cards");
+  const byId = new Map(nodes.map(node => [node.id, node]));
+  for (const text of nodes.filter(node => node.placement.input.type.name === "Text" && node.content?.startsWith("## "))) {
+    const parent = byId.get(text.placement.parent);
+    const background = byId.get(parent.placement.children[0]);
+    assert.equal(background.placement.input.type.name, "PathShape");
+    const backgroundIndex = html.lastIndexOf(`data-ss-node-id="${background.id}"`);
+    const textIndex = html.indexOf(`data-ss-node-id="${text.id}"`);
+    assert(backgroundIndex >= 0 && textIndex > backgroundIndex, "card background covers its text");
+  }
+}
+
 function assertSnapshot(snapshot, expected) {
+  assertCardPaintOrder(snapshot.display.html, expected);
   const actual = snapshot.layout.objects;
   const nodes = expected.nodes.filter((node) => node.kind === "object");
   assert.equal(actual.length, nodes.length, "editor omitted or duplicated objects");

@@ -20,7 +20,8 @@ export function pageObjects(dump, name) {
     }
   }
   visit(page.id);
-  return dump.nodes.filter((item) => ids.has(item.id));
+  const byId = new Map(dump.nodes.map(node => [node.id, node]));
+  return [...ids].map(id => byId.get(id));
 }
 
 export function item(dump, page, prefix) {
@@ -39,22 +40,31 @@ export function frame(item) {
   return { x: item.x, y: item.y, width: item.width, height: item.height };
 }
 
+const isContainer = node => (node.placement?.children.length ?? 0) > 0;
+
 export function assertHealthy(dump) {
+  const byId = new Map(dump.nodes.map(node => [node.id, node]));
+  const isBackgroundFor = (background, other) => {
+    if (background.placement.input.type.name !== "PathShape") return false;
+    const parent = byId.get(background.placement.parent);
+    if (parent?.placement?.children[0] !== background.id) return false;
+    if (Object.keys(frame(parent)).some(key => Math.abs(parent[key] - background[key]) > tolerance)) return false;
+    while (other?.placement) {
+      if (other.placement.parent === parent.id) return true;
+      other = byId.get(other.placement.parent);
+    }
+    return false;
+  };
   assert.deepEqual(dump.diagnostics, [], "practical layout must not produce diagnostics");
   for (const page of dump.nodes.filter((node) => node.kind === "page")) {
     const nodes = pageObjects(dump, page.name);
     assert(nodes.length > 3, `${page.name}: empty content`);
     for (const node of nodes) {
+      assert(node.placement, `${page.name}/${node.id}: legacy object in typed fixture`);
+      assert.equal(node.role, null, `${page.name}/${node.id}: legacy role`);
       for (const [key, value] of Object.entries(frame(node))) assert(Number.isFinite(value), `${page.name}/${node.id}: non-finite ${key}`);
       assert(node.width > 0 && node.height > 0, `${page.name}/${node.id}: collapsed frame`);
       contains(page, node, `${page.name}/${node.id}: page bounds`);
-      if (node.role === "group") {
-        for (const id of dump.contains.find((entry) => entry.parent === node.id)?.children ?? []) {
-          const child = nodes.find((entry) => entry.id === id);
-          assert(child, `${page.name}: missing child ${id}`);
-          contains(node, child, `${page.name}/${node.id}: group bounds`);
-        }
-      }
       if (!["text", "code"].includes(node.render?.kind) || !node.content) continue;
       const measurement = node.measurement;
       assert(measurement, `${page.name}/${node.id}: missing text measurement`);
@@ -68,16 +78,27 @@ export function assertHealthy(dump) {
       assert(ink && [ink.x, ink.y, ink.width, ink.height].every(Number.isFinite) && ink.width >= 0 && ink.height >= 0,
         `${page.name}/${node.id}: invalid ink bounds`);
     }
-    const leaves = nodes.filter((node) => node.role !== "group");
+    for (const node of nodes) {
+      if (isContainer(node)) {
+        for (const id of dump.contains.find((entry) => entry.parent === node.id)?.children ?? []) {
+          const child = nodes.find((entry) => entry.id === id);
+          assert(child, `${page.name}: missing child ${id}`);
+          contains(node, child, `${page.name}/${node.id}: group bounds`);
+        }
+      }
+    }
+    const leaves = nodes.filter((node) => !isContainer(node));
     for (let i = 0; i < leaves.length; i += 1) {
       for (const b of leaves.slice(i + 1)) {
         const a = leaves[i];
+        // A frame-sized first rectangle is the background of its own subtree.
+        if (isBackgroundFor(a, b) || isBackgroundFor(b, a)) continue;
         const overlapX = Math.min(right(a), right(b)) - Math.max(a.x, b.x);
         const overlapY = Math.min(top(a), top(b)) - Math.max(a.y, b.y);
         assert(overlapX <= tolerance || overlapY <= tolerance, `${page.name}: overlapping objects ${a.id} and ${b.id}`);
       }
     }
-    const numbers = leaves.filter((node) => node.role === "pageno");
+    const numbers = nodes.filter((node) => node.placement.input.type.name === "PageNumber");
     assert.equal(numbers.length, 1, `${page.name}: missing or duplicated page number`);
     close(numbers[0].y, 20, `${page.name}: footer position`);
   }
@@ -105,11 +126,11 @@ export function assertPractical(dump, { width = 1000, centered = false, cardShif
     const cell = item(dump, "matrix", prefix);
     close(cell.x, x, `${prefix}: nested horizontal padding`);
     close(cell.y, y, `${prefix}: nested vertical padding`);
-    const column = dump.nodes.find((node) => node.role === "group" &&
+    const column = dump.nodes.find((node) => isContainer(node) &&
       dump.contains.some((entry) => entry.parent === node.id && entry.children.includes(cell.id)));
     assert(column, `${prefix}: missing column group`);
     close(column.width, 472, `${prefix}: equal parent column width`);
-    // Vertical splitting fixes height; short text keeps its natural width.
+    // Text remains inside the explicitly inset column frame.
     assert(cell.width <= 452 + tolerance, `${prefix}: text exceeds padded column width`);
     close(cell.height, 190, `${prefix}: padded row height`);
   }
@@ -145,12 +166,17 @@ export function assertPractical(dump, { width = 1000, centered = false, cardShif
   close(annotation.x, right(diagram) + 32, "side note gap");
   close(center(annotation), center(diagram), "side note center");
 
-  const cards = ["## Collect\n", "## Transform\n", "## Inspect\n"].map((prefix) => item(dump, "cards", prefix));
+  const cards = pageObjects(dump, "cards").filter(node => node.placement.input.type.name === "Card");
+  assert.equal(cards.length, 3, "missing or duplicated Card input");
+  const bodies = ["## Collect\n", "## Transform\n", "## Inspect\n"].map(prefix => item(dump, "cards", prefix));
   for (const [index, card] of cards.entries()) {
     close(card.x, 150 + cardShift + index * 324, "card horizontal position");
     close(top(card), 510 - cardDrop, "card top alignment");
     close(card.width, 300, "card width");
     close(card.height, 170, "card height");
+    close(bodies[index].x, card.x + 16, "card text inset");
+    close(top(bodies[index]), top(card) - 12, "card text top inset");
+    close(bodies[index].width, 268, "card text width");
   }
   const summary = item(dump, "cards", "Card summary:");
   close(summary.x, cards[0].x, "summary left alignment");
@@ -159,5 +185,5 @@ export function assertPractical(dump, { width = 1000, centered = false, cardShif
 
 export function geometry(dump, pageName) {
   return (pageName ? pageObjects(dump, pageName) : dump.nodes.filter((item) => item.kind === "object"))
-    .map((item) => ({ id: item.id, role: item.role, content: item.content, ...frame(item) }));
+    .map((item) => ({ id: item.id, type: item.placement.input.type, content: item.content, ...frame(item) }));
 }

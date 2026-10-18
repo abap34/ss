@@ -2,7 +2,7 @@ import std:themes/default as *
 
 page integration
   heading! "Monte Carlo integration"
-  let body = text! <<
+  let body_value = text <<
 Let $f$ return 1 inside the circle and 0 outside.
 
 $$
@@ -12,6 +12,7 @@ $$
 \end{aligned}
 $$
 >>
+  let content = place!(body_value // text("The base letters keep the surrounding text size.", default_theme().note))
+  let body = first(children(content))
   ~ body.width == 540
-  body // note! "The base letters keep the surrounding text size."
 end
