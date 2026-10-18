@@ -15,13 +15,13 @@ test "embedded syntax cache returns independent module trees" {
     defer second.deinit();
     try testing.expectEqual(parsed_after_first, cache.parsedModuleCount());
 
-    const first_objects = moduleBySpec(&first, "std:internal/objects") orelse return error.MissingObjects;
-    const second_objects = moduleBySpec(&second, "std:internal/objects") orelse return error.MissingObjects;
-    try testing.expect(first_objects.syntax.functions.items.len != 0);
-    try testing.expectEqual(first_objects.syntax.functions.items.len, second_objects.syntax.functions.items.len);
+    const first_text = moduleBySpec(&first, "std:text") orelse return error.MissingText;
+    const second_text = moduleBySpec(&second, "std:text") orelse return error.MissingText;
+    try testing.expect(first_text.syntax.functions.items.len != 0);
+    try testing.expectEqual(first_text.syntax.functions.items.len, second_text.syntax.functions.items.len);
 
-    const first_name = @constCast(first_objects.syntax.functions.items[0].name);
-    const second_name = second_objects.syntax.functions.items[0].name;
+    const first_name = @constCast(first_text.syntax.functions.items[0].name);
+    const second_name = second_text.syntax.functions.items[0].name;
     try testing.expect(first_name.ptr != second_name.ptr);
     const expected_first_byte = second_name[0];
     first_name[0] = if (expected_first_byte == 'x') 'y' else 'x';
@@ -30,8 +30,8 @@ test "embedded syntax cache returns independent module trees" {
     var third = try loadGraph(&cache);
     defer third.deinit();
     try testing.expectEqual(parsed_after_first, cache.parsedModuleCount());
-    const third_objects = moduleBySpec(&third, "std:internal/objects") orelse return error.MissingObjects;
-    try testing.expectEqualStrings(second_name, third_objects.syntax.functions.items[0].name);
+    const third_text = moduleBySpec(&third, "std:text") orelse return error.MissingText;
+    try testing.expectEqualStrings(second_name, third_text.syntax.functions.items[0].name);
 }
 
 fn loadGraph(cache: *compiler.module_loader.EmbeddedSyntaxCache) !compiler.module_loader.ModuleGraph {
