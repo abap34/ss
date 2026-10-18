@@ -4973,24 +4973,41 @@ test "compiler semantics: bang-marked functions may return unplaced values" {
     , .{ .count = 0 });
 }
 
-test "compiler semantics: removed object placement APIs are rejected" {
-    try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\page bad
-        \\  new(pagectx(), "old", "body", "text")
-        \\end
-        \\
-    , "case.ss:bytes:", "InvalidArity: expected 3, got 4");
+test "compiler semantics: legacy object APIs are unavailable" {
+    const cases = [_]struct { name: []const u8, call: []const u8 }{
+        .{ .name = "new", .call = "new(\"old\", \"body\", \"text\")" },
+        .{ .name = "new_group", .call = "new_group(pagectx(), select<Text>(pagectx()))" },
+        .{ .name = "obj", .call = "obj(\"old\", \"body\", \"text\")" },
+        .{ .name = "txt_obj", .call = "txt_obj(\"old\", \"body\")" },
+        .{ .name = "body_obj", .call = "body_obj(\"old\")" },
+        .{ .name = "content", .call = "content(text!(\"old\"))" },
+        .{ .name = "prop", .call = "prop(pagectx(), \"layout_h\", \"left\")" },
+        .{ .name = "has_prop", .call = "has_prop(pagectx(), \"layout_h\")" },
+        .{ .name = "prop_eq", .call = "prop_eq(pagectx(), \"layout_h\", \"left\")" },
+        .{ .name = "set_content", .call = "set_content(text!(\"old\"), \"new\")" },
+        .{ .name = "set_prop", .call = "set_prop(pagectx(), \"layout_h_center_offset\", 42)" },
+        .{ .name = "objs", .call = "objs(pagectx(), \"body\")" },
+        .{ .name = "objs_here", .call = "objs_here(\"body\")" },
+        .{ .name = "objs_all", .call = "objs_all(\"body\")" },
+        .{ .name = "doc_objs", .call = "doc_objs(docctx(), \"body\")" },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(testing.allocator, "page bad\n  {s}\nend\n", .{case.call});
+        defer testing.allocator.free(source);
+        const message = try std.fmt.allocPrint(testing.allocator, "UnknownFunction: unknown function: {s}", .{case.name});
+        defer testing.allocator.free(message);
+        try expectDiagnostic(source, "case.ss:bytes:", message);
+    }
+}
 
-    try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\page bad
-        \\  new_group(pagectx(), objs_here("body"))
-        \\end
-        \\
-    , "case.ss:bytes:", "UnknownFunction: unknown function: new_group");
+test "compiler semantics: role queries are unavailable" {
+    for ([_][]const u8{ "page_objects_by_role", "document_objects_by_role" }) |name| {
+        const source = try std.fmt.allocPrint(testing.allocator, "page bad\n  let items = select({s}, \"{s}\", \"body\")\nend\n", .{ if (std.mem.startsWith(u8, name, "page_")) "pagectx()" else "docctx()", name });
+        defer testing.allocator.free(source);
+        const message = try std.fmt.allocPrint(testing.allocator, "UnknownQuery: unknown query: {s}", .{name});
+        defer testing.allocator.free(message);
+        try expectDiagnostic(source, "case.ss:bytes:", message);
+    }
 }
 
 test "compiler semantics: page anchors cannot be constraint targets" {
@@ -6577,7 +6594,7 @@ test "compiler semantics: erased selections cannot be returned as typed selectio
         \\end
         \\page main
         \\end
-    , "case.ss:bytes:", "TypeMismatch");
+    , "case.ss:bytes:", "InvalidGroupInput");
 }
 
 test "compiler semantics: erased selections cannot be property assignment targets" {

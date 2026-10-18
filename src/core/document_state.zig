@@ -415,10 +415,6 @@ pub const DocumentState = struct {
         return self.source_map.inferred_values.allocator();
     }
 
-    pub fn builtinClass(self: *const DocumentState, name: []const u8) ?model.NominalId {
-        return self.declaration_index.builtinClass(name);
-    }
-
     pub fn rebuildDeclarationIndex(self: *DocumentState) !void {
         const next = try declarations.build(self.allocator, self);
         self.declaration_index.deinit();
@@ -1436,41 +1432,6 @@ pub const DocumentState = struct {
         return selection;
     }
 
-    fn selectPageObjectsByRole(
-        self: *DocumentState,
-        allocator: Allocator,
-        page_id: NodeId,
-        role: Role,
-        provenance: []const u8,
-    ) !Selection {
-        var selection = Selection.init(.object, provenance);
-        const children = self.graph.contains.get(page_id) orelse return selection;
-        for (children.items) |child_id| {
-            const node = self.getNode(child_id) orelse continue;
-            if (roleEq(node.role, role)) {
-                try selection.ids.append(allocator, child_id);
-            }
-        }
-        return selection;
-    }
-
-    fn selectDocumentObjectsByRole(
-        self: *DocumentState,
-        allocator: Allocator,
-        role: Role,
-        provenance: []const u8,
-    ) !Selection {
-        var selection = Selection.init(.object, provenance);
-        for (self.graph.page_order.items) |page_id| {
-            var page_selection = try self.selectPageObjectsByRole(allocator, page_id, role, provenance);
-            defer page_selection.deinit(allocator);
-            for (page_selection.ids.items) |id| {
-                try selection.ids.append(allocator, id);
-            }
-        }
-        return selection;
-    }
-
     fn selectDocumentPages(self: *DocumentState, allocator: Allocator, provenance: []const u8) !Selection {
         var selection = Selection.init(.page, provenance);
         for (self.graph.page_order.items) |page_id| {
@@ -1517,12 +1478,6 @@ pub const DocumentState = struct {
             },
             .descendants => .{
                 .selection = try self.selectDescendants(allocator, base.object, query.name),
-            },
-            .page_objects_by_role => |role| .{
-                .selection = try self.selectPageObjectsByRole(allocator, base.page, role, query.name),
-            },
-            .document_objects_by_role => |role| .{
-                .selection = try self.selectDocumentObjectsByRole(allocator, role, query.name),
             },
             .document_pages => .{
                 .selection = try self.selectDocumentPages(allocator, query.name),

@@ -111,8 +111,8 @@ test "evaluation frames include calls made by default arguments" {
 test "evaluation frames include lambdas and primitive callbacks" {
     const source = leaf ++
         \\page main
-        \\  let item = place_on!(pagectx(), new("A", "body", "text"))
-        \\  foreach(select(pagectx(), "page_objects_by_role", "body"), (o: Object) |-> leaf())
+        \\  let item = place_on!(pagectx(), Text { content = "A" })
+        \\  foreach(select<Text>(pagectx()), (o: Placed<Text>) |-> leaf())
         \\end
     ;
     try evaluate(source, 1, error.EvaluationResourceLimit);

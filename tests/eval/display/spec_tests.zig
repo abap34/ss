@@ -1522,17 +1522,22 @@ test "typed groups: paired generic constructors retain group input types" {
     }
 }
 
-test "typed groups: unused displays cannot mutate legacy groups" {
+test "typed groups: unused displays reject placed children" {
     var state = try documentWithModules(
         \\import std:text as t
-        \\type Legacy { item: Object }
-        \\fn display(self: Placed<Legacy>) -> t::Text
+        \\type Wrapper { item: Placed<t::Text> }
+        \\fn display(self: Placed<Wrapper>) -> t::Text
         \\  let invalid = group(self.value.item)
         \\  return t::Text { content = "Unused" }
         \\end
     );
     defer state.deinit();
-    try testing.expectError(error.ImpureDisplayFunction, compiler.analysis.analyzeDocumentState(testing.allocator, &state));
+    try testing.expectError(error.DiagnosticsFailed, compiler.analysis.analyzeDocumentState(testing.allocator, &state));
+    var found = false;
+    for (state.diagnostics.entries.items) |diagnostic| {
+        if (std.mem.eql(u8, diagnostic.code(), "InvalidGroupInput")) found = true;
+    }
+    try testing.expect(found);
 }
 
 test "typed groups: invalid children and mismatched signatures are diagnosed statically" {

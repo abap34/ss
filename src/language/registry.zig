@@ -45,18 +45,11 @@ pub const PrimitiveCall = enum {
     frame_y,
     frame_width,
     frame_height,
-    content,
-    prop,
-    has_prop,
-    prop_eq,
     selection_empty,
     selection_count,
-    set_content,
     group,
     new_page,
-    new,
     place_on,
-    set_prop,
     constraints,
     constrain_on,
     report_error,
@@ -70,13 +63,9 @@ pub const PrimitiveCall = enum {
 // Exhaustive classification makes new primitives declare their effect here.
 pub fn primitiveAllowsDisplayEvaluation(op: PrimitiveCall) bool {
     return switch (op) {
-        .set_content,
-        .group,
         .new_page,
-        .new,
         .place_on,
         .constrain_on,
-        .set_prop,
         .report_error,
         .report_warning,
         .require_asset_exists,
@@ -122,13 +111,10 @@ pub fn primitiveAllowsDisplayEvaluation(op: PrimitiveCall) bool {
         .frame_y,
         .frame_width,
         .frame_height,
-        .content,
-        .prop,
-        .has_prop,
-        .prop_eq,
         .selection_empty,
         .selection_count,
         .constraints,
+        .group,
         .path,
         => true,
     };
@@ -140,8 +126,6 @@ pub const QueryOp = enum {
     children,
     descendants,
     document_pages,
-    page_objects_by_role,
-    document_objects_by_role,
 };
 
 pub const PrimitiveDescriptor = struct {
@@ -175,10 +159,7 @@ pub const PrimitiveResultPolicy = enum {
     argument_type,
     selection_algebra,
     select_query,
-    target_arg,
     placement,
-    group_object,
-    object_from_role_arg,
 };
 
 pub const PrimitiveCallbackSpec = struct {
@@ -253,18 +234,11 @@ const primitive_descriptors = [_]PrimitiveDescriptor{
     .{ .op = .frame_y, .name = "frame_y", .min_arity = 1, .max_arity = 1, .arg_names = &.{"placement"}, .arg_types = &.{Type.placement}, .result_type = Type.number, .summary = "Return the solved y coordinate for a placement" },
     .{ .op = .frame_width, .name = "frame_width", .min_arity = 1, .max_arity = 1, .arg_names = &.{"placement"}, .arg_types = &.{Type.placement}, .result_type = Type.number, .summary = "Return the solved width for a placement" },
     .{ .op = .frame_height, .name = "frame_height", .min_arity = 1, .max_arity = 1, .arg_names = &.{"placement"}, .arg_types = &.{Type.placement}, .result_type = Type.number, .summary = "Return the solved height for a placement" },
-    .{ .op = .content, .name = "content", .min_arity = 1, .max_arity = 1, .arg_names = &.{"object"}, .arg_types = &.{Type.object}, .result_type = Type.string, .summary = "Return an object's textual content" },
-    .{ .op = .prop, .name = "prop", .min_arity = 3, .max_arity = 3, .arg_names = &.{ "target", "key", "default" }, .arg_types = &.{ Type.any, Type.string, Type.string }, .result_type = Type.string, .summary = "Read a property from a document, page, or object, falling back to a default" },
-    .{ .op = .has_prop, .name = "has_prop", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "target", "key" }, .arg_types = &.{ Type.any, Type.string }, .result_type = Type.boolean, .summary = "Return whether a document, page, or object has a property" },
-    .{ .op = .prop_eq, .name = "prop_eq", .min_arity = 3, .max_arity = 3, .arg_names = &.{ "target", "key", "value" }, .arg_types = &.{ Type.any, Type.string, Type.string }, .result_type = Type.boolean, .summary = "Return whether a property equals a string value" },
     .{ .op = .selection_empty, .name = "selection_empty", .min_arity = 1, .max_arity = 1, .arg_names = &.{"selection"}, .arg_types = &.{Type.selection(.any)}, .result_type = Type.boolean, .summary = "Return whether a Selection has no members" },
     .{ .op = .selection_count, .name = "selection_count", .min_arity = 1, .max_arity = 1, .arg_names = &.{"selection"}, .arg_types = &.{Type.selection(.any)}, .result_type = Type.number, .summary = "Return the number of members in a Selection" },
-    .{ .op = .set_content, .name = "set_content", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "object", "text" }, .arg_types = &.{ Type.object, Type.string }, .result_type = Type.object, .result_policy = .first_arg, .summary = "Define an object's textual content" },
-    .{ .op = .group, .name = "group", .min_arity = 1, .max_arity = 255, .arg_names = &.{"child"}, .arg_types = &.{Type.object}, .result_type = Type.object, .result_policy = .group_object, .summary = "Combine unplaced presentation values, preserving each child type and position" },
+    .{ .op = .group, .name = "group", .min_arity = 1, .max_arity = 255, .arg_names = &.{"child"}, .arg_types = &.{Type.any}, .result_type = .{ .kind = .group }, .summary = "Combine unplaced presentation values, preserving each child type and position" },
     .{ .op = .new_page, .name = "new_page", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "document", "title" }, .arg_types = &.{ Type.document, Type.string }, .result_type = Type.page, .summary = "Create a page in the scheduled document graph" },
-    .{ .op = .new, .name = "new", .min_arity = 3, .max_arity = 3, .arg_names = &.{ "content", "role_name", "payload_name" }, .arg_types = &.{ Type.string, Type.string, Type.string }, .result_type = Type.object, .result_policy = .object_from_role_arg, .summary = "Create an unplaced object" },
-    .{ .op = .place_on, .name = "place_on!", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "page", "value" }, .arg_types = &.{ Type.page, Type.any }, .result_type = Type.object, .result_policy = .placement, .result_arg_index = 1, .places_objects = true, .summary = "Place an object on a page" },
-    .{ .op = .set_prop, .name = "set_prop", .min_arity = 3, .max_arity = 3, .arg_names = &.{ "target", "key", "value" }, .arg_types = &.{ Type.any, Type.string, Type.any }, .result_type = null, .result_policy = .target_arg, .summary = "Attach a property to a document, page, or object" },
+    .{ .op = .place_on, .name = "place_on!", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "page", "value" }, .arg_types = &.{ Type.page, Type.any }, .result_type = Type.placement, .result_policy = .placement, .result_arg_index = 1, .places_objects = true, .summary = "Place an immutable presentation value on a page" },
     .{ .op = .constraints, .name = "constraints", .min_arity = 0, .max_arity = 255, .arg_names = &.{"constraint_set"}, .arg_types = &.{Type.constraints}, .result_type = Type.constraints, .summary = "Bundle a ConstraintSet" },
     .{ .op = .constrain_on, .name = "constrain_on!", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "page", "constraints" }, .arg_types = &.{ Type.page, Type.constraints }, .result_type = .{ .kind = .void }, .summary = "Register constraints on a page" },
     .{ .op = .report_error, .name = "report_error", .min_arity = 1, .max_arity = 1, .arg_names = &.{"message"}, .arg_types = &.{Type.string}, .result_type = Type.string, .summary = "Report error diagnostics from user-defined checks" },
@@ -279,8 +253,6 @@ const query_descriptors = [_]QueryDescriptor{
     .{ .op = .children, .name = "children", .arity = 2, .input_name = "base", .input_type = Type.placement, .extra_arg_names = &.{}, .extra_arg_types = &.{}, .output_type = Type.selection(.placement), .summary = "Select direct display children" },
     .{ .op = .descendants, .name = "descendants", .arity = 2, .input_name = "base", .input_type = Type.placement, .extra_arg_names = &.{}, .extra_arg_types = &.{}, .output_type = Type.selection(.placement), .summary = "Select all display descendants in construction order" },
     .{ .op = .document_pages, .name = "document_pages", .arity = 2, .input_name = "base", .input_type = Type.document, .extra_arg_names = &.{}, .extra_arg_types = &.{}, .output_type = Type.selection(.page), .summary = "Select all pages in the document" },
-    .{ .op = .page_objects_by_role, .name = "page_objects_by_role", .arity = 3, .input_name = "base", .input_type = Type.page, .extra_arg_names = &.{"role_name"}, .extra_arg_types = &.{Type.string}, .output_type = Type.selection(.object), .summary = "Select objects by role within a page" },
-    .{ .op = .document_objects_by_role, .name = "document_objects_by_role", .arity = 3, .input_name = "base", .input_type = Type.document, .extra_arg_names = &.{"role_name"}, .extra_arg_types = &.{Type.string}, .output_type = Type.selection(.object), .summary = "Select objects by role across the whole document" },
 };
 
 comptime {

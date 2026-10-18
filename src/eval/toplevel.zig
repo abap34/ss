@@ -1254,14 +1254,6 @@ const BuiltinContext = struct {
         return try evalCallObjectArg(self.evaluation, self.page_id, self.scope, self.env, self.current_origin, call, index);
     }
 
-    pub fn evalRoleArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!core.Role {
-        return try evalCallRoleArg(self.evaluation, self.page_id, self.scope, self.env, self.current_origin, call, index);
-    }
-
-    pub fn evalPayloadArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!names.ParsedPayload {
-        return try evalCallPayloadArg(self.evaluation, self.page_id, self.scope, self.env, self.current_origin, call, index);
-    }
-
     pub fn ownString(self: *BuiltinContext, text: []u8) ![]const u8 {
         return try self.state.ownString(text);
     }
@@ -1318,38 +1310,8 @@ const BuiltinContext = struct {
         return .{ .anchor = .{ .page = .{ .page_id = page_id, .anchor = anchor } } };
     }
 
-    pub fn makeObject(
-        self: *BuiltinContext,
-        role_name: []const u8,
-        role: core.Role,
-        object_kind: core.ObjectKind,
-        payload_kind: core.PayloadKind,
-        content: []const u8,
-    ) !core.NodeId {
-        return try self.state.createObjectWithOrigin(role_name, role, object_kind, payload_kind, content, self.current_origin);
-    }
-
-    pub fn makeGroup(self: *BuiltinContext, child_ids: []const core.NodeId, composition: ?ast.GroupComposition) !core.NodeId {
-        const id = try self.state.createGroupWithOrigin(child_ids, self.current_origin);
-        // Removed with the remaining legacy Object constructors. Typed groups
-        // keep the configuration in their immutable input instead of fields.
-        if (composition) |mode| {
-            const axis: core.Value = .{ .string = if (mode.isHorizontal()) "horizontal" else "vertical" };
-            const depth = self.evaluation.frames.depth;
-            try self.state.setNodeFieldValueWithOrigin(id, "join_axis", axis, depth, self.current_origin);
-            if (mode.equal()) try self.state.setNodeFieldValueWithOrigin(id, "split_axis", axis, depth, self.current_origin);
-            try self.state.setNodeFieldValueWithOrigin(id, "split_gap", .{ .number = 32 }, depth, self.current_origin);
-            try self.state.setNodeFieldValueWithOrigin(id, "align_children_y", .{ .boolean = mode.isHorizontal() }, depth, self.current_origin);
-        }
-        return id;
-    }
-
     pub fn makePage(self: *BuiltinContext, title: []const u8) !core.NodeId {
         return try self.state.addPage(title);
-    }
-
-    pub fn placeObjectOnPage(self: *BuiltinContext, page_id: core.NodeId, object_id: core.NodeId) !void {
-        try self.state.placeObjectOnPage(page_id, object_id);
     }
 
     pub fn registerPlacement(self: *BuiltinContext, page_id: core.NodeId, input: core.Value, call_id: ?u64) !core.NodeId {
@@ -1364,16 +1326,6 @@ const BuiltinContext = struct {
         const id = try self.state.registerPlacement(page_id, input, self.current_origin);
         inputs.appendAssumeCapacity(id);
         return id;
-    }
-
-    pub fn setNodeFieldValue(self: *BuiltinContext, object_id: core.NodeId, key: []const u8, value: core.Value) !void {
-        self.state.setNodeFieldValueWithOrigin(object_id, key, value, self.evaluation.frames.depth, self.current_origin) catch |err| switch (err) {
-            error.DuplicatePropertyDefinition => {
-                try reportDuplicatePropertyDefinition(self.state, self.current_origin, object_id, key);
-                return err;
-            },
-            else => return err,
-        };
     }
 
     pub fn invokeCallback(self: *BuiltinContext, function: core.FunctionRef, args: []const core.Value) !core.Value {
@@ -1410,32 +1362,6 @@ const BuiltinContext = struct {
         _ = self;
         _ = object_id;
         return error.UnsupportedDocumentEvaluationPrimitive;
-    }
-
-    pub fn nodeContent(self: *BuiltinContext, object_id: core.NodeId) ?[]const u8 {
-        const node = self.state.getNode(object_id) orelse return null;
-        return node.content;
-    }
-
-    pub fn nodeField(self: *BuiltinContext, target: core.Value, key: []const u8) ?core.Value {
-        const node_id = switch (target) {
-            .document => |id| id,
-            .page => |id| id,
-            .object => |id| id,
-            else => return null,
-        };
-        const node = self.state.getNode(node_id) orelse return null;
-        return core.nodeField(node, key);
-    }
-
-    pub fn setNodeContent(self: *BuiltinContext, object_id: core.NodeId, text: []const u8) !void {
-        self.state.setNodeContent(object_id, text) catch |err| switch (err) {
-            error.DuplicateContentDefinition => {
-                try reportDuplicateContentDefinition(self.state, self.current_origin);
-                return err;
-            },
-            else => return err,
-        };
     }
 
     pub fn equalAnchorConstraintSet(
@@ -1596,14 +1522,6 @@ fn evalSelectCall(
         .document_pages => {
             return try state.select(state.allocator, base, core.Query.documentPages());
         },
-        .page_objects_by_role => {
-            const role = try evalCallRoleArg(evaluation, page_id, scope, env, current_origin, call, 2);
-            return try state.select(state.allocator, base, core.Query.pageObjectsByRole(role));
-        },
-        .document_objects_by_role => {
-            const role = try evalCallRoleArg(evaluation, page_id, scope, env, current_origin, call, 2);
-            return try state.select(state.allocator, base, core.Query.documentObjectsByRole(role));
-        },
     }
 }
 
@@ -1753,40 +1671,6 @@ fn evalCallObjectArg(
     index: usize,
 ) anyerror!core.NodeId {
     return try resolveValueObjectId(try evalCallArg(evaluation, page_id, scope, env, current_origin, call, index));
-}
-
-fn evalCallRoleArg(
-    evaluation: *EvalContext,
-    page_id: core.NodeId,
-    scope: EvalScope,
-    env: *Environment,
-    current_origin: core.SourceOrigin,
-    call: CallExpr,
-    index: usize,
-) anyerror!core.Role {
-    const state = evaluation.state;
-    const role_name = try evalCallStringArg(evaluation, page_id, scope, env, current_origin, call, index);
-    return names.parseRoleName(role_name) orelse {
-        try reportNamedResolutionError(state, error.UnknownRole, "role", role_name, current_origin);
-        return error.UnknownRole;
-    };
-}
-
-fn evalCallPayloadArg(
-    evaluation: *EvalContext,
-    page_id: core.NodeId,
-    scope: EvalScope,
-    env: *Environment,
-    current_origin: core.SourceOrigin,
-    call: CallExpr,
-    index: usize,
-) anyerror!names.ParsedPayload {
-    const state = evaluation.state;
-    const payload_name = try evalCallStringArg(evaluation, page_id, scope, env, current_origin, call, index);
-    return names.parsePayloadName(payload_name) orelse {
-        try reportNamedResolutionError(state, error.UnknownPayloadKind, "payload kind", payload_name, current_origin);
-        return error.UnknownPayloadKind;
-    };
 }
 
 fn singleConstraintSet(state: *core.DocumentState, constraint: core.Constraint) !core.ConstraintSet {

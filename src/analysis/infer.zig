@@ -19,7 +19,6 @@ const infoFromHole = semantic_types.infoFromHole;
 const infoFromType = semantic_types.infoFromType;
 const isPropertyTarget = semantic_types.isPropertyTarget;
 const joinTypeInfo = semantic_types.joinTypeInfo;
-const resolveStringLiteral = semantic_types.resolveStringLiteral;
 const singleFunctionLabel = semantic_types.singleFunctionLabel;
 const targetClassForInfo = semantic_types.targetClassForInfo;
 const typeInfoLabelAlloc = semantic_types.typeInfoLabelAlloc;
@@ -1019,9 +1018,7 @@ fn inferPrimitiveCallInfo(
         if ((descriptor.op == .add or descriptor.op == .sub) and left == .anchor and right == .number) return infoFromType(Type.anchor);
         if (descriptor.op == .add and left == .number and right == .anchor) return infoFromType(Type.anchor);
     }
-    if (descriptor.op == .group and argument_infos.len > 0 and
-        (argument_infos[0].ty.kind == .record or argument_infos[0].ty.kind == .group))
-    {
+    if (descriptor.op == .group) {
         const children = try allocator.alloc(Type, argument_infos.len);
         defer allocator.free(children);
         for (argument_infos, children, 0..) |info, *child, index| {
@@ -1032,26 +1029,17 @@ fn inferPrimitiveCallInfo(
             }
             child.* = info.ty;
         }
-        if (state) |owner| if (call.callee.call_id) |id| try owner.displays.typed_group_calls.put(id, {});
         return infoFromType(try (Type{ .kind = .group }).withArguments(allocator, children));
-    }
-    if (descriptor.op == .group and call.callee.composition != null) {
-        // A composition operand is one input, never an implicit selection spread.
-        for (argument_infos, 0..) |actual, index| try ensureType(state, allocator, actual, Type.object, callArgumentOrigin(call, index, origin), .UnmatchedArgumentType);
     }
     for (argument_infos, 0..) |actual, index| {
         if (isPrimitiveFunctionArgument(descriptor, index)) continue;
         if (sema.primitiveArgType(descriptor, index)) |expected| {
-            const argument_type = if (descriptor.op == .group and actual.ty.kind == .selection) Type.selection(.object) else expected;
-            try ensureType(state, allocator, actual, argument_type, origin, .UnmatchedArgumentType);
+            try ensureType(state, allocator, actual, expected, origin, .UnmatchedArgumentType);
         }
     }
     if (descriptor.result_policy == .placement) {
         const input = argument_infos[descriptor.result_arg_index];
         if (input.hole != null) return input;
-        // Legacy object constructors are removed as stdlib migrates. Their
-        // attachment path must not be used for immutable typed inputs.
-        if (input.ty.kind == .object) return input;
         if (input.ty.kind != .record and input.ty.kind != .group) {
             try addUserReport(state, origin, "InvalidPlacementInput", "placement requires an unplaced presentation value", .{});
             return error.InvalidType;
@@ -1070,43 +1058,7 @@ fn inferPrimitiveCallInfo(
         }
         return infoFromType(try Type.placedOf(allocator, input.ty));
     }
-    const info = try primitiveResultTypeInfo(allocator, state, sema, env, call, descriptor, origin, argument_infos);
-    if (state != null and options.validate_contracts) {
-        switch (descriptor.op) {
-            .prop, .has_prop, .prop_eq => try validateKnownPropertyKeyCall(state.?, call, sema, origin, argument_infos),
-            .set_prop => try validateSetPropCall(state.?, call, sema, origin, argument_infos),
-            else => {},
-        }
-    }
-    return info;
-}
-
-fn validateKnownPropertyKeyCall(
-    state: *core.DocumentState,
-    call: ast.CallExpr,
-    sema: *const SemanticEnv,
-    origin: core.SourceOrigin,
-    argument_infos: []const TypeInfo,
-) !void {
-    if (call.args.items.len < 2) return;
-    const key = switch (call.args.items[1]) {
-        .string => |literal| literal.text,
-        .hole => return,
-        else => {
-            try addUserReport(state, origin, "InvalidProperty", "property key must be a known field literal", .{});
-            return error.InvalidType;
-        },
-    };
-    const target_info = argument_infos[0];
-    if (target_info.hole != null) return;
-    if (!semantic_types.isPropertyReadTarget(target_info)) {
-        try addUserReport(state, origin, "InvalidProperty", "property reads require Document, Page, or Object", .{});
-        return error.InvalidType;
-    }
-    if (fieldTypeForTarget(sema, target_info, key) == null) {
-        try addUserReport(state, origin, "UnknownField", "unknown field: {s}", .{key});
-        return error.InvalidType;
-    }
+    return primitiveResultTypeInfo(allocator, state, sema, call, descriptor, origin, argument_infos);
 }
 
 fn isPrimitiveFunctionArgument(descriptor: registry.PrimitiveDescriptor, index: usize) bool {
@@ -1264,7 +1216,6 @@ fn primitiveResultTypeInfo(
     allocator: std.mem.Allocator,
     state: ?*core.DocumentState,
     sema: *const SemanticEnv,
-    env: *const TypeEnv,
     call: ast.CallExpr,
     descriptor: registry.PrimitiveDescriptor,
     origin: core.SourceOrigin,
@@ -1299,26 +1250,14 @@ fn primitiveResultTypeInfo(
             return infoFromType(try selectionItemType(state, selection_info, origin));
         },
         .first_arg, .argument_type => {
-            if (call.args.items.len <= descriptor.result_arg_index) return infoFromType(registry.primitiveResultType(descriptor) orelse Type.object);
+            if (call.args.items.len <= descriptor.result_arg_index) return error.InvalidArity;
             const result = argument_infos[descriptor.result_arg_index];
             if (descriptor.result_policy == .argument_type and result.hole == null) return infoFromType(result.ty);
             return result;
         },
         .selection_algebra => return try inferSelectionAlgebraInfo(allocator, state, call, descriptor.op, origin, argument_infos),
-        .select_query => return try inferSelectCallInfo(allocator, state, sema, env, call, origin, argument_infos),
-        .target_arg => {
-            if (call.args.items.len <= descriptor.result_arg_index) return infoFromType(Type.object);
-            const target_info = argument_infos[descriptor.result_arg_index];
-            if (target_info.hole != null) return target_info;
-            return .{
-                .ty = switch (target_info.ty.kind) {
-                    .document, .page, .object, .selection => target_info.ty,
-                    else => Type.object,
-                },
-                .object_class = target_info.object_class,
-            };
-        },
-        .declared, .group_object, .object_from_role_arg => {},
+        .select_query => return try inferSelectCallInfo(allocator, state, sema, call, origin, argument_infos),
+        .declared => {},
         .placement => unreachable,
     }
 
@@ -1327,17 +1266,7 @@ fn primitiveResultTypeInfo(
         const right = argument_infos[1];
         return .{ .ty = Type.string, .string_literal = try semantic_types.concatStringLiterals(allocator, left.string_literal, right.string_literal) };
     }
-    const result_type = registry.primitiveResultType(descriptor) orelse Type.object;
-    if (result_type.kind != .object) return infoFromType(result_type);
-
-    var info = infoFromType(result_type);
-    info.object_class = switch (descriptor.result_policy) {
-        .group_object => sema.builtinClass("ObjectGroup"),
-        .object_from_role_arg => inferObjectConstructorClass(sema, env, call, if (descriptor.op == .new) 1 else 2),
-        else => null,
-    };
-    if (info.object_class) |id| info.ty = Type.objectId(id);
-    return info;
+    return infoFromType(registry.primitiveResultType(descriptor) orelse return error.InvalidType);
 }
 
 fn selectionItemType(state: ?*core.DocumentState, info: TypeInfo, origin: core.SourceOrigin) !Type {
@@ -1466,7 +1395,6 @@ fn inferSelectCallInfo(
     allocator: std.mem.Allocator,
     state: ?*core.DocumentState,
     sema: *const SemanticEnv,
-    env: *const TypeEnv,
     call: ast.CallExpr,
     origin: core.SourceOrigin,
     argument_infos: []const TypeInfo,
@@ -1521,81 +1449,7 @@ fn inferSelectCallInfo(
         try ensureType(state, allocator, actual, expected, origin, .UnmatchedArgumentType);
     }
     if (query.preserves_input_type) return infoFromType(try Type.selectionOf(allocator, base.ty));
-    var info = infoFromType(registry.queryOutputType(query));
-    info.object_class = inferQueryOutputClass(sema, env, query, call);
-    if (info.ty.kind == .selection and info.ty.selectionItem().kind == .object) if (info.object_class) |id| {
-        info.ty = try Type.selectionOf(allocator, Type.objectId(id));
-    };
-    return info;
-}
-
-fn inferQueryOutputClass(
-    sema: *const SemanticEnv,
-    env: *const TypeEnv,
-    query: registry.QueryDescriptor,
-    call: ast.CallExpr,
-) ?core.NominalId {
-    return switch (query.op) {
-        .page_objects_by_role, .document_objects_by_role => blk: {
-            if (call.args.items.len < 3) break :blk null;
-            const role_name = resolveStringLiteral(env, call.args.items[2]) orelse break :blk null;
-            if (sema.roleClass(role_name)) |class_name| break :blk class_name;
-            break :blk null;
-        },
-        .self_placement, .children, .descendants, .document_pages, .previous_page => null,
-    };
-}
-
-fn inferObjectConstructorClass(sema: *const SemanticEnv, env: *const TypeEnv, call: ast.CallExpr, role_index: usize) ?core.NominalId {
-    if (call.args.items.len <= role_index) return null;
-    const role_name = resolveStringLiteral(env, call.args.items[role_index]) orelse return null;
-    return sema.roleClass(role_name);
-}
-
-fn validateSetPropCall(
-    state: *core.DocumentState,
-    call: ast.CallExpr,
-    sema: *const SemanticEnv,
-    origin: core.SourceOrigin,
-    argument_infos: []const TypeInfo,
-) !void {
-    if (call.args.items.len < 3) return;
-    const key = switch (call.args.items[1]) {
-        .string => |literal| literal.text,
-        .hole => return,
-        else => {
-            try addUserReport(state, origin, "InvalidProperty", "property key must be a known field literal", .{});
-            return error.InvalidType;
-        },
-    };
-    const target_info = argument_infos[0];
-    if (target_info.hole != null) return;
-    if (!isPropertyTarget(target_info)) {
-        const actual_label = try typeInfoLabelAlloc(state.allocator, target_info);
-        defer state.allocator.free(actual_label);
-        try addUserReport(
-            state,
-            origin,
-            "InvalidProperty",
-            "set_prop target must be Document, Page, Object, or Selection<Object>; got {s}",
-            .{actual_label},
-        );
-        return error.InvalidType;
-    }
-
-    const value_info = argument_infos[2];
-    if (value_info.hole != null) return;
-    if (!try semantic_types.isPropertyStorable(state.allocator, sema, value_info.ty)) {
-        try addUserReport(state, origin, "InvalidProperty", "properties cannot contain functions or unconstrained Any values", .{});
-        return error.InvalidType;
-    }
-    if (fieldTypeForTarget(sema, target_info, key)) |field| {
-        try validateExpectedFieldValue(state, field, key, value_info, origin);
-        return;
-    }
-
-    try addUserReport(state, origin, "UnknownField", "unknown field: {s}", .{key});
-    return error.InvalidType;
+    return infoFromType(registry.queryOutputType(query));
 }
 
 fn fieldTypeForTarget(sema: *const SemanticEnv, target_info: TypeInfo, key: []const u8) ?Type {
@@ -1610,16 +1464,6 @@ fn fieldTypeForTarget(sema: *const SemanticEnv, target_info: TypeInfo, key: []co
     else
         null;
     return if (field) |descriptor| descriptor.value_type else null;
-}
-
-fn validateExpectedFieldValue(
-    state: *core.DocumentState,
-    expected: Type,
-    key: []const u8,
-    value_info: TypeInfo,
-    origin: core.SourceOrigin,
-) !void {
-    return validateExpectedFieldValueAtSpan(state, expected, key, value_info, origin, null);
 }
 
 fn validateExpectedFieldValueAtSpan(

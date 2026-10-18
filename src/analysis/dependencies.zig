@@ -1334,13 +1334,7 @@ pub const Analyzer = struct {
                 const combined = if (primitive.op == .selection_difference or primitive.op == .sub) left else try self.joinValueFacts(left, right);
                 result = combined;
             },
-            .new => {
-                result.object_role = try literalStringArg(self, call, 1);
-                result.children = &.{};
-            },
             .group => {
-                const typed = self.isTypedGroupCall(call);
-                if (!typed) result.object_role = core.GroupRole;
                 const children = try self.value_storage.allocator().alloc(ValueFacts, call.args.items.len);
                 for (call.args.items, children) |arg, *child| child.* = try self.valueFacts(arg);
                 result.children = children;
@@ -1357,7 +1351,7 @@ pub const Analyzer = struct {
                     result.placement = .exact(call.callee.call_id.?, &.{});
                 } else result = input;
             },
-            .set_prop, .set_content, .require_asset_exists => if (call.args.items.len > 0) {
+            .require_asset_exists => if (call.args.items.len > 0) {
                 result = try self.valueFacts(call.args.items[0]);
             },
             else => {},
@@ -2205,9 +2199,7 @@ pub const Analyzer = struct {
         if (primitiveNeedsArgFacts(descriptor.op)) {
             var arg_facts = try self.collectCallArgFacts(call);
             defer self.deinitCallArgFacts(&arg_facts);
-            if (descriptor.op == .group) {
-                if (self.isTypedGroupCall(call)) return self.callArgFactsSummary(arg_facts.items);
-            }
+            if (descriptor.op == .group) return self.callArgFactsSummary(arg_facts.items);
             if (descriptor.op == .place_on) {
                 if (self.sema.state) |state| if (call.callee.call_id) |id| {
                     if (state.displays.call_targets.get(id)) |plan| return self.typedPlacementCall(id, state.displays.plans.items[plan], arg_facts.items);
@@ -2234,9 +2226,6 @@ pub const Analyzer = struct {
             .page_index, .page_count => try summary.addRead(Resource.makePages(null)),
             .frame_x, .frame_y, .frame_width, .frame_height => {
                 summary.reads_layout = true;
-            },
-            .group => {
-                summary.writes_layout_input = true;
             },
             .new_page => {
                 try summary.addWrite(Resource.makePages(null));
@@ -2312,37 +2301,13 @@ pub const Analyzer = struct {
             .frame_x, .frame_y, .frame_width, .frame_height => {
                 summary.reads_layout = true;
             },
-            .content => try summary.addRead(Resource.makeContentProperty(propertyOwnerFromArgFacts(arg_facts, 0))),
-            .prop, .has_prop, .prop_eq => try summary.addRead(Resource.makeProperty(
-                propertyOwnerFromArgFacts(arg_facts, 0),
-                literalStringFromArgFacts(arg_facts, 1),
-            )),
-            .set_content => {
-                try summary.addWrite(Resource.makeContentProperty(propertyOwnerFromArgFacts(arg_facts, 0)));
-                summary.writes_layout_input = true;
-            },
-            .group => {
-                for (arg_facts) |arg| try self.addEscapedObjects(&summary, arg.values);
-                summary.writes_layout_input = true;
-            },
             .new_page => {
                 try summary.addWrite(Resource.makePages(null));
-                summary.writes_layout_input = true;
-            },
-            .new => {
                 summary.writes_layout_input = true;
             },
             .place_on => {
                 if (arg_facts.len > 1) try self.addEscapedObjects(&summary, arg_facts[1].values);
                 if (arg_facts.len > 1) try self.addPlacementWrites(&summary, arg_facts[1].values, arg_facts[0].values.page_scope);
-                summary.writes_layout_input = true;
-            },
-            .set_prop => {
-                if (arg_facts.len > 2) try self.addEscapedObjects(&summary, arg_facts[2].values);
-                try summary.addWrite(Resource.makeProperty(
-                    propertyOwnerFromArgFacts(arg_facts, 0),
-                    literalStringFromArgFacts(arg_facts, 1),
-                ));
                 summary.writes_layout_input = true;
             },
             .constrain_on => {
@@ -2361,15 +2326,8 @@ pub const Analyzer = struct {
     fn primitiveNeedsArgFacts(op: registry.PrimitiveCall) bool {
         return switch (op) {
             .select,
-            .content,
-            .prop,
-            .has_prop,
-            .prop_eq,
-            .set_content,
-            .new,
             .group,
             .place_on,
-            .set_prop,
             => true,
             else => false,
         };
@@ -2462,11 +2420,6 @@ pub const Analyzer = struct {
         };
         switch (query.op) {
             .document_pages => try summary.addSelectionRead(Resource.makePages(null)),
-            .document_objects_by_role => try summary.addSelectionRead(Resource.makeObjects(literalStringFromArgFacts(arg_facts, 2))),
-            .page_objects_by_role => try summary.addSelectionRead(.{ .objects = .{
-                .role = literalStringFromArgFacts(arg_facts, 2),
-                .page_scope = if (arg_facts.len > 0) arg_facts[0].values.page_scope else .any,
-            } }),
             // Display-generated children are produced after registration.
             .children, .descendants => {
                 const scope: ValueFacts = if (arg_facts.len > 0) arg_facts[0].values else .{};
@@ -2485,23 +2438,6 @@ pub const Analyzer = struct {
     fn literalStringFromArgFacts(arg_facts: []const CallArgFacts, index: usize) ?[]const u8 {
         if (index >= arg_facts.len) return null;
         return arg_facts[index].string_literal;
-    }
-
-    fn objectRoleFromArgFacts(arg_facts: []const CallArgFacts, index: usize) ?[]const u8 {
-        if (index >= arg_facts.len) return null;
-        return arg_facts[index].object_role;
-    }
-
-    fn propertyOwnerFromArgFacts(arg_facts: []const CallArgFacts, index: usize) PropertyOwner {
-        if (index >= arg_facts.len) return .any;
-        const target = arg_facts[index].property_target orelse return .any;
-        return target.owner;
-    }
-
-    fn propertyOwnerArg(self: *Analyzer, call: ast.CallExpr, index: usize) !PropertyOwner {
-        if (index >= call.args.items.len) return .any;
-        const target = (try self.propertyTargetExpr(call.args.items[index])) orelse return .any;
-        return target.owner;
     }
 
     fn propertyTargetExpr(self: *Analyzer, expr: ast.Expr) anyerror!?PropertyTarget {
@@ -2526,27 +2462,22 @@ pub const Analyzer = struct {
         };
     }
 
-    fn isTypedGroupCall(self: *const Analyzer, call: ast.CallExpr) bool {
-        return if (self.sema.state) |state| state.displays.isTypedGroupCall(call.callee.call_id) else false;
-    }
-
     fn propertyTargetCall(self: *Analyzer, call: ast.CallExpr) anyerror!?PropertyTarget {
         const descriptor = (try self.callCallee(call.callee)) orelse return null;
         return switch (descriptor) {
             .primitive => |primitive| switch (primitive.op) {
                 .docctx => PropertyTarget.document(),
                 .pagectx, .new_page => PropertyTarget.page(),
-                .new => PropertyTarget.freshObject(self.objectClassForRole(try literalStringArg(self, call, 1))),
-                .group => if (self.isTypedGroupCall(call)) null else PropertyTarget.freshObject(self.objectClassForRole(core.GroupRole)),
+                .group => null,
                 .place_on => if (call.args.items.len > 1)
                     try self.propertyTargetExpr(call.args.items[1])
                 else
                     PropertyTarget.any(),
-                .set_content, .require_asset_exists => if (call.args.items.len > 0)
+                .require_asset_exists => if (call.args.items.len > 0)
                     try self.propertyTargetExpr(call.args.items[0])
                 else
                     PropertyTarget.any(),
-                .set_prop, .foreach, .selection_filter, .foreach_enumerate => if (call.args.items.len > 0)
+                .foreach, .selection_filter, .foreach_enumerate => if (call.args.items.len > 0)
                     try self.propertyTargetExpr(call.args.items[0])
                 else
                     PropertyTarget.any(),
@@ -2584,9 +2515,6 @@ pub const Analyzer = struct {
         const query = registry.lookupQueryOp(query_name) orelse return PropertyTarget.any();
         return switch (query.op) {
             .document_pages, .previous_page => PropertyTarget.page(),
-            .page_objects_by_role,
-            .document_objects_by_role,
-            => PropertyTarget.object(self.objectClassForRole(try literalStringArg(self, call, 2))),
             .children, .descendants => PropertyTarget.object(null),
             .self_placement => if (call.args.items.len > 0)
                 (try self.propertyTargetExpr(call.args.items[0])) orelse PropertyTarget.any()
@@ -2778,8 +2706,6 @@ pub const Analyzer = struct {
         const descriptor = (try self.callCallee(call.callee)) orelse return null;
         return switch (descriptor) {
             .primitive => |primitive| switch (primitive.op) {
-                .new => try literalStringArg(self, call, 1),
-                .group => if (self.isTypedGroupCall(call)) null else core.GroupRole,
                 .place_on => try self.objectRoleArg(call, 1),
                 else => null,
             },

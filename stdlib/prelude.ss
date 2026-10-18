@@ -1,5 +1,11 @@
 ;; Common authoring functions. Implementation callbacks stay in their modules.
-import std:internal/classes
+import std:graphics/types
+import std:math/types
+import std:assets/types
+import std:layout/types
+import std:code/types
+import std:text/types
+import std:graphics/paint/types
 import std:theme/types
 import std:layout as {
   place!,
@@ -61,16 +67,12 @@ import std:themes/default as {
 }
 import std:query as {
   previous_page,
-  objs,
-  objs_here,
   selection,
   filter,
   children,
   descendants,
   doc_pages,
   pages,
-  objs_all,
-  doc_objs,
 }
 import std:graphics as {
   PathShape,
@@ -141,12 +143,4 @@ import std:graphics/paint as {
   stipple_sparse_fill,
   stipple_fill,
   stipple_dense_fill,
-}
-import std:internal/objects as {
-  obj,
-  obj!,
-  txt_obj,
-  txt_obj!,
-  body_obj,
-  body_obj!,
 }

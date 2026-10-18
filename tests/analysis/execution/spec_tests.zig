@@ -243,7 +243,7 @@ test "execution graph owns computed resource names after analyzers and cached su
     // The testing allocator also checks that the graph's string storage is freed.
     for ([_]std.mem.Allocator{ poison.allocator(), testing.allocator }) |allocator| {
         var state = try document(
-            \\fn read_offset() -> Number = prop(docctx(), "layout_h_" ++ "center_offset")
+            \\fn read_offset() -> Number = docctx().layout.center_offset
             \\document
             \\  let first = read_offset()
             \\end
@@ -251,11 +251,12 @@ test "execution graph owns computed resource names after analyzers and cached su
             \\  let second = read_offset()
             \\end
             \\document
-            \\  docctx().layout_h_center_offset = 24
+            \\  docctx().layout.center_offset = 24
             \\end
         );
         defer state.deinit();
-        // Exercise graph storage independently of surface property-key validation.
+        // Synthetic nested paths allocate resource names in dependency analysis.
+        // This tests graph ownership before surface field validation.
         var declarations = try compiler.declarations.build(testing.allocator, &state);
         defer declarations.deinit();
         var graph = try compiler.analysis.ExecutionGraph.build(allocator, &state, &declarations, .{});
@@ -266,7 +267,7 @@ test "execution graph owns computed resource names after analyzers and cached su
             for (unit.summary.reads.items) |resource| {
                 if (resource == .property and resource.property.owner == .document) {
                     if (resource.property.key.displayName()) |name| {
-                        if (std.mem.eql(u8, name, "layout_h_center_offset")) found = true;
+                        if (std.mem.eql(u8, name, "layout.center_offset")) found = true;
                     }
                 }
             }
