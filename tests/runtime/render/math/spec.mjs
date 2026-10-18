@@ -26,28 +26,29 @@ async function testSizing() {
     { name: 'matrix_three', formula: String.raw`\begin{matrix}x\\x\\x\end{matrix}` },
     { name: 'wide', formula: 'x+x+x+x' },
     { name: 'overflow', formula: 'x+x+x+x', width: 30 },
-    { name: 'shrink', formula: 'x+x+x+x', width: 30, style: 'body.text.math.display_fit = MathFit.shrink' },
-    { name: 'shrink_short', content: '$$x$$', style: 'body.text.math.display_fit = MathFit.shrink' },
-    { name: 'double_size', content: '$$x$$', style: 'body.text.size = 48' },
-    { name: 'scaled', content: '$$x$$', style: 'body.text.math.scale = 1.5' },
-    { name: 'zero_gap', formula: aligned, style: 'body.text.math.display_gap = 0' },
-    { name: 'large_gap', formula: aligned, style: 'body.text.math.display_gap = 1' },
+    { name: 'shrink', formula: 'x+x+x+x', width: 30, style: 'text.math.display_fit = MathFit.shrink' },
+    { name: 'shrink_short', content: '$$x$$', style: 'text.math.display_fit = MathFit.shrink' },
+    { name: 'double_size', content: '$$x$$', style: 'text.size = 48' },
+    { name: 'scaled', content: '$$x$$', style: 'text.math.scale = 1.5' },
+    { name: 'zero_gap', formula: aligned, style: 'text.math.display_gap = 0' },
+    { name: 'large_gap', formula: aligned, style: 'text.math.display_gap = 1' },
   ];
   const source = 'import std:themes/default as *\n' + cases.map(c => `
 page ${c.name}
   let content = <<
 ${c.content ?? `$$\n${c.formula}\n$$`}
 >>
-  let base_theme = current_theme() with {
-    body.text.size = 24
-    body.text.math.scale = 1
+  let base_style = default_theme().body with {
+    text.size = 24
+    text.math.scale = 1
   }
-  let body = text!(content, base_theme with { ${c.style ?? ''} })
+  let body = text!(content, base_style with { ${c.style ?? ''} })
   ~ body.width == ${c.width ?? 500}
   ~ body.left == page.left + 100
   ~ body.top == page.top - 100
   let following = text! "After ${c.name}"
-  body // following
+  ~ following.left == body.left
+  ~ following.top == body.bottom - 32
 end
 `).join('\n');
   const run = args => {
@@ -101,7 +102,7 @@ end
     near(following('zero_gap').y - following('large_gap').y, 48);
 
     // Reuse the same on-disk caches after a style-only change.
-    await writeFile(path.join(project, 'slide.ss'), source.replace('body.text.math.scale = 1.5', 'body.text.math.scale = 2'));
+    await writeFile(path.join(project, 'slide.ss'), source.replace('text.math.scale = 1.5', 'text.math.scale = 2'));
     run(['render', 'slide.ss', 'out.pdf']);
     run(['render', '--format', 'html', 'slide.ss', 'updated.html']);
     const updated = await readFile(path.join(project, 'updated.html'), 'utf8');
