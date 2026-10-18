@@ -899,6 +899,59 @@ test "typed placement: display dependencies wait for page creation and retain ca
     try testing.expectEqual(page, state.getNode(text).?.placement.?.page_id);
 }
 
+test "page numbers: standard display waits for all pages and retains custom format captures" {
+    var state = try documentWithModules(
+        \\import std:document as document_api
+        \\fn body_numbering(prefix: String, excluded: Number) -> (Page, Document) -> String
+        \\  return (page: Page, document: Document) |-> prefix ++ str(page_index(page) - excluded) ++ " of " ++ str(page_count(document) - excluded)
+        \\end
+        \\document
+        \\  let first = new_page(docctx(), "First")
+        \\  let value = document_api::PageNumber {}
+        \\  let first_number = place_on!(first, value)
+        \\  let second = new_page(docctx(), "Second")
+        \\  let second_number = place_on!(second, value)
+        \\  let third = new_page(docctx(), "Third")
+        \\  let custom = value with { format = body_numbering("Slide ", 1) }
+        \\  let third_number = place_on!(third, custom)
+        \\end
+    );
+    defer state.deinit();
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    try testing.expectEqual(@as(usize, 3), state.graph.page_order.items.len);
+    try testing.expectEqual(@as(usize, 0), state.diagnostics.entries.items.len);
+    for (state.graph.page_order.items, [_][]const u8{ "1/3", "2/3", "Slide 2 of 2" }) |page, expected| {
+        const roots = state.placementRootsOf(page);
+        try testing.expectEqual(@as(usize, 1), roots.len);
+        const number = state.getNode(roots[0]).?;
+        try testing.expectEqualStrings("PageNumber", number.placement.?.value.record.ty.class_name.?);
+        try testing.expect(number.role == null);
+        try testing.expectEqual(@as(usize, 0), number.fields.items.len);
+        const child = state.getNode(state.childrenOf(number.id).?[0]).?;
+        try testing.expectEqualStrings(expected, core.nodeDisplayContent(child));
+        try testing.expectEqual(page, child.placement.?.page_id);
+        try testing.expectEqual(core.native_display.Kind.text, child.placement.?.display.native);
+    }
+}
+
+test "page numbers: formatting callbacks cannot modify the document" {
+    var state = try documentWithModules(
+        \\import std:document as document_api
+        \\fn mutate(page: Page, document: Document) -> String
+        \\  new_page(document, "Unexpected")
+        \\  return "bad"
+        \\end
+        \\page first
+        \\  place!(document_api::PageNumber { format = mutate })
+        \\end
+    );
+    defer state.deinit();
+    try testing.expectError(error.ImpureDisplayFunction, compiler.analysis.analyzeDocumentState(testing.allocator, &state));
+    try testing.expectEqual(@as(usize, 0), state.graph.page_order.items.len);
+}
+
 test "typed placement: indirect display writes are rejected with the concrete input callback" {
     var state = try documentWithModules(
         \\import std:text/content as native
