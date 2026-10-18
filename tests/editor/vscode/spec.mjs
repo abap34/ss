@@ -20,8 +20,16 @@ await testPresentationCommand();
 await testLineCommentSyntax();
 await testCompositionOperatorSyntax();
 await testPairedFunctionKeywordSyntax();
+await testValueUpdateKeywordSyntax();
 await testTypeDeclarationSyntax();
 await testBlockStringSyntax();
+
+async function testValueUpdateKeywordSyntax() {
+  const grammar = JSON.parse(await readFile(path.join(root, "editor/vscode/syntaxes/ss.tmLanguage.json"), "utf8"));
+  const keyword = new RegExp(grammar.repository.keywords.patterns[0].match, "g");
+  assert(JSON.stringify("style with { size = 24 }".match(keyword)) === '["with"]', "value updates must highlight with");
+  assert("with_spacing".match(keyword) === null, "with must not split longer identifiers");
+}
 
 async function testTypeDeclarationSyntax() {
   const grammar = JSON.parse(await readFile(path.join(root, "editor/vscode/syntaxes/ss.tmLanguage.json"), "utf8"));
