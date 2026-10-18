@@ -333,11 +333,12 @@ test "native text display: a user display reaches Markdown preparation through i
     var state = try documentWithModules(
         \\import std:text/content as native
         \\import std:text/types as styles
+        \\import std:text/style as block
         \\type Message { content: String }
         \\fn display(self: Placed<Message>) -> native::Text
         \\  return native::Text {
         \\    content = self.value.content
-        \\    style = styles::TextStyle { size = 31 parse = styles::TextParseMode.block }
+        \\    style = block::TextBlockStyle { text = styles::TextStyle { size = 31 parse = styles::TextParseMode.block } }
         \\  }
         \\end
     );
@@ -400,8 +401,121 @@ test "native text display: nominal identity and complete input are required" {
     defer value.deinit(testing.allocator);
     try value.record.fields.append(testing.allocator, .{ .name = "content", .value = .{ .string = "Missing style" } });
     try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, .text));
-    try value.record.fields.append(testing.allocator, .{ .name = "style", .value = .{ .record = .init(Type.recordType("TextStyle").inModule(0)) } });
+    try value.record.fields.append(testing.allocator, .{ .name = "style", .value = .{ .record = .init(Type.recordType("TextBlockStyle").inModule(0)) } });
     try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, .text));
+}
+
+test "native text display: public Text preserves complete block styles without mutable properties" {
+    var state = try documentWithModules(
+        \\import std:text as text_api
+        \\import std:layout/types as layout
+        \\fn/! styled(content: String, style: text_api::TextBlockStyle) -> text_api::Text
+        \\  return text_api::Text { content = content style = style }
+        \\end
+        \\page main
+        \\  let original = text_api::TextBlockStyle {
+        \\    text = text_api::TextStyle { size = 23 parse = text_api::TextParseMode.block }
+        \\    layout = layout::LayoutStyle { x = 64 right_inset = 80 spacing_after = 19 wrap = layout::WrapMode.off }
+        \\    underline = text_api::UnderlineStyle { color = c"#ff0000" width = 3 offset = -4 }
+        \\    headings = text_api::MarkdownHeadingStyles {
+        \\      h1 = text_api::MarkdownHeadingStyle { text = text_api::TextStyle { size = 37 line_height = 43 } }
+        \\    }
+        \\  }
+        \\  let changed = original with { text.size = 29 layout.wrap = layout::WrapMode.on headings.h2 = text_api::MarkdownHeadingStyle { text = text_api::TextStyle { size = 31 } } }
+        \\  let first: Placed<text_api::Text> = styled!("# First", original)
+        \\  let second: Placed<text_api::Text> = styled!("## Second", changed)
+        \\end
+    );
+    defer state.deinit();
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const roots = state.placementRootsOf(state.graph.page_order.items[0]);
+    try testing.expectEqual(@as(usize, 2), roots.len);
+    for (roots, [_]f32{ 23, 29 }, 0..) |root, font_size, index| {
+        const node = state.getNode(root).?;
+        try testing.expect(node.role == null);
+        try testing.expectEqual(@as(usize, 0), node.fields.items.len);
+        const paint = core.render_policy.resolve(&state, node);
+        try testing.expectEqual(font_size, paint.text.?.font_size);
+        try testing.expectEqual(index == 1, paint.text.?.wrap);
+        try testing.expectEqual(@as(f32, 37), paint.text.?.markdown_headings[0].?.font_size);
+        try testing.expectEqual(@as(f32, 43), paint.text.?.markdown_headings[0].?.line_height);
+        if (index == 0) try testing.expect(paint.text.?.markdown_headings[1] == null) else try testing.expectEqual(@as(f32, 31), paint.text.?.markdown_headings[1].?.font_size);
+        try testing.expectEqual(@as(f32, 3), paint.underline.width);
+        try testing.expectEqual(@as(f32, -4), paint.underline.offset);
+        try testing.expectEqual(@as(f32, 1), paint.underline.color.?.r);
+        const layout = core.nodeField(node, "layout").?.record;
+        try testing.expectEqual(@as(f32, 64), layout.field("x").?.number);
+        try testing.expectEqual(@as(f32, 80), layout.field("right_inset").?.number);
+        try testing.expectEqual(@as(f32, 19), layout.field("spacing_after").?.number);
+        var prepared = try core.prepared.prepareObjectWithRender(testing.allocator, &state, node, paint);
+        defer prepared.deinit(testing.allocator);
+        try testing.expectEqual(core.markdown.ParseMode.block, prepared.parse_mode);
+        try testing.expectEqual(@as(usize, 1), prepared.markdown_doc.?.blocks.items.len);
+    }
+}
+
+test "native text display: an immutable theme block can be used directly and updated independently" {
+    var state = try documentWithModules(
+        \\import std:themes/academic as academic
+        \\import std:text as { Text }
+        \\fn/! styled(content: String, style: TextBlockStyle) -> Text = Text { content = content style = style }
+        \\page main
+        \\  let theme = academic::default_theme()
+        \\  styled!("Original", theme.h1)
+        \\  styled!("Changed", theme.h1 with { text.size = 44 })
+        \\  styled!("Reused", theme.h1)
+        \\end
+    );
+    defer state.deinit();
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const roots = state.placementRootsOf(state.graph.page_order.items[0]);
+    try testing.expectEqual(@as(usize, 3), roots.len);
+    for (roots, [_]f32{ 32, 44, 32 }) |root, size| {
+        const node = state.getNode(root).?;
+        const paint = core.render_policy.resolve(&state, node);
+        try testing.expectEqual(size, paint.text.?.font_size);
+        try testing.expectEqual(@as(f32, 36), paint.text.?.line_height);
+        try testing.expectEqual(@as(f32, 48), core.nodeField(node, "layout").?.record.field("spacing_after").?.number);
+        try testing.expect(node.role == null);
+        try testing.expectEqual(@as(usize, 0), node.fields.items.len);
+    }
+}
+
+test "native text display: every bundled theme resolves the same text paint from a block value" {
+    for ([_][]const u8{ "default", "academic", "pop" }) |name| {
+        const source = try std.fmt.allocPrint(testing.allocator,
+            \\import std:themes/{s} as theme_api
+            \\import std:text as {{ Text }}
+            \\import std:internal/style as styles
+            \\fn/! styled(content: String, style: TextBlockStyle) -> Text = Text {{ content = content style = style }}
+            \\page main
+            \\  let theme = theme_api::default_theme()
+            \\  text!("# Theme", theme)
+            \\  styled!("# Theme", styles::markdown_text_style(theme))
+            \\end
+        , .{name});
+        defer testing.allocator.free(source);
+        var state = try documentWithModules(source);
+        defer state.deinit();
+        var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+        defer graph.deinit();
+        try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+        const roots = state.placementRootsOf(state.graph.page_order.items[0]);
+        try testing.expectEqual(@as(usize, 2), roots.len);
+        const previous = state.getNode(roots[0]).?;
+        const typed = state.getNode(roots[1]).?;
+        const previous_paint = core.render_policy.resolve(&state, previous);
+        const typed_paint = core.render_policy.resolve(&state, typed);
+        try testing.expectEqualDeep(previous_paint.text, typed_paint.text);
+        try testing.expectEqualDeep(previous_paint.underline, typed_paint.underline);
+        try testing.expectEqual(core.markdown.parseModeForNode(&state, previous), core.markdown.parseModeForNode(&state, typed));
+        try testing.expect(typed.role == null);
+        try testing.expectEqual(@as(usize, 0), typed.fields.items.len);
+    }
 }
 
 fn preparePlan(state: *core.DocumentState, input: Type) !compiler.analysis.display.Plan {

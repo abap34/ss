@@ -1,6 +1,9 @@
 import std:text/types as { TextStyle, TextParseMode }
+import std:text/style as { TextBlockStyle }
 
 type Text {
   content: String
-  style: TextStyle = TextStyle { parse = TextParseMode.block }
+  style: TextBlockStyle = TextBlockStyle {
+    text = TextStyle { parse = TextParseMode.block }
+  }
 }
