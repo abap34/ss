@@ -848,7 +848,7 @@ test "syntax spec: paired placement functions expand to plain and placing defini
     try expectParseErrorAt(error.PairedFunctionNameCannotEndWithBang, bad_source, bang_offset);
 }
 
-test "syntax spec: bare user type names parse as object class annotations" {
+test "syntax spec: user type annotations retain unresolved names until name resolution" {
     var parsed = try parse(
         \\fn keep(value: Text) -> Text
         \\  return value
@@ -858,9 +858,9 @@ test "syntax spec: bare user type names parse as object class annotations" {
     defer parsed.deinit();
 
     const keep = parsed.module.functions.items[0];
-    try testing.expectEqual(Type.Kind.object, keep.params.items[0].ty.kind);
+    try testing.expectEqual(Type.Kind.unresolved, keep.params.items[0].ty.kind);
     try testing.expectEqualStrings("Text", keep.params.items[0].ty.class_name.?);
-    try testing.expectEqual(Type.Kind.object, keep.result_type.kind);
+    try testing.expectEqual(Type.Kind.unresolved, keep.result_type.kind);
     try testing.expectEqualStrings("Text", keep.result_type.class_name.?);
 }
 
@@ -1107,7 +1107,7 @@ test "syntax spec: optional types compose with functions and selections" {
     const items = keep.params.items[2].ty;
     try testing.expectEqual(Type.Kind.optional, items.kind);
     try testing.expectEqual(Type.Kind.selection, items.optional_child.?.kind);
-    try testing.expectEqual(Type.Kind.object, items.optional_child.?.selectionItem().kind);
+    try testing.expectEqual(Type.Kind.unresolved, items.optional_child.?.selectionItem().kind);
     try testing.expectEqualStrings("Text", items.optional_child.?.selectionItem().class_name.?);
 }
 
@@ -1230,7 +1230,7 @@ test "syntax spec: qualified type names parse in annotations and type parameters
     defer parsed.deinit();
 
     const keep = parsed.module.functions.items[0];
-    try testing.expectEqual(Type.Kind.object, keep.params.items[0].ty.kind);
+    try testing.expectEqual(Type.Kind.unresolved, keep.params.items[0].ty.kind);
     try testing.expectEqualStrings("classes::TextStyle", keep.params.items[0].ty.class_name.?);
     try testing.expectEqualStrings("classes::TextStyle", source[keep.params.items[0].ty.class_name_span.?.start..keep.params.items[0].ty.class_name_span.?.end]);
     try testing.expectEqual(Type.Kind.selection, keep.params.items[1].ty.kind);

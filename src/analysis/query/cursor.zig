@@ -626,7 +626,7 @@ fn sourceNameInType(budget: ?QueryBudget, ty: ast.Type, offset: usize) ?SourceNa
         if (sourceNameInType(budget, argument, offset)) |target| return target;
     }
     return switch (ty.kind) {
-        .object, .record, .parameter => if (spanContainsOptional(ty.class_name_span, offset)) .{
+        .object, .record, .parameter, .unresolved => if (spanContainsOptional(ty.class_name_span, offset)) .{
             .text = ty.class_name orelse "",
             .kind = .type_name,
         } else null,

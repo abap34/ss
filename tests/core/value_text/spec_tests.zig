@@ -219,6 +219,8 @@ test "core value text spec: malformed serialized record types are rejected" {
         "{\"kind\":\"record\",\"name\":\"Box\",\"arguments\":[{\"kind\":\"optional\"}]}",
         "{\"kind\":\"record\",\"name\":\"Box\",\"arguments\":[{\"kind\":\"function\",\"parameters\":[]}]}",
         "{\"kind\":\"record\",\"name\":\"Box\",\"arguments\":[{\"kind\":\"parameter\"}]}",
+        "{\"kind\":\"unresolved\",\"name\":\"Box\"}",
+        "{\"kind\":\"record\",\"name\":\"Box\",\"arguments\":[{\"kind\":\"unresolved\",\"name\":\"T\"}]}",
         "{\"kind\":\"record\",\"name\":\"Box\",\"arguments\":[{\"kind\":\"number\",\"arguments\":[]}]}",
         "{\"kind\":\"record\",\"name\":\"Box\",\"arguments\":[{\"kind\":\"placed\"}]}",
         "{\"kind\":\"record\",\"name\":\"Box\",\"arguments\":[{\"kind\":\"placed\",\"arguments\":[{\"kind\":\"number\"},{\"kind\":\"string\"}]}]}",
@@ -228,4 +230,16 @@ test "core value text spec: malformed serialized record types are rejected" {
         defer testing.allocator.free(source);
         try testing.expectError(error.InvalidValueTag, core.value_text.parsePropertyValue(testing.allocator, source));
     }
+}
+
+test "core value text spec: unresolved names cannot be decoded or serialized as value types" {
+    const Type = ast.Type;
+    const name = Type.unresolvedNameAt("Missing", .{ .start = 0, .end = 7 });
+    try testing.expectError(error.InvalidValueTag, core.value_text.typedPropertyValue(testing.allocator, "value", name));
+    var optional = try Type.optional(testing.allocator, name);
+    defer optional.deinit(testing.allocator);
+    try testing.expectError(error.InvalidValueTag, core.value_text.typedPropertyValue(testing.allocator, "none", optional));
+    var record = core.RecordValue.init(try Type.recordType("Box").inModule(0).withArguments(testing.allocator, &.{name}));
+    defer record.deinit(testing.allocator);
+    try testing.expectError(error.InvalidValueTag, core.value_text.propertyString(testing.allocator, .{ .record = record }));
 }

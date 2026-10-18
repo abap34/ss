@@ -5884,7 +5884,7 @@ test "compiler semantics: object class optional and selection mismatches are rej
     , "case.ss:bytes:", "TypeMismatch: expected Object<Card>?, got Object<Body>");
 }
 
-test "compiler semantics: selection item class annotations resolve class names" {
+test "compiler semantics: selection item annotations reject unknown type names" {
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
@@ -5902,9 +5902,7 @@ test "compiler semantics: default argument expressions are checked for nested ty
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\type Card = object {
-        \\  roles = ["card"]
-        \\}
+        \\type Card {}
         \\
         \\fn label(callback: Card -> String = (item: Missing) |-> "missing") -> String
         \\  return "ok"
@@ -5924,6 +5922,14 @@ test "compiler semantics: unknown annotation types report UnknownType" {
         \\end
         \\
     , "case.ss:bytes:", "UnknownType: unknown type: string");
+}
+
+test "compiler semantics: unresolved names are diagnosed inside compound type annotations" {
+    for ([_][]const u8{ "Missing<Number>", "Missing?", "Number -> Missing", "Placed<Missing>", "Box<Missing>" }) |annotation| {
+        const source = try std.fmt.allocPrint(testing.allocator, "type Box<T> {{ value: T }}\nfn unused(value: {s}) -> Number = 0\npage main\nend\n", .{annotation});
+        defer testing.allocator.free(source);
+        try expectDiagnostic(source, "case.ss:bytes:", "UnknownType: unknown type: Missing");
+    }
 }
 
 test "compiler semantics: numeric comparisons evaluate both outcomes" {

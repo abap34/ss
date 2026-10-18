@@ -64,6 +64,7 @@ pub const Type = struct {
         document,
         page,
         object,
+        unresolved,
         placed,
         group,
         placement,
@@ -98,6 +99,11 @@ pub const Type = struct {
     pub const boolean = Type{ .kind = .boolean };
     pub const constraints = Type{ .kind = .constraints };
     pub const path = Type{ .kind = .path };
+
+    /// A source-level name awaiting resolution in its declaration environment.
+    pub fn unresolvedNameAt(name: []const u8, span: SourceSpan) Type {
+        return .{ .kind = .unresolved, .class_name = name, .class_name_span = span };
+    }
 
     pub fn objectClass(name: []const u8) Type {
         return .{ .kind = .object, .class_name = name };
@@ -135,6 +141,7 @@ pub const Type = struct {
     }
 
     pub fn nominalId(self: Type) ?NominalId {
+        if (self.kind == .unresolved) return null;
         return .{
             .module_id = self.nominal_module_id orelse return null,
             .name = (if (self.kind == .enum_type) self.enum_name else self.class_name) orelse return null,
@@ -333,6 +340,15 @@ pub const Type = struct {
         return false;
     }
 
+    pub fn containsUnresolvedName(self: Type) bool {
+        if (self.kind == .unresolved) return true;
+        for (self.arguments) |argument| if (argument.containsUnresolvedName()) return true;
+        for (self.fn_params) |param| if (param.containsUnresolvedName()) return true;
+        if (self.fn_result) |result| if (result.containsUnresolvedName()) return true;
+        if (self.optional_child) |child| if (child.containsUnresolvedName()) return true;
+        return false;
+    }
+
     pub fn eql(a: Type, b: Type) bool {
         if (a.kind != b.kind or a.arguments.len != b.arguments.len) return false;
         for (a.arguments, b.arguments) |left, right| if (!eql(left, right)) return false;
@@ -364,6 +380,11 @@ pub const Type = struct {
     }
 
     pub fn accepts(expected: Type, actual: Type) bool {
+        if (expected.containsUnresolvedName() or actual.containsUnresolvedName()) return false;
+        return acceptsResolved(expected, actual);
+    }
+
+    fn acceptsResolved(expected: Type, actual: Type) bool {
         if (expected.kind == .hole or actual.kind == .hole) return false;
         if (expected.kind == .any or actual.kind == .any) return expected.kind != .parameter and actual.kind != .parameter;
         if (expected.kind == .optional) {
@@ -371,9 +392,9 @@ pub const Type = struct {
             const child = expected.optional_child orelse return false;
             if (actual.kind == .optional) {
                 const actual_child = actual.optional_child orelse return false;
-                return accepts(child.*, actual_child.*);
+                return acceptsResolved(child.*, actual_child.*);
             }
-            return accepts(child.*, actual);
+            return acceptsResolved(child.*, actual);
         }
         if (actual.kind == .optional) return false;
         if (expected.kind == .placement and actual.kind == .placed) return actual.placedInput() != null;
@@ -399,9 +420,9 @@ pub const Type = struct {
             if (actual.fn_result == null) return false;
             if (expected.fn_params.len != actual.fn_params.len) return false;
             for (expected.fn_params, 0..) |expected_param, index| {
-                if (!accepts(actual.fn_params[index], expected_param)) return false;
+                if (!acceptsResolved(actual.fn_params[index], expected_param)) return false;
             }
-            return accepts(expected.fn_result.?.*, actual.fn_result.?.*);
+            return acceptsResolved(expected.fn_result.?.*, actual.fn_result.?.*);
         }
         if (expected.kind == .object and expected.class_name != null and actual.class_name != null) {
             if (expected.nominal_module_id != actual.nominal_module_id or !std.mem.eql(u8, expected.class_name.?, actual.class_name.?)) return false;
@@ -411,7 +432,7 @@ pub const Type = struct {
             const received = actual.selectionItem();
             if (wanted.kind == .any) return true;
             if (received.kind == .any) return false;
-            return accepts(wanted, received);
+            return acceptsResolved(wanted, received);
         }
         if (expected.arguments.len != actual.arguments.len) return false;
         for (expected.arguments, actual.arguments) |left, right| if (!eql(left, right)) return false;
@@ -511,7 +532,7 @@ pub const Type = struct {
                 try out.appendSlice(allocator, name)
             else
                 try out.appendSlice(allocator, displayName(self.kind)),
-            .record, .parameter => if (self.class_name) |name|
+            .record, .parameter, .unresolved => if (self.class_name) |name|
                 try out.appendSlice(allocator, name)
             else
                 try out.appendSlice(allocator, displayName(self.kind)),
@@ -539,6 +560,7 @@ pub const Type = struct {
             .document => "Document",
             .page => "Page",
             .object => "Object",
+            .unresolved => "UnresolvedType",
             .placed => "Placed",
             .group => "Group",
             .placement => "Placement",

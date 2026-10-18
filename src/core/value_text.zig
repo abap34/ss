@@ -53,6 +53,7 @@ pub fn deinitParsedPropertyValue(allocator: std.mem.Allocator, value: *model.Val
 }
 
 pub fn typedPropertyValue(allocator: std.mem.Allocator, text: []const u8, ty: ast.Type) !model.Value {
+    if (ty.containsUnresolvedName()) return error.InvalidValueTag;
     if (ty.kind == .optional) {
         const child = ty.optional_child orelse return .{ .string = text };
         return typedPropertyValue(allocator, text, child.*);
