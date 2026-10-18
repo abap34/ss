@@ -443,6 +443,11 @@ fn hashOptionalCodePaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.Co
 fn hashOptionalVectorPathPaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.VectorPathPaint) void {
     hashBool(hasher, maybe != null);
     if (maybe) |path| {
+        hashBool(hasher, path.natural_size != null);
+        if (path.natural_size) |size| {
+            hashF32(hasher, size.width);
+            hashF32(hasher, size.height);
+        }
         hashCorePath(hasher, path.path);
         hashVectorFill(hasher, path.fill);
         hashOptionalVectorStroke(hasher, path.stroke);

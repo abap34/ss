@@ -409,7 +409,7 @@ pub const CompositionOrder = struct {
     }
 };
 
-pub const NativeDisplayKind = enum { text, image, pdf, code, latex };
+pub const NativeDisplayKind = enum { text, image, pdf, code, latex, path_shape };
 
 /// Input storage follows Value ownership: recursive storage is owned, while
 /// strings, names and function identities borrow the document's runtime inputs.
@@ -925,6 +925,11 @@ pub fn nodeField(node: *const Node, key: []const u8) ?Value {
             if (style != .record) return null;
             if (std.mem.eql(u8, key, "layout")) return style.record.field(key);
             return switch (placement.display.native) {
+                .path_shape => blk: {
+                    if (std.mem.eql(u8, key, "path") or std.mem.eql(u8, key, "marker_start") or std.mem.eql(u8, key, "marker_end")) break :blk placement.value.record.field(key);
+                    if (std.mem.eql(u8, key, "fill") or std.mem.eql(u8, key, "stroke")) break :blk style.record.field(key);
+                    break :blk null;
+                },
                 .text => blk: {
                     if (std.mem.eql(u8, key, "text") or std.mem.eql(u8, key, "underline")) break :blk style.record.field(key);
                     if (std.mem.eql(u8, key, "markdown_headings")) break :blk style.record.field("headings");
@@ -956,6 +961,7 @@ pub fn nodeContent(node: *const Node) ?[]const u8 {
             .text => placement.value.record.field("content").?.string,
             .image, .pdf => placement.value.record.field("path").?.string,
             .code, .latex => placement.value.record.field("source").?.string,
+            .path_shape => "",
         };
     }
     return node.content;

@@ -1600,3 +1600,94 @@ test "typed compositions: invalid updates and placed operands fail before evalua
         try testing.expectEqual(@as(usize, 0), state.graph.page_order.items.len);
     }
 }
+
+test "native path display: immutable geometry, paint and markers survive reuse and queries" {
+    var state = try documentWithModules(
+        \\import std:graphics as g
+        \\import std:graphics/path as p
+        \\import std:text as t
+        \\type Diagram { shape: g::PathShape }
+        \\fn display(self: Placed<Diagram>) -> g::PathShape = self.value.shape
+        \\const input: g::PathShape = g::PathShape {
+        \\  path = path(p::move_to(0, 0), p::line_to(1, 1))
+        \\  width = 180 height = 90
+        \\  marker_end = g::marker_arrow_filled()
+        \\}
+        \\page first
+        \\  place!(t::Text { content = str(selection_count(select<g::PathShape>(pagectx()))) })
+        \\  place!(input)
+        \\  place!(input with { width = 240 style.stroke.width = 4 marker_start = g::marker_circle() })
+        \\end
+        \\page second
+        \\  place!(Diagram { shape = input })
+        \\end
+    );
+    defer state.deinit();
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const pages = state.graph.page_order.items;
+    const roots = state.placementRootsOf(pages[0]);
+    try testing.expectEqualStrings("2", core.nodeDisplayContent(state.getNode(roots[0]).?));
+    const reused = state.childrenOf(state.placementRootsOf(pages[1])[0]).?[0];
+    for ([_]core.NodeId{ roots[1], roots[2], reused }, 0..) |id, index| {
+        const node = state.getNode(id).?;
+        try testing.expectEqual(core.native_display.Kind.path_shape, node.placement.?.display.native);
+        try testing.expectEqualStrings("PathShape", node.placement.?.value.record.ty.class_name.?);
+        try testing.expectEqual(if (index == 2) pages[1] else pages[0], node.placement.?.page_id);
+        try testing.expect(node.role == null);
+        try testing.expectEqual(@as(usize, 0), node.fields.items.len);
+        const paint = core.render_policy.resolve(&state, node).vector_path.?;
+        try testing.expectEqual(@as(f32, if (index == 1) 240 else 180), paint.natural_size.?.width);
+        try testing.expectEqual(@as(f32, 90), paint.natural_size.?.height);
+        try testing.expectEqual(@as(f32, if (index == 1) 4 else 1.6), paint.stroke.?.width);
+        try testing.expectEqual(index == 1, paint.marker_start != null);
+        try testing.expect(paint.marker_end != null);
+        var prepared = try core.prepared.prepareObject(testing.allocator, &state, node);
+        defer prepared.deinit(testing.allocator);
+        try testing.expectEqual(core.markdown.ParseMode.none, prepared.parse_mode);
+        try testing.expectEqual(@as(usize, 0), prepared.asset_deps.len);
+        try testing.expectEqualStrings("", prepared.content);
+    }
+}
+
+test "native path display: nominal contracts and finite positive dimensions are required" {
+    var state = try documentWithModules(
+        \\import std:graphics as g
+        \\import std:graphics/path as p
+        \\type PathShape { path: Path }
+        \\page first
+        \\  place!(g::PathShape { path = path(p::move_to(0, 0), p::line_to(1, 1)) })
+        \\end
+    );
+    defer state.deinit();
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    try testing.expect(core.native_display.kindForType(&state, Type.recordType("PathShape").inModule(0)) == null);
+    const node = state.getNode(state.placementRootsOf(state.graph.page_order.items[0])[0]).?;
+    var value = try node.placement.?.value.clone(testing.allocator);
+    defer value.deinit(testing.allocator);
+    for (value.record.fields.items) |*field| {
+        if (std.mem.eql(u8, field.name, "width") or std.mem.eql(u8, field.name, "height")) {
+            const saved = field.value;
+            for ([_]f32{ 0, -1, std.math.inf(f32), std.math.nan(f32) }) |invalid| {
+                field.value = .{ .number = invalid };
+                try testing.expectError(error.InvalidShapeSize, core.native_display.validateValue(&state, value, .path_shape));
+            }
+            field.value = .{ .string = "Invalid dimension" };
+            try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, .path_shape));
+            field.value = saved;
+        } else if (std.mem.eql(u8, field.name, "marker_start")) {
+            field.value = .{ .record = .init(Type.recordType("MarkerStyle").inModule(0)) };
+            try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, .path_shape));
+            field.value = .none;
+        } else if (std.mem.eql(u8, field.name, "path")) {
+            const saved = field.value;
+            field.value = .{ .string = "Not a path" };
+            try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, .path_shape));
+            field.value = saved;
+        }
+    }
+    try core.native_display.validateValue(&state, value, .path_shape);
+}

@@ -101,6 +101,7 @@ pub fn intrinsicWidthCached(state: *Workspace, node: *const Node, cache: *Measur
 }
 
 fn intrinsicWidthWithCache(state: *Workspace, node: *const Node, cache: ?*MeasurementCache) !f32 {
+    if (render_policy.naturalPathSize(node)) |size| return size.width;
     const layout_style = styleForNode(state, node);
     const content = model.nodeDisplayContent(node);
     const chrome_width = 2.0 * chromePadX(state, node);
@@ -167,11 +168,13 @@ pub fn intrinsicHeightCached(state: *Workspace, node: *const Node, frame: model.
 }
 
 pub fn frameConstrainedMeasurementCached(state: *Workspace, node: *const Node, frame: model.Frame, cache: *MeasurementCache) !?model.LayoutMeasurement {
+    if (render_policy.naturalPathSize(node) != null) return try cache.renderedMeasurement(state, node, frame.width, .width_constrained);
     const measured_outer_width = if (frame.width > 0) @max(@as(f32, 1.0), frame.width) else 1;
     return try cache.renderedMeasurement(state, node, measured_outer_width, .width_constrained);
 }
 
 fn intrinsicHeightWithCache(state: *Workspace, node: *const Node, frame: model.Frame, cache: ?*MeasurementCache) !f32 {
+    if (render_policy.naturalPathSize(node)) |size| return size.height;
     const layout_style = styleForNode(state, node);
     const chrome_height = 2.0 * chromePadY(state, node);
     const measured_outer_width = if (frame.width > 0)

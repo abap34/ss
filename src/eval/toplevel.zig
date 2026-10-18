@@ -216,6 +216,7 @@ pub const EvalContext = struct {
                     .latex => .latex,
                     .image => .image_ref,
                     .pdf => .pdf_ref,
+                    .path_shape => .text,
                 };
                 if (kind == .image or kind == .pdf) {
                     try validateAssetPath(self.state, placement.page_id, id, placement.value.record.field("path").?.string, payload_kind, node.origin);
@@ -232,6 +233,7 @@ pub const EvalContext = struct {
                 node.object_kind = switch (kind) {
                     .text, .code, .latex => .text,
                     .image, .pdf => .asset,
+                    .path_shape => .text,
                 };
                 node.payload_kind = payload_kind;
                 placement.display = .{ .native = kind };

@@ -97,40 +97,54 @@ fn isLibraryType(state: anytype, ty: ast.Type, spec: []const u8, name: []const u
 const Contract = struct {
     module: []const u8,
     name: []const u8,
-    string_fields: []const []const u8,
-    record_fields: []const struct { field: []const u8, module: []const u8, name: []const u8 },
+    value_fields: []const struct { field: []const u8, ty: ast.Type, tag: model.ValueTag } = &.{},
+    record_fields: []const struct { field: []const u8, module: []const u8, name: []const u8, optional: bool = false },
 };
 
 fn contract(kind: Kind) Contract {
     return switch (kind) {
+        .path_shape => .{
+            .module = "std:graphics/content",
+            .name = "PathShape",
+            .value_fields = &.{
+                .{ .field = "path", .ty = ast.Type.path, .tag = .path },
+                .{ .field = "width", .ty = ast.Type.number, .tag = .number },
+                .{ .field = "height", .ty = ast.Type.number, .tag = .number },
+            },
+            .record_fields = &.{
+                .{ .field = "style", .module = "std:graphics/types", .name = "VectorStyle" },
+                .{ .field = "marker_start", .module = "std:graphics/types", .name = "MarkerStyle", .optional = true },
+                .{ .field = "marker_end", .module = "std:graphics/types", .name = "MarkerStyle", .optional = true },
+            },
+        },
         .text => .{
             .module = "std:text/content",
             .name = "Text",
-            .string_fields = &.{"content"},
+            .value_fields = &.{.{ .field = "content", .ty = ast.Type.string, .tag = .string }},
             .record_fields = &.{.{ .field = "style", .module = "std:text/style", .name = "TextBlockStyle" }},
         },
         .image => .{
             .module = "std:assets/content",
             .name = "Image",
-            .string_fields = &.{"path"},
+            .value_fields = &.{.{ .field = "path", .ty = ast.Type.string, .tag = .string }},
             .record_fields = &.{.{ .field = "style", .module = "std:assets/style", .name = "AssetBlockStyle" }},
         },
         .code => .{
             .module = "std:code/content",
             .name = "Code",
-            .string_fields = &.{ "source", "language" },
+            .value_fields = &.{ .{ .field = "source", .ty = ast.Type.string, .tag = .string }, .{ .field = "language", .ty = ast.Type.string, .tag = .string } },
             .record_fields = &.{.{ .field = "style", .module = "std:code/style", .name = "CodeBlockStyle" }},
         },
         .pdf => .{
             .module = "std:assets/content",
             .name = "Pdf",
-            .string_fields = &.{"path"},
+            .value_fields = &.{.{ .field = "path", .ty = ast.Type.string, .tag = .string }},
             .record_fields = &.{.{ .field = "style", .module = "std:assets/style", .name = "AssetBlockStyle" }},
         },
         .latex => .{
             .module = "std:math/content",
             .name = "Latex",
-            .string_fields = &.{"source"},
+            .value_fields = &.{.{ .field = "source", .ty = ast.Type.string, .tag = .string }},
             .record_fields = &.{
                 .{ .field = "style", .module = "std:math/style", .name = "LatexBlockStyle" },
                 .{ .field = "config", .module = "std:math/types", .name = "LatexConfig" },
@@ -154,13 +168,17 @@ pub fn validateType(state: anytype, ty: ast.Type, kind: Kind) !void {
     const id = ty.nominalId().?;
     const index = state.declaration_index;
     const expected = contract(kind);
-    for (expected.string_fields) |name| {
-        const field = index.recordField(id, name) orelse return error.InvalidNativeDisplay;
-        if (!ast.Type.eql(field.value_type, ast.Type.string)) return error.InvalidNativeDisplay;
+    for (expected.value_fields) |value| {
+        const field = index.recordField(id, value.field) orelse return error.InvalidNativeDisplay;
+        if (!ast.Type.eql(field.value_type, value.ty)) return error.InvalidNativeDisplay;
     }
     for (expected.record_fields) |record| {
         const field = index.recordField(id, record.field) orelse return error.InvalidNativeDisplay;
-        if (!isLibraryType(state, field.value_type, record.module, record.name)) return error.InvalidNativeDisplay;
+        const field_type = if (record.optional) blk: {
+            if (field.value_type.kind != .optional) return error.InvalidNativeDisplay;
+            break :blk (field.value_type.optional_child orelse return error.InvalidNativeDisplay).*;
+        } else field.value_type;
+        if (!isLibraryType(state, field_type, record.module, record.name)) return error.InvalidNativeDisplay;
     }
 }
 
@@ -171,12 +189,22 @@ pub fn validateValue(state: anytype, value: model.Value, kind: Kind) !void {
     };
     try validateType(state, record.ty, kind);
     const expected = contract(kind);
-    for (expected.string_fields) |name| {
-        const field = record.field(name) orelse return error.InvalidNativeDisplay;
-        if (field != .string) return error.InvalidNativeDisplay;
+    for (expected.value_fields) |expected_value| {
+        const field = record.field(expected_value.field) orelse return error.InvalidNativeDisplay;
+        if (std.meta.activeTag(field) != expected_value.tag) return error.InvalidNativeDisplay;
     }
     for (expected.record_fields) |expected_record| {
         const field = record.field(expected_record.field) orelse return error.InvalidNativeDisplay;
+        if (expected_record.optional and field == .none) continue;
         if (field != .record or !isLibraryType(state, field.record.ty, expected_record.module, expected_record.name)) return error.InvalidNativeDisplay;
+    }
+    if (kind == .path_shape) try validateShapeDimensions(value);
+}
+
+/// Dimensions describe the natural frame. Placement constraints may resize it.
+fn validateShapeDimensions(value: model.Value) !void {
+    for ([_][]const u8{ "width", "height" }) |name| {
+        const number = value.record.field(name).?.number;
+        if (!std.math.isFinite(number) or number <= 0) return error.InvalidShapeSize;
     }
 }
