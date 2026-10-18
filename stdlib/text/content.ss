@@ -1,9 +1,8 @@
-import std:text/types as { TextStyle, TextParseMode }
-import std:text/style as { TextBlockStyle }
+import std:text/style as { TextBlockStyle, default_text_style }
+import std:math/types as { LatexConfig }
 
 type Text {
   content: String
-  style: TextBlockStyle = TextBlockStyle {
-    text = TextStyle { parse = TextParseMode.block }
-  }
+  style: TextBlockStyle = default_text_style
+  config: LatexConfig = LatexConfig {}
 }

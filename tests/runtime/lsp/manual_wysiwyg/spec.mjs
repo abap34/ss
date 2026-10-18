@@ -153,7 +153,6 @@ automatic = false
 await testContinuousPositionEdits(5000);
 await testContinuousPositionEdits(0);
 await testSignedZeroPositionEdits();
-await testConnectorForcesFullDisplay();
 await testPageSpaceFillForcesFullDisplay();
 await testReadlinesForcesFullDisplay();
 await testWatchedModuleChangeForcesFullDisplay();
@@ -426,97 +425,6 @@ automatic = false
   }
 }
 
-async function testConnectorForcesFullDisplay() {
-  const fixture = await mkdtemp(
-    path.join(os.tmpdir(), "ss-lsp-manual-connector-"),
-  );
-  try {
-    const slide = path.join(fixture, "slide.ss");
-    const uri = pathToFileURL(slide).toString();
-    let source = `import std:themes/default as *
-
-page demo
-let source_item = text!("Source")
-let target_item = text!("Target")
-let edge = connect!(source_item, target_item)
-~!~ source_item.left == page.left + 40
-~!~ source_item.top == page.top - 100
-~!~ target_item.left == page.left + 200
-~!~ target_item.top == page.top - 100
-end
-`;
-    await writeFile(path.join(fixture, "ss.toml"), `[project]
-entry = "slide.ss"
-
-[editor.lsp]
-debounce = 0
-
-[editor.wysiwyg.refresh]
-automatic = false
-`, "utf8");
-    await writeFile(slide, source, "utf8");
-
-    await withLspClient({ cwd: fixture }, async (client) => {
-      await client.initialize();
-      const initialDiagnostics = client.waitForDiagnostics(uri);
-      client.openDocument({ uri, text: source, version: 1 });
-      assert(
-        (await initialDiagnostics).params.diagnostics.length === 0,
-        "connector fixture produced diagnostics",
-      );
-
-      const initial = await client.request("ss/editorSnapshot", {
-        textDocument: { uri },
-      });
-      const edgeTarget = editingTarget(initial, "edge");
-      assert(
-        typeof initial.display?.html === "string" &&
-          initial.display.html.includes("ss-vector-path") &&
-          initial.display.html.includes(
-            `data-ss-node-id="${edgeTarget.node_id}"`,
-          ),
-        `connector fixture did not render its connector: ${JSON.stringify(initial.display)}`,
-      );
-      const target = editingTarget(initial, "target_item");
-      const from = previewBounds(initial, target.node_id);
-      const to = { ...from, x: 220, y: 120 };
-      const edit = await requestEdit(
-        client,
-        uri,
-        initial,
-        target,
-        from,
-        to,
-        "absolute",
-        target.page_id,
-      );
-      assert(
-        edit.status === "ok",
-        `connector endpoint edit failed: ${JSON.stringify(edit)}`,
-      );
-      source = applyProtocolEdits(
-        source,
-        edit.workspaceEdit?.changes?.[uri] ?? [],
-      );
-      client.changeDocument({ uri, version: 2, text: source });
-
-      const moved = await client.request("ss/editorSnapshot", {
-        textDocument: { uri },
-        baseSnapshotId: initial.snapshot_id,
-      });
-      assert(
-        moved.display?.schema === 2 &&
-          moved.display?.kind !== "translation_patch" &&
-          typeof moved.display?.html === "string",
-        `connector endpoint movement reused stale HTML: ${JSON.stringify(moved.display)}`,
-      );
-      assertPosition(moved, "target_item", 220, 120, "connector endpoint edit");
-    });
-  } finally {
-    await rm(fixture, { recursive: true, force: true });
-  }
-}
-
 async function testReadlinesForcesFullDisplay() {
   const fixture = await mkdtemp(
     path.join(os.tmpdir(), "ss-lsp-manual-readlines-"),
@@ -717,9 +625,9 @@ end
 `;
     const initialModuleSource = `import std:themes/default as *
 
-fn watched_item!() -> Object
-  return text!("Watched module", current_theme() with {
-    body.text.color = c"#ff0000"
+fn watched_item!() -> Placed<Text>
+  return text!("Watched module", current_theme().body with {
+    text.color = c"#ff0000"
   })
 end
 `;

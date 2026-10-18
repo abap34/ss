@@ -4,9 +4,9 @@ document
   let callback = label
 end
 document
-  let item = text("A")
+  let item = body_obj("A")
   let value = callback(item)
   item.link_id = "marked"
-  let output = text(value)
+  let output = body_obj(value)
   place_on!(new_page(docctx(), "main"), output)
 end

@@ -723,7 +723,7 @@ test "native text display: every bundled theme resolves the same text paint from
             \\fn/! styled(content: String, style: TextBlockStyle) -> Text = Text {{ content = content style = style }}
             \\page main
             \\  let theme = theme_api::default_theme()
-            \\  text!("# Theme", theme)
+            \\  text!("# Theme", styles::markdown_text_style(theme))
             \\  styled!("# Theme", styles::markdown_text_style(theme))
             \\end
         , .{name});
@@ -1877,4 +1877,40 @@ test "latex constructor: unused bodies do not allocate placements or require ext
     try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
     try testing.expectEqual(@as(usize, 2), state.nodeCount());
     try testing.expectEqual(@as(usize, 0), state.diagnostics.entries.items.len);
+}
+
+
+test "native text display: public constructors preserve explicit TeX configuration and input independence" {
+    var state = try documentWithModules(
+        \\import std:text as words
+        \\const config: LatexConfig = LatexConfig { engine = LatexEngine.lualatex preamble = "explicit" }
+        \\const original: words::Text = words::text("**Shared**", default_text_style, config)
+        \\const changed: words::Text = original with { config.preamble = "changed" style.text.size = 31 }
+        \\document
+        \\  latex_preamble("ambient")
+        \\end
+        \\page main
+        \\  let first: Placed<words::Text> = place!(original)
+        \\  let second: Placed<words::Text> = place!(changed)
+        \\  let third: Placed<words::Text> = words::text!("Default")
+        \\  let unused = words::text("Unplaced")
+        \\end
+    );
+    defer state.deinit();
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const roots = state.placementRootsOf(state.graph.page_order.items[0]);
+    try testing.expectEqual(@as(usize, 3), roots.len);
+    for (roots, [_][]const u8{ "explicit", "changed", "" }, [_]f32{ 20, 31, 20 }) |root, preamble, size| {
+        const node = state.getNode(root).?;
+        try testing.expect(node.role == null);
+        try testing.expectEqual(@as(usize, 0), node.fields.items.len);
+        try testing.expectEqual(size, core.render_policy.resolve(&state, node).text.?.font_size);
+        var env = try core.render_env.resolveForNode(testing.allocator, &state, node);
+        defer env.deinit(testing.allocator);
+        try testing.expectEqual(if (preamble.len == 0) core.render_env.LatexEngine.pdflatex else .lualatex, env.latex_engine);
+        try testing.expectEqual(@as(usize, if (preamble.len == 0) 0 else 1), env.latex_preamble.items.len);
+        if (preamble.len != 0) try testing.expectEqualStrings(preamble, env.latex_preamble.items[0].value);
+    }
 }

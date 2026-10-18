@@ -1,6 +1,6 @@
 import std:themes/default as *
 
-fn make() -> Object = text("A")
+fn make() -> Object = body_obj("A")
 page main
   let a = make()
   let b = make()

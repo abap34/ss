@@ -13,6 +13,8 @@ import std:layout as {
   surround,
 }
 import std:text as {
+  Text,
+  default_text_style,
   text,
   text!,
   title,

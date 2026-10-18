@@ -1,7 +1,11 @@
 import std:themes/default as *
 
+fn/! body(content: String, style: TextBlockStyle = current_theme().body) -> Text
+  return text(content, style)
+end
+
 page main
-  text!("Late theme")
+  body!("Late theme")
 end
 
 document

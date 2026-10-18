@@ -71,12 +71,9 @@ async function testMarkdownMathUsesPreambleFallback() {
       `import std:themes/default as *
 
 page formula
-text!("Inline $\\ArchiveMacro$ fallback")
+text!("Inline $\\ArchiveMacro$ fallback", default_text_style, LatexConfig { preamble = readlines("preamble.tex") })
 end
 
-document
-  latex_preamble_file("preamble.tex")
-end
 `,
       "utf8",
     );
@@ -283,12 +280,9 @@ async function testLatexArtifactCacheIsReusedAndInvalidated() {
 import std:math as formulas
 
 const config: LatexConfig = LatexConfig { preamble = readlines("preamble.tex") }
-document
-latex_preamble(config.preamble)
-end
 
 page formula
-text!("Markdown $\\CacheToken$")
+text!("Markdown $\\CacheToken$", default_text_style, config)
 latex!("$\\CacheToken$", formulas::LatexBlockStyle {}, config)
 end
 `,

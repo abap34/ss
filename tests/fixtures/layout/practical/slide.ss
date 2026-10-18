@@ -32,7 +32,7 @@ A synthetic paragraph explains how a small collection is checked before processi
 - Keep the original ordering.
 - Report missing values clearly.
 >>
-  let description = text(description_content, current_theme() with { body.text.size = 24 })
+  let description = text(description_content, current_theme().body with { text.size = 24 })
   let upper = text <<
 ## Input summary
 

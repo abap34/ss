@@ -122,7 +122,10 @@ fn contract(kind: Kind) Contract {
             .module = "std:text/content",
             .name = "Text",
             .value_fields = &.{.{ .field = "content", .ty = ast.Type.string, .tag = .string }},
-            .record_fields = &.{.{ .field = "style", .module = "std:text/style", .name = "TextBlockStyle" }},
+            .record_fields = &.{
+                .{ .field = "style", .module = "std:text/style", .name = "TextBlockStyle" },
+                .{ .field = "config", .module = "std:math/types", .name = "LatexConfig" },
+            },
         },
         .icon => .{
             .module = "std:assets/content",

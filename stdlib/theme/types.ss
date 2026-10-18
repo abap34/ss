@@ -6,6 +6,7 @@ import std:components/figure/style
 import std:components/toc/style
 import std:templates/slide/style
 import std:components/callout/style
+import std:text/content as { Text }
 
 type GeneratedStyle {
   pageno: TextBlockStyle = TextBlockStyle {}

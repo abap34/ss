@@ -167,11 +167,11 @@ test "analysis completion: composition remains independent of lexical function n
         \\  return 1
         \\end
         \\page main
-        \\  let a = text!("A")
-        \\  let b = text!("B")
+        \\  let a = text("A")
+        \\  let b = text("B")
         \\  let hjoin = (left: Object, right: Object) |-> 1
         \\  let combined = a || b
-        \\  let label = (a || b).content
+        \\  let label = (a || b).gap
         \\end
     );
     defer case.deinit();
@@ -199,8 +199,7 @@ test "analysis completion: composition remains independent of lexical function n
         .offset = offsetAfter(case.source, "(a || b)."),
     }, .{ .budget_ms = 100 });
     defer result.deinit(case.allocator);
-    try expectHas(result, "content");
-    try expectHas(result, "layout");
+    try expectHas(result, "gap");
     try expectOnlyKind(result, .property);
 }
 
@@ -295,7 +294,7 @@ test "analysis completion: visible function prefers imported module definitions 
     const item = resolve_query.valueBinding(null, snapshot, module.id, "text", null, .function) orelse return error.ExpectedFunction;
 
     try testing.expectEqualStrings("text", item.name);
-    try testing.expectEqualStrings("text(content: String, style: Theme = theme::current_theme()) -> Object", item.signature);
+    try testing.expectEqualStrings("text(content: String, style: TextBlockStyle = default_text_style, config: LatexConfig = LatexConfig {  }) -> Text", item.signature);
 }
 
 test "analysis completion: visible variables and definitions use shared scope resolution" {
@@ -915,7 +914,8 @@ test "analysis queries: recovery syntax is borrowed for repeated requests" {
         .offset = offsetAfter(case.source, "t."),
     }, .{ .budget_ms = 1000 });
     defer completion.deinit(testing.allocator);
-    try expectHas(completion, "text");
+    try expectHas(completion, "style");
+    try expectHas(completion, "config");
     try expectHas(completion, "content");
 }
 
@@ -1314,7 +1314,7 @@ test "analysis queries: let initializer resolves outside its own binding" {
     const declaration = query_types.SourceRequest{ .path = case.path, .source = case.source, .offset = offsetAfter(case.source, "let text") - 1 };
     var local = (try snapshot_api.hoverAt(case.allocator, snapshot, declaration, clock.options())) orelse return error.ExpectedHover;
     defer local.deinit(case.allocator);
-    try testing.expect(std.mem.indexOf(u8, local.markdown, "text: Object") != null);
+    try testing.expect(std.mem.indexOf(u8, local.markdown, "text: Text") != null);
 }
 
 test "analysis queries: constant record receivers precede enum names" {

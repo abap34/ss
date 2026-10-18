@@ -25,7 +25,7 @@ const output = path.join(root, ".ss-cache/tests/syntax/formatting");
 await mkdir(output, { recursive: true });
 const directory = await mkdtemp(path.join(output, "run-"));
 const prelude = `import std:prelude as *
-fn mark!(label: String) -> Object
+fn mark!(label: String) -> Text
   return text(label)
 end
 `;
@@ -107,7 +107,7 @@ function print(tree, format) {
 async function runBatch(name, batch) {
   const file = path.join(directory, `${name}.ss`);
   const destination = path.join(directory, `${name}.json`);
-  const source = prelude + batch.map((item) => `\npage ${item.id}\nvflow(LayoutPolicy.${item.policy})\nlet g = ${item.expression}\nplace_on!(pagectx(), g)\nend\n`).join("");
+  const source = prelude + batch.map((item) => `\npage ${item.id}\nvflow(LayoutPolicy.${item.policy})\nlet g = ${item.expression}\nplace!(g)\nend\n`).join("");
   await writeFile(file, source);
   try {
     await exec(ssBin, ["dump", "--quiet", file, destination], { cwd: directory, timeout: 30000, killSignal: "SIGKILL", maxBuffer: 2 * 1024 * 1024 });

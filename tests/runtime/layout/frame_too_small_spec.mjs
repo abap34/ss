@@ -18,9 +18,9 @@ async function testWrappedTextUsesConstrainedWidthForDiagnostics() {
       `import std:themes/default as *
 
 page wrapped_ok
-  let body = text!("This is a deliberately long paragraph that should wrap inside the fixed width frame without reporting frame too small.", current_theme() with {
-    body.text.size = 22
-    body.text.line_height = 30
+  let body = text!("This is a deliberately long paragraph that should wrap inside the fixed width frame without reporting frame too small.", current_theme().body with {
+    text.size = 22
+    text.line_height = 30
   })
   ~ body.left == page.left + 100
   ~ body.right == body.left + 260
@@ -54,12 +54,12 @@ page table_ok
 
 Repeated updates continue along the same edge after the older state is processed.
 >>
-  let body = text!(body_content, current_theme() with {
-    body.text.size = 16
-    body.text.line_height = 22
-    body.text.markdown.table.cell_pad_x = 7
-    body.text.markdown.table.cell_pad_y = 5
-    body.text.markdown.table.line_width = 0.8
+  let body = text!(body_content, current_theme().body with {
+    text.size = 16
+    text.line_height = 22
+    text.markdown.table.cell_pad_x = 7
+    text.markdown.table.cell_pad_y = 5
+    text.markdown.table.line_width = 0.8
   })
 
   ~ body.left == page.left + 642
@@ -116,9 +116,9 @@ async function testTooSmallFixedFrameReportsConstraints() {
       `import std:themes/default as *
 
 page too_small
-  let body = text!("SupercalifragilisticexpialidociousSupercalifragilisticexpialidocious", current_theme() with {
-    body.text.size = 24
-    body.text.line_height = 30
+  let body = text!("SupercalifragilisticexpialidociousSupercalifragilisticexpialidocious", current_theme().body with {
+    text.size = 24
+    text.line_height = 30
   })
   ~ body.left == page.left + 100
   ~ body.right == body.left + 120

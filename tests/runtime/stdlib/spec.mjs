@@ -16,7 +16,7 @@ async function dump(source) {
 }
 try {
   const literal = await dump(`page text
-text!("**Literal**", current_theme() with { body.text.parse = TextParseMode.plain })
+text!("**Literal**", current_theme().body with { text.parse = TextParseMode.plain })
 text!("**Formatted**")
 text("Unplaced")
 h3!("Third level")
@@ -26,20 +26,21 @@ end
   const formatted = literal.nodes.find(n => n.content === '**Formatted**');
   assert(raw && formatted);
   assert(raw.width > 20 && raw.height > 10, "Literal text must have rendered dimensions");
-  assert.match(raw.fields.text, /"case":"plain"/);
-  assert.match(formatted.fields.text, /"case":"block"/);
+  assert.equal(raw.placement.input.type.name, 'Text');
+  assert.equal(raw.placement.input.fields.find(f => f.name === 'style').value.fields.find(f => f.name === 'text').value.fields.find(f => f.name === 'parse').value.case, 'plain');
+  assert.equal(formatted.placement.input.fields.find(f => f.name === 'style').value.fields.find(f => f.name === 'text').value.fields.find(f => f.name === 'parse').value.case, 'block');
   assert(!literal.nodes.some(n => n.content === 'Unplaced'));
   const headingSemantics = JSON.parse(literal.nodes.find(n => n.content === 'Third level').fields.semantics);
   assert.equal(headingSemantics.fields.find(f => f.name === 'heading_level').value.value, 3);
 
   const nested = await dump(`page nested
-text!("**Styled**", current_theme() with {
-  body.text.markdown.code.size = 17
-  body.text.markdown.code.chrome.pad_x = 21
-  body.text.markdown.code.colors.keyword = c"#123456"
-  body.text.markdown.table.cell_pad_x = 13
-  body.text.markdown.quote.pad_y = 11
-  body.text.math.scale = 1.4
+text!("**Styled**", default_text_style with {
+  text.markdown.code.size = 17
+  text.markdown.code.chrome.pad_x = 21
+  text.markdown.code.colors.keyword = c"#123456"
+  text.markdown.table.cell_pad_x = 13
+  text.markdown.quote.pad_y = 11
+  text.math.scale = 1.4
 })
 text!("Default")
 end
@@ -158,8 +159,8 @@ end
  set_theme(chosen::default_theme() with { body.text.size = 27 })
  end
  page theme
- text!("Default style")
- text!("Local style", current_theme() with { body.text.size = 19 })
+ text!("Default style", current_theme().body)
+ text!("Local style", current_theme().body with { text.size = 19 })
  end
  `);
     assert.equal(themed.nodes.find(n => n.content === 'Default style').render.text.font_size, 27);

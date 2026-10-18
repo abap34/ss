@@ -72,10 +72,10 @@ async function testProjectCompletionLifecycle() {
     const libraryValidSource = `import std:text as default
 import std:text as *
 
-fn module_label!(text_value: String, color_name: Color = c"0.07,0.08,0.10") -> Object
-  return text!(text_value, current_theme() with {
-    body.text.size = 24
-    body.text.color = color_name
+fn module_label!(text_value: String, color_name: Color = c"0.07,0.08,0.10") -> Placed<Text>
+  return text!(text_value, current_theme().body with {
+    text.size = 24
+    text.color = color_name
   })
 end
 
@@ -106,25 +106,25 @@ end
     });
     assertSameLabels(libraryMemberCompletion, repeatedLibraryCompletion, "repeated imported library member completion");
 
-    const libraryRecordUpdateBrokenSource = libraryValidSource.replace("body.text.size = 24", "bod");
+    const libraryRecordUpdateBrokenSource = libraryValidSource.replace("text.size = 24", "tex");
     client.changeDocument({ uri: partsUri, version: 3, text: libraryRecordUpdateBrokenSource });
     const recordUpdateBaseCompletion = await requestCompleteCompletion(client, {
       textDocument: { uri: partsUri },
       position: positionAfter(libraryRecordUpdateBrokenSource, "with {\n    "),
     });
-    assertThemeRecordCompletion(recordUpdateBaseCompletion, "record update base completion");
+    assertTextBlockCompletion(recordUpdateBaseCompletion, "record update base completion");
 
     const recordUpdatePrefixCompletion = await requestCompleteCompletion(client, {
       textDocument: { uri: partsUri },
-      position: positionAfter(libraryRecordUpdateBrokenSource, "bod"),
+      position: positionAfter(libraryRecordUpdateBrokenSource, "    tex"),
     });
-    assertThemeRecordCompletion(recordUpdatePrefixCompletion, "record update prefix completion");
+    assertTextBlockCompletion(recordUpdatePrefixCompletion, "record update prefix completion");
 
-    const libraryRecordUpdateNestedBrokenSource = libraryValidSource.replace("body.text.size = 24", "body.text.");
+    const libraryRecordUpdateNestedBrokenSource = libraryValidSource.replace("text.size = 24", "text.");
     client.changeDocument({ uri: partsUri, version: 4, text: libraryRecordUpdateNestedBrokenSource });
     const recordUpdateNestedCompletion = await requestCompleteCompletion(client, {
       textDocument: { uri: partsUri },
-      position: positionAfter(libraryRecordUpdateNestedBrokenSource, "body.text."),
+      position: positionAfter(libraryRecordUpdateNestedBrokenSource, "    text."),
     });
     assertTextStyleRecordCompletion(recordUpdateNestedCompletion, "record update nested completion");
 
@@ -214,7 +214,7 @@ import std:text as *
 
 page ok
   let t = text("body")
-  place_on!(pagectx(), t)
+  place!(t)
 end
 `;
     const memberChangedDiagnostics = client.waitForDiagnostics(
@@ -243,7 +243,7 @@ end
       position: positionAt(memberValidSource, "text(", 1),
     });
     assert(
-      textHover?.contents?.value?.includes("text(content: String, style: Theme = theme::current_theme()) -> Object"),
+      textHover?.contents?.value?.includes("text(content: String, style: TextBlockStyle = default_text_style, config: LatexConfig = LatexConfig {  }) -> Text"),
       `text hover did not show themed signature: ${JSON.stringify(textHover)}`,
     );
 
@@ -271,7 +271,12 @@ end
       textDocument: { uri },
       position: positionAfter(memberBrokenSource, "t."),
     });
-    assertPropertyCompletion(memberCompletion, "member completion");
+    assertUniqueCompletionLabels(memberCompletion, "placed text completion");
+    for (const field of ["value", "page", "document", "left", "right"]) {
+      assertCompletionHas(memberCompletion, field, "placed text completion");
+      assertCompletionKind(memberCompletion, field, 10, "placed text completion");
+    }
+    assertCompletionMissing(memberCompletion, ["text", "layout", "content"], "placed text completion");
     assertCompletionMissing(memberCompletion, ["Align"], "member completion");
 
     const enumBrokenSource = `import std:text as *
@@ -414,7 +419,7 @@ async function testTypeAndImportDefinition() {
     const localUri = pathToFileURL(slide).toString();
     const localSource = `import std:text as *
 
-fn themed(theme_value: Theme) -> Object
+fn themed(theme_value: Theme) -> Text
   let override = Theme {
     body = theme_value.body
   }
@@ -422,11 +427,11 @@ fn themed(theme_value: Theme) -> Object
     body.text.size = 24
   }
   let align_value = Align.center
-  return text("body", theme_value)
+  return text("body", theme_value.body)
 end
 
 page title
-  place_on!(pagectx(), themed(current_theme()))
+  place!(themed(current_theme()))
 end
 `;
     await writeFile(slide, localSource, "utf8");
@@ -528,7 +533,7 @@ end
 
       const paramDefinition = await client.request("textDocument/definition", {
         textDocument: { uri: localUri },
-        position: positionAt(localSource, "theme_value)", 1),
+        position: positionAt(localSource, "theme_value.body)", 1),
       });
       assert(Array.isArray(paramDefinition), `expected param definition array, got ${JSON.stringify(paramDefinition)}`);
       assert(paramDefinition.length === 1, `param definition was not unique: ${JSON.stringify(paramDefinition)}`);
@@ -644,11 +649,11 @@ function assertPropertyCompletion(completion, label) {
   }
 }
 
-function assertThemeRecordCompletion(completion, label) {
+function assertTextBlockCompletion(completion, label) {
   assertUniqueCompletionLabels(completion, label);
-  assertCompletionHas(completion, "body", label);
-  assertCompletionHas(completion, "h1", label);
-  assertCompletionHas(completion, "callout", label);
+  assertCompletionHas(completion, "text", label);
+  assertCompletionHas(completion, "layout", label);
+  assertCompletionHas(completion, "headings", label);
   assertCompletionMissing(completion, ["page", "String", "size"], label);
 }
 

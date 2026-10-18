@@ -7,8 +7,8 @@ let table_content = <<
 | one two three four five six seven eight nine ten | A |
 | one two three four five six seven eight nine ten | B |
 >>
-let table = text!(table_content, current_theme() with {
-  body.layout.wrap = WrapMode.on
+let table = text!(table_content, current_theme().body with {
+  layout.wrap = WrapMode.on
 })
 ~ table.left == page.left + 60
 ~ table.right == table.left + 220
@@ -25,8 +25,8 @@ let table_content = <<
 | one two three four five six seven eight nine ten | A |
 | one two three four five six seven eight nine ten | B |
 >>
-let table = text!(table_content, current_theme() with {
-  body.layout.wrap = WrapMode.off
+let table = text!(table_content, current_theme().body with {
+  layout.wrap = WrapMode.off
 })
 ~ table.left == page.left + 60
 ~ table.right == table.left + 220

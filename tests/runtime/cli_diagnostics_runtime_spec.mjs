@@ -982,15 +982,15 @@ end
       path.join(project, "theme.ss"),
       `import std:text as default
 
-fn/! success_text(content: String) -> Object
-  return default::text(content, current_theme() with {
-    body.text.cjk_bold_passes = 3
+fn/! success_text(content: String) -> Text
+  return default::text(content, current_theme().body with {
+    text.cjk_bold_passes = 3
   })
 end
 
-fn/! danger_text(content: String) -> Object
-  return default::text(content, current_theme() with {
-    body.text.cjk_bold_passes = 3
+fn/! danger_text(content: String) -> Text
+  return default::text(content, current_theme().body with {
+    text.cjk_bold_passes = 3
   })
 end
 `,
@@ -1002,9 +1002,9 @@ end
     const headers = output.match(/^ERROR: .*UnknownField:/gm) ?? [];
     assert(result.code !== 0, "check should fail for an unknown record field in a placing function");
     assert(headers.length === 2, `two unknown record fields produced ${headers.length} diagnostic headers instead of two:\n${output}`);
-    assert(output.includes("theme.ss:5:15: UnknownField:"), `first unknown record field diagnostic did not point at the field token:\n${output}`);
-    assert(output.includes("theme.ss:11:15: UnknownField:"), `second unknown record field diagnostic did not point at the field token:\n${output}`);
-    assert(output.includes("|     body.text.cjk_bold_passes = 3"), `unknown record field diagnostic omitted its source excerpt:\n${output}`);
+    assert(output.includes("theme.ss:5:10: UnknownField:"), `first unknown record field diagnostic did not point at the field token:\n${output}`);
+    assert(output.includes("theme.ss:11:10: UnknownField:"), `second unknown record field diagnostic did not point at the field token:\n${output}`);
+    assert(output.includes("|     text.cjk_bold_passes = 3"), `unknown record field diagnostic omitted its source excerpt:\n${output}`);
   } finally {
     await rm(project, { recursive: true, force: true });
   }

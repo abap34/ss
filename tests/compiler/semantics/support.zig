@@ -305,8 +305,8 @@ pub fn expectBodyTextDefaults(
 
     for (state.graph.nodes.items) |node| {
         if (node.kind != .object) continue;
-        const role = node.role orelse continue;
-        if (!std.mem.eql(u8, role, "body")) continue;
+        const placement = node.placement orelse continue;
+        if (placement.display != .native or placement.display.native != .text) continue;
         const render = core.render_policy.resolve(&state, &node);
         const text = render.text orelse continue;
         try std.testing.expectApproxEqAbs(expected.math_scale, text.math_scale, 0.0001);

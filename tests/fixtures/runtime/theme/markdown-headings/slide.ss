@@ -14,33 +14,15 @@ let content = <<
 
 ###### HeadingSix
 >>
-text!(content, current_theme() with {
-  body.text.size = 18
-  body.text.line_height = 24
-  body.text.color = c"0.1,0.1,0.1"
-  h1.text.size = 44
-  h1.text.line_height = 50
-  h1.text.color = c"0.8,0.1,0.1"
-  h1.layout.spacing_after = 19
-  h2.text.size = 36
-  h2.text.line_height = 42
-  h2.text.color = c"0.1,0.6,0.2"
-  h2.layout.spacing_after = 17
-  h3.text.size = 28
-  h3.text.line_height = 34
-  h3.text.color = c"0.1,0.2,0.8"
-  h3.layout.spacing_after = 15
-  h4.text.size = 24
-  h4.text.line_height = 29
-  h4.text.color = c"0.7,0.1,0.6"
-  h4.layout.spacing_after = 13
-  h5.text.size = 20
-  h5.text.line_height = 25
-  h5.text.color = c"0.1,0.6,0.7"
-  h5.layout.spacing_after = 11
-  h6.text.size = 18
-  h6.text.line_height = 23
-  h6.text.color = c"0.8,0.4,0.1"
-  h6.layout.spacing_after = 9
+text!(content, default_text_style with {
+  text.size = 18
+  text.line_height = 24
+  text.color = c"0.1,0.1,0.1"
+  headings.h1 = MarkdownHeadingStyle { text = TextStyle { size = 44 line_height = 50 color = c"0.8,0.1,0.1" } }
+  headings.h2 = MarkdownHeadingStyle { text = TextStyle { size = 36 line_height = 42 color = c"0.1,0.6,0.2" } }
+  headings.h3 = MarkdownHeadingStyle { text = TextStyle { size = 28 line_height = 34 color = c"0.1,0.2,0.8" } }
+  headings.h4 = MarkdownHeadingStyle { text = TextStyle { size = 24 line_height = 29 color = c"0.7,0.1,0.6" } }
+  headings.h5 = MarkdownHeadingStyle { text = TextStyle { size = 20 line_height = 25 color = c"0.1,0.6,0.7" } }
+  headings.h6 = MarkdownHeadingStyle { text = TextStyle { size = 18 line_height = 23 color = c"0.8,0.4,0.1" } }
 })
 end

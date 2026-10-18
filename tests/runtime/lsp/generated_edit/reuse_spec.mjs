@@ -30,7 +30,7 @@ async function testReuse(kind) {
     await writeFile(path.join(project, "asset.png"), Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"));
     await writeFile(path.join(project, "snippet.txt"), "UNCHANGED_EXTERNAL_INPUT\n");
     await writeFile(path.join(project, "fragment.tex"), String.raw`\rule{12pt}{10pt}`);
-    const moduleSource = 'import std:themes/default as *\nfn watched_item!() -> Object\nreturn text!("Module input")\nend\n';
+    const moduleSource = 'import std:themes/default as *\nfn watched_item!() -> Placed<Text>\nreturn text!("Module input")\nend\n';
     await writeFile(path.join(project, "parts.ss"), moduleSource);
     let source = `import std:themes/default as *
 ${kind === "module" ? 'import "./parts" as *\n' : ""}page first
