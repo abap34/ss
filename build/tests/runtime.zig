@@ -15,6 +15,7 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
     const test_step = suite.all;
     const specs = [_]Spec{
         .{ .path = "tests/runtime/stdlib/spec.mjs", .name = "test-stdlib", .description = "Check public standard-library construction and placement contracts" },
+        .{ .path = "tests/runtime/assets/typed_icon_spec.mjs", .name = "test-typed-icon", .description = "Check immutable icon inputs, catalog validation, composition, and rendering" },
         .{ .path = "tests/runtime/assets/typed_pdf_spec.mjs", .name = "test-typed-pdf", .description = "Check typed PDF inputs, page selection, and rendering" },
         .{ .path = "tests/runtime/code/typed_display_spec.mjs", .name = "test-typed-code", .description = "Check immutable code display inputs and syntax highlighting" },
         .{ .path = "tests/runtime/layout/composition/typed_spec.mjs", .name = "test-typed-composition", .description = "Check immutable composition operators, spacing, and equal cells" },

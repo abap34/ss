@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("ast");
 const model = @import("model");
+const fontawesome = @import("fontawesome.zig");
 
 pub const Kind = model.NativeDisplayKind;
 pub const Target = union(enum) {
@@ -123,6 +124,12 @@ fn contract(kind: Kind) Contract {
             .value_fields = &.{.{ .field = "content", .ty = ast.Type.string, .tag = .string }},
             .record_fields = &.{.{ .field = "style", .module = "std:text/style", .name = "TextBlockStyle" }},
         },
+        .icon => .{
+            .module = "std:assets/content",
+            .name = "Icon",
+            .value_fields = &.{.{ .field = "source", .ty = ast.Type.string, .tag = .string }},
+            .record_fields = &.{.{ .field = "style", .module = "std:assets/style", .name = "AssetBlockStyle" }},
+        },
         .image => .{
             .module = "std:assets/content",
             .name = "Image",
@@ -199,6 +206,10 @@ pub fn validateValue(state: anytype, value: model.Value, kind: Kind) !void {
         if (field != .record or !isLibraryType(state, field.record.ty, expected_record.module, expected_record.name)) return error.InvalidNativeDisplay;
     }
     if (kind == .path_shape) try validateShapeDimensions(value);
+    if (kind == .icon) {
+        const spec = fontawesome.parseSource(record.field("source").?.string) orelse return error.InvalidFontAwesomeIcon;
+        if (!fontawesome.contains(spec)) return error.InvalidFontAwesomeIcon;
+    }
 }
 
 /// Dimensions describe the natural frame. Placement constraints may resize it.

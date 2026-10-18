@@ -532,7 +532,7 @@ pub const LayoutMeasurementScope = struct {
                 .height = if (core.render_policy.naturalPathSize(node)) |size|
                     (if (mode == .width_constrained and frame.height > 0) frame.height else size.height)
                 else
-                    measurementFrameHeight(frame, mode),
+                    measurementFrameHeight(frame, mode, object),
             },
             .content = object.content,
             .content_provenance = object.content_provenance,
@@ -555,9 +555,17 @@ pub const LayoutMeasurementScope = struct {
     }
 };
 
-fn measurementFrameHeight(frame: Frame, mode: core.LayoutMeasurementMode) f32 {
+const default_icon_size: f32 = 72;
+
+fn measurementFrameHeight(frame: Frame, mode: core.LayoutMeasurementMode, object: *const core.prepared.PreparedObject) f32 {
     if (mode == .width_constrained and frame.height > 0) {
         return @max(frame.height, 1);
+    }
+    for (object.asset_deps) |dep| {
+        if (dep.kind == .icon and object.render.kind == .vector_asset) {
+            const size = scaledAssetSize(.{ .width = default_icon_size, .height = default_icon_size }, object.render.asset);
+            return size.height + 2 * object.render.chrome.pad_y;
+        }
     }
     return Defaults.height;
 }
@@ -2141,7 +2149,7 @@ fn measureAssetIntrinsic(
     if (!isPdfAssetOp(command)) {
         if (core.fontawesome.parseSource(command.content)) |spec| {
             if (!core.fontawesome.contains(spec)) return NativePdfError.InvalidFontAwesomeIcon;
-            const size = if (mode == .natural) Size{ .width = 72, .height = 72 } else Size{ .width = @max(width, 1), .height = @max(height, 1) };
+            const size = if (mode == .natural) scaledAssetSize(.{ .width = default_icon_size, .height = default_icon_size }, command.render.asset) else Size{ .width = @max(width, 1), .height = @max(height, 1) };
             return .{ .width = size.width, .height = size.height, .ink_bounds = .{ .width = size.width, .height = size.height } };
         }
     }

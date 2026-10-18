@@ -526,12 +526,14 @@ test "native asset display: local names and incomplete inputs cannot impersonate
         \\import std:assets as assets
         \\type Image { path: String }
         \\type Pdf { path: String }
+        \\type Icon { source: String }
     );
     defer state.deinit();
     try compiler.analysis.analyzeDocumentState(testing.allocator, &state);
     for ([_]struct { name: []const u8, kind: core.native_display.Kind }{
         .{ .name = "Image", .kind = .image },
         .{ .name = "Pdf", .kind = .pdf },
+        .{ .name = "Icon", .kind = .icon },
     }) |case| {
         const local = Type.recordType(case.name).inModule(0);
         try testing.expect(core.native_display.kindForType(&state, local) == null);
@@ -541,7 +543,7 @@ test "native asset display: local names and incomplete inputs cannot impersonate
         try testing.expectEqual(case.kind, (try prepareTarget(&state, native_type)).native);
         var value = core.Value{ .record = .init(native_type) };
         defer value.deinit(testing.allocator);
-        try value.record.fields.append(testing.allocator, .{ .name = "path", .value = .{ .string = "Missing style" } });
+        try value.record.fields.append(testing.allocator, .{ .name = if (case.kind == .icon) "source" else "path", .value = .{ .string = "Missing style" } });
         try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, case.kind));
         try value.record.fields.append(testing.allocator, .{ .name = "style", .value = .{ .record = .init(Type.recordType("AssetBlockStyle").inModule(0)) } });
         try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, case.kind));
@@ -1690,4 +1692,64 @@ test "native path display: nominal contracts and finite positive dimensions are 
         }
     }
     try core.native_display.validateValue(&state, value, .path_shape);
+}
+
+test "native icon display: immutable inputs preserve identity, paint and bundled dependencies" {
+    const source = try std.Io.Dir.cwd().readFileAlloc(testing.io, "tests/fixtures/typed-display/icon.ss", testing.allocator, .limited(64 * 1024));
+    defer testing.allocator.free(source);
+    var state = try documentWithModules(source);
+    defer state.deinit();
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    try testing.expectEqual(@as(usize, 0), state.diagnostics.entries.items.len);
+    const FileInputs = std.meta.Child(std.meta.Child(@TypeOf(state.file_inputs)));
+    var inputs = FileInputs.init(testing.allocator);
+    defer inputs.deinit();
+    state.file_inputs = &inputs;
+    defer state.file_inputs = null;
+    var pages = try core.prepared.prepare(testing.allocator, &state);
+    defer pages.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 0), inputs.items().len);
+    const ty = Type.recordType("Icon").inModule(state.moduleByPathOrSpec("std:assets/content").?.id);
+    var selected = try state.selectTypedPlacements(testing.allocator, .{ .document = state.graph.document_id }, ty);
+    defer selected.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 5), selected.ids.items.len);
+    for (selected.ids.items, 0..) |id, index| {
+        const node = state.getNode(id).?;
+        try testing.expectEqual(core.native_display.Kind.icon, node.placement.?.display.native);
+        try testing.expect(node.role == null);
+        try testing.expect(node.content == null);
+        try testing.expectEqual(@as(usize, 0), node.fields.items.len);
+        const paint = core.render_policy.resolve(&state, node);
+        try testing.expectEqual(core.render_policy.RenderKind.vector_asset, paint.kind);
+        try testing.expectEqual(@as(f32, if (index == 1) 1.5 else 1), paint.asset.?.scale);
+        try testing.expect(paint.asset.?.tint != null);
+        try testing.expectApproxEqAbs(@as(f32, if (index == 1) 219.0 / 255.0 else 37.0 / 255.0), paint.asset.?.tint.?.r, 0.0001);
+        var prepared = try core.prepared.prepareObject(testing.allocator, &state, node);
+        defer prepared.deinit(testing.allocator);
+        try testing.expectEqualStrings(if (index == 1) "fa-solid:heart" else "fa-solid:star", prepared.content);
+        try testing.expectEqual(@as(usize, 1), prepared.asset_deps.len);
+        try testing.expectEqual(core.prepared.AssetDependency.Kind.icon, prepared.asset_deps[0].kind);
+        try testing.expectEqualStrings(prepared.content, prepared.asset_deps[0].source);
+        try testing.expect(prepared.markdown_doc == null);
+        try testing.expect(prepared.text_layout == null);
+    }
+}
+
+test "native icon display: catalog names are validated without treating them as files" {
+    for ([_][]const u8{ "fa-solid:not-a-real-ss-icon", "unrecognized:star", "image.svg", "" }) |source| {
+        const text = try std.fmt.allocPrint(testing.allocator,
+            \\import std:assets as assets
+            \\page icons
+            \\  let item = place!(assets::Icon {{ source = "{s}" }})
+            \\end
+        , .{source});
+        defer testing.allocator.free(text);
+        var state = try documentWithModules(text);
+        defer state.deinit();
+        var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+        defer graph.deinit();
+        try testing.expectError(error.InvalidFontAwesomeIcon, compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io }));
+    }
 }
