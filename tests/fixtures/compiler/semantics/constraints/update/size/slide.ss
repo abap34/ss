@@ -1,7 +1,7 @@
 import std:themes/default as *
 
-fn component!() -> Object
-  let item = body_obj!("resize")
+fn component!() -> Placed<Text>
+  let item = text!("resize")
   ~ item.center_x == page.center_x
   ~ item.top == page.top - 60
   ~ item.width == 240
