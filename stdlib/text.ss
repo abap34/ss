@@ -1,4 +1,5 @@
 import std:text/style as { TextBlockStyle }
+import std:text/content as { Text }
 import std:text/types as { SemanticRole, SemanticStyle, RenderKind, TextParseMode, FontStyle, FontStretch, FontFace, MarkdownUnderlineStyle, MarkdownQuoteStyle, TextMathStyle, MarkdownListStyle, MarkdownTableStyle, MarkdownCodeStyle, MarkdownStyle, TextStyle, MarkdownHeadingStyle, MarkdownHeadingStyles, UnderlineStyle, RuleStyle }
 import std:theme as theme
 import std:internal/style as styles

@@ -66,7 +66,7 @@ pub fn validateType(state: anytype, ty: ast.Type, kind: Kind) !void {
             const content = index.recordField(id, "content") orelse return error.InvalidNativeDisplay;
             if (!ast.Type.eql(content.value_type, ast.Type.string)) return error.InvalidNativeDisplay;
             const style = index.recordField(id, "style") orelse return error.InvalidNativeDisplay;
-            if (!isLibraryType(state, style.value_type, "std:text/types", "TextStyle")) return error.InvalidNativeDisplay;
+            if (!isLibraryType(state, style.value_type, "std:text/style", "TextBlockStyle")) return error.InvalidNativeDisplay;
         },
     }
 }
@@ -82,7 +82,7 @@ pub fn validateValue(state: anytype, value: model.Value, kind: Kind) !void {
             const content = record.field("content") orelse return error.InvalidNativeDisplay;
             if (content != .string) return error.InvalidNativeDisplay;
             const style = record.field("style") orelse return error.InvalidNativeDisplay;
-            if (style != .record or !isLibraryType(state, style.record.ty, "std:text/types", "TextStyle")) return error.InvalidNativeDisplay;
+            if (style != .record or !isLibraryType(state, style.record.ty, "std:text/style", "TextBlockStyle")) return error.InvalidNativeDisplay;
         },
     }
 }

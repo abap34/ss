@@ -884,7 +884,13 @@ pub fn roleEq(role: ?Role, expected: []const u8) bool {
 pub fn nodeField(node: *const Node, key: []const u8) ?Value {
     if (node.placement) |placement| {
         if (placement.display == .native) return switch (placement.display.native) {
-            .text => if (std.mem.eql(u8, key, "text")) placement.value.record.field("style") else null,
+            .text => blk: {
+                const style = placement.value.record.field("style") orelse break :blk null;
+                if (style != .record) break :blk null;
+                if (std.mem.eql(u8, key, "text") or std.mem.eql(u8, key, "layout") or std.mem.eql(u8, key, "underline")) break :blk style.record.field(key);
+                if (std.mem.eql(u8, key, "markdown_headings")) break :blk style.record.field("headings");
+                break :blk null;
+            },
         };
     }
     for (node.fields.items) |field| {
