@@ -5498,15 +5498,17 @@ test "compiler semantics: page-only primitives are rejected in document context"
     , "case.ss:bytes:", "NoCurrentPage");
 }
 
-test "compiler semantics: missing page relationships have specific diagnostics" {
-    try expectLoweringErrorDiagnostic(
-        \\import std:themes/default as *
-        \\
+test "compiler semantics: missing page relationships return none" {
+    try expectObjectContent(
         \\page first
-        \\  prev_page()
+        \\  let previous: Page? = previous_page(pagectx())
+        \\  if previous?
+        \\    text!("Unexpected page")
+        \\  else
+        \\    text!("No previous page")
+        \\  end
         \\end
-        \\
-    , "NoPreviousPage: the current page is the first page and has no previous page");
+    , "No previous page");
 
     try expectObjectContent(
         \\import std:themes/default as *

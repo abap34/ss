@@ -27,6 +27,12 @@ test "language registry spec: semantic contracts live on primitive descriptors" 
     try testing.expectEqual(@as(usize, 2), foreach_enumerate.callback.?.supplied_arg_count);
     try testing.expectEqual(registry.PrimitiveResultPolicy.first_arg, foreach_enumerate.result_policy);
 
+    const filter = registry.lookupPrimitiveCall("selection_filter").?;
+    try testing.expectEqual(registry.PrimitiveResultPolicy.first_arg, filter.result_policy);
+    try testing.expectEqual(@as(usize, 1), filter.callback.?.function_arg_index);
+    try testing.expectEqual(@as(usize, 1), filter.callback.?.supplied_arg_count);
+    try testing.expect(Type.eql(Type.boolean, filter.callback.?.expected_result_type.?));
+
     const fold = registry.lookupPrimitiveCall("fold").?;
     try testing.expect(fold.callback != null);
     try testing.expectEqual(@as(usize, 2), fold.callback.?.function_arg_index);
@@ -65,6 +71,8 @@ test "language registry spec: query output types are declared in the registry" {
     const parent_type = registry.queryOutputType(parent);
     try testing.expectEqual(Type.Kind.optional, parent_type.kind);
     try testing.expect(Type.eql(Type.page, parent_type.optional_child.?.*));
+    const previous = registry.lookupQueryOp("previous_page").?;
+    try testing.expect(Type.eql(parent_type, registry.queryOutputType(previous)));
 }
 
 test "language registry spec: stdlib helpers are not kernel primitives" {

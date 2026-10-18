@@ -377,7 +377,9 @@ fn checkPlacementEffectDeclarations(allocator: std.mem.Allocator, state: *core.D
     while (it.next()) |entry| {
         try state.checkAnalysisCanceled();
         const func = entry.value_ptr.*;
-        if (dependencies.callableNamePlacesObjects(func.name)) continue;
+        // Display bodies have a stricter read-only contract checked by the call
+        // analyzer; suggesting a placing name would not make a display valid.
+        if (func.isDisplay() or dependencies.callableNamePlacesObjects(func.name)) continue;
         const module_id = entry.key_ptr.module_id;
         if (!try analyzer.functionBody(entry.key_ptr.*, module_id, func)) continue;
         const origin = state.sourceOrigin(module_id, func.span);

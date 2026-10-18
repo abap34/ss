@@ -250,6 +250,181 @@ fn childQueriesWithAllocator(allocator: std.mem.Allocator, state: *core.Document
     try testing.expectEqual(@as(usize, 0), leaf.selection.ids.items.len);
 }
 
+test "typed queries: previous pages are optional and page filtering keeps construction order" {
+    var state = try document(
+        \\import std:text/content as native
+        \\import std:query as query
+        \\type PageLabel {}
+        \\fn display(self: Placed<PageLabel>) -> native::Text
+        \\  let previous: Page? = query::previous_page(self.page)
+        \\  let body: Selection<Page> = query::filter(pages(self.document), (p: Page) |-> page_index(p) > 1)
+        \\  let labels = join(body, ",", (p: Page) |-> str(page_index(p)))
+        \\  return native::Text { content = str(page_index(previous ?? self.page)) ++ ":" ++ labels }
+        \\end
+        \\page cover
+        \\  place_on!(pagectx(), PageLabel {})
+        \\end
+        \\page first
+        \\  place_on!(pagectx(), PageLabel {})
+        \\end
+        \\page second
+        \\  place_on!(pagectx(), PageLabel {})
+        \\end
+    );
+    defer state.deinit();
+    var graph = try checkedGraph(&state);
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    for (state.graph.page_order.items, [_][]const u8{ "1:2,3", "1:2,3", "2:2,3" }, 0..) |page, expected, index| {
+        var previous = try state.select(testing.allocator, .{ .page = page }, core.Query.previousPage());
+        defer previous.deinit(testing.allocator);
+        if (index == 0) try testing.expect(previous == .none) else try testing.expectEqual(state.graph.page_order.items[index - 1], previous.page);
+        const root = state.placementRootsOf(page)[0];
+        try testing.expectEqualStrings(expected, core.nodeDisplayContent(state.getNode(state.childrenOf(root).?[0]).?));
+    }
+}
+
+test "typed queries: filtering evaluates each predicate once and leaves the input selection unchanged" {
+    var state = try document(
+        \\import std:text/content as native
+        \\type Heading { title: String level: Number }
+        \\fn/! heading(title: String, level: Number) -> Heading = Heading { title = title level = level }
+        \\fn display(self: Placed<Heading>) -> native::Text = native::Text { content = self.value.title }
+        \\fn visit!(item: Placed<Heading>) -> Bool
+        \\  place_on!(pagectx(), native::Text { content = "Visit " ++ item.value.title })
+        \\  return item.value.level == 1
+        \\end
+        \\page main
+        \\  heading!("First", 1)
+        \\  heading!("Second", 2)
+        \\  heading!("Third", 1)
+        \\  let input = select<Heading>(pagectx())
+        \\  let selected: Selection<Placed<Heading>> = filter(input, (h: Placed<Heading>) |-> visit!(h))
+        \\  let empty = filter(input, (h: Placed<Heading>) |-> false)
+        \\  let still_empty = filter(empty, (h: Placed<Heading>) |-> visit!(h))
+        \\  let titles = join(selected, ",", (h: Placed<Heading>) |-> h.value.title)
+        \\  let result = titles ++ ":" ++ str(selection_count(input)) ++ ":" ++ str(selection_count(still_empty))
+        \\  place_on!(pagectx(), native::Text { content = result })
+        \\end
+    );
+    defer state.deinit();
+    var graph = try checkedGraph(&state);
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const roots = state.placementRootsOf(state.graph.page_order.items[0]);
+    try testing.expectEqual(@as(usize, 7), roots.len);
+    for (roots[3..], [_][]const u8{ "Visit First", "Visit Second", "Visit Third", "First,Third:3:0" }) |root, expected| {
+        try testing.expectEqualStrings(expected, core.nodeDisplayContent(state.getNode(root).?));
+    }
+}
+
+test "typed queries: filtering preserves subtree facts for predicates and returned selections" {
+    var state = try document(
+        \\import std:text/content as native
+        \\type Label { title: String }
+        \\type Reader { target: Placement }
+        \\fn/! label(title: String) -> Label = Label { title = title }
+        \\fn display(self: Placed<Label>) -> native::Text = native::Text { content = self.value.title }
+        \\fn display(self: Placed<Reader>) -> native::Text
+        \\  let chosen: Selection<Placement> = filter(selection(self.value.target), (p: Placement) |-> selection_count(children(p)) > 0)
+        \\  let leaves = select<native::Text>(first(chosen))
+        \\  return native::Text { content = join(leaves, ",", (t: Placed<native::Text>) |-> t.value.content) }
+        \\end
+        \\page main
+        \\  let first_target = label!("First")
+        \\  let second_target = label!("Second")
+        \\  place_on!(pagectx(), Reader { target = first_target })
+        \\  place_on!(pagectx(), Reader { target = second_target })
+        \\end
+    );
+    defer state.deinit();
+    var graph = try checkedGraph(&state);
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const roots = state.placementRootsOf(state.graph.page_order.items[0]);
+    for (roots[2..], [_][]const u8{ "First", "Second" }) |root, expected| {
+        try testing.expectEqualStrings(expected, core.nodeDisplayContent(state.getNode(state.childrenOf(root).?[0]).?));
+    }
+}
+
+test "typed queries: predicates cannot grow their selected collection or mutate from displays" {
+    const definitions =
+        \\import std:text/content as native
+        \\type Heading { title: String }
+        \\type Summary {}
+        \\fn/! heading(title: String) -> Heading = Heading { title = title }
+        \\fn display(self: Placed<Heading>) -> native::Text = native::Text { content = self.value.title }
+        \\fn mutate!(item: Placed<Heading>) -> Bool
+        \\  heading!(item.value.title)
+        \\  return true
+        \\end
+        \\
+    ;
+    for ([_]bool{ false, true }) |in_display| {
+        const body = if (in_display)
+            \\fn display(self: Placed<Summary>) -> native::Text
+            \\  let items = filter(select<Heading>(self.document), (h: Placed<Heading>) |-> mutate!(h))
+            \\  return native::Text { content = str(selection_count(items)) }
+            \\end
+            \\page main
+            \\  heading!("Initial")
+            \\  place_on!(pagectx(), Summary {})
+            \\end
+        else
+            \\page main
+            \\  heading!("Initial")
+            \\  let items = filter(select<Heading>(pagectx()), (h: Placed<Heading>) |-> mutate!(h))
+            \\end
+        ;
+        const source = try std.mem.concat(testing.allocator, u8, &.{ definitions, body });
+        defer testing.allocator.free(source);
+        var state = try document(source);
+        defer state.deinit();
+        try testing.expectError(if (in_display) error.ImpureDisplayFunction else error.InvalidSelectionMutation, analyzeGraph(&state));
+        for (state.graph.page_order.items) |page| try testing.expectEqual(@as(usize, 0), state.placementRootsOf(page).len);
+    }
+}
+
+test "typed queries: filtering rejects invalid predicate types before evaluation" {
+    for ([_][]const u8{ "filter", "selection_filter" }) |operation| {
+        for ([_][]const u8{ "(p: Page) |-> 1", "() |-> true", "(n: Number) |-> true", "nothing" }) |predicate| {
+            const source = try std.fmt.allocPrint(testing.allocator,
+                \\fn nothing(page_value: Page) -> Void
+                \\end
+                \\page main
+                \\  let selected = {s}(pages(docctx()), {s})
+                \\end
+            , .{ operation, predicate });
+            defer testing.allocator.free(source);
+            var state = try document(source);
+            defer state.deinit();
+            if (analyzeGraph(&state)) |_| return error.ExpectedInvalidPredicate else |_| {}
+            try testing.expect(state.diagnostics.entries.items.len != 0);
+        }
+    }
+}
+
+test "typed queries: predicate failure releases its temporary selection" {
+    var state = try document(
+        \\type Missing {}
+        \\fn fail(page_value: Page) -> Bool
+        \\  if page_index(page_value) > 1
+        \\    let item = first(select<Missing>(page_value))
+        \\  end
+        \\  return true
+        \\end
+        \\page main
+        \\  filter(pages(docctx()), fail)
+        \\end
+        \\page later
+        \\end
+    );
+    defer state.deinit();
+    var graph = try checkedGraph(&state);
+    defer graph.deinit();
+    try testing.expectError(error.EmptySelection, compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io }));
+}
+
 test "typed queries: child helpers wait for displays and preserve each captured subtree" {
     var state = try document(
         \\import std:text/content as native

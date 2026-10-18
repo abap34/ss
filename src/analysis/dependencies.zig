@@ -1223,7 +1223,7 @@ pub const Analyzer = struct {
                     };
                 }
             },
-            .first => if (call.args.items.len > 0) {
+            .first, .selection_filter => if (call.args.items.len > 0) {
                 result = try self.valueFacts(call.args.items[0]);
             },
             .selection_union, .selection_intersection, .selection_difference, .sub => if (call.args.items.len == 2) {
@@ -2042,6 +2042,7 @@ pub const Analyzer = struct {
             var binding = CallbackArgBinding{};
             if (item_index != null and index == item_index.?) {
                 binding.property_target = item_target orelse PropertyTarget.any();
+                if (findIndexedCallArgFacts(arg_facts, 0)) |selection| binding.values = selection.values;
             }
             try bindings.append(self.allocator, binding);
         }
@@ -2076,6 +2077,7 @@ pub const Analyzer = struct {
     fn callbackSelectionArgIndex(op: registry.PrimitiveCall) ?usize {
         return switch (op) {
             .foreach,
+            .selection_filter,
             .foreach_enumerate,
             .join,
             => 0,
@@ -2423,7 +2425,7 @@ pub const Analyzer = struct {
                     try self.propertyTargetExpr(call.args.items[0])
                 else
                     PropertyTarget.any(),
-                .set_prop, .extend_render_env, .foreach, .foreach_enumerate => if (call.args.items.len > 0)
+                .set_prop, .extend_render_env, .foreach, .selection_filter, .foreach_enumerate => if (call.args.items.len > 0)
                     try self.propertyTargetExpr(call.args.items[0])
                 else
                     PropertyTarget.any(),
