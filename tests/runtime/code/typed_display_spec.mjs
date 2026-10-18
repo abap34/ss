@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, copyFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, copyFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { root, ssBin } from "../harness.mjs";
 
@@ -54,6 +54,46 @@ try {
   run("render", "--quiet", "slide.ss", "--output", "rendered.pdf");
   const pdf = await readFile(path.join(project, "rendered.pdf"));
   assert.equal(pdf.subarray(0, 5).toString(), "%PDF-");
+
+  await writeFile(path.join(project, "snippet.py"), "return 17\n");
+  await writeFile(path.join(project, "constructors.ss"), `import std:code as c
+const reusable: c::Code = c::code_file("snippet.py", "python")
+page constructors
+  let unused = c::code("UNPLACED")
+  let first: Placed<c::Code> = c::code!("return 17\n", "python")
+  let second: Placed<c::Code> = c::code_file!("snippet.py", "python")
+  let third = place!(reusable with { style.text.size = 22 })
+  ~ first.left == page.left + 64
+  ~ first.top == page.top - 64
+  ~ second.left == first.left
+  ~ second.top == first.bottom - 32
+  ~ third.left == second.left
+  ~ third.top == second.bottom - 32
+end
+`);
+  run("check", "--quiet", "constructors.ss");
+  run("dump", "--quiet", "constructors.ss", "--output", "constructors.json");
+  const constructed = JSON.parse(await readFile(path.join(project, "constructors.json"), "utf8"));
+  const placed = constructed.nodes.filter(node => node.placement?.display.kind === "code");
+  assert.equal(placed.length, 3);
+  assert(!constructed.nodes.some(node => node.content === "UNPLACED"));
+  assert.deepEqual(placed.map(node => node.content), Array(3).fill("return 17\n"));
+  assert.deepEqual(placed.map(node => node.render.text.font_size), [16, 16, 22]);
+  assert.deepEqual(placed[0].placement.input, placed[1].placement.input);
+  assert.equal(new Set(placed.map(node => node.id)).size, 3);
+  for (const node of placed) {
+    assert.equal(node.role, null);
+    assert.deepEqual(node.fields, {});
+    assert.equal(node.render.text.font.family, "monospace");
+    assert.deepEqual(node.render.code.keyword_color, color("cf222e"));
+  }
+  await writeFile(path.join(project, "snippet.py"), "return 29\n");
+  run("dump", "--quiet", "constructors.ss", "--output", "updated.json");
+  const updated = JSON.parse(await readFile(path.join(project, "updated.json"), "utf8"));
+  assert.deepEqual(updated.nodes.filter(node => node.placement?.display.kind === "code").map(node => node.content),
+    ["return 17\n", "return 29\n", "return 29\n"]);
+  run("render", "--quiet", "constructors.ss", "--output", "constructors.pdf");
+  assert.equal((await readFile(path.join(project, "constructors.pdf"))).subarray(0, 5).toString(), "%PDF-");
 } finally {
   await rm(project, { recursive: true, force: true });
 }

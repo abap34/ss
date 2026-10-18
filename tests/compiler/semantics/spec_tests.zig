@@ -828,15 +828,16 @@ test "compiler semantics: stdlib core components build when called directly" {
     );
 }
 
-test "compiler semantics: latex is the only public explicit LaTeX constructor" {
-    try expectDiagnostic(
+test "compiler semantics: math and latex are public without obsolete aliases" {
+    try buildSource(
         \\import std:themes/default as *
         \\
-        \\page bad
+        \\page formulas
         \\  math!("x + y")
+        \\  latex!("$x + y$")
         \\end
         \\
-    , "case.ss:bytes:", "UnknownFunction: unknown function: math!");
+    );
 
     try expectDiagnostic(
         \\import std:themes/default as *
@@ -1992,7 +1993,7 @@ test "compiler semantics: code theme helpers set code and markdown colors" {
         \\
         \\page ok
         \\  let colors = palettes::code_theme_one_dark()
-        \\  let snippet = code("fn demo() -> Void\nend", "ss", current_theme().code with { highlight = colors })
+        \\  let snippet = code!("fn demo() -> Void\nend", "ss", current_theme().code with { highlight = colors })
         \\  let body = text("```ss\nfn demo() -> Void\nend\n```", current_theme() with { code.highlight = colors })
         \\end
         \\
