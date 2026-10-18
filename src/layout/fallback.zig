@@ -208,10 +208,10 @@ fn computeHorizontalComponentUnit(
         }
     }
 
-    const placement_index = if (anchor == .left)
-        leftPredecessorGroupIndex(state, workspace, components, component_root, leftmost_index orelse return null) orelse return null
-    else
-        seed_index;
+    // The measurement seed may sit inside a group positioned by a predecessor.
+    // Place the component from its leftmost frame so that dependency cannot
+    // undo the final center or right alignment.
+    const placement_index = leftPredecessorGroupIndex(state, workspace, components, component_root, leftmost_index orelse return null) orelse return null;
     return .{
         .placement_index = placement_index,
         .placement_offset = (temp[placement_index].start orelse leftmost_start) - leftmost_start,

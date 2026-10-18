@@ -1534,6 +1534,40 @@ test "layout solver: horizontal fallback seeds unconstrained peer anchors" {
     try expectFloat((try state_layout.frame(title)).*.x, (try state_layout.frame(byline)).*.x);
 }
 
+test "layout solver: horizontal policy measures the complete row through display wrappers" {
+    for ([_][]const u8{ "left", "center", "right" }) |policy| {
+        for (0..3) |depth| {
+            var state = try initEmptyDocumentState();
+            defer state.deinit();
+            var state_layout = LayoutFixture.init(&state);
+            defer state_layout.deinit();
+            const page = try state.addPage("Wrapped row");
+            try setEnumField(&state, page, "layout_h", "LayoutPolicy", policy);
+            var a = try state.createObjectWithOrigin("a", null, .text, .text, "A", null);
+            var b = try state.createObjectWithOrigin("b", null, .text, .text, "B", null);
+            try addFixedSize(&state, a, 120, 80);
+            try addFixedSize(&state, b, 240, 60);
+            for (0..depth) |_| {
+                a = try state.createGroupWithOrigin(&.{a}, null);
+                b = try state.createGroupWithOrigin(&.{b}, null);
+            }
+            const row = try state.createGroupWithOrigin(&.{ a, b }, null);
+            try state.placeObjectOnPage(page, row);
+            try state.constraints.addAnchor(state.allocator, b, .left, .{ .node = .{ .node_id = a, .anchor = .right } }, 32, null);
+            try addDefaultAlignment(&state, b, a);
+
+            try finalizeDocumentState(&state_layout);
+
+            const frame = (try state_layout.frame(row)).*;
+            try expectFloat(392, frame.width);
+            const expected: f32 = if (std.mem.eql(u8, policy, "center")) 640 - frame.width / 2 else if (std.mem.eql(u8, policy, "right")) 1184 - frame.width else 96;
+            try expectFloat(expected, frame.x);
+            try expectFloat(frame.x, (try state_layout.frame(a)).*.x);
+            try expectFloat(frame.x + 152, (try state_layout.frame(b)).*.x);
+        }
+    }
+}
+
 test "layout solver: same-target peer equalities form one fallback unit" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
