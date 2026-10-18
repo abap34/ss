@@ -141,6 +141,7 @@ pub const ExecutionGraph = struct {
                     if (index + 1 < plan.steps.items.len) try summary.addWrite(.{ .objects = .{
                         .input_type = plan.steps.items[index + 1].input,
                         .placement_call = definition.call_id,
+                        .depth = .exact(index + 1),
                         .page_scope = definition.page_scope,
                     } });
                     const module_id = switch (step.target) {

@@ -1517,6 +1517,7 @@ fn inferSelectCallInfo(
         const actual = argument_infos[arg_index];
         try ensureType(state, allocator, actual, expected, origin, .UnmatchedArgumentType);
     }
+    if (query.preserves_input_type) return infoFromType(try Type.selectionOf(allocator, base.ty));
     var info = infoFromType(registry.queryOutputType(query));
     info.object_class = inferQueryOutputClass(sema, env, query, call, base);
     if (info.ty.kind == .selection and info.ty.selectionItem().kind == .object) if (info.object_class) |id| {
@@ -1540,7 +1541,7 @@ fn inferQueryOutputClass(
             if (sema.roleClass(role_name)) |class_name| break :blk class_name;
             break :blk null;
         },
-        .children, .descendants, .document_pages, .previous_page, .parent_page => null,
+        .self_placement, .children, .descendants, .document_pages, .previous_page, .parent_page => null,
     };
 }
 

@@ -123,7 +123,7 @@ pub const AccessSummary = struct {
     fn hasConcreteMembershipScope(self: AccessSummary) bool {
         for ([_][]const Resource{ self.reads.items, self.writes.items, self.selection_reads.items }) |resources| {
             for (resources) |resource| {
-                if (resource == .objects and (resource.objects.page_scope != .any or resource.objects.placement_call != null)) return true;
+                if (resource == .objects and (resource.objects.page_scope != .any or resource.objects.placement_call != null or !resource.objects.depth.eql(.{}))) return true;
             }
         }
         for (self.display_definitions.items) |definition| if (definition.reads.hasConcreteMembershipScope()) return true;
@@ -282,6 +282,14 @@ pub fn appendResource(
                 defer allocator.free(text);
                 try out.appendSlice(allocator, ", placement=");
                 try out.appendSlice(allocator, text);
+            }
+            if (!role_name.depth.eql(.{})) {
+                const range = if (role_name.depth.max) |limit|
+                    try std.fmt.allocPrint(allocator, ", depth={d}..{d}", .{ role_name.depth.min, limit })
+                else
+                    try std.fmt.allocPrint(allocator, ", depth={d}..", .{role_name.depth.min});
+                defer allocator.free(range);
+                try out.appendSlice(allocator, range);
             }
             try out.appendSlice(allocator, ", owner=");
             try appendPropertyOwner(allocator, out, .{ .object = role_name.owner }, options);
@@ -526,6 +534,7 @@ const ValueFacts = struct {
     children: ?[]const ValueFacts = null,
     page_scope: ResourceScope = .any,
     placement_call: ?u64 = null,
+    placement_depth: resource_model.PlacementDepth = .{},
     const Field = struct { name: []const u8, value: ValueFacts };
     const Callable = union(enum) {
         named: semantic_env.ResolvedFunction,
@@ -1072,6 +1081,7 @@ pub const Analyzer = struct {
         result.object_role = mergeOptionalNames(left.object_role, right.object_role);
         result.page_scope = if (resourceScopeEql(left.page_scope, right.page_scope)) left.page_scope else .any;
         result.placement_call = if (left.placement_call == right.placement_call) left.placement_call else null;
+        result.placement_depth = left.placement_depth.join(right.placement_depth);
         if (left.children) |left_children| if (right.children) |right_children| {
             result.children = try std.mem.concat(allocator, ValueFacts, &.{ left_children, right_children });
         };
@@ -1162,7 +1172,7 @@ pub const Analyzer = struct {
                     .primitive => |primitive| break :blk try self.primitiveValueFacts(call, primitive),
                     .unknown => break :blk .{},
                     .function => |named| switch (named.decl.result_type.kind) {
-                        .function, .record, .optional, .any, .placed, .placement, .page => {},
+                        .function, .record, .optional, .any, .placed, .placement, .page, .document, .selection => {},
                         .object => {
                             const role = try self.objectRoleCall(call);
                             if (role != null and !std.mem.eql(u8, role.?, core.GroupRole)) {
@@ -1196,15 +1206,25 @@ pub const Analyzer = struct {
         var result = try self.withPropertyTarget(.{}, try self.propertyTargetCall(call));
         switch (primitive.op) {
             .pagectx => result.page_scope = if (self.variable_scope == .page) self.variable_scope else .any,
-            .select => if (call.type_args.items.len == 1 and call.args.items.len == 1) {
+            .select => if (call.args.items.len > 0) {
                 const scope = try self.valueFacts(call.args.items[0]);
-                result.page_scope = scope.page_scope;
-                result.placement_call = scope.placement_call;
+                if (call.type_args.items.len == 1 and call.args.items.len == 1) {
+                    result.page_scope = scope.page_scope;
+                    result.placement_call = scope.placement_call;
+                } else if (try literalStringArg(self, call, 1)) |name| {
+                    if (registry.lookupQueryOp(name)) |query| switch (query.op) {
+                        .self_placement => result = scope,
+                        .children, .descendants => {
+                            result.page_scope = scope.page_scope;
+                            result.placement_call = scope.placement_call;
+                            result.placement_depth = if (query.op == .children) scope.placement_depth.children() else scope.placement_depth.descendants();
+                        },
+                        else => {},
+                    };
+                }
             },
             .first => if (call.args.items.len > 0) {
-                const selection = try self.valueFacts(call.args.items[0]);
-                result.page_scope = selection.page_scope;
-                result.placement_call = selection.placement_call;
+                result = try self.valueFacts(call.args.items[0]);
             },
             .selection_union, .selection_intersection, .selection_difference, .sub => if (call.args.items.len == 2) {
                 const left = try self.valueFacts(call.args.items[0]);
@@ -1212,6 +1232,7 @@ pub const Analyzer = struct {
                 const combined = if (primitive.op == .selection_difference or primitive.op == .sub) left else try self.joinValueFacts(left, right);
                 result.page_scope = combined.page_scope;
                 result.placement_call = combined.placement_call;
+                result.placement_depth = combined.placement_depth;
             },
             .new => {
                 result.object_role = try literalStringArg(self, call, 1);
@@ -1233,6 +1254,7 @@ pub const Analyzer = struct {
                     result = try self.withPropertyTarget(result, PropertyTarget.freshObject(null));
                     result.page_scope = (try self.valueFacts(call.args.items[0])).page_scope;
                     result.placement_call = call.callee.call_id;
+                    result.placement_depth = .exact(0);
                 } else result = input;
             },
             .set_prop, .set_content, .set_repr, .require_asset_exists, .extend_render_env => if (call.args.items.len > 0) {
@@ -2124,7 +2146,7 @@ pub const Analyzer = struct {
         var summary = try self.callArgFactsSummary(args);
         errdefer summary.deinit();
         const page_scope = args[0].values.page_scope;
-        try summary.addWrite(.{ .objects = .{ .input_type = plan.steps.items[0].input, .page_scope = page_scope, .placement_call = call_id } });
+        try summary.addWrite(.{ .objects = .{ .input_type = plan.steps.items[0].input, .page_scope = page_scope, .placement_call = call_id, .depth = .exact(0) } });
         summary.places_objects = true;
         summary.writes_layout_input = true;
         var steps = std.ArrayList(AccessSummary).empty;
@@ -2134,7 +2156,7 @@ pub const Analyzer = struct {
         }
         try steps.ensureTotalCapacity(self.allocator, plan.steps.items.len);
         var input = args[1].values;
-        for (plan.steps.items) |step| {
+        for (plan.steps.items, 0..) |step, depth| {
             switch (step.target) {
                 .native => steps.appendAssumeCapacity(AccessSummary.init(self.allocator)),
                 .function => |key| {
@@ -2147,6 +2169,7 @@ pub const Analyzer = struct {
                     });
                     receiver.page_scope = page_scope;
                     receiver.placement_call = call_id;
+                    receiver.placement_depth = .exact(depth);
                     var argument = CallArgFacts{ .summary = AccessSummary.init(self.allocator), .values = receiver };
                     defer argument.deinit();
                     steps.appendAssumeCapacity(try self.invokeValueFacts(function, &.{argument}));
@@ -2320,11 +2343,18 @@ pub const Analyzer = struct {
                 .role = literalStringFromArgFacts(arg_facts, 2),
                 .page_scope = if (arg_facts.len > 0) arg_facts[0].values.page_scope else .any,
             } }),
-            // Containment is fixed when the group value is constructed.
-            .children, .descendants => {},
+            // Display-generated children are produced after registration.
+            .children, .descendants => {
+                const scope: ValueFacts = if (arg_facts.len > 0) arg_facts[0].values else .{};
+                try summary.addSelectionRead(.{ .objects = .{
+                    .page_scope = scope.page_scope,
+                    .placement_call = scope.placement_call,
+                    .depth = if (query.op == .children) scope.placement_depth.children() else scope.placement_depth.descendants(),
+                } });
+            },
             // A singleton snapshots the supplied identity, not a collection.
             // Its argument dependencies have already been collected.
-            .self_object => {},
+            .self_object, .self_placement => {},
             .previous_page => try summary.addRead(Resource.makePages(null)),
             .parent_page => {
                 const owner = propertyOwnerFromArgFacts(arg_facts, 0);
@@ -2435,7 +2465,7 @@ pub const Analyzer = struct {
             .document_objects_by_role,
             => PropertyTarget.object(self.objectClassForRole(try literalStringArg(self, call, 2))),
             .children, .descendants => PropertyTarget.object(null),
-            .self_object => if (call.args.items.len > 0)
+            .self_object, .self_placement => if (call.args.items.len > 0)
                 (try self.propertyTargetExpr(call.args.items[0])) orelse PropertyTarget.any()
             else
                 PropertyTarget.any(),
@@ -2698,6 +2728,7 @@ fn buildFunctionCallSummaryKey(
         try appendOptionalBytesKey(allocator, &out, fact.object_role);
         try appendResourceScopeKey(allocator, &out, fact.values.page_scope);
         try appendOptionalPlacementCallKey(allocator, &out, fact.values.placement_call);
+        try appendPlacementDepthKey(allocator, &out, fact.values.placement_depth);
         try appendCompositionKey(allocator, &out, fact.values);
         try appendOptionalPropertyTargetKey(allocator, &out, fact.property_target);
         try appendResourceListKey(allocator, &out, fact.summary.selection_reads.items);
@@ -2715,6 +2746,14 @@ fn appendCompositionKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), v
             try appendCompositionKey(allocator, out, child);
         }
     } else try out.append(allocator, '?');
+}
+
+fn appendPlacementDepthKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), depth: resource_model.PlacementDepth) !void {
+    try appendKeyInt(allocator, out, depth.min);
+    if (depth.max) |limit| {
+        try out.append(allocator, 'd');
+        try appendKeyInt(allocator, out, limit);
+    } else try out.append(allocator, '*');
 }
 
 fn appendOptionalPlacementCallKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), id: ?u64) !void {
@@ -2752,6 +2791,7 @@ fn appendResourceKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), reso
         .objects => |role_name| {
             try out.append(allocator, 'o');
             try appendOptionalPlacementCallKey(allocator, out, role_name.placement_call);
+            try appendPlacementDepthKey(allocator, out, role_name.depth);
             try appendOptionalBytesKey(allocator, out, role_name.role);
             if (role_name.input_type) |ty| {
                 try out.append(allocator, 't');

@@ -915,6 +915,7 @@ pub const Query = struct {
 
     pub const Op = union(enum) {
         self_object: void,
+        self_placement: void,
         previous_page: void,
         parent_page: void,
         children: void,
@@ -929,6 +930,14 @@ pub const Query = struct {
             .input = .object,
             .name = "self-object",
             .op = .{ .self_object = {} },
+        };
+    }
+
+    pub fn selfPlacement() Query {
+        return .{
+            .input = .object,
+            .name = "self-placement",
+            .op = .{ .self_placement = {} },
         };
     }
 

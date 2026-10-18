@@ -1592,6 +1592,9 @@ fn evalSelectCall(
     };
     try value_contracts.ensureValueConformsToType(state, null, base, descriptor.input_type, current_origin, .UnmatchedInputType);
     switch (descriptor.op) {
+        .self_placement => {
+            return try state.select(state.allocator, base, core.Query.selfPlacement());
+        },
         .self_object => {
             return try state.select(state.allocator, base, core.Query.selfObject());
         },

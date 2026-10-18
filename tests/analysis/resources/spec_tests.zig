@@ -179,3 +179,25 @@ test "resource index: typed subtree reads retain broad writers and exclude disti
     try index.forEachCandidate(read, &visitor);
     try testing.expectEqualSlices(bool, &.{ true, true, true, false, false }, &seen);
 }
+
+test "resource index: direct-child depth excludes later descendants while unknown writers remain candidates" {
+    const read: Resource = .{ .objects = .{ .placement_call = 10, .depth = .exact(1) } };
+    const writers = [_]Resource{
+        .{ .objects = .{} },
+        .{ .objects = .{ .placement_call = 10, .depth = .exact(0) } },
+        .{ .objects = .{ .placement_call = 10, .depth = .exact(1) } },
+        .{ .objects = .{ .placement_call = 10, .depth = .exact(2) } },
+        .{ .objects = .{ .placement_call = 11, .depth = .exact(1) } },
+        .{ .objects = .{ .placement_call = 10, .depth = .{ .min = 1 } } },
+    };
+    var index = resource_index.ResourceWriterIndex.init(testing.allocator);
+    defer index.deinit();
+    for (writers, 0..) |write, unit| try index.addWrite(unit, write);
+    var seen: [writers.len]bool = undefined;
+    @memset(&seen, false);
+    var visitor = MatchingVisitor{ .read = read, .seen = &seen };
+    try index.forEachCandidate(read, &visitor);
+    try testing.expectEqualSlices(bool, &.{ true, false, true, false, false, true }, &seen);
+    try testing.expect(!read.eql(writers[3]));
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, verifyResourceMatrix, .{&writers});
+}

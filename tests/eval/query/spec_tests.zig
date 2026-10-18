@@ -71,6 +71,7 @@ test "typed queries: a preceding table of contents waits for generated headings 
     var excluding_self = try state.selectTypedPlacements(testing.allocator, .{ .object = subtree.ids.items[0] }, input);
     defer excluding_self.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 0), excluding_self.ids.items.len);
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, childQueriesWithAllocator, .{ &state, wrapper });
     var other_module = try state.selectTypedPlacements(testing.allocator, .{ .document = state.graph.document_id }, Type.recordType("Heading").inModule(1));
     defer other_module.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 0), other_module.ids.items.len);
@@ -229,5 +230,138 @@ test "typed queries: selection operators reject scalar operands before evaluatio
         }
         try testing.expect(found);
         for (state.graph.page_order.items) |page| try testing.expectEqual(@as(usize, 0), state.placementRootsOf(page).len);
+    }
+}
+
+fn childQueriesWithAllocator(allocator: std.mem.Allocator, state: *core.DocumentState, root: core.NodeId) !void {
+    var direct = try state.select(allocator, .{ .object = root }, core.Query.children());
+    defer direct.deinit(allocator);
+    try testing.expectEqual(@as(usize, 1), direct.selection.ids.items.len);
+    var all = try state.select(allocator, .{ .object = root }, core.Query.descendants());
+    defer all.deinit(allocator);
+    try testing.expectEqual(@as(usize, 2), all.selection.ids.items.len);
+    try testing.expectEqual(direct.selection.ids.items[0], all.selection.ids.items[0]);
+    try testing.expectEqual(state.childrenOf(direct.selection.ids.items[0]).?[0], all.selection.ids.items[1]);
+    var singleton = try state.select(allocator, .{ .object = root }, core.Query.selfPlacement());
+    defer singleton.deinit(allocator);
+    try testing.expectEqualSlices(core.NodeId, &.{root}, singleton.selection.ids.items);
+    var leaf = try state.select(allocator, .{ .object = all.selection.ids.items[1] }, core.Query.children());
+    defer leaf.deinit(allocator);
+    try testing.expectEqual(@as(usize, 0), leaf.selection.ids.items.len);
+}
+
+test "typed queries: child helpers wait for displays and preserve each captured subtree" {
+    var state = try document(
+        \\import std:text/content as native
+        \\type Heading { title: String }
+        \\type Wrapped { content: Heading }
+        \\type Reader { target: Placement }
+        \\fn/! wrapped(title: String) -> Wrapped = Wrapped { content = Heading { title = title } }
+        \\fn display(self: Placed<Heading>) -> native::Text = native::Text { content = self.value.title }
+        \\fn display(self: Placed<Wrapped>) -> Heading = self.value.content
+        \\fn child_count(target: Placement) -> Number = selection_count(children(target))
+        \\fn display(self: Placed<Reader>) -> native::Text
+        \\  let same: Placed<Reader> = first(selection(self))
+        \\  let target = same.value.target
+        \\  let read = () |-> child_count(target)
+        \\  let direct: Selection<Placement> = children(target)
+        \\  let all: Selection<Placement> = descendants(target)
+        \\  let result = str(read()) ++ ":" ++ str(selection_count(all)) ++ ":" ++ str(selection_count(selection(self)))
+        \\  return native::Text { content = result }
+        \\end
+        \\page main
+        \\  let first_target = wrapped!("First")
+        \\  let second_target = place_on!(pagectx(), native::Text { content = "Second" })
+        \\  place_on!(pagectx(), Reader { target = first_target })
+        \\  place_on!(pagectx(), Reader { target = second_target })
+        \\  let child = first(children(first_target))
+        \\  let leaf = first(descendants(child))
+        \\  ~ leaf.left == page.left + 24
+        \\end
+    );
+    defer state.deinit();
+    var graph = try checkedGraph(&state);
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const roots = state.placementRootsOf(state.graph.page_order.items[0]);
+    try testing.expectEqual(@as(usize, 4), roots.len);
+    for (roots[2..], [_][]const u8{ "1:2:1", "0:0:1" }) |root, expected| {
+        try testing.expectEqualStrings(expected, core.nodeDisplayContent(state.getNode(state.childrenOf(root).?[0]).?));
+    }
+    var pages = try core.prepared.prepare(testing.allocator, &state);
+    defer pages.deinit(testing.allocator);
+    var layout = try core.layout.solveDocument(&state, null, .{ .jobs = 1 });
+    defer layout.deinit(testing.allocator);
+    const leaf = state.childrenOf(state.childrenOf(roots[0]).?[0]).?[0];
+    try testing.expectApproxEqAbs(@as(f32, 24), layout.nodeFrame(leaf).?.x, core.layout.graph.ConstraintTolerance);
+}
+
+test "typed queries: reading one's own children during display rejects a dependency cycle" {
+    for ([_][]const u8{ "children", "descendants" }) |query| {
+        const source = try std.fmt.allocPrint(testing.allocator,
+            \\import std:text/content as native
+            \\type Reader {{}}
+            \\fn display(self: Placed<Reader>) -> native::Text
+            \\  return native::Text {{ content = str(selection_count({s}(self))) }}
+            \\end
+            \\page main
+            \\  place_on!(pagectx(), Reader {{}})
+            \\end
+        , .{query});
+        defer testing.allocator.free(source);
+        var state = try document(source);
+        defer state.deinit();
+        try testing.expectError(error.ExecutionDependencyCycle, analyzeGraph(&state));
+        try testing.expectEqual(@as(usize, 0), state.placementRootsOf(state.graph.page_order.items[0]).len);
+    }
+}
+
+test "typed queries: child and singleton queries require a placement reference" {
+    for ([_][]const u8{ "children", "descendants", "selection" }) |query| {
+        for ([_][]const u8{ "7", "Heading { title = \"Value\" }", "pagectx()", "text!(\"Legacy\")" }) |input| {
+            const source = try std.fmt.allocPrint(testing.allocator,
+                \\type Heading {{ title: String }}
+                \\page main
+                \\  let result = {s}({s})
+                \\end
+            , .{ query, input });
+            defer testing.allocator.free(source);
+            var state = try document(source);
+            defer state.deinit();
+            if (analyzeGraph(&state)) |_| return error.ExpectedInvalidQuery else |_| {}
+            try testing.expect(state.diagnostics.entries.items.len != 0);
+            for (state.graph.page_order.items) |page| try testing.expectEqual(@as(usize, 0), state.placementRootsOf(page).len);
+        }
+    }
+}
+
+test "typed queries: a child display can count direct siblings but not unfinished descendants" {
+    for ([_][]const u8{ "children", "descendants" }) |query| {
+        const source = try std.fmt.allocPrint(testing.allocator,
+            \\import std:text/content as native
+            \\type Parent {{}}
+            \\type Child {{ parent: Placement }}
+            \\fn display(self: Placed<Parent>) -> Child = Child {{ parent = self }}
+            \\fn display(self: Placed<Child>) -> native::Text
+            \\  let peers = {s}(self.value.parent)
+            \\  return native::Text {{ content = str(selection_count(peers)) }}
+            \\end
+            \\page main
+            \\  place_on!(pagectx(), Parent {{}})
+            \\end
+        , .{query});
+        defer testing.allocator.free(source);
+        var state = try document(source);
+        defer state.deinit();
+        if (std.mem.eql(u8, query, "descendants")) {
+            try testing.expectError(error.ExecutionDependencyCycle, analyzeGraph(&state));
+            continue;
+        }
+        var graph = try checkedGraph(&state);
+        defer graph.deinit();
+        try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+        const parent = state.placementRootsOf(state.graph.page_order.items[0])[0];
+        const child = state.childrenOf(parent).?[0];
+        try testing.expectEqualStrings("1", core.nodeDisplayContent(state.getNode(state.childrenOf(child).?[0]).?));
     }
 }

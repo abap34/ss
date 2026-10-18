@@ -1502,34 +1502,34 @@ pub const DocumentState = struct {
 
     fn selectChildren(self: *DocumentState, allocator: Allocator, parent_id: NodeId, provenance: []const u8) !Selection {
         var selection = Selection.init(.object, provenance);
-        const children = self.graph.contains.get(parent_id) orelse return selection;
-        for (children.items) |child_id| {
-            const child = self.getNode(child_id) orelse continue;
-            if (child.kind == .object) try selection.ids.append(allocator, child_id);
+        errdefer selection.deinit(allocator);
+        for (self.childrenOf(parent_id) orelse &.{}) |child_id| {
+            const child = self.getNode(child_id) orelse return error.UnknownNode;
+            if (child.placement == null) return error.InvalidSelectionScope;
+            if (!child.discarded) try selection.ids.append(allocator, child_id);
         }
         return selection;
     }
 
-    fn appendDescendants(self: *DocumentState, allocator: Allocator, parent_id: NodeId, selection: *Selection) !void {
-        const children = self.graph.contains.get(parent_id) orelse return;
-        for (children.items) |child_id| {
-            const child = self.getNode(child_id) orelse continue;
-            if (child.kind == .object) try selection.ids.append(allocator, child_id);
-            try self.appendDescendants(allocator, child_id, selection);
-        }
-    }
-
     fn selectDescendants(self: *DocumentState, allocator: Allocator, parent_id: NodeId, provenance: []const u8) !Selection {
         var selection = Selection.init(.object, provenance);
-        try self.appendDescendants(allocator, parent_id, &selection);
+        errdefer selection.deinit(allocator);
+        try self.appendMatchingPlacements(allocator, self.childrenOf(parent_id) orelse &.{}, null, null, &selection.ids);
         return selection;
     }
 
     pub fn select(self: *DocumentState, allocator: Allocator, base: Value, query: Query) !Value {
         try self.ensureValueTag(base, query.input, query.name);
+        switch (query.op) {
+            .self_placement, .children, .descendants => {
+                const node = self.getNode(base.object) orelse return error.UnknownNode;
+                if (node.placement == null or node.discarded) return error.InvalidSelectionScope;
+            },
+            else => {},
+        }
 
         return switch (query.op) {
-            .self_object => .{
+            .self_object, .self_placement => .{
                 .selection = try self.singletonSelection(allocator, .object, query.name, base.object),
             },
             .previous_page => .{
