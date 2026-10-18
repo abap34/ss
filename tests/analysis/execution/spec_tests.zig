@@ -1,6 +1,7 @@
 const std = @import("std");
 const compiler = @import("compiler");
 const core = compiler.core;
+const Type = compiler.language.Type;
 const testing = std.testing;
 
 fn document(source: []const u8) !core.DocumentState {
@@ -52,8 +53,8 @@ test "dependency cycle diagnostics retain source locations in both graph constru
     for ([_]compiler.analysis.AnalysisMode{ .diagnostics_only, .evaluation }) |mode| {
         var state = try document(
             \\page bad
-            \\  let target = body_obj("hello")
-            \\  target.content = target.content ++ "!"
+            \\  let target = pagectx()
+            \\  target.layout_h_center_offset = target.layout_h_center_offset + 1
             \\end
         );
         defer state.deinit();
@@ -242,48 +243,36 @@ test "execution graph owns computed resource names after analyzers and cached su
     // The testing allocator also checks that the graph's string storage is freed.
     for ([_]std.mem.Allocator{ poison.allocator(), testing.allocator }) |allocator| {
         var state = try document(
-            \\fn read_size() -> Number = prop(docctx(), "font_" ++ "size")
+            \\fn read_offset() -> Number = prop(docctx(), "layout_h_" ++ "center_offset")
             \\document
-            \\  let first = read_size()
+            \\  let first = read_offset()
             \\end
             \\document
-            \\  let second = read_size()
+            \\  let second = read_offset()
             \\end
             \\document
-            \\  set_prop(docctx(), "font_" ++ "size", 24)
-            \\end
-            \\page main
-            \\  let items = doc_objs(docctx(), "tag" ++ "ged")
-            \\  let item = place_on!(pagectx(), new("item", "tag" ++ "ged", "text"))
+            \\  docctx().layout_h_center_offset = 24
             \\end
         );
         defer state.deinit();
+        // Exercise graph storage independently of surface property-key validation.
         var declarations = try compiler.declarations.build(testing.allocator, &state);
         defer declarations.deinit();
         var graph = try compiler.analysis.ExecutionGraph.build(allocator, &state, &declarations, .{});
         defer graph.deinit();
-        try testing.expectEqual(@as(usize, 5), graph.units.items.len);
+        try testing.expectEqual(@as(usize, 3), graph.units.items.len);
         for (graph.units.items[0..2]) |unit| {
             var found = false;
             for (unit.summary.reads.items) |resource| {
                 if (resource == .property and resource.property.owner == .document) {
                     if (resource.property.key.displayName()) |name| {
-                        if (std.mem.eql(u8, name, "font_size")) found = true;
+                        if (std.mem.eql(u8, name, "layout_h_center_offset")) found = true;
                     }
                 }
             }
             try testing.expect(found);
         }
-        var found_role = false;
-        for (graph.units.items[3].summary.reads.items) |resource| {
-            if (resource == .objects) {
-                if (resource.objects.role) |role| {
-                    if (std.mem.eql(u8, role, "tagged")) found_role = true;
-                }
-            }
-        }
-        try testing.expect(found_role);
-        for ([_]compiler.analysis.DependencyEdge{ .{ .from = 2, .to = 0 }, .{ .from = 2, .to = 1 }, .{ .from = 4, .to = 3 } }) |expected| {
+        for ([_]compiler.analysis.DependencyEdge{ .{ .from = 2, .to = 0 }, .{ .from = 2, .to = 1 } }) |expected| {
             var found = false;
             for (graph.edges.items) |edge| {
                 if (edge.from == expected.from and edge.to == expected.to) found = true;
@@ -346,14 +335,11 @@ test "validation diagnostics own messages independently of analysis storage" {
         \\end
     , "ImpureDisplayFunction", "display functions must be pure and read-only, including indirect calls");
     try expectOwnedDiagnostic(
-        \\type Holder = object {
-        \\  roles = ["holder"]
-        \\  format: (Object -> String)?
-        \\}
+        \\type Holder { title: String }
         \\page main
-        \\  let item = txt_obj("A", "holder")
+        \\  let item = Holder { title = "A" } with { missing = "B" }
         \\end
-    , "InvalidPropertyType", "property 'format' must not contain functions or unconstrained Any values");
+    , "UnknownField", "type 'Holder' has no field 'missing'");
     try expectOwnedDiagnostic(
         \\type Label {}
         \\fn label() -> String = label()
@@ -378,11 +364,14 @@ test "call analysis limit diagnostics survive temporary analysis storage" {
 
 test "dependency summary deduplication preserves overlapping resources in either order" {
     const deps = compiler.analysis.dependencies;
-    const specific: deps.PropertyOwner = .{ .object = .{ .identity = .{ .scope = .{ .page = 1 }, .name = "item" } } };
+    const text_type = Type.recordType("Text").inModule(1);
+    const typed: deps.Resource = .{ .objects = .{ .input_type = text_type } };
+    const placed: deps.Resource = .{ .objects = .{ .input_type = text_type, .placement = .exact(1, &.{}) } };
     const pairs = [_][2]deps.Resource{
-        .{ deps.Resource.makeProperty(specific, "badge"), deps.Resource.makeProperty(.{ .object = .{} }, "badge") },
-        .{ deps.Resource.makeProperty(.document, "badge"), deps.Resource.makeProperty(.document, null) },
-        .{ deps.Resource.makeObjects("body"), deps.Resource.makeObjects(null) },
+        .{ deps.Resource.makeProperty(.page, "layout_h_center_offset"), deps.Resource.makeProperty(.any, "layout_h_center_offset") },
+        .{ deps.Resource.makeProperty(.document, "layout_h_center_offset"), deps.Resource.makeProperty(.document, null) },
+        .{ typed, .{ .objects = .{} } },
+        .{ placed, typed },
         .{ deps.Resource.makePages(1), deps.Resource.makePages(null) },
         .{ deps.Resource.makeVariable(.{ .page = 1 }, "item"), deps.Resource.makeVariable(.any, "item") },
     };
@@ -403,9 +392,12 @@ test "dependency summary deduplication preserves overlapping resources in either
         try testing.expectEqual(@as(usize, 2), summary.writes.items.len);
         try testing.expectEqual(@as(usize, 2), summary.selection_reads.items.len);
     };
-    const name = try testing.allocator.dupe(u8, "body");
+    const name = try testing.allocator.dupe(u8, "Text");
     defer testing.allocator.free(name);
-    try testing.expect(deps.Resource.makeObjects(name).eql(deps.Resource.makeObjects("body")));
+    const allocated: deps.Resource = .{ .objects = .{ .input_type = Type.recordType(name).inModule(1) } };
+    try testing.expect(allocated.eql(typed));
+    const other_module: deps.Resource = .{ .objects = .{ .input_type = Type.recordType("Text").inModule(2) } };
+    try testing.expect(!allocated.intersects(other_module));
 }
 
 test "execution graph owns typed display summaries after temporary analysis storage is destroyed" {
