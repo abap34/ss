@@ -311,17 +311,6 @@ fn expectObjectFieldPathWithThemeOverlay(
     try compiler_semantics.expectObjectFieldPathWithOverlays(testing.io, allocator, path, source, &overlays, root_key, field_path, expected);
 }
 
-fn expectClassDefaultProperty(source: []const u8, role: []const u8, key: []const u8, expected: ?[]const u8) !void {
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
-    try compiler_semantics.expectClassDefaultProperty(testing.io, allocator, path, source, role, key, expected);
-}
-
 fn expectBodyTextDefaults(source: []const u8, expected: compiler_semantics.BodyTextDefaults) !void {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1318,21 +1307,14 @@ test "compiler semantics: enum type names are not record constructors" {
 
 test "compiler semantics: enum names can be shadowed by values" {
     try buildSource(
-        \\import std:themes/default as *
-        \\
         \\enum Mode { alpha beta }
-        \\type Card = object {
-        \\  roles = ["card"]
-        \\  custom_mode: Mode = Mode.alpha
-        \\}
-        \\
-        \\page ok
+        \\type Card { custom_mode: Mode? = Mode.alpha }
+        \\page main
         \\  let fallback = Mode.beta
-        \\  let card = obj("card", "card", "text")
+        \\  let card = Card {}
         \\  let Mode = card
         \\  let current = Mode.custom_mode ?? fallback
         \\end
-        \\
     );
 }
 
@@ -1377,58 +1359,46 @@ test "compiler semantics: enum types resolve through imported modules" {
     );
 }
 
-test "compiler semantics: enum properties serialize as case names" {
-    try expectObjectContent(
-        \\import std:themes/default as *
-        \\
+test "compiler semantics: enum fields retain their cases through immutable updates" {
+    var state = try compiler_semantics.buildFinalizedDocumentState(testing.io, testing.allocator, "enum-values.ss",
         \\enum Mode { alpha beta }
-        \\type Card = object {
-        \\  roles = ["card"]
-        \\  custom_mode: Mode = Mode.alpha
-        \\}
-        \\
-        \\page ok
-        \\  let card = obj("card", "card", "text")
-        \\  card.custom_mode = Mode.beta
-        \\  if prop_eq(card, "custom_mode", "beta")
-        \\    text!("enum-ok")
-        \\  end
+        \\type Card { custom_mode: Mode = Mode.alpha }
+        \\fn display(self: Placed<Card>) -> Text = text("Card")
+        \\page main
+        \\  let original = Card {}
+        \\  let updated = original with { custom_mode = Mode.beta }
+        \\  place!(original)
+        \\  place!(updated)
         \\end
-        \\
-    , "enum-ok");
+    );
+    defer state.deinit();
+    const roots = state.placementRootsOf(state.graph.page_order.items[0]);
+    try testing.expectEqual(@as(usize, 2), roots.len);
+    for (roots, [_][]const u8{ "alpha", "beta" }) |id, expected| {
+        const input = state.getNode(id).?.placement.?.value.record;
+        const actual = input.field("custom_mode").?.enum_case;
+        try testing.expectEqualStrings("Mode", actual.enum_name);
+        try testing.expectEqualStrings(expected, actual.case_name);
+        try testing.expectEqual(input.ty.nominal_module_id, actual.module_id);
+    }
 
     try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\enum Mode { alpha beta }
-        \\type Card = object {
-        \\  roles = ["card"]
-        \\  custom_mode: Mode = Mode.alpha
-        \\}
-        \\
-        \\page bad
-        \\  let card = obj("card", "card", "text")
-        \\  card.custom_mode = "beta"
-        \\end
-        \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'custom_mode' expects Mode, got String");
-
-    try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
         \\enum Mode { alpha beta }
         \\enum Other { beta }
-        \\type Card = object {
-        \\  roles = ["card"]
-        \\  custom_mode: Mode = Mode.alpha
-        \\}
-        \\
-        \\page bad
-        \\  let card = obj("card", "card", "text")
-        \\  card.custom_mode = Other.beta
+        \\type Card { custom_mode: Mode = Mode.alpha }
+        \\page main
+        \\  let card = Card {} with { custom_mode = "beta" }
         \\end
-        \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'custom_mode' expects Mode, got Other");
+    , "case.ss:bytes:", "TypeMismatch: expected Mode, got String");
+
+    try expectDiagnostic(
+        \\enum Mode { alpha beta }
+        \\enum Other { beta }
+        \\type Card { custom_mode: Mode = Mode.alpha }
+        \\page main
+        \\  let card = Card {} with { custom_mode = Other.beta }
+        \\end
+    , "case.ss:bytes:", "TypeMismatch: expected Mode, got Other");
 }
 
 test "compiler semantics: type names share one namespace" {
@@ -1446,13 +1416,13 @@ test "compiler semantics: type names share one namespace" {
         \\import std:themes/default as *
         \\
         \\enum Mode { alpha }
-        \\type Mode = object {
+        \\type Mode {
         \\}
         \\
         \\page bad
         \\end
         \\
-    , "case.ss:bytes:", "DuplicateType: object type 'Mode' is already defined in this module");
+    , "case.ss:bytes:", "DuplicateType: value type 'Mode' is already defined in this module");
 
     try buildSource(
         \\import std:themes/default as *
@@ -1494,7 +1464,7 @@ test "compiler semantics: type names share one namespace" {
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\type String = object {
+        \\type String {
         \\}
         \\
         \\page bad
@@ -1505,7 +1475,7 @@ test "compiler semantics: type names share one namespace" {
     try buildSource(
         \\import std:themes/default as *
         \\
-        \\type Card = object {
+        \\type Card {
         \\}
         \\enum Mode { Card local }
         \\
@@ -1526,7 +1496,7 @@ test "compiler semantics: type names share one namespace" {
         \\end
         \\
     ,
-        \\type RemoteType = object {
+        \\type RemoteType {
         \\}
         \\
     );
@@ -2931,13 +2901,12 @@ test "compiler semantics: typed properties reject optional and wrong static valu
     , "case.ss:bytes:", "UnknownField: unknown field: text_markdown_code_fill");
 }
 
-test "compiler semantics: object field defaults are statically typed" {
-    const defaults_source =
-        \\import std:themes/default as *
-        \\
+test "compiler semantics: ordinary field defaults evaluate with their declared types" {
+    var state = try compiler_semantics.buildFinalizedDocumentState(testing.io, testing.allocator, "value-defaults.ss",
         \\enum Mode { alpha beta }
-        \\type Card = object {
-        \\  roles = ["card"]
+        \\type Inner { mode: Mode = Mode.beta }
+        \\type Outer { inner: Inner = Inner {} }
+        \\type Card {
         \\  size: Number = 1.02
         \\  offset: Number = -1.5
         \\  accent: Color = c"#334455"
@@ -2945,55 +2914,40 @@ test "compiler semantics: object field defaults are statically typed" {
         \\  mode: Mode = Mode.beta
         \\  enabled: Bool = true
         \\  label: String = "default label"
-        \\}
-        \\
-        \\page ok
-        \\  let card = obj("card", "card", "text")
-        \\end
-        \\
-    ;
-    try expectClassDefaultProperty(defaults_source, "card", "size", "1.02");
-    try expectClassDefaultProperty(defaults_source, "card", "offset", "-1.5");
-    try expectClassDefaultProperty(defaults_source, "card", "accent", "0.2,0.26666668,0.33333334");
-    try expectClassDefaultProperty(defaults_source, "card", "optional_accent", null);
-    try expectClassDefaultProperty(defaults_source, "card", "mode", "beta");
-    try expectClassDefaultProperty(defaults_source, "card", "enabled", "true");
-    try expectClassDefaultProperty(defaults_source, "card", "label", "default label");
-
-    const nested_defaults_source =
-        \\import std:themes/default as *
-        \\
-        \\enum Mode { alpha beta }
-        \\type Outer {
-        \\  inner: Inner = Inner {}
-        \\}
-        \\type Inner {
-        \\  mode: Mode = Mode.beta
-        \\}
-        \\type Card = object {
-        \\  roles = ["card"]
         \\  config: Outer = Outer {}
+        \\  calculated: Number = 1 + 2
+        \\  joined: String = "a" ++ "b"
         \\}
-        \\
-        \\page ok
-        \\  let card = obj("card", "card", "text")
+        \\fn display(self: Placed<Card>) -> Text = text("Card")
+        \\page main
+        \\  place!(Card {})
         \\end
-        \\
-    ;
-    try expectClassDefaultProperty(
-        nested_defaults_source,
-        "card",
-        "config",
-        "{\"kind\":\"record\",\"type\":{\"kind\":\"record\",\"name\":\"Outer\",\"module\":0},\"fields\":[{\"name\":\"inner\",\"explicit\":false,\"value\":{\"kind\":\"record\",\"type\":{\"kind\":\"record\",\"name\":\"Inner\",\"module\":0},\"fields\":[{\"name\":\"mode\",\"explicit\":false,\"value\":{\"kind\":\"enum\",\"type\":\"Mode\",\"module\":0,\"case\":\"beta\"}}]}}]}",
     );
+    defer state.deinit();
+    const roots = state.placementRootsOf(state.graph.page_order.items[0]);
+    try testing.expectEqual(@as(usize, 1), roots.len);
+    const card = state.getNode(roots[0]).?.placement.?.value.record;
+    try testing.expectEqualStrings("Card", card.ty.class_name.?);
+    try testing.expectEqual(@as(f32, 1.02), card.field("size").?.number);
+    try testing.expectEqual(@as(f32, -1.5), card.field("offset").?.number);
+    try testing.expectEqualStrings("0.2,0.26666668,0.33333334", card.field("accent").?.string);
+    try testing.expectEqual(.none, std.meta.activeTag(card.field("optional_accent").?));
+    try testing.expectEqualStrings("beta", card.field("mode").?.enum_case.case_name);
+    try testing.expect(card.field("enabled").?.boolean);
+    try testing.expectEqualStrings("default label", card.field("label").?.string);
+    const outer = card.field("config").?.record;
+    try testing.expectEqualStrings("Outer", outer.ty.class_name.?);
+    const inner = outer.field("inner").?.record;
+    try testing.expectEqualStrings("Inner", inner.ty.class_name.?);
+    try testing.expectEqualStrings("beta", inner.field("mode").?.enum_case.case_name);
+    try testing.expectEqual(@as(f32, 3), card.field("calculated").?.number);
+    try testing.expectEqualStrings("ab", card.field("joined").?.string);
+    for (card.fields.items) |field| try testing.expect(!field.explicit);
 
     try expectBodyTextDefaults(
-        \\import std:themes/default as *
-        \\
-        \\page ok
-        \\  text!("body", default_theme().body)
+        \\page main
+        \\  text!("Body", default_theme().body)
         \\end
-        \\
     , .{
         .math_scale = 1.05,
         .inline_math_spacing = 0.08,
@@ -3001,91 +2955,44 @@ test "compiler semantics: object field defaults are statically typed" {
     });
 
     try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\type Card = object {
-        \\  accent: Color = "red"
-        \\}
-        \\
-        \\page bad
+        \\enum Mode { alpha beta }
+        \\enum Other { alpha beta }
+        \\type Card { accent: Color = "red" }
+        \\page main
         \\end
-        \\
-    , "case.ss:bytes:", "InvalidFieldDefault: default value does not match field type Color");
-
-    try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\type Card = object {
-        \\  accent: Color = none
-        \\}
-        \\
-        \\page bad
-        \\end
-        \\
-    , "case.ss:bytes:", "InvalidFieldDefault: default value does not match field type Color");
-
-    try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\type Card = object {
-        \\  accent: Color? = "red"
-        \\}
-        \\
-        \\page bad
-        \\end
-        \\
     , "case.ss:bytes:", "InvalidFieldDefault");
 
     try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\type Card = object {
-        \\  count: Number = 1 + 2
-        \\}
-        \\
-        \\page bad
-        \\end
-        \\
-    , "case.ss:bytes:", "InvalidFieldDefault: default value does not match field type Number");
-
-    try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\type Card = object {
-        \\  label: String = "a" ++ "b"
-        \\}
-        \\
-        \\page bad
-        \\end
-        \\
-    , "case.ss:bytes:", "InvalidFieldDefault: default value does not match field type String");
-
-    try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\enum Mode { alpha beta }
-        \\type Card = object {
-        \\  mode: Mode = "alpha"
-        \\}
-        \\
-        \\page bad
-        \\end
-        \\
-    , "case.ss:bytes:", "InvalidFieldDefault: default value does not match field type Mode");
-
-    try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
         \\enum Mode { alpha beta }
         \\enum Other { alpha beta }
-        \\type Card = object {
-        \\  mode: Mode = Other.alpha
-        \\}
-        \\
-        \\page bad
+        \\type Card { accent: Color = none }
+        \\page main
         \\end
-        \\
-    , "case.ss:bytes:", "InvalidFieldDefault: default value does not match field type Mode");
+    , "case.ss:bytes:", "InvalidFieldDefault");
+
+    try expectDiagnostic(
+        \\enum Mode { alpha beta }
+        \\enum Other { alpha beta }
+        \\type Card { accent: Color? = "red" }
+        \\page main
+        \\end
+    , "case.ss:bytes:", "InvalidFieldDefault");
+
+    try expectDiagnostic(
+        \\enum Mode { alpha beta }
+        \\enum Other { alpha beta }
+        \\type Card { mode: Mode = "alpha" }
+        \\page main
+        \\end
+    , "case.ss:bytes:", "InvalidFieldDefault");
+
+    try expectDiagnostic(
+        \\enum Mode { alpha beta }
+        \\enum Other { alpha beta }
+        \\type Card { mode: Mode = Other.alpha }
+        \\page main
+        \\end
+    , "case.ss:bytes:", "InvalidFieldDefault");
 }
 
 test "compiler semantics: document page and selection properties are typed" {
@@ -5706,182 +5613,97 @@ test "compiler semantics: duplicate user functions are rejected" {
     );
 }
 
-test "compiler semantics: duplicate object classes are rejected" {
-    try expectBuildFails(
-        \\import std:themes/default as *
-        \\
-        \\type Thing = object {
-        \\}
-        \\
-        \\type Thing = object {
-        \\}
-        \\
-        \\page bad
+test "compiler semantics: duplicate ordinary types are rejected" {
+    try expectDiagnostic(
+        \\type Thing {}
+        \\type Thing {}
+        \\page main
         \\end
-        \\
-    );
+    , "case.ss:bytes:", "DuplicateType");
 }
 
-test "compiler semantics: user object class names can be used as annotations" {
-    try buildSource(
-        \\type Card = object {
-        \\}
-        \\
-        \\fn keep(value: Card) -> Card
-        \\  return value
+test "compiler semantics: user type names annotate parameters and results" {
+    try expectObjectContent(
+        \\type Card { label: String }
+        \\fn keep(value: Card) -> Card = value
+        \\page main
+        \\  text!(keep(Card { label = "Kept" }).label)
         \\end
-        \\
-        \\page ok
-        \\end
-        \\
-    );
+    , "Kept");
 }
 
-test "compiler semantics: object class annotations are checked through selections" {
-    try buildSource(
-        \\import std:themes/default as *
-        \\
-        \\type Card = object {
-        \\  roles = ["card"]
-        \\}
-        \\
-        \\fn first_card(items: Selection<Card>) -> Card
-        \\  return first(items)
+test "compiler semantics: selections preserve nominal placement types through callbacks" {
+    try expectObjectContent(
+        \\type Card { label: String }
+        \\fn display(self: Placed<Card>) -> Text = text(self.value.label)
+        \\fn first_card(items: Selection<Placed<Card>>) -> Placed<Card> = first(items)
+        \\page main
+        \\  place!(Card { label = "A" })
+        \\  let selected = first_card(select<Card>(pagectx()))
+        \\  text!("Selected " ++ selected.value.label)
         \\end
-        \\
-        \\page ok
-        \\  place_on!(pagectx(), obj("A", "card", "text"))
-        \\  let card_obj = first_card(objs_here("card"))
-        \\  text!(content(card_obj))
-        \\end
-        \\
-    );
+    , "Selected A");
 
     try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\type Card = object {
-        \\  roles = ["card"]
-        \\}
-        \\
-        \\fn accept_body(item: Body) -> Object
-        \\  return item
+        \\type Card {}
+        \\fn display(self: Placed<Card>) -> Text = text("Card")
+        \\fn accept_text(item: Placed<Text>) -> Number = 1
+        \\page main
+        \\  place!(Card {})
+        \\  foreach(select<Card>(pagectx()), accept_text)
         \\end
-        \\
-        \\page bad
-        \\  place_on!(pagectx(), obj("A", "card", "text"))
-        \\  foreach(select(pagectx(), "page_objects_by_role", "card"), accept_body)
-        \\end
-        \\
-    , "case.ss:bytes:", "TypeMismatch: expected Object<Body>, got Object<Card>");
+    , "case.ss:bytes:", "TypeMismatch: expected Placed<Text>, got Placed<Card>");
 }
 
-test "compiler semantics: object class mismatches report concrete type labels" {
+test "compiler semantics: nominal type mismatches report concrete type labels" {
     try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\type Card = object {
-        \\  roles = ["card"]
-        \\}
-        \\
-        \\fn keep_card(value: Card) -> Card
-        \\  return value
+        \\type Card {}
+        \\fn keep_card(value: Card) -> Card = value
+        \\page main
+        \\  keep_card(text("Not a card"))
         \\end
-        \\
-        \\page bad
-        \\  keep_card(new("not a card", "body", "text"))
-        \\end
-        \\
-    , "case.ss:bytes:", "TypeMismatch: expected Object<Card>, got Object<Body>");
+    , "case.ss:bytes:", "TypeMismatch: expected Card, got Text");
 }
 
-test "compiler semantics: object class optional and selection mismatches are rejected" {
+test "compiler semantics: nominal optional and selection mismatches are rejected" {
     try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\type Card = object {
-        \\  roles = ["card"]
-        \\}
-        \\
-        \\fn bad_return(value: Body) -> Card
-        \\  return value
+        \\type Card {}
+        \\fn bad_return(value: Text) -> Card = value
+        \\page main
         \\end
-        \\
-        \\page bad
-        \\end
-        \\
-    , "case.ss:bytes:", "TypeMismatch: expected Object<Card>, got Object<Body>");
+    , "case.ss:bytes:", "TypeMismatch: expected Card, got Text");
 
     try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\type Card = object {
-        \\  roles = ["card"]
-        \\}
-        \\
-        \\fn bad_optional_return(value: Card?) -> Card
-        \\  return value
+        \\type Card {}
+        \\fn bad_optional(value: Card?) -> Card = value
+        \\page main
         \\end
-        \\
-        \\page bad
-        \\end
-        \\
-    , "case.ss:bytes:", "TypeMismatch: expected Object<Card>, got Object<Card>?");
+    , "case.ss:bytes:", "TypeMismatch: expected Card, got Card?");
 
     try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\type Card = object {
-        \\  roles = ["card"]
-        \\}
-        \\
-        \\fn bad_selection(items: Selection<Body>) -> Selection<Card>
-        \\  return items
+        \\type Card {}
+        \\fn bad_selection(items: Selection<Placed<Text>>) -> Selection<Placed<Card>> = items
+        \\page main
         \\end
-        \\
-        \\page bad
-        \\end
-        \\
-    , "case.ss:bytes:", "TypeMismatch: expected Selection<Object<Card>>, got Selection<Object<Body>>");
+    , "case.ss:bytes:", "TypeMismatch: expected Selection<Placed<Card>>, got Selection<Placed<Text>>");
 
     try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\type Card = object {
-        \\  roles = ["card"]
-        \\}
-        \\
-        \\fn keep_body(items: Selection<Body>) -> Selection<Body>
-        \\  return items
+        \\type Card {}
+        \\fn keep_text(items: Selection<Placed<Text>>) -> Selection<Placed<Text>> = items
+        \\fn first_card(items: Selection<Placed<Card>>) -> Placed<Card> = first(items)
+        \\page main
+        \\  text!("Body")
+        \\  first_card(keep_text(select<Text>(pagectx())))
         \\end
-        \\
-        \\fn first_card(items: Selection<Card>) -> Card
-        \\  return first(items)
-        \\end
-        \\
-        \\page bad
-        \\  text!("body")
-        \\  first_card(keep_body(objs_here("body")))
-        \\end
-        \\
-    , "case.ss:bytes:", "TypeMismatch: expected Selection<Object<Card>>, got Selection<Object<Body>>");
+    , "case.ss:bytes:", "TypeMismatch: expected Selection<Placed<Card>>, got Selection<Placed<Text>>");
 
     try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\type Card = object {
-        \\  roles = ["card"]
-        \\}
-        \\
-        \\fn take_card(value: Card?) -> Card?
-        \\  return value
+        \\type Card {}
+        \\fn take_card(value: Card?) -> Card? = value
+        \\page main
+        \\  take_card(text("Not a card"))
         \\end
-        \\
-        \\page bad
-        \\  take_card(new("not a card", "body", "text"))
-        \\end
-        \\
-    , "case.ss:bytes:", "TypeMismatch: expected Object<Card>?, got Object<Body>");
+    , "case.ss:bytes:", "TypeMismatch: expected Card?, got Text");
 }
 
 test "compiler semantics: selection item annotations reject unknown type names" {
@@ -6307,8 +6129,11 @@ test "compiler semantics: static string construction has a finite size limit" {
 test "compiler semantics: higher order writes determine execution order" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    const input = try fixtureSource(arena.allocator(), "higher-order-effects");
-    try compiler_semantics.expectObjectContent(testing.io, arena.allocator(), input.path, input.source, "marked");
+    for ([_][]const u8{ "slide.ss", "document.ss" }) |filename| {
+        const path = try std.fs.path.join(arena.allocator(), &.{ fixture_root, "higher-order-effects", filename });
+        const source = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, arena.allocator(), .limited(64 * 1024));
+        try compiler_semantics.expectObjectContent(testing.io, arena.allocator(), path, source, "marked");
+    }
 }
 
 test "compiler semantics: returned closures keep captured property targets" {

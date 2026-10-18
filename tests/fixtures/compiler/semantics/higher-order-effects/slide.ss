@@ -1,8 +1,14 @@
-import std:themes/default as *
-fn mark(item: Object) -> Object = set_prop(item, "link_id", "marked")
-fn apply_to(item: Object, callback: Object -> Object) -> Object = callback(item)
+fn mark(doc: Document) -> Void
+  doc.layout_h_center_offset = 42
+end
+fn apply_to(doc: Document, callback: Document -> Void) -> Void = callback(doc)
+fn label(doc: Document) -> String
+  if doc.layout_h_center_offset == 42
+    return "marked"
+  end
+  return "missing"
+end
 page main
-  let item = body_obj!("A")
-  text!((item.link_id ?? "missing"))
-  apply_to(item, mark)
+  text!(label(docctx()))
+  apply_to(docctx(), mark)
 end
