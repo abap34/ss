@@ -18,11 +18,11 @@ fn vsplit(items: Selection<Object>, gap: Number = 32) -> Object
 end
 
 fn composition_objects(a: Object, b: Object) -> Selection<Object>
-  return selection_union(select(a, "self_object"), select(b, "self_object"))
+  return select(a, "self_object") | select(b, "self_object")
 end
 
 fn composition_append(items: Selection<Object>, child: Object) -> Selection<Object>
-  return selection_union(items, select(child, "self_object"))
+  return items | select(child, "self_object")
 end
 
 fn compose(items: Selection<Object>, horizontal: Bool, equal: Bool, gap: Number) -> Object

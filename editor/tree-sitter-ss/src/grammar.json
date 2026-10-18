@@ -1607,7 +1607,7 @@
     },
     "block_call_statement": {
       "type": "PREC",
-      "value": 10,
+      "value": 12,
       "content": {
         "type": "SEQ",
         "members": [
@@ -1647,7 +1647,7 @@
       "members": [
         {
           "type": "PREC",
-          "value": 10,
+          "value": 12,
           "content": {
             "type": "SEQ",
             "members": [
@@ -1676,7 +1676,7 @@
         },
         {
           "type": "PREC",
-          "value": 11,
+          "value": 13,
           "content": {
             "type": "SEQ",
             "members": [
@@ -1889,6 +1889,48 @@
                 "name": "_expression"
               },
               {
+                "type": "STRING",
+                "value": "|"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "_expression"
+              }
+            ]
+          }
+        },
+        {
+          "type": "PREC_LEFT",
+          "value": 4,
+          "content": {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "_expression"
+              },
+              {
+                "type": "STRING",
+                "value": "&"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "_expression"
+              }
+            ]
+          }
+        },
+        {
+          "type": "PREC_LEFT",
+          "value": 5,
+          "content": {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "_expression"
+              },
+              {
                 "type": "CHOICE",
                 "members": [
                   {
@@ -1926,7 +1968,7 @@
         },
         {
           "type": "PREC_LEFT",
-          "value": 7,
+          "value": 9,
           "content": {
             "type": "SEQ",
             "members": [
@@ -1956,7 +1998,7 @@
         },
         {
           "type": "PREC_LEFT",
-          "value": 6,
+          "value": 8,
           "content": {
             "type": "SEQ",
             "members": [
@@ -1986,7 +2028,7 @@
         },
         {
           "type": "PREC_LEFT",
-          "value": 5,
+          "value": 7,
           "content": {
             "type": "SEQ",
             "members": [
@@ -2073,7 +2115,7 @@
     },
     "unary_expression": {
       "type": "PREC",
-      "value": 8,
+      "value": 10,
       "content": {
         "type": "SEQ",
         "members": [
@@ -2099,7 +2141,7 @@
     },
     "text_call_expression": {
       "type": "PREC",
-      "value": 9,
+      "value": 11,
       "content": {
         "type": "SEQ",
         "members": [
@@ -2133,7 +2175,7 @@
     },
     "call_expression": {
       "type": "PREC_LEFT",
-      "value": 9,
+      "value": 11,
       "content": {
         "type": "SEQ",
         "members": [
@@ -2286,7 +2328,7 @@
     },
     "value_construction": {
       "type": "PREC",
-      "value": 9,
+      "value": 11,
       "content": {
         "type": "SEQ",
         "members": [
@@ -2386,7 +2428,7 @@
     },
     "member_expression": {
       "type": "PREC_LEFT",
-      "value": 9,
+      "value": 11,
       "content": {
         "type": "SEQ",
         "members": [
@@ -2441,7 +2483,7 @@
     },
     "property_default_expression": {
       "type": "PREC_RIGHT",
-      "value": 4,
+      "value": 6,
       "content": {
         "type": "SEQ",
         "members": [
@@ -2487,7 +2529,7 @@
     },
     "property_exists_expression": {
       "type": "PREC",
-      "value": 8,
+      "value": 10,
       "content": {
         "type": "SEQ",
         "members": [
@@ -3463,7 +3505,7 @@
       "type": "IMMEDIATE_TOKEN",
       "content": {
         "type": "PATTERN",
-        "value": "[ \\t]+([^ \\t|/\"(<?~\\n][^\\n]*|\\|([^|=\\n][^\\n]*|=([^|\\n][^\\n]*)?)?|\\/([^/=\\n][^\\n]*|=([^/\\n][^\\n]*)?)?|<([^<\\n][^\\n]*)?|\\?([^?\\n][^\\n]*)?)"
+        "value": "[ \\t]+([^ \\t|&/\"(<?~\\n][^\\n]*|\\|->[^\\n]*|\\/([^/=\\n][^\\n]*|=([^/\\n][^\\n]*)?)?|<([^<\\n][^\\n]*)?|\\?([^?\\n][^\\n]*)?)"
       }
     },
     "_bang_line_text": {

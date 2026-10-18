@@ -1584,11 +1584,12 @@ pub const DocumentState = struct {
 
     /// Set algebra must not make operand order determine numbering order.
     /// Legacy unattached objects retain their old ordering during migration.
-    pub fn orderPlacementSelection(self: *DocumentState, allocator: Allocator, selection: *Selection) !void {
-        if (selection.item_tag != .object or selection.ids.items.len < 2) return;
+    pub fn orderSelection(self: *DocumentState, allocator: Allocator, selection: *Selection) !void {
+        if (selection.ids.items.len < 2) return;
         for (selection.ids.items) |id| {
             const node = self.getNode(id) orelse return error.UnknownNode;
-            if (node.placement == null) return;
+            if (selection.item_tag == .object and node.placement == null) return;
+            if (selection.item_tag == .page and node.kind != .page) return error.InvalidSelectionScope;
         }
         var wanted = std.AutoHashMap(NodeId, void).init(allocator);
         defer wanted.deinit();
@@ -1597,7 +1598,9 @@ pub const DocumentState = struct {
         errdefer ordered.deinit(allocator);
         try ordered.ensureTotalCapacity(allocator, wanted.count());
         for (self.graph.page_order.items) |page| {
-            try self.appendMatchingPlacements(allocator, self.placementRootsOf(page), null, &wanted, &ordered);
+            if (selection.item_tag == .page) {
+                if (wanted.contains(page)) try ordered.append(allocator, page);
+            } else try self.appendMatchingPlacements(allocator, self.placementRootsOf(page), null, &wanted, &ordered);
         }
         if (ordered.items.len != wanted.count()) return error.InvalidSelectionScope;
         selection.ids.deinit(allocator);

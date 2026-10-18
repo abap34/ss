@@ -215,6 +215,19 @@ fn typeForPrimitiveCall(allocator: std.mem.Allocator, budget: ?QueryBudget, snap
         const selection = (try typeForExpr(allocator, budget, snapshot, module_id, offset, call.args.items[0])) orelse return null;
         return if (selection.kind == .selection) selection.selectionItem() else null;
     }
+    if (call.args.items.len == 2) switch (descriptor.op) {
+        .selection_union, .selection_intersection, .selection_difference, .sub => {
+            const left = (try typeForExpr(allocator, budget, snapshot, module_id, offset, call.args.items[0])) orelse return null;
+            const right = (try typeForExpr(allocator, budget, snapshot, module_id, offset, call.args.items[1])) orelse return null;
+            if (left.kind == .selection and right.kind == .selection) {
+                if (registry.selectionPlacementItem(descriptor.op, left.selectionItem(), right.selectionItem())) |item| {
+                    return try ast.Type.selectionOf(allocator, item);
+                }
+                if (left.selectionItem().kind == .page and right.selectionItem().kind == .page) return left;
+            }
+        },
+        else => {},
+    };
     return if (primitiveBinding(budget, snapshot, call.callee.name)) |value| value.value_type else null;
 }
 

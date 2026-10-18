@@ -274,6 +274,8 @@ fn operatorEnd(text: []const u8, start: usize, line_end: usize) ?usize {
         "!=",
         "<=",
         ">=",
+        "|",
+        "&",
     };
     for (operators) |operator| {
         if (start + operator.len <= end and source.startsWithAt(text, start, operator)) return start + operator.len;

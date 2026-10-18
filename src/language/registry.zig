@@ -204,6 +204,17 @@ pub const QueryDescriptor = struct {
     summary: []const u8,
 };
 
+pub fn selectionPlacementItem(op: PrimitiveCall, left: Type, right: Type) ?Type {
+    if ((left.kind != .placed and left.kind != .placement) or
+        (right.kind != .placed and right.kind != .placement)) return null;
+    return switch (op) {
+        .selection_union => if (Type.eql(left, right)) left else Type.placement,
+        .selection_intersection => if (left.kind == .placement) right else left,
+        .selection_difference, .sub => left,
+        else => null,
+    };
+}
+
 const primitive_descriptors = [_]PrimitiveDescriptor{
     .{ .op = .pagectx, .name = "pagectx", .min_arity = 0, .max_arity = 0, .arg_names = &.{}, .arg_types = &.{}, .result_type = Type.page, .context = .page, .summary = "Return the current page context" },
     .{ .op = .docctx, .name = "docctx", .min_arity = 0, .max_arity = 0, .arg_names = &.{}, .arg_types = &.{}, .result_type = Type.document, .summary = "Return the current document context" },

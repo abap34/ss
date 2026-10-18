@@ -1537,6 +1537,7 @@ const Parser = struct {
         var continuation = self.pos;
         source.skipTriviaFrom(self.source, &continuation);
         if (self.peekCompositionOperatorAt(continuation) != null or source.startsWithAt(self.source, self.pos, "??")) return true;
+        if (self.peekSelectionOperator('|') or self.peekSelectionOperator('&')) return true;
         // Keep spaced punctuation in line text. A member or optional operand
         // can use adjacent punctuation, parentheses, or a lexical binding.
         if (self.source[self.pos] == '~') return true;
@@ -1615,7 +1616,7 @@ const Parser = struct {
     fn parseCompositionExpr(self: *Parser) anyerror!Expr {
         source.skipInlineSpaces(self.source, &self.pos);
         const left_start = self.pos;
-        var left = try self.parseComparisonExpr();
+        var left = try self.parseSelectionUnionExpr();
         errdefer left.deinit(self.allocator);
         var direction: ?CompositionOperator = null;
         var first_operator_span: ast.Span = undefined;
@@ -1690,7 +1691,7 @@ const Parser = struct {
             if (self.recovering) return self.makeHoleExpr(.expr, .expression, pointSpan(self.pos), error.ExpectedExpression, diagnostics.foundToken(self.source, self.pos));
             return self.fail(error.ExpectedExpression);
         }
-        return self.parseComparisonExpr();
+        return self.parseSelectionUnionExpr();
     }
 
     fn startsReservedKeyword(self: *const Parser) bool {
@@ -1726,6 +1727,37 @@ const Parser = struct {
             .args = args,
             .arg_spans = arg_spans,
         } };
+    }
+
+    fn peekSelectionOperator(self: *const Parser, operator: u8) bool {
+        if (self.pos >= self.source.len or self.source[self.pos] != operator) return false;
+        return operator != '|' or (self.peekCompositionOperator() == null and
+            !source.startsWithAt(self.source, self.pos, "|->"));
+    }
+
+    fn parseSelectionUnionExpr(self: *Parser) anyerror!Expr {
+        return self.parseSelectionExpr('|', "selection_union");
+    }
+
+    fn parseSelectionIntersectionExpr(self: *Parser) anyerror!Expr {
+        return self.parseSelectionExpr('&', "selection_intersection");
+    }
+
+    fn parseSelectionExpr(self: *Parser, comptime operator: u8, comptime name: []const u8) anyerror!Expr {
+        var left = if (operator == '|') try self.parseSelectionIntersectionExpr() else try self.parseComparisonExpr();
+        errdefer left.deinit(self.allocator);
+        while (true) {
+            source.skipInlineSpaces(self.source, &self.pos);
+            if (!self.peekSelectionOperator(operator)) return left;
+            self.pos += 1;
+            source.skipInlineSpaces(self.source, &self.pos);
+            var right = if (self.atStatementBoundary() or source.lineCommentMarkerLength(self.source, self.pos) != null) blk: {
+                if (!self.recovering) return self.fail(error.ExpectedExpression);
+                break :blk try self.makeHoleExpr(.expr, .expression, pointSpan(self.pos), error.ExpectedExpression, diagnostics.foundToken(self.source, self.pos));
+            } else if (operator == '|') try self.parseSelectionIntersectionExpr() else try self.parseComparisonExpr();
+            errdefer right.deinit(self.allocator);
+            left = try self.makeBinaryCall(name, left, right);
+        }
     }
 
     fn parseComparisonExpr(self: *Parser) anyerror!Expr {
@@ -1805,13 +1837,17 @@ const Parser = struct {
             self.pos += 1;
             var arg = try self.parseUnaryExpr();
             errdefer arg.deinit(self.allocator);
-            return .{ .call = try self.makeCall1("not", arg) };
+            var call = try self.makeCall1("not", arg);
+            call.callee.is_operator = true;
+            return .{ .call = call };
         }
         if (!self.eof() and self.source[self.pos] == '-') {
             self.pos += 1;
             var arg = try self.parseUnaryExpr();
             errdefer arg.deinit(self.allocator);
-            return .{ .call = try self.makeCall1("neg", arg) };
+            var call = try self.makeCall1("neg", arg);
+            call.callee.is_operator = true;
+            return .{ .call = call };
         }
         return self.parsePostfixExpr();
     }
@@ -2243,7 +2279,9 @@ const Parser = struct {
     }
 
     fn makeBinaryCall(self: *Parser, name: []const u8, left: Expr, right: Expr) !Expr {
-        return .{ .call = try self.makeCall2(name, left, right) };
+        var call = try self.makeCall2(name, left, right);
+        call.callee.is_operator = true;
+        return .{ .call = call };
     }
 
     fn parseCallAfterName(self: *Parser, name: ast.CallableName) anyerror!ast.CallExpr {

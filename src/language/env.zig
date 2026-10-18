@@ -106,6 +106,7 @@ pub const SemanticEnv = struct {
     }
 
     pub fn resolveFunction(self: *const SemanticEnv, callee: ast.CallableName) FunctionResolution {
+        if (callee.is_operator) return .unknown;
         if (self.instantiatedFunction(callee)) |resolved| return .{ .found = resolved };
         if (callee.name_hole != null) return .unknown;
         return name_resolution.resolve(ResolvedFunction, FunctionResolver{ .env = self }, self.module_id, .{
@@ -115,6 +116,7 @@ pub const SemanticEnv = struct {
     }
 
     pub fn resolveConst(self: *const SemanticEnv, callee: ast.CallableName) ConstResolution {
+        if (callee.is_operator) return .unknown;
         if (callee.name_hole != null) return .unknown;
         return name_resolution.resolve(ResolvedConst, ConstResolver{ .env = self }, self.module_id, .{
             .qualifier = callee.qualifier,

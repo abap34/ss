@@ -999,6 +999,9 @@ fn inferPrimitiveCallInfo(
     if (argument_infos.len == 2 and argument_infos[0].hole == null and argument_infos[1].hole == null) {
         const left = argument_infos[0].ty.kind;
         const right = argument_infos[1].ty.kind;
+        if (descriptor.op == .sub and left == .selection and right == .selection) {
+            return inferSelectionAlgebraInfo(allocator, state, call, .selection_difference, origin, argument_infos);
+        }
         if (descriptor.op == .num_eq and left == .anchor and right == .anchor) return infoFromType(Type.constraints);
         if ((descriptor.op == .add or descriptor.op == .sub) and left == .anchor and right == .number) return infoFromType(Type.anchor);
         if (descriptor.op == .add and left == .number and right == .anchor) return infoFromType(Type.anchor);
@@ -1424,15 +1427,7 @@ fn inferSelectionAlgebraInfo(
 
     const left_item = left.ty.selectionItem();
     const right_item = right.ty.selectionItem();
-    if ((left_item.kind == .placed or left_item.kind == .placement) and
-        (right_item.kind == .placed or right_item.kind == .placement))
-    {
-        const item = switch (op) {
-            .selection_union => if (Type.eql(left_item, right_item)) left_item else Type.placement,
-            .selection_intersection => if (left_item.kind == .placement) right_item else left_item,
-            .selection_difference => left_item,
-            else => unreachable,
-        };
+    if (registry.selectionPlacementItem(op, left_item, right_item)) |item| {
         return infoFromType(try Type.selectionOf(allocator, item));
     }
 

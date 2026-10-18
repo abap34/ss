@@ -39,15 +39,3 @@ end
 fn page_of(obj: Object) -> Page?
   return select(obj, "parent_page")
 end
-
-fn union(left: Selection<Object>, right: Selection<Object>) -> Selection<Object>
-  return selection_union(left, right)
-end
-
-fn intersect(left: Selection<Object>, right: Selection<Object>) -> Selection<Object>
-  return selection_intersection(left, right)
-end
-
-fn diff(left: Selection<Object>, right: Selection<Object>) -> Selection<Object>
-  return selection_difference(left, right)
-end

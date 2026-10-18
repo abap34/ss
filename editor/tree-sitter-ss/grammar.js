@@ -1,11 +1,13 @@
 const PREC = {
-  call: 9,
-  unary: 8,
-  mul: 7,
-  add: 6,
-  concat: 5,
-  coalesce: 4,
-  compare: 3,
+  call: 11,
+  unary: 10,
+  mul: 9,
+  add: 8,
+  concat: 7,
+  coalesce: 6,
+  compare: 5,
+  intersection: 4,
+  union: 3,
   composition: 2,
 };
 
@@ -238,6 +240,8 @@ module.exports = grammar({
     ),
 
     binary_expression: $ => choice(
+      prec.left(PREC.union, seq($._expression, "|", $._expression)),
+      prec.left(PREC.intersection, seq($._expression, "&", $._expression)),
       prec.left(PREC.compare, seq($._expression, choice("==", "!=", "<", "<=", ">", ">="), $._expression)),
       prec.left(PREC.mul, seq($._expression, choice("*", "/"), $._expression)),
       prec.left(PREC.add, seq($._expression, choice("+", "-"), $._expression)),
@@ -349,7 +353,7 @@ module.exports = grammar({
     // Only a line-leading delimiter closes the literal. Leave its suffix and
     // newline to the surrounding expression, just like other string literals.
     block_text: _ => token(seq("<<", /[ \t\r]*(;;[^\n]*)?\n([ \t\r]*([^ \t\r>\n][^\n]*|>([^>\n][^\n]*)?)?\n)*[ \t\r]*>>/)),
-    line_text: _ => token.immediate(/[ \t]+([^ \t|/"(<?~\n][^\n]*|\|([^|=\n][^\n]*|=([^|\n][^\n]*)?)?|\/([^/=\n][^\n]*|=([^/\n][^\n]*)?)?|<([^<\n][^\n]*)?|\?([^?\n][^\n]*)?)/),
+    line_text: _ => token.immediate(/[ \t]+([^ \t|&/"(<?~\n][^\n]*|\|->[^\n]*|\/([^/=\n][^\n]*|=([^/\n][^\n]*)?)?|<([^<\n][^\n]*)?|\?([^?\n][^\n]*)?)/),
     _bang_line_text: _ => token.immediate(/[ \t]+([^ \t"(<\n][^\n]*|<([^<\n][^\n]*)?)/),
     number: _ => /\d+(\.\d+)?/,
     boolean: _ => choice("true", "false"),

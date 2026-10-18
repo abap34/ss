@@ -153,6 +153,22 @@ test "syntax scanner: equal composition operators use longest complete tokens" {
     try testing.expectEqual(expected.len, index);
 }
 
+test "syntax scanner: selection operators remain distinct from composition and lambda tokens" {
+    try expectTokens("a|b&c || d |=| e |-> f", &.{
+        .{ .kind = .identifier, .text = "a", .line = 0 },
+        .{ .kind = .operator, .text = "|", .line = 0 },
+        .{ .kind = .identifier, .text = "b", .line = 0 },
+        .{ .kind = .operator, .text = "&", .line = 0 },
+        .{ .kind = .identifier, .text = "c", .line = 0 },
+        .{ .kind = .operator, .text = "||", .line = 0 },
+        .{ .kind = .identifier, .text = "d", .line = 0 },
+        .{ .kind = .operator, .text = "|=|", .line = 0 },
+        .{ .kind = .identifier, .text = "e", .line = 0 },
+        .{ .kind = .operator, .text = "|->", .line = 0 },
+        .{ .kind = .identifier, .text = "f", .line = 0 },
+    });
+}
+
 test "syntax scanner: classifies semantic tokens without LSP logic" {
     const text =
         \\fn title!(x: String)
