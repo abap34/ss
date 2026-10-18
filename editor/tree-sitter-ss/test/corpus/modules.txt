@@ -120,3 +120,92 @@ type Padding {
         (identifier)
         (type (primary_type (type_identifier)))
         (number)))))
+
+================================================================================
+Qualified values and members
+================================================================================
+
+const fallback: Style = library::defaults
+page main
+  let style = library::defaults
+  let size = library::defaults.size
+  let optional = library::optional ?? library::defaults
+  let callback = (library::format)
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (const_declaration
+    (identifier)
+    (type (primary_type (type_identifier)))
+    (qualified_identifier (identifier) (identifier)))
+  (page_declaration
+    (identifier)
+    (let_statement
+      (identifier)
+      (qualified_identifier (identifier) (identifier)))
+    (let_statement
+      (identifier)
+      (member_expression
+        (qualified_identifier (identifier) (identifier))
+        (identifier)))
+    (let_statement
+      (identifier)
+      (property_default_expression
+        (qualified_identifier (identifier) (identifier))
+        (qualified_identifier (identifier) (identifier))))
+    (let_statement
+      (identifier)
+      (parenthesized_expression
+        (qualified_identifier (identifier) (identifier))))))
+
+================================================================================
+Qualified values in comparisons calls and immutable updates
+================================================================================
+
+page main
+  let comparison = library::count < 4
+  let value = library::identity<Number>(4)
+  let updated = library::defaults with { text.size = 24 }
+  let nested = (library::defaults with { text.size = 24 }).text.size
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (page_declaration
+    (identifier)
+    (let_statement
+      (identifier)
+      (binary_expression
+        (qualified_identifier (identifier) (identifier))
+        (number)))
+    (let_statement
+      (identifier)
+      (call_expression
+        (callable_identifier
+          (qualified_callable_identifier
+            (identifier)
+            (bare_callable_identifier (identifier))))
+        (type_arguments (type (primary_type (type_identifier))))
+        (number)))
+    (let_statement
+      (identifier)
+      (value_update_expression
+        (qualified_identifier (identifier) (identifier))
+        (value_update_field
+          (value_field_path (identifier) (identifier))
+          (number))))
+    (let_statement
+      (identifier)
+      (member_expression
+        (member_expression
+          (parenthesized_expression
+            (value_update_expression
+              (qualified_identifier (identifier) (identifier))
+              (value_update_field
+                (value_field_path (identifier) (identifier))
+                (number))))
+          (identifier))
+        (identifier)))))

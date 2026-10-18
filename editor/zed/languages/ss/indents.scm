@@ -26,6 +26,9 @@
   (object_extension
     "extend" @start.extend
     "}" @end)
+  (value_update_expression
+    "{" @start.update
+    "}" @end)
   (parameters)
   (lambda_parameters)
   (list_expression)

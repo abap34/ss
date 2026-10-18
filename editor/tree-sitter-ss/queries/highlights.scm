@@ -7,6 +7,7 @@
   "fn"
   "fn/!"
   "let"
+  "with"
   "return"
   "end"
   "property"
@@ -86,3 +87,6 @@
   (#match? @type "^[A-Z]"))
 
 (value_field name: (identifier) @property)
+
+(qualified_identifier module: (identifier) @module name: (identifier) @variable)
+(value_field_path (identifier) @property)
