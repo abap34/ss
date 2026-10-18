@@ -8494,16 +8494,40 @@ test "compiler semantics: generic operator results are checked after substitutio
 
 test "compiler semantics: generic optional values and generated placing calls" {
     try buildSource(
+        \\import std:text/content as native
         \\fn unwrap<T>(value: T?, fallback: T) -> T = value ?? fallback
         \\fn/! wrapped<T>(value: T) -> T = value
         \\page main
         \\  let missing: Number? = none
         \\  let n: Number = unwrap(missing, 2)
         \\  let s: String = unwrap<String>(none, "Fallback")
-        \\  let first = wrapped!<Body>(text(s))
-        \\  let second = wrapped!(text("Created"))
+        \\  let first: Placed<native::Text> = wrapped!<native::Text>(native::Text { content = s })
+        \\  let second = wrapped!(native::Text { content = "Created" })
         \\end
     );
+}
+
+test "compiler semantics: paired typed constructors validate display and placement inputs" {
+    try expectDiagnostic(
+        \\type Hidden { content: String }
+        \\fn/! hidden() -> Hidden = Hidden { content = "Missing" }
+        \\page main
+        \\  hidden!()
+        \\end
+    , "case.ss:bytes:", "MissingDisplay");
+    try expectDiagnostic(
+        \\import std:text/content as native
+        \\fn/! already(value: Placed<native::Text>) -> Placed<native::Text> = value
+        \\page main
+        \\end
+    , "case.ss:bytes:", "InvalidPlacementInput");
+    try expectDiagnostic(
+        \\fn/! action() -> Void
+        \\  return
+        \\end
+        \\page main
+        \\end
+    , "case.ss:bytes:", "InvalidVoidType");
 }
 
 test "compiler semantics: generic values infer arguments and preserve nested updates" {

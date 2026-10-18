@@ -2748,6 +2748,10 @@ test "syntax spec: generic declarations and applications preserve type arguments
     const paired = parsed.module.functions.items[2];
     try testing.expectEqualStrings("wrap!", paired.name);
     try testing.expectEqualStrings("T", paired.type_params.items[0].name);
+    try testing.expectEqual(Type.Kind.placed, paired.result_type.kind);
+    const input_type = paired.result_type.placedInput().?;
+    try testing.expectEqualStrings("Box", input_type.class_name.?);
+    try testing.expectEqualStrings("T", input_type.arguments[0].class_name.?);
     const forwarded = paired.statements.items[0].kind.return_expr.call.args.items[1].call;
     try testing.expectEqualStrings("T", forwarded.type_args.items[0].class_name.?);
     const statements = parsed.module.pages.items[0].statements.items;

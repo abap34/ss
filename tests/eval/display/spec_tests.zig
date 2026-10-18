@@ -688,3 +688,51 @@ test "typed placement: generic displays run each concrete stage through the exec
     try testing.expectEqual(@as(usize, 1), state.getNode(root).?.placement.?.value.record.ty.arguments[0].arguments.len);
     try testing.expectEqual(core.native_display.Kind.text, state.getNode(text).?.placement.?.display.native);
 }
+
+test "paired placement: imported constructors preserve values defaults and concrete display plans" {
+    var state = try documentWithModules(
+        \\import ./tests/fixtures/typed-display/constructors as widgets
+        \\fn default_prefix() -> String = "Caller: "
+        \\fn invoke!(action: (String, String) -> Placed<widgets::Label>) -> Placed<widgets::Label>
+        \\  return action("Indirect", "Callback: ")
+        \\end
+        \\page first
+        \\  let value: widgets::Label = widgets::label("Value")
+        \\  widgets::label("Discarded")
+        \\  let first: Placed<widgets::Label> = widgets::label!(value.content)
+        \\  let second = widgets::label!("Explicit", "Chosen: ")
+        \\  let indirect = invoke!((content: String, prefix: String) |-> widgets::label!(content, prefix))
+        \\  let nested = widgets::wrap(widgets::wrap(value))
+        \\  let third = widgets::wrap!<widgets::Wrapper<widgets::Wrapper<widgets::Label>>>(nested)
+        \\  let fourth = widgets::wrap!(nested)
+        \\  let captured: String = fourth.value.content.content.content.content
+        \\end
+    );
+    defer state.deinit();
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const page = state.graph.page_order.items[0];
+    const roots = state.placementRootsOf(page);
+    try testing.expectEqual(@as(usize, 5), roots.len);
+    for ([_][]const u8{ "Module default: Value", "Chosen: Explicit", "Callback: Indirect", "Module default: Value", "Module default: Value" }, roots) |content, root| {
+        var node = state.getNode(root).?;
+        try testing.expectEqual(page, node.placement.?.page_id);
+        while (state.childrenOf(node.id)) |children| {
+            if (children.len == 0) break;
+            try testing.expectEqual(@as(usize, 1), children.len);
+            node = state.getNode(children[0]).?;
+            try testing.expectEqual(page, node.placement.?.page_id);
+        }
+        try testing.expectEqualStrings(content, core.nodeDisplayContent(node));
+        try testing.expectEqual(core.native_display.Kind.text, node.placement.?.display.native);
+    }
+    const first = state.getNode(roots[0]).?.placement.?;
+    try testing.expectEqualStrings("Label", first.value.record.ty.class_name.?);
+    try testing.expectEqualStrings("Module default: ", first.value.record.field("prefix").?.string);
+    const third = state.getNode(roots[3]).?.placement.?;
+    const fourth = state.getNode(roots[4]).?.placement.?;
+    try testing.expect(Type.eql(third.value.record.ty, fourth.value.record.ty));
+    try testing.expect(roots[3] != roots[4]);
+    try testing.expect(state.childrenOf(roots[3]).?[0] != state.childrenOf(roots[4]).?[0]);
+}
