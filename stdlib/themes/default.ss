@@ -1,4 +1,12 @@
-import std:theme/types
+import std:theme/types as { Theme, ThemeOptions }
+import std:text/style as { TextBlockStyle }
+import std:text/types as { TextStyle, FontFace, TextParseMode, MarkdownHeadingStyle, MarkdownHeadingStyles, MarkdownQuoteStyle }
+import std:layout/types as { LayoutStyle, WrapMode, FitPolicy }
+import std:code/style as { CodeBlockStyle }
+import std:assets/style as { AssetBlockStyle }
+import std:assets/types as { AssetStyle }
+import std:graphics/paint/types as { ChromeStyle }
+import std:components/toc/style as { TocStyle }
 import std:code/palettes as palette
 
 fn default_theme(options: ThemeOptions = ThemeOptions {}) -> Theme

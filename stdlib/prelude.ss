@@ -38,12 +38,14 @@ import std:text as {
   h6!,
 }
 import std:code as {
+  Code,
   code,
   code!,
   code_file,
   code_file!,
 }
 import std:math as {
+  Latex,
   Math,
   math,
   math!,
@@ -57,6 +59,9 @@ import std:math as {
   page_latex_preamble_file,
 }
 import std:assets as {
+  Image,
+  Pdf,
+  Icon,
   image,
   image!,
   pdf,

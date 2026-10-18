@@ -1,9 +1,7 @@
-import std:internal/classes
 import std:text/style
 import std:code/style
 import std:assets/style
 import std:components/toc/style
-import std:text/content as { Text }
 
 type ThemeOptions {
   font_family: String? = none
