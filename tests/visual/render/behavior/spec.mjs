@@ -61,9 +61,10 @@ async function renderPdfAssetCases() {
   const project = await createProject("pdf-assets");
   await writeMinimalPdf(path.join(project, "asset.pdf"), 200, 100);
   await writeFile(path.join(project, "slide.ss"), `import std:prelude as *
+import std:assets/style as { AssetBlockStyle }
 
 page small
-let asset = pdf!("asset.pdf", 0.3)
+let asset = pdf!("asset.pdf", 0.3, 1, PdfPageBox.crop, AssetBlockStyle {})
 ~ asset.left == page.left + 100
 ~ asset.right == page.right - 480
 ~ asset.top == page.top - 120
@@ -71,7 +72,7 @@ let asset = pdf!("asset.pdf", 0.3)
 end
 
 page large
-let asset = pdf!("asset.pdf", 0.8)
+let asset = pdf!("asset.pdf", 0.8, 1, PdfPageBox.crop, AssetBlockStyle {})
 ~ asset.left == page.left + 100
 ~ asset.right == page.right - 480
 ~ asset.top == page.top - 120
@@ -79,7 +80,7 @@ let asset = pdf!("asset.pdf", 0.8)
 end
 
 page fixed_frame
-let asset = pdf!("asset.pdf", 1)
+let asset = pdf!("asset.pdf", 1, 1, PdfPageBox.crop, AssetBlockStyle {})
 ~ asset.left == page.left + 100
 ~ asset.right == asset.left + 80
 ~ asset.top == page.top - 120

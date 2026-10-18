@@ -1,7 +1,8 @@
 import std:themes/default as *
 
 page embedded_pdf
-let picture = scale(pdf_obj("asset.pdf"), 0.72)
+let picture = pdf_obj("asset.pdf")
+picture.asset.scale = 0.72
 picture.asset.pdf_page = 2
 picture.asset.pdf_box = PdfPageBox.crop
 picture.chrome.fill = none
@@ -13,7 +14,8 @@ place_on!(pagectx(), picture)
 end
 
 page embedded_pdf_media
-let picture = scale(pdf_obj("asset.pdf"), 0.72)
+let picture = pdf_obj("asset.pdf")
+picture.asset.scale = 0.72
 picture.asset.pdf_page = 2
 picture.asset.pdf_box = PdfPageBox.media
 picture.chrome.fill = none
