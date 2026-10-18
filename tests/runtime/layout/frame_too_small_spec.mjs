@@ -85,13 +85,12 @@ async function testChromeStrokeStaysInsideFrameForDiagnostics() {
       `import std:themes/default as *
 
 page chrome_ok
-  let panel = place_on!(pagectx(), new("", "panel", "text"))
-  panel.chrome = ChromeStyle {
-    fill = c"0.97,0.98,1"
-    stroke = c"0.80,0.84,0.90"
-    line_width = 2
-    radius = 12
-  }
+  let panel = code!("", "plain", CodeBlockStyle {} with {
+    chrome.fill = c"0.97,0.98,1"
+    chrome.stroke = c"0.80,0.84,0.90"
+    chrome.line_width = 2
+    chrome.radius = 12
+  })
   ~ panel.left == page.left + 52
   ~ panel.right == page.right - 52
   ~ panel.top == page.top - 160

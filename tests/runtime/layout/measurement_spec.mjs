@@ -357,20 +357,14 @@ function bodyBoxSource() {
   return `import std:themes/default as *
 
 fn body_box!(body_text: String) -> Placed<Text>
-  let chrome = place_on!(pagectx(), new("", "panel", "text"))
-  chrome.chrome = ChromeStyle {
-    fill = c"0.97,0.98,1"
-    stroke = c"0.80,0.84,0.90"
-    line_width = 2
-    radius = 12
-  }
+  let panel = rectangle!(1, 1, vector_style(solid_fill(c"0.97,0.98,1"), no_stroke()))
 
   let box = text!(body_text)
 
-  ~ chrome.left == page.left + 52
-  ~ chrome.right == page.right - 52
-  ~ chrome.top == box.top + 16
-  ~ chrome.bottom == box.bottom - 16
+  ~ panel.left == page.left + 52
+  ~ panel.right == page.right - 52
+  ~ panel.top == box.top + 16
+  ~ panel.bottom == box.bottom - 16
   ~ box.left == page.left + 72
   ~ box.right == page.right - 72
 
@@ -397,7 +391,7 @@ function nodeByContentPrefix(dump, prefix) {
 
 function assertPanelContainsBody(dump, body) {
   const panel = dump.nodes.find((candidate) =>
-    candidate.render?.kind === "chrome_only" &&
+    candidate.placement?.display.kind === "path_shape" &&
     close(candidate.x, body.x - 20) &&
     close(candidate.y, body.y - 16) &&
     close(candidate.width, body.width + 40));

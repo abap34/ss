@@ -215,9 +215,8 @@ async function writeDeck(project) {
 page one
 text!("hello")
 text!("world")
-let item = body_obj!("old")
-item.link_id = "one"
-text!(content(item))
+let item = text!("old")
+text!(item.value.content)
 end
 `,
     "utf8",

@@ -109,10 +109,7 @@ async function writeOffPageSlide(slide) {
 
 page offpage
 pagectx().background_fill = c"1,1,1"
-let marker = place_on!(pagectx(), new("", "panel", "text"))
-marker.chrome.fill = c"1,0,0"
-marker.chrome.stroke = none
-marker.chrome.line_width = 0
+let marker = rectangle!(200, 200, vector_style(solid_fill(c"1,0,0"), no_stroke()))
 ~ marker.left == page.right + 100
 ~ marker.bottom == page.bottom + 100
 ~ marker.width == 200
