@@ -285,6 +285,7 @@ async function testLatexScaleChangesNaturalWidth() {
     await writeFile(
       slide,
       `import std:themes/default as *
+import std:math as formulas
 
 page latex_natural
 let formula = latex!("$x + y$")
@@ -293,7 +294,7 @@ let formula = latex!("$x + y$")
 end
 
 page latex_scaled
-let formula = latex!("$x + y$", 2)
+let formula = latex!("$x + y$", formulas::LatexBlockStyle {} with { latex.scale = 2 })
 ~ formula.left == page.left + 100
 ~ formula.top == page.top - 160
 end

@@ -1,7 +1,6 @@
 import std:math/types as { MathFit, LatexEngine, LatexStyle, LatexConfig }
 import std:math/content as { Latex, Math }
 import std:math/style as { LatexBlockStyle }
-import std:internal/objects as objects
 
 fn/! math(source: String, style: LatexBlockStyle = LatexBlockStyle {}, config: LatexConfig = LatexConfig {}) -> Math
   return Math { source = source style = style config = config }
@@ -31,8 +30,6 @@ fn page_latex_preamble_file(path: String) -> Void
   extend_render_env(pagectx(), "add", "latex.preamble.file", path)
 end
 
-fn/! latex(text_value: String, scale: Number = 1) -> Object
-  let obj = objects::latex_obj(text_value)
-  obj.latex.scale = scale
-  return obj
+fn/! latex(source: String, style: LatexBlockStyle = LatexBlockStyle {}, config: LatexConfig = LatexConfig {}) -> Latex
+  return Latex { source = source style = style config = config }
 end
