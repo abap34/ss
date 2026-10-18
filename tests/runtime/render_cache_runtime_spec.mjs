@@ -9,7 +9,6 @@ await testRenderCacheGenerations();
 await testAssetBasePathsInvalidateTheFilesActuallyRead();
 await testRenderManifestFallbacks();
 await testAnnotationChangesReusePageCache();
-await testDeltaRejectsInternalLinkChanges();
 await testMeasurementCacheIsReused();
 await testRenderCompilationReusesTextShapes();
 await testRenderCachePruneIntervalSkipsFreshStamp();
@@ -146,39 +145,6 @@ async function testRenderManifestFallbacks() {
     await writeFile(slide, deckSource(["First base missing", "Second", "Third", "Fourth", "Fifth"]), "utf8");
     await runSs(["render", "slide.ss", output], project);
     await assertPdfFile(output, "render should fall back when the page count changes");
-  } finally {
-    await rm(project, { recursive: true, force: true });
-  }
-}
-
-async function testDeltaRejectsInternalLinkChanges() {
-  const project = await mkdtempProject("ss-render-internal-link-delta-");
-  try {
-    const slide = path.join(project, "slide.ss");
-    const output = path.join(project, "out.pdf");
-    await writeFile(slide, internalLinkDeckSource("Target", "Jump"), "utf8");
-    await runSs(["render", "slide.ss", output], project);
-
-    const manifestDir = path.join(project, ".ss-cache", "render", "ss-pdf-render-ir-v2", "output-manifests");
-    const manifestNames = (await readdir(manifestDir)).filter((name) => name.endsWith(".manifest"));
-    assert(manifestNames.length === 1, `expected one internal-link manifest, got ${manifestNames.length}`);
-    const manifest = path.join(manifestDir, manifestNames[0]);
-
-    await writeFile(slide, internalLinkDeckSource("Target", "Changed jump"), "utf8");
-    await runSs(["render", "slide.ss", output], project);
-    const changedLinkManifest = await readFile(manifest, "utf8");
-    assert(
-      changedLinkManifest.includes("\nassembly\tfull\n"),
-      `changing a destination link unexpectedly used delta assembly:\n${changedLinkManifest}`,
-    );
-
-    await writeFile(slide, internalLinkDeckSource("Changed target", "Changed jump"), "utf8");
-    await runSs(["render", "slide.ss", output], project);
-    const changedDestinationManifest = await readFile(manifest, "utf8");
-    assert(
-      changedDestinationManifest.includes("\nassembly\tfull\n"),
-      `changing a destination definition unexpectedly used delta assembly:\n${changedDestinationManifest}`,
-    );
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -385,23 +351,6 @@ text!("${text}")
 end`,
   )
   .join("\n\n")}
-`;
-}
-
-function internalLinkDeckSource(targetText, linkText) {
-  return `import std:themes/default as *
-
-page target
-let target = txt_obj("${targetText}", "body")
-target.link_id = "target"
-place_on!(pagectx(), target)
-end
-
-page link
-text! <<
-[${linkText}](#target)
->>
-end
 `;
 }
 

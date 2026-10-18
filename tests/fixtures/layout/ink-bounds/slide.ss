@@ -19,14 +19,15 @@ let right = text!("f", default_theme().body with {
 ~ right.left == page.left + 1270
 ~ right.top == page.top - 160
 
-let padded = body_obj!("j")
-padded.text = TextStyle {
-  size = 24
-  line_height = 36
-  font = FontFace { family = "DejaVu Serif" style = FontStyle.italic }
-}
-padded.chrome.pad_x = 10
-padded.chrome.fill = c"#eeeeee"
+let padded = code!("j", "plain", CodeBlockStyle {
+  text = TextStyle {
+    size = 24
+    line_height = 36
+    font = FontFace { family = "DejaVu Serif" style = FontStyle.italic }
+    code_font = FontFace { family = "DejaVu Serif" style = FontStyle.italic }
+  }
+  chrome = ChromeStyle { pad_x = 10 fill = c"#eeeeee" }
+})
 ~ padded.left == page.left
 ~ padded.top == page.top - 240
 end
