@@ -1,11 +1,11 @@
 import std:document/numbering as { number_of }
 import std:document/content as { PageNumber, format_page_number, Heading, default_heading_style }
 import std:text/style
-import std:theme as *
+import std:themes/default as { default_theme }
 import std:internal/document as generated
 import std:internal/style as styles
 
-fn pagenos!(format: String? = none, style: TextBlockStyle = current_theme().page_number) -> Void
+fn pagenos!(format: String? = none, style: TextBlockStyle = default_theme().page_number) -> Void
   generated::mk_pagenos!(docctx(), format, (obj: Object) |-> styles::apply_text_block_style(obj, style))
 end
 
@@ -37,6 +37,6 @@ fn numbering!(counter_name: String, format: String = "{number}. {text}") -> Void
   generated::numbering!(counter_name, format)
 end
 
-fn/! citation(number: Number, reference: String, style: TextBlockStyle = current_theme().citation) -> Object
+fn/! citation(number: Number, reference: String, style: TextBlockStyle = default_theme().citation) -> Object
   return styles::text_object("[" ++ str(number) ++ "] " ++ reference, "citation", style)
 end

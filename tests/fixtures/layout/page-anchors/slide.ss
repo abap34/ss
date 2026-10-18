@@ -1,7 +1,7 @@
 import std:themes/default as *
 
 fn block!(label: String) -> Placed<Text>
-  let item = text!(label, current_theme().body with {
+  let item = text!(label, default_theme().body with {
     layout.spacing_after = 24
   })
   ~ item.left == page.left + 80

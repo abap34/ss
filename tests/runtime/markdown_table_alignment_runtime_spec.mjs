@@ -25,7 +25,7 @@ let body_content = <<
 | L | R |
 | Wide left text | 9 |
 >>
-let body = text!(body_content, current_theme().body with {
+let body = text!(body_content, default_theme().body with {
   layout.x = 120
   layout.right_inset = 420
   layout.wrap = WrapMode.on

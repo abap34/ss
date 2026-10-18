@@ -8,8 +8,7 @@ import { assert, ssBin } from "./harness.mjs";
 const pdflatexAvailable = await commandAvailable("pdflatex");
 
 if (pdflatexAvailable) await testPreludeLatexUsesLiteralPayload();
-await testThemeStoredThemeOverride("academic");
-await testThemeStoredThemeOverride("pop");
+await testExplicitThemeValues();
 
 async function testPreludeLatexUsesLiteralPayload() {
   const project = await mkdtempProject("ss-stdlib-wrappers-");
@@ -41,43 +40,29 @@ end
   }
 }
 
-async function testThemeStoredThemeOverride(themeName) {
-  const project = await mkdtempProject(`ss-theme-${themeName}-`);
+async function testExplicitThemeValues() {
+  const project = await mkdtempProject("ss-theme-values-");
   try {
-    const content = `${themeName} override`;
-    await writeFile(
-      path.join(project, "slide.ss"),
-      `import std:themes/${themeName} as *
-
-document
-set_theme(default_theme() with {
-  body.text.size = 31
-})
-end
-
+    await writeFile(path.join(project, "slide.ss"), `import std:themes/default as *
+const custom: Theme = default_theme() with { body.text.size = 31 }
 page styled
-text!("${content}")
+  text!("Custom", custom.body)
+  text!("Local", custom.body with { text.size = 19 })
+  text!("Unchanged", custom.body)
+  text!("Default")
 end
-`,
-      "utf8",
-    );
+`);
     const dumpPath = path.join(project, "dump.json");
     await runSs(["dump", "slide.ss", dumpPath], project);
-
     const dump = JSON.parse(await readFile(dumpPath, "utf8"));
-    const node = dump.nodes.find((candidate) => candidate.content === content);
-    assert(node, `theme text node was not found: ${JSON.stringify(dump.nodes)}`);
-    const textStyle = JSON.parse(node.fields.text);
-    const size = taggedRecordField(textStyle, "size");
-    assert(size?.kind === "number" && size.value === 31, `${themeName} theme override did not reach text!: ${JSON.stringify(textStyle)}`);
+    for (const [content, size] of [["Custom", 31], ["Local", 19], ["Unchanged", 31], ["Default", 20]]) {
+      const node = dump.nodes.find(candidate => candidate.content === content);
+      assert(node?.placement?.input.type.name === "Text", `missing typed text: ${content}`);
+      assert(node.render.text.font_size === size, `incorrect explicit style for ${content}: ${JSON.stringify(node.render.text)}`);
+    }
   } finally {
     await rm(project, { recursive: true, force: true });
   }
-}
-
-function taggedRecordField(record, name) {
-  assert(record.kind === "record", `expected tagged record: ${JSON.stringify(record)}`);
-  return record.fields.find((field) => field.name === name)?.value;
 }
 
 async function mkdtempProject(prefix) {

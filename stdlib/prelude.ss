@@ -92,10 +92,6 @@ import std:document as {
   page_bg,
   doc_bg,
 }
-import std:theme as {
-  set_theme,
-  current_theme,
-}
 import std:themes/default as {
   default_theme,
 }

@@ -541,7 +541,7 @@ test "analysis completion: record update paths complete record fields" {
         \\import std:text as *
         \\
         \\page title
-        \\  let local = current_theme() with {
+        \\  let local = default_theme() with {
         \\    body.text.size = 20
         \\  }
         \\  text!("body", local.body)
@@ -554,7 +554,7 @@ test "analysis completion: record update paths complete record fields" {
         \\import std:text as *
         \\
         \\page title
-        \\  let local = current_theme() with {
+        \\  let local = default_theme() with {
         \\
         \\    bod
         \\    body.
@@ -621,7 +621,7 @@ test "analysis completion: record update paths complete record fields" {
             \\import std:text as *
             \\
             \\page title
-            \\  let local = current_theme() with  {
+            \\  let local = default_theme() with  {
             \\bod
             \\  }
             \\  text!("body", local.body)

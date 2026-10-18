@@ -16,7 +16,7 @@ async function dump(source) {
 }
 try {
   const literal = await dump(`page text
-text!("**Literal**", current_theme().body with { text.parse = TextParseMode.plain })
+text!("**Literal**", default_theme().body with { text.parse = TextParseMode.plain })
 text!("**Formatted**")
 text("Unplaced")
 h3!("Third level")
@@ -142,12 +142,10 @@ end
 
   for (const name of ['default']) {
     const themed = await dump(`import std:themes/${name} as chosen
- document
- set_theme(chosen::default_theme() with { body.text.size = 27 })
- end
+ const theme: Theme = chosen::default_theme() with { body.text.size = 27 }
  page theme
- text!("Default style", current_theme().body)
- text!("Local style", current_theme().body with { text.size = 19 })
+ text!("Default style", theme.body)
+ text!("Local style", theme.body with { text.size = 19 })
  end
  `);
     assert.equal(themed.nodes.find(n => n.content === 'Default style').render.text.font_size, 27);

@@ -1,13 +1,11 @@
 import std:themes/default as *
 
-fn/! body(content: String, style: TextBlockStyle = current_theme().body) -> Text
+fn/! body(content: String, style: TextBlockStyle = presentation.body) -> Text
   return text(content, style)
 end
 
 page main
-  body!("Late theme")
+  body!("Forward theme")
 end
 
-document
-  set_theme(default_theme() with { body.text.size = 22 })
-end
+const presentation: Theme = default_theme() with { body.text.size = 22 }
