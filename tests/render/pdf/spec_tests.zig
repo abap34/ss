@@ -122,6 +122,26 @@ fn firstPdfPath(
     return error.ExpectedCachedPdfMissing;
 }
 
+fn expectOutputAssembly(allocator: std.mem.Allocator, cache: []const u8, assembly: []const u8) !void {
+    const path = try std.fs.path.join(allocator, &.{ cache, pdf_document.cache_version, "output-manifests" });
+    defer allocator.free(path);
+    var dir = try std.Io.Dir.cwd().openDir(testing.io, path, .{ .iterate = true });
+    defer dir.close(testing.io);
+    const expected = try std.fmt.allocPrint(allocator, "\nassembly\t{s}\n", .{assembly});
+    defer allocator.free(expected);
+    var seen = false;
+    var iterator = dir.iterate();
+    while (try iterator.next(testing.io)) |entry| {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".manifest")) continue;
+        try testing.expect(!seen);
+        seen = true;
+        const manifest = try dir.readFileAlloc(testing.io, entry.name, allocator, .limited(16 * 1024));
+        defer allocator.free(manifest);
+        try expectContains(manifest, expected);
+    }
+    try testing.expect(seen);
+}
+
 fn corruptFileWithoutChangingSize(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -1020,6 +1040,64 @@ test "render PDF spec: document renderer publishes, verifies, and reuses content
         defer allocator.free(text);
         try expectContains(text, "first cached page");
         try expectContains(text, "second cached page");
+    }
+}
+
+test "render PDF spec: internal annotation changes require full document assembly" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const allocator = testing.allocator;
+    const root = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path[0..]});
+    defer allocator.free(root);
+    const cache = try std.fs.path.join(allocator, &.{ root, "render-cache" });
+    defer allocator.free(cache);
+    const output = try std.fs.path.join(allocator, &.{ root, "output.pdf" });
+    defer allocator.free(output);
+    const output_z = try allocator.dupeSentinel(u8, output, 0);
+    defer allocator.free(output_z);
+
+    const Variant = struct {
+        link_width: ?f64 = 40,
+        destination_x: ?f64 = 20,
+        unrelated_width: f64 = 40,
+        assembly: []const u8 = "full",
+    };
+    const variants = [_]Variant{
+        .{},
+        .{ .unrelated_width = 42, .assembly = "delta" },
+        .{ .unrelated_width = 42, .link_width = 60 },
+        .{ .unrelated_width = 42, .link_width = 60, .destination_x = 30 },
+        .{ .unrelated_width = 42, .link_width = null, .destination_x = 30 },
+        .{ .unrelated_width = 42, .link_width = null, .destination_x = null },
+    };
+    for (variants) |variant| {
+        const pages = try allocator.alloc(render.Page, 3);
+        for (pages, 0..) |*page, index| page.* = .{
+            .page_id = @intCast(index + 1),
+            .index = index,
+            .width = 320,
+            .height = 180,
+        };
+        var ir = render.Ir{ .pages = pages };
+        defer ir.deinit(allocator);
+        ir.semantics = try documentSemantics(allocator, pages.len);
+        for (pages, 0..) |*page, index| try page.appendFillRect(allocator, null, .{
+            .x = 20,
+            .y = 20,
+            .width = if (index == 2) variant.unrelated_width else 40,
+            .height = 20,
+        }, .{ .r = 0.1, .g = 0.2, .b = 0.3 });
+        if (variant.destination_x) |x| try pages[0].appendDestination(allocator, "target", .{ .x = x, .y = 20 });
+        if (variant.link_width) |width| try pages[1].appendLink(allocator, .destination, "target", .{
+            .x = 20,
+            .y = 20,
+            .width = width,
+            .height = 20,
+        });
+
+        try pdf_document.write(allocator, testing.io, &ir, output, .{ .jobs = 1, .cache_dir = cache }, null);
+        try expectOutputAssembly(allocator, cache, variant.assembly);
+        try testing.expectEqual(@as(c_int, 0), c.ss_qpdf_validate(output_z.ptr, pages.len, 1));
     }
 }
 
