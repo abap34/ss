@@ -287,7 +287,8 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             break :blk .{ .string = try ctx.ownStringWithProvenance(try out.toOwnedSlice(ctx.state.allocator), provenance.items) };
         },
         .first => blk: {
-            const selection = try ctx.evalExprValue(call.args.items[0]);
+            var selection = try ctx.evalExprValue(call.args.items[0]);
+            defer selection.deinit(ctx.state.allocator);
             break :blk switch (selection) {
                 .selection => |sel| switch (sel.item_tag) {
                     .object => .{ .object = sel.first() orelse return error.EmptySelection },
@@ -329,6 +330,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
                 },
                 else => unreachable,
             }
+            try ctx.state.orderPlacementSelection(ctx.state.allocator, &result);
             break :blk .{ .selection = result };
         },
         .page_index => blk: {

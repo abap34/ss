@@ -7,6 +7,7 @@ pub fn formatPrimitiveSignature(
     allocator: std.mem.Allocator,
     descriptor: registry.PrimitiveDescriptor,
 ) ![]const u8 {
+    if (descriptor.op == .select) return allocator.dupe(u8, "select<T>(scope) -> Selection<Placed<T>>");
     var params = std.ArrayList(u8).empty;
     defer params.deinit(allocator);
     for (descriptor.arg_names, 0..) |_, index| {

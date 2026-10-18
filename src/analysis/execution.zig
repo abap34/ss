@@ -140,6 +140,7 @@ pub const ExecutionGraph = struct {
                     summary.writes_layout_input = true;
                     if (index + 1 < plan.steps.items.len) try summary.addWrite(.{ .objects = .{
                         .input_type = plan.steps.items[index + 1].input,
+                        .placement_call = definition.call_id,
                         .page_scope = definition.page_scope,
                     } });
                     const module_id = switch (step.target) {

@@ -5,6 +5,7 @@ const core = @import("core");
 const name_resolution = @import("../../language/name_resolution.zig");
 const type_resolution = @import("../../language/type_resolution.zig");
 const generic_arguments = @import("../generic_arguments.zig");
+const registry = @import("../../language/registry.zig");
 const utils = @import("utils");
 const QueryBudget = @import("types.zig").QueryBudget;
 
@@ -174,7 +175,7 @@ pub fn typeForExpr(allocator: std.mem.Allocator, budget: ?QueryBudget, snapshot:
                 .local => |value| if (value.value_type.fn_result) |result| result.* else null,
                 .constant => |value| if (value.value_type.fn_result) |result| result.* else null,
                 .function => |value| try typeForCall(allocator, budget, snapshot, module_id, offset, value, call),
-                .primitive => if (primitiveBinding(budget, snapshot, call.callee.name)) |value| value.value_type else null,
+                .primitive => try typeForPrimitiveCall(allocator, budget, snapshot, module_id, offset, call),
                 .unknown => null,
             };
         },
@@ -199,6 +200,22 @@ pub fn typeForExpr(allocator: std.mem.Allocator, budget: ?QueryBudget, snapshot:
         },
         else => null,
     };
+}
+
+fn typeForPrimitiveCall(allocator: std.mem.Allocator, budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, offset: usize, call: ast.CallExpr) anyerror!?ast.Type {
+    const descriptor = registry.lookupPrimitiveCall(call.callee.name) orelse return null;
+    if (descriptor.op == .select and call.type_args.items.len == 1 and call.args.items.len == 1) {
+        const input = (try resolveType(allocator, budget, snapshot, module_id, offset, call.type_args.items[0])) orelse return null;
+        if (input.kind != .record) return null;
+        var item = try ast.Type.placedOf(allocator, input);
+        defer item.deinit(allocator);
+        return try ast.Type.selectionOf(allocator, item);
+    }
+    if (descriptor.op == .first and call.args.items.len == 1) {
+        const selection = (try typeForExpr(allocator, budget, snapshot, module_id, offset, call.args.items[0])) orelse return null;
+        return if (selection.kind == .selection) selection.selectionItem() else null;
+    }
+    return if (primitiveBinding(budget, snapshot, call.callee.name)) |value| value.value_type else null;
 }
 
 fn substitutions(allocator: std.mem.Allocator, module_id: core.SourceModuleId, declaration_start: usize, count: usize) ![]ast.Type.Substitution {

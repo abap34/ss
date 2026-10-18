@@ -17,6 +17,11 @@ pub fn register(suite: Suite, modules: project.ProjectModules, compiler_mod: *Mo
         import("compiler", compiler_mod),
     }, true);
     _ = suite.add(display_spec_mod, .{ .name = "test-display", .description = "Check typed display instantiation and evaluation" });
+
+    const typed_query_spec_mod = createModule(ctx, "tests/eval/query/spec_tests.zig", &.{
+        import("compiler", compiler_mod),
+    }, true);
+    _ = suite.add(typed_query_spec_mod, .{ .name = "test-typed-query", .description = "Check typed placement queries and execution dependencies" });
     const execution_spec_mod = createModule(ctx, "tests/analysis/execution/spec_tests.zig", &.{
         import("compiler", compiler_mod),
     }, true);

@@ -1573,7 +1573,13 @@ fn evalSelectCall(
 ) anyerror!core.Value {
     const state = evaluation.state;
     const functions = evaluation.functions;
-    const base = try evalExpr(evaluation, page_id, scope, env, current_origin, call.args.items[0]);
+    var base = try evalExpr(evaluation, page_id, scope, env, current_origin, call.args.items[0]);
+    defer base.deinit(state.allocator);
+    if (call.type_args.items.len != 0) {
+        if (call.type_args.items.len != 1 or call.args.items.len != 1) return error.InvalidArity;
+        return .{ .selection = try state.selectTypedPlacements(state.allocator, base, call.type_args.items[0]) };
+    }
+    if (call.args.items.len < 2) return error.InvalidArity;
     const op_name = try evalCallStringArg(evaluation, page_id, scope, env, current_origin, call, 1);
     const sema = SemanticEnv.init(null, null, functions);
     const descriptor = sema.query(op_name) orelse {

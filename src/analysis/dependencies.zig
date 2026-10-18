@@ -123,7 +123,7 @@ pub const AccessSummary = struct {
     fn hasConcreteMembershipScope(self: AccessSummary) bool {
         for ([_][]const Resource{ self.reads.items, self.writes.items, self.selection_reads.items }) |resources| {
             for (resources) |resource| {
-                if (resource == .objects and resource.objects.page_scope != .any) return true;
+                if (resource == .objects and (resource.objects.page_scope != .any or resource.objects.placement_call != null)) return true;
             }
         }
         for (self.display_definitions.items) |definition| if (definition.reads.hasConcreteMembershipScope()) return true;
@@ -276,6 +276,12 @@ pub fn appendResource(
             if (role_name.input_type) |ty| {
                 try out.appendSlice(allocator, ", type=");
                 try ty.formatInto(allocator, out);
+            }
+            if (role_name.placement_call) |id| {
+                const text = try std.fmt.allocPrint(allocator, "{d}", .{id});
+                defer allocator.free(text);
+                try out.appendSlice(allocator, ", placement=");
+                try out.appendSlice(allocator, text);
             }
             try out.appendSlice(allocator, ", owner=");
             try appendPropertyOwner(allocator, out, .{ .object = role_name.owner }, options);
@@ -519,6 +525,7 @@ const ValueFacts = struct {
     // Null means the subtree is unknown; an empty slice proves a leaf.
     children: ?[]const ValueFacts = null,
     page_scope: ResourceScope = .any,
+    placement_call: ?u64 = null,
     const Field = struct { name: []const u8, value: ValueFacts };
     const Callable = union(enum) {
         named: semantic_env.ResolvedFunction,
@@ -1064,6 +1071,7 @@ pub const Analyzer = struct {
         var result = try self.withPropertyTarget(try self.newValueFacts(candidates.items, fields.items), joinPropertyTargets(left.property_target, right.property_target));
         result.object_role = mergeOptionalNames(left.object_role, right.object_role);
         result.page_scope = if (resourceScopeEql(left.page_scope, right.page_scope)) left.page_scope else .any;
+        result.placement_call = if (left.placement_call == right.placement_call) left.placement_call else null;
         if (left.children) |left_children| if (right.children) |right_children| {
             result.children = try std.mem.concat(allocator, ValueFacts, &.{ left_children, right_children });
         };
@@ -1188,6 +1196,23 @@ pub const Analyzer = struct {
         var result = try self.withPropertyTarget(.{}, try self.propertyTargetCall(call));
         switch (primitive.op) {
             .pagectx => result.page_scope = if (self.variable_scope == .page) self.variable_scope else .any,
+            .select => if (call.type_args.items.len == 1 and call.args.items.len == 1) {
+                const scope = try self.valueFacts(call.args.items[0]);
+                result.page_scope = scope.page_scope;
+                result.placement_call = scope.placement_call;
+            },
+            .first => if (call.args.items.len > 0) {
+                const selection = try self.valueFacts(call.args.items[0]);
+                result.page_scope = selection.page_scope;
+                result.placement_call = selection.placement_call;
+            },
+            .selection_union, .selection_intersection, .selection_difference => if (call.args.items.len == 2) {
+                const left = try self.valueFacts(call.args.items[0]);
+                const right = try self.valueFacts(call.args.items[1]);
+                const combined = if (primitive.op == .selection_difference) left else try self.joinValueFacts(left, right);
+                result.page_scope = combined.page_scope;
+                result.placement_call = combined.placement_call;
+            },
             .new => {
                 result.object_role = try literalStringArg(self, call, 1);
                 result.children = &.{};
@@ -1206,6 +1231,8 @@ pub const Analyzer = struct {
                         .{ .name = "page", .value = try self.valueFacts(call.args.items[0]) },
                     });
                     result = try self.withPropertyTarget(result, PropertyTarget.freshObject(null));
+                    result.page_scope = (try self.valueFacts(call.args.items[0])).page_scope;
+                    result.placement_call = call.callee.call_id;
                 } else result = input;
             },
             .set_prop, .set_content, .set_repr, .require_asset_exists, .extend_render_env => if (call.args.items.len > 0) {
@@ -2056,6 +2083,17 @@ pub const Analyzer = struct {
                     if (state.displays.call_targets.get(id)) |plan| return self.typedPlacementCall(id, state.displays.plans.items[plan], arg_facts.items);
                 };
             }
+            if (descriptor.op == .select and call.type_args.items.len == 1) {
+                var summary = try self.callArgFactsSummary(arg_facts.items);
+                errdefer summary.deinit();
+                const scope = arg_facts.items[0].values;
+                try summary.addSelectionRead(.{ .objects = .{
+                    .input_type = call.type_args.items[0],
+                    .page_scope = scope.page_scope,
+                    .placement_call = scope.placement_call,
+                } });
+                return summary;
+            }
             return try self.primitiveCallWithFacts(descriptor, arg_facts.items);
         }
 
@@ -2086,7 +2124,7 @@ pub const Analyzer = struct {
         var summary = try self.callArgFactsSummary(args);
         errdefer summary.deinit();
         const page_scope = args[0].values.page_scope;
-        try summary.addWrite(.{ .objects = .{ .input_type = plan.steps.items[0].input, .page_scope = page_scope } });
+        try summary.addWrite(.{ .objects = .{ .input_type = plan.steps.items[0].input, .page_scope = page_scope, .placement_call = call_id } });
         summary.places_objects = true;
         summary.writes_layout_input = true;
         var steps = std.ArrayList(AccessSummary).empty;
@@ -2102,11 +2140,13 @@ pub const Analyzer = struct {
                 .function => |key| {
                     const state = self.sema.state.?;
                     const function = try self.newValueFacts(&.{.{ .named = .{ .key = key, .module_id = key.module_id, .decl = state.functions.get(key).? } }}, &.{});
-                    const receiver = try self.newValueFacts(&.{}, &.{
+                    var receiver = try self.newValueFacts(&.{}, &.{
                         .{ .name = "value", .value = input },
                         .{ .name = "page", .value = args[0].values },
                         .{ .name = "document", .value = try self.withPropertyTarget(.{}, PropertyTarget.document()) },
                     });
+                    receiver.page_scope = page_scope;
+                    receiver.placement_call = call_id;
                     var argument = CallArgFacts{ .summary = AccessSummary.init(self.allocator), .values = receiver };
                     defer argument.deinit();
                     steps.appendAssumeCapacity(try self.invokeValueFacts(function, &.{argument}));
@@ -2385,6 +2425,7 @@ pub const Analyzer = struct {
     }
 
     fn propertyTargetSelect(self: *Analyzer, call: ast.CallExpr) !?PropertyTarget {
+        if (call.type_args.items.len != 0) return PropertyTarget.object(null);
         const query_name = (try literalStringArg(self, call, 1)) orelse return PropertyTarget.any();
         const query = registry.lookupQueryOp(query_name) orelse return PropertyTarget.any();
         return switch (query.op) {
@@ -2541,9 +2582,11 @@ pub const Analyzer = struct {
             .document => PropertyTarget.document(),
             .page => PropertyTarget.page(),
             .object => PropertyTarget.object(ty.nominalId()),
+            .placed, .placement => PropertyTarget.object(null),
             .selection => switch (ty.selectionItem().kind) {
                 .page => PropertyTarget.page(),
                 .object, .any => PropertyTarget.object(ty.selectionItemId()),
+                .placed, .placement => PropertyTarget.object(null),
                 else => null,
             },
             .optional => if (ty.optional_child) |child| self.propertyTargetForType(child.*) else null,
@@ -2653,6 +2696,7 @@ fn buildFunctionCallSummaryKey(
         try appendOptionalBytesKey(allocator, &out, fact.string_literal);
         try appendOptionalBytesKey(allocator, &out, fact.object_role);
         try appendResourceScopeKey(allocator, &out, fact.values.page_scope);
+        try appendOptionalPlacementCallKey(allocator, &out, fact.values.placement_call);
         try appendCompositionKey(allocator, &out, fact.values);
         try appendOptionalPropertyTargetKey(allocator, &out, fact.property_target);
         try appendResourceListKey(allocator, &out, fact.summary.selection_reads.items);
@@ -2670,6 +2714,13 @@ fn appendCompositionKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), v
             try appendCompositionKey(allocator, out, child);
         }
     } else try out.append(allocator, '?');
+}
+
+fn appendOptionalPlacementCallKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), id: ?u64) !void {
+    if (id) |value| {
+        try out.append(allocator, 'c');
+        try appendKeyInt(allocator, out, value);
+    } else try out.append(allocator, '*');
 }
 
 fn appendFunctionKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), key: core.FunctionKey) !void {
@@ -2699,6 +2750,7 @@ fn appendResourceKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), reso
         },
         .objects => |role_name| {
             try out.append(allocator, 'o');
+            try appendOptionalPlacementCallKey(allocator, out, role_name.placement_call);
             try appendOptionalBytesKey(allocator, out, role_name.role);
             if (role_name.input_type) |ty| {
                 try out.append(allocator, 't');

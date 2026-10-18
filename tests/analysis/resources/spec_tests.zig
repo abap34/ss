@@ -157,3 +157,25 @@ test "resource index: allocation failures release every partially built bucket" 
     };
     try allocation_testing.checkAllAllocationFailures(testing.allocator, verifyResourceMatrix, .{&resources});
 }
+
+test "resource index: typed subtree reads retain broad writers and exclude distinct roots and input types" {
+    const Type = compiler.language.Type;
+    const heading = Type.recordType("Heading").inModule(1);
+    const other_heading = Type.recordType("Heading").inModule(2);
+    const read: Resource = .{ .objects = .{ .input_type = heading, .placement_call = 10 } };
+    const writers = [_]Resource{
+        .{ .objects = .{} },
+        .{ .objects = .{ .input_type = heading } },
+        .{ .objects = .{ .input_type = heading, .placement_call = 10 } },
+        .{ .objects = .{ .input_type = heading, .placement_call = 11 } },
+        .{ .objects = .{ .input_type = other_heading, .placement_call = 10 } },
+    };
+    var index = resource_index.ResourceWriterIndex.init(testing.allocator);
+    defer index.deinit();
+    for (writers, 0..) |write, unit| try index.addWrite(unit, write);
+    var seen: [writers.len]bool = undefined;
+    @memset(&seen, false);
+    var visitor = MatchingVisitor{ .read = read, .seen = &seen };
+    try index.forEachCandidate(read, &visitor);
+    try testing.expectEqualSlices(bool, &.{ true, true, true, false, false }, &seen);
+}
