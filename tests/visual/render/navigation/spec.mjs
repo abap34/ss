@@ -192,7 +192,8 @@ let title = h1!("Second page")
 end
 
 page third
-let picture = scale(pdf_obj("asset.pdf"), 0.72)
+let picture = pdf_obj("asset.pdf")
+picture.asset.scale = 0.72
 picture.asset.pdf_page = 2
 picture.asset.pdf_box = PdfPageBox.crop
 picture.chrome.fill = none
