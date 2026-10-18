@@ -527,6 +527,60 @@ const ValueFacts = struct {
         for (self.fields) |entry| if (std.mem.eql(u8, entry.name, name)) return entry.value;
         return .{};
     }
+
+    fn eql(left: ValueFacts, right: ValueFacts, depth: usize) bool {
+        if (depth >= max_value_fact_depth) return false;
+        if (left.candidates.len != right.candidates.len or left.fields.len != right.fields.len or
+            !resourceScopeEql(left.page_scope, right.page_scope) or !left.placement.eql(right.placement) or
+            !sameName(left.object_role, right.object_role)) return false;
+        if (!sameTarget(left.property_target, right.property_target)) return false;
+        for (left.candidates) |candidate| {
+            var found = false;
+            for (right.candidates) |other| if (callableEql(candidate, other, depth + 1)) {
+                found = true;
+                break;
+            };
+            if (!found) return false;
+        }
+        for (left.fields) |field_value| if (!field_value.value.eql(right.field(field_value.name), depth + 1)) return false;
+        if (left.children) |children| {
+            const other = right.children orelse return false;
+            if (children.len != other.len) return false;
+            for (children, other) |a, b| if (!a.eql(b, depth + 1)) return false;
+        } else if (right.children != null) return false;
+        return true;
+    }
+
+    fn sameTarget(left: ?PropertyTarget, right: ?PropertyTarget) bool {
+        if (left) |target| {
+            const other = right orelse return false;
+            return target.owner.eql(other.owner) and target.fresh == other.fresh;
+        }
+        return right == null;
+    }
+
+    fn sameName(left: ?[]const u8, right: ?[]const u8) bool {
+        if (left) |value| return if (right) |other| std.mem.eql(u8, value, other) else false;
+        return right == null;
+    }
+
+    fn callableEql(left: Callable, right: Callable, depth: usize) bool {
+        if (depth >= max_value_fact_depth or std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
+        return switch (left) {
+            .named => |named| named.key.eql(right.named.key),
+            .closure => |closure| blk: {
+                const other = right.closure;
+                if (closure.module_id != other.module_id or closure.lambda.body != other.lambda.body or closure.bindings.len != other.bindings.len) break :blk false;
+                for (closure.bindings, other.bindings) |a, b| {
+                    if (!std.mem.eql(u8, a.name, b.name) or a.policy != b.policy or !sameName(a.string_literal, b.string_literal) or
+                        !sameName(a.object_role, b.object_role) or !sameTarget(a.property_target, b.property_target) or !a.values.eql(b.values, depth + 1) or
+                        a.selection_reads.len != b.selection_reads.len) break :blk false;
+                    for (a.selection_reads, b.selection_reads) |x, y| if (!x.eql(y)) break :blk false;
+                }
+                break :blk true;
+            },
+        };
+    }
 };
 
 const CapturedBinding = struct {
@@ -1045,11 +1099,18 @@ pub const Analyzer = struct {
 
     fn joinValueFacts(self: *Analyzer, left: ValueFacts, right: ValueFacts) anyerror!ValueFacts {
         if (left.id == 0) return right;
-        if (right.id == 0 or left.id == right.id) return left;
+        if (right.id == 0 or left.eql(right, 0)) return left;
         const allocator = self.value_storage.allocator();
         var candidates = std.ArrayList(ValueFacts.Callable).empty;
         try candidates.appendSlice(allocator, left.candidates);
-        try candidates.appendSlice(allocator, right.candidates);
+        for (right.candidates) |candidate| {
+            var found = false;
+            for (candidates.items) |existing| if (ValueFacts.callableEql(candidate, existing, 0)) {
+                found = true;
+                break;
+            };
+            if (!found) try candidates.append(allocator, candidate);
+        }
         var fields = std.ArrayList(ValueFacts.Field).empty;
         for (left.fields) |field| try fields.append(allocator, .{ .name = field.name, .value = try self.joinValueFacts(field.value, right.field(field.name)) });
         for (right.fields) |field| {
@@ -1065,7 +1126,17 @@ pub const Analyzer = struct {
         result.page_scope = if (resourceScopeEql(left.page_scope, right.page_scope)) left.page_scope else .any;
         result.placement = left.placement.join(right.placement);
         if (left.children) |left_children| if (right.children) |right_children| {
-            result.children = try std.mem.concat(allocator, ValueFacts, &.{ left_children, right_children });
+            var children = std.ArrayList(ValueFacts).empty;
+            try children.appendSlice(allocator, left_children);
+            for (right_children) |child| {
+                var found = false;
+                for (children.items) |existing| if (child.eql(existing, 0)) {
+                    found = true;
+                    break;
+                };
+                if (!found) try children.append(allocator, child);
+            }
+            result.children = children.items;
         };
         return result;
     }
@@ -1184,6 +1255,47 @@ pub const Analyzer = struct {
         };
     }
 
+    fn importPlacementInput(self: *Analyzer, input: core.placement_inputs.Value, depth: usize) anyerror!ValueFacts {
+        if (depth >= max_value_fact_depth) return error.FunctionAnalysisLimitExceeded;
+        const allocator = self.value_storage.allocator();
+        const candidates = try allocator.alloc(ValueFacts.Callable, input.candidates.len);
+        for (input.candidates, candidates) |candidate, *output| output.* = switch (candidate) {
+            .function => |key| .{ .named = .{ .key = key, .module_id = key.module_id, .decl = self.sema.functions.get(key).? } },
+            .closure => |closure| blk: {
+                const bindings = try allocator.alloc(CapturedBinding, closure.bindings.len);
+                for (closure.bindings, bindings) |binding, *captured| {
+                    const values = try self.importPlacementInput(binding.value, depth + 1);
+                    var reads = std.ArrayList(Resource).empty;
+                    try self.importSelectionReads(&reads, binding.value);
+                    captured.* = .{ .name = binding.name, .policy = .local, .values = values, .string_literal = binding.value.string_literal, .object_role = null, .property_target = values.property_target, .selection_reads = reads.items };
+                }
+                break :blk .{ .closure = .{ .module_id = closure.module_id, .lambda = closure.lambda, .bindings = bindings } };
+            },
+        };
+        const fields = try allocator.alloc(ValueFacts.Field, input.fields.len);
+        for (input.fields, fields) |field, *output| output.* = .{ .name = field.name, .value = try self.importPlacementInput(field.value, depth + 1) };
+        var result = try self.newValueFacts(candidates, fields);
+        if (input.reference) |reference| switch (reference) {
+            .unknown => result = try self.withPropertyTarget(result, PropertyTarget.any()),
+            .document => result = try self.withPropertyTarget(result, PropertyTarget.document()),
+            .page => result = try self.withPropertyTarget(result, PropertyTarget.page()),
+            .placement => |placement| {
+                result = try self.withPropertyTarget(result, PropertyTarget.object(null));
+                result.placement = .exact(placement.call, placement.path);
+            },
+        };
+        const children = try allocator.alloc(ValueFacts, input.children.len);
+        for (input.children, children) |child, *output| output.* = try self.importPlacementInput(child, depth + 1);
+        if (!input.unknown) result.children = children;
+        return result;
+    }
+
+    fn importSelectionReads(self: *Analyzer, reads: *std.ArrayList(Resource), input: core.placement_inputs.Value) anyerror!void {
+        for (input.selected_types) |ty| try appendUnique(self.value_storage.allocator(), reads, .{ .objects = .{ .input_type = ty } });
+        for (input.fields) |field| try self.importSelectionReads(reads, field.value);
+        for (input.children) |child| try self.importSelectionReads(reads, child);
+    }
+
     fn primitiveValueFacts(self: *Analyzer, call: ast.CallExpr, primitive: registry.PrimitiveDescriptor) anyerror!ValueFacts {
         var result = try self.withPropertyTarget(.{}, try self.propertyTargetCall(call));
         switch (primitive.op) {
@@ -1191,6 +1303,14 @@ pub const Analyzer = struct {
             .select => if (call.args.items.len > 0) {
                 const scope = try self.valueFacts(call.args.items[0]);
                 if (call.type_args.items.len == 1 and call.args.items.len == 1) {
+                    if (self.sema.state) |state| {
+                        var candidates = ValueFacts{};
+                        for (state.displays.inputs.entries.items) |entry| {
+                            if (!ast.Type.eql(entry.input, call.type_args.items[0])) continue;
+                            candidates = try self.joinValueFacts(candidates, try self.importPlacementInput(entry.receiver, 0));
+                        }
+                        result = try self.withPropertyTarget(candidates, result.property_target);
+                    }
                     result.page_scope = scope.page_scope;
                     result.placement = if (scope.placement.call != null) scope.placement.descendants() else .{};
                 } else if (try literalStringArg(self, call, 1)) |name| {
@@ -1204,6 +1324,7 @@ pub const Analyzer = struct {
                     };
                 }
             },
+            .fold => return self.foldValueFacts(call, null),
             .first, .selection_filter => if (call.args.items.len > 0) {
                 result = try self.valueFacts(call.args.items[0]);
             },
@@ -1211,8 +1332,7 @@ pub const Analyzer = struct {
                 const left = try self.valueFacts(call.args.items[0]);
                 const right = try self.valueFacts(call.args.items[1]);
                 const combined = if (primitive.op == .selection_difference or primitive.op == .sub) left else try self.joinValueFacts(left, right);
-                result.page_scope = combined.page_scope;
-                result.placement = combined.placement;
+                result = combined;
             },
             .new => {
                 result.object_role = try literalStringArg(self, call, 1);
@@ -2253,6 +2373,32 @@ pub const Analyzer = struct {
         };
     }
 
+    fn foldValueFacts(self: *Analyzer, call: ast.CallExpr, summary: ?*AccessSummary) anyerror!ValueFacts {
+        if (call.args.items.len < 3) return .{};
+        const callback = try self.valueFacts(call.args.items[2]);
+        var args = std.ArrayList(CallArgFacts).empty;
+        defer self.deinitCallArgFacts(&args);
+        try args.ensureTotalCapacity(self.allocator, call.args.items.len - 1);
+        args.appendAssumeCapacity(try self.analyzeCallArgFacts(call.args.items[1]));
+        args.appendAssumeCapacity(try self.analyzeCallArgFacts(call.args.items[0]));
+        for (call.args.items[3..]) |argument| args.appendAssumeCapacity(try self.analyzeCallArgFacts(argument));
+        for (0..max_value_fact_depth) |_| {
+            var invoked = try self.invokeValueFacts(callback, args.items);
+            defer invoked.deinit();
+            if (summary) |effects| try effects.merge(invoked);
+            const previous_reads = args.items[0].summary.selection_reads.items.len;
+            for (invoked.selection_reads.items) |resource| try args.items[0].summary.addSelectionRead(resource);
+            const returned = try self.returnedValueFacts(callback, args.items);
+            const combined = try self.joinValueFacts(args.items[0].values, returned);
+            if (combined.eql(args.items[0].values, 0) and previous_reads == args.items[0].summary.selection_reads.items.len) return combined;
+            args.items[0].values = combined;
+            args.items[0].property_target = combined.property_target;
+            args.items[0].object_role = combined.object_role;
+            args.items[0].string_literal = null;
+        }
+        return error.FunctionAnalysisLimitExceeded;
+    }
+
     fn primitiveCallbackCall(self: *Analyzer, call: ast.CallExpr, descriptor: registry.PrimitiveDescriptor) anyerror!AccessSummary {
         const callback_spec = descriptor.callback orelse unreachable;
         var arg_facts = try self.collectCallArgFactsSkipping(call, callback_spec.function_arg_index);
@@ -2265,7 +2411,9 @@ pub const Analyzer = struct {
 
         var callback_summary = AccessSummary.init(self.allocator);
         defer callback_summary.deinit();
-        if (call.args.items.len > callback_spec.function_arg_index) {
+        if (descriptor.op == .fold) {
+            _ = try self.foldValueFacts(call, &callback_summary);
+        } else if (call.args.items.len > callback_spec.function_arg_index) {
             const expr = call.args.items[callback_spec.function_arg_index];
             var evaluation = try self.analyzeExpr(expr);
             defer evaluation.deinit();

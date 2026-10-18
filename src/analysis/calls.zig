@@ -8,6 +8,8 @@ const semantic_env = @import("../language/env.zig");
 const analysis_env = @import("env.zig");
 
 const SemanticEnv = semantic_env.SemanticEnv;
+const input_facts = core.placement_inputs;
+const captures = @import("captures.zig");
 
 // Closure specialization can create an unbounded sequence of environments.
 // Exhaustion rejects the program before evaluation; it is not a termination proof.
@@ -104,6 +106,11 @@ const ValueFacts = struct {
     objects: std.AutoHashMap(usize, void),
     unknown_objects: bool = false,
     unknown: bool = false,
+    selected_types: std.ArrayList(ast.Type) = .empty,
+    reference: ?input_facts.Value.Reference = null,
+    string_literal: ?[]const u8 = null,
+    unknown_string: bool = false,
+    unknown_reference: bool = false,
 
     fn init(allocator: std.mem.Allocator) ValueFacts {
         return .{ .labels = LabelMap.init(allocator), .fields = std.StringHashMap(ValueFacts).init(allocator), .objects = std.AutoHashMap(usize, void).init(allocator) };
@@ -127,12 +134,58 @@ const ValueFacts = struct {
         while (fields.next()) |field| field.deinit();
         for (self.children.items) |*child| child.deinit();
         self.children.deinit(self.fields.allocator);
+        self.selected_types.deinit(self.fields.allocator);
         self.fields.deinit();
         self.labels.deinit();
         self.objects.deinit();
     }
 
+    fn eql(self: ValueFacts, other: ValueFacts) bool {
+        if (self.selected_types.items.len != other.selected_types.items.len) return false;
+        for (self.selected_types.items) |ty| {
+            var found = false;
+            for (other.selected_types.items) |other_ty| if (ast.Type.eql(ty, other_ty)) {
+                found = true;
+                break;
+            };
+            if (!found) return false;
+        }
+        if (self.unknown != other.unknown or self.unknown_objects != other.unknown_objects or
+            self.unknown_string != other.unknown_string or self.unknown_reference != other.unknown_reference or
+            self.labels.count() != other.labels.count() or self.objects.count() != other.objects.count() or
+            self.fields.count() != other.fields.count() or self.children.items.len != other.children.items.len or
+            !referenceEql(self.reference, other.reference) or !optionalStringEql(self.string_literal, other.string_literal)) return false;
+        var labels = self.labels.keyIterator();
+        while (labels.next()) |label| if (!other.labels.contains(label.*)) return false;
+        var objects = self.objects.keyIterator();
+        while (objects.next()) |id| if (!other.objects.contains(id.*)) return false;
+        var fields = self.fields.iterator();
+        while (fields.next()) |field| if (!field.value_ptr.eql(other.fields.get(field.key_ptr.*) orelse return false)) return false;
+        for (self.children.items, other.children.items) |left, right| if (!left.eql(right)) return false;
+        return true;
+    }
+
+    fn isEmpty(self: ValueFacts) bool {
+        return !self.unknown and !self.unknown_objects and !self.unknown_string and !self.unknown_reference and self.labels.count() == 0 and
+            self.objects.count() == 0 and self.fields.count() == 0 and self.children.items.len == 0 and
+            self.reference == null and self.string_literal == null and self.selected_types.items.len == 0;
+    }
+
     fn unionWith(self: *ValueFacts, other: ValueFacts) anyerror!void {
+        if (other.isEmpty()) return;
+        const empty = self.isEmpty();
+        for (other.selected_types.items) |ty| {
+            var found = false;
+            for (self.selected_types.items) |existing| if (ast.Type.eql(ty, existing)) {
+                found = true;
+                break;
+            };
+            if (!found) try self.selected_types.append(self.fields.allocator, ty);
+        }
+        self.unknown_reference = self.unknown_reference or other.unknown_reference or (!empty and !referenceEql(self.reference, other.reference));
+        self.unknown_string = self.unknown_string or other.unknown_string or (!empty and !optionalStringEql(self.string_literal, other.string_literal));
+        self.reference = if (self.unknown_reference) null else other.reference;
+        self.string_literal = if (self.unknown_string) null else other.string_literal;
         var objects = other.objects.keyIterator();
         while (objects.next()) |id| try self.objects.put(id.*, {});
         self.unknown_objects = self.unknown_objects or other.unknown_objects;
@@ -198,8 +251,9 @@ const ValueFacts = struct {
         // Closed scalar fields carry no call or object facts. Omitting them
         // avoids copying complete presentation records through every call.
         // An explicit empty field must still refine an unknown record.
-        if (!self.unknown and !value.unknown and !value.unknown_objects and
-            value.labels.count() == 0 and value.objects.count() == 0 and value.fields.count() == 0 and value.children.items.len == 0)
+        if (!self.unknown and !value.unknown and !value.unknown_objects and !value.unknown_string and !value.unknown_reference and
+            value.labels.count() == 0 and value.objects.count() == 0 and value.fields.count() == 0 and value.children.items.len == 0 and
+            value.reference == null and value.string_literal == null and value.selected_types.items.len == 0)
         {
             var empty = value;
             empty.deinit();
@@ -244,6 +298,7 @@ const Analyzer = struct {
     lambda_exprs: LambdaMap,
     lambda_captures: LambdaCaptureMap,
     capture_keys: std.StringHashMap(Label),
+    capture_index: captures.Index,
     require_known_calls: bool = false,
     current_origin: ?core.SourceOrigin = null,
     call_depth: usize = 0,
@@ -251,6 +306,10 @@ const Analyzer = struct {
     types_checked: bool = true,
     object_properties: std.ArrayList(ValueFacts) = .empty,
     unknown_properties: ValueFacts,
+    collecting_inputs: bool = false,
+    inputs_changed: bool = false,
+    typed_inputs: std.ArrayList(struct { input: ast.Type, receiver: ValueFacts }) = .empty,
+    input_type_keys: std.ArrayList(ast.Type) = .empty,
     typed_displays: std.ArrayList(struct { plan: usize, receiver: ValueFacts, origin: ?core.SourceOrigin }) = .empty,
 
     fn init(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) Analyzer {
@@ -265,6 +324,7 @@ const Analyzer = struct {
             .lambda_exprs = LambdaMap.init(allocator),
             .lambda_captures = LambdaCaptureMap.init(allocator),
             .capture_keys = std.StringHashMap(Label).init(allocator),
+            .capture_index = captures.Index.init(allocator),
             .unknown_properties = ValueFacts.init(allocator),
         };
     }
@@ -304,10 +364,58 @@ const Analyzer = struct {
         // executed roots with actual arguments, without reusing open captures
         // or summaries as evidence that a call has been verified.
         var roots = Analyzer.init(self.allocator, self.state, &self.sema);
-        roots.require_known_calls = true;
         roots.types_checked = self.types_checked;
+        if (self.types_checked) try roots.collectPlacementInputs();
+        roots.require_known_calls = self.types_checked;
+        roots.clearPass();
         try roots.checkRoots();
         try roots.checkDisplayFunctions();
+        if (self.types_checked) try roots.publishInputs();
+    }
+
+    fn clearPass(self: *Analyzer) void {
+        self.states.clearRetainingCapacity();
+        self.returns.clearRetainingCapacity();
+        self.const_values.clearRetainingCapacity();
+        self.typed_displays.clearRetainingCapacity();
+    }
+
+    // Queries start with no candidates. Join immutable inputs to a fixed point,
+    // then check executed calls strictly; discovery never licenses an unknown call.
+    fn collectPlacementInputs(self: *Analyzer) !void {
+        self.collecting_inputs = true;
+        defer self.collecting_inputs = false;
+        for (0..max_call_analysis_depth) |_| {
+            self.inputs_changed = false;
+            self.clearPass();
+            try self.checkRoots();
+            try self.checkDisplayFunctions();
+            if (!self.inputs_changed) return;
+        }
+        try self.state.addValidationDiagnostic(.@"error", null, null, self.current_origin, .{
+            .user_report = .{ .code = "FunctionAnalysisLimitExceeded", .message = try self.state.allocator.dupe(u8, "cannot establish a finite set of function candidates in placement inputs") },
+        });
+        return error.FunctionAnalysisLimitExceeded;
+    }
+
+    fn rememberInput(self: *Analyzer, input: ast.Type, receiver: ValueFacts) !void {
+        for (self.typed_inputs.items) |*entry| {
+            if (!ast.Type.eql(entry.input, input)) continue;
+            var combined = try entry.receiver.clone(self.allocator);
+            try combined.unionWith(receiver);
+            if (!combined.eql(entry.receiver)) {
+                entry.receiver = combined;
+                self.inputs_changed = true;
+            }
+            return;
+        }
+        try self.typed_inputs.append(self.allocator, .{ .input = input, .receiver = try receiver.clone(self.allocator) });
+        self.inputs_changed = true;
+    }
+
+    fn selectedInput(self: *Analyzer, input: ast.Type) !ValueFacts {
+        for (self.typed_inputs.items) |entry| if (ast.Type.eql(entry.input, input)) return entry.receiver.clone(self.allocator);
+        return ValueFacts.init(self.allocator);
     }
 
     fn checkRoots(self: *Analyzer) !void {
@@ -349,7 +457,7 @@ const Analyzer = struct {
         const key = try self.activationKey(activation);
         // Construction calls allocate fresh abstract objects and may register
         // display functions. Their effects cannot be skipped by a return cache.
-        const memoize = !self.require_known_calls or self.checking_display;
+        const memoize = !self.collecting_inputs and (!self.require_known_calls or self.checking_display);
         defer if (!memoize) {
             _ = self.states.remove(key);
         };
@@ -450,7 +558,12 @@ const Analyzer = struct {
                     .primitive, .unknown => return ValueFacts.unknownValue(self.allocator),
                 }
             },
-            .string, .color, .number, .boolean, .none, .enum_case => return ValueFacts.init(self.allocator),
+            .string => |literal| {
+                var value = ValueFacts.init(self.allocator);
+                value.string_literal = literal.text;
+                return value;
+            },
+            .color, .number, .boolean, .none, .enum_case => return ValueFacts.init(self.allocator),
             .lambda => |lambda| {
                 const label = try self.registerLambda(lambda, env);
                 return try ValueFacts.singleton(self.allocator, label);
@@ -540,18 +653,32 @@ const Analyzer = struct {
                 if (self.checking_display and !typed_group and !unresolved_group and !registry.primitiveAllowsDisplayEvaluation(primitive.op)) return self.rejectDisplayWrite();
                 const arg_labels = try self.argumentFacts(call.args.items, env, owner);
                 if (primitive.callback) |callback_spec| {
-                    if (call.args.items.len > callback_spec.function_arg_index) {
-                        const callback = arg_labels.items[callback_spec.function_arg_index];
+                    if (arg_labels.items.len <= callback_spec.function_arg_index) return ValueFacts.unknownValue(self.allocator);
+                    const callback = arg_labels.items[callback_spec.function_arg_index];
+                    var accumulator = if (primitive.op == .fold) try arg_labels.items[1].clone(self.allocator) else ValueFacts.init(self.allocator);
+                    for (0..max_call_analysis_depth) |_| {
                         var callback_args = std.ArrayList(ValueFacts).empty;
-                        var fixed_index: usize = 0;
-                        while (fixed_index < callback_spec.supplied_arg_count) : (fixed_index += 1) {
-                            try callback_args.append(self.allocator, ValueFacts.unknownValue(self.allocator));
+                        for (0..callback_spec.supplied_arg_count) |index| {
+                            const value = if (primitive.op == .fold and index == 0)
+                                accumulator
+                            else if ((primitive.op == .fold and index == 1) or index == 0)
+                                arg_labels.items[0]
+                            else
+                                ValueFacts.init(self.allocator);
+                            try callback_args.append(self.allocator, value);
                         }
-                        var index = callback_spec.function_arg_index + 1;
-                        while (index < arg_labels.items.len) : (index += 1) {
-                            try callback_args.append(self.allocator, arg_labels.items[index]);
-                        }
-                        _ = try self.invokeValue(callback, callback_args.items, owner);
+                        try callback_args.appendSlice(self.allocator, arg_labels.items[callback_spec.function_arg_index + 1 ..]);
+                        const returned = try self.invokeValue(callback, callback_args.items, owner);
+                        if (primitive.op != .fold) break;
+                        var combined = try accumulator.clone(self.allocator);
+                        try combined.unionWith(returned);
+                        if (combined.eql(accumulator)) return combined;
+                        accumulator = combined;
+                    } else {
+                        try self.state.addValidationDiagnostic(.@"error", null, null, self.current_origin, .{
+                            .user_report = .{ .code = "FunctionAnalysisLimitExceeded", .message = try self.state.allocator.dupe(u8, "cannot establish a finite set of function candidates in a fold accumulator") },
+                        });
+                        return error.FunctionAnalysisLimitExceeded;
                     }
                 }
                 return self.primitiveFacts(primitive, call, arg_labels.items);
@@ -568,6 +695,28 @@ const Analyzer = struct {
             return value;
         }
         switch (primitive.op) {
+            .docctx, .pagectx => {
+                var value = ValueFacts.init(self.allocator);
+                value.reference = if (primitive.op == .docctx) .document else .page;
+                return value;
+            },
+            .select => {
+                if (!self.types_checked) return ValueFacts.unknownValue(self.allocator);
+                if (call.type_args.items.len == 1) {
+                    var result = try self.selectedInput(call.type_args.items[0]);
+                    try result.selected_types.append(self.allocator, call.type_args.items[0]);
+                    return result;
+                }
+                if (args.len > 1) if (args[1].string_literal) |name| {
+                    if (registry.lookupQueryOp(name)) |query| if (query.op == .self_placement) return args[0].clone(self.allocator);
+                };
+            },
+            .selection_union, .selection_intersection => if (args.len == 2) {
+                var combined = try args[0].clone(self.allocator);
+                try combined.unionWith(args[1]);
+                return combined;
+            },
+            .selection_difference, .sub => if (args.len > 0) return args[0].clone(self.allocator),
             .new, .group => {
                 if (!self.require_known_calls) return ValueFacts.unknownValue(self.allocator);
                 var value = ValueFacts.init(self.allocator);
@@ -592,11 +741,21 @@ const Analyzer = struct {
             .placement => {
                 if (call.callee.call_id) |id| if (self.state.displays.call_targets.get(id)) |plan| {
                     var receiver = ValueFacts.init(self.allocator);
+                    receiver.reference = .{ .placement = .{ .call = id, .path = &.{} } };
                     try receiver.putField("value", try args[primitive.result_arg_index].clone(self.allocator));
-                    if (self.require_known_calls) try self.typed_displays.append(self.allocator, .{ .plan = plan, .receiver = try receiver.clone(self.allocator), .origin = self.current_origin });
+                    try receiver.putField("page", try args[0].clone(self.allocator));
+                    var document = ValueFacts.init(self.allocator);
+                    document.reference = .document;
+                    try receiver.putField("document", document);
+                    if (self.collecting_inputs or self.require_known_calls) try self.typed_displays.append(self.allocator, .{ .plan = plan, .receiver = try receiver.clone(self.allocator), .origin = self.current_origin });
                     return receiver;
                 };
                 if (args.len > primitive.result_arg_index) return args[primitive.result_arg_index].clone(self.allocator);
+            },
+            .first_selection_item => if (args.len >= 1) {
+                var result = try args[0].clone(self.allocator);
+                result.selected_types.clearRetainingCapacity();
+                return result;
             },
             .first_arg => if (args.len >= 1) return args[0].clone(self.allocator),
             .target_arg => if (args.len > primitive.result_arg_index) return args[primitive.result_arg_index].clone(self.allocator),
@@ -657,25 +816,40 @@ const Analyzer = struct {
             const receivers = try self.allocator.alloc(ValueFacts, plan.steps.items.len);
             defer self.allocator.free(receivers);
             receivers[0] = registration.receiver;
-            for (plan.steps.items, 0..) |step, index| switch (step.target) {
-                .native => {},
-                .group => {
-                    const input = try receivers[index].getField("value", self.allocator);
-                    for (step.children.items, 0..) |child_index, position| {
+            for (plan.steps.items, 0..) |step, index| {
+                if (self.collecting_inputs) try self.rememberInput(step.input, receivers[index]);
+                switch (step.target) {
+                    .native => {},
+                    .group => {
+                        const input = try receivers[index].getField("value", self.allocator);
+                        for (step.children.items, 0..) |child_index, position| {
+                            var receiver = ValueFacts.init(self.allocator);
+                            const value = if (position < input.children.items.len) try input.children.items[position].clone(self.allocator) else ValueFacts.unknownValue(self.allocator);
+                            receiver.reference = if (registration.receiver.reference) |reference| switch (reference) {
+                                .placement => |placement| .{ .placement = .{ .call = placement.call, .path = plan.steps.items[child_index].path } },
+                                else => null,
+                            } else null;
+                            try receiver.putField("value", value);
+                            try receiver.putField("page", try registration.receiver.getField("page", self.allocator));
+                            try receiver.putField("document", try registration.receiver.getField("document", self.allocator));
+                            receivers[child_index] = receiver;
+                        }
+                    },
+                    .function => |key| {
+                        const output = try self.invokeNamed(self.namedLabel(key), key.module_id, self.state.functions.get(key).?, &.{receivers[index]});
                         var receiver = ValueFacts.init(self.allocator);
-                        const value = if (position < input.children.items.len) try input.children.items[position].clone(self.allocator) else ValueFacts.unknownValue(self.allocator);
-                        try receiver.putField("value", value);
-                        receivers[child_index] = receiver;
-                    }
-                },
-                .function => |key| {
-                    const output = try self.invokeNamed(self.namedLabel(key), key.module_id, self.state.functions.get(key).?, &.{receivers[index]});
-                    var receiver = ValueFacts.init(self.allocator);
-                    try receiver.putField("value", output);
-                    std.debug.assert(step.children.items.len == 1);
-                    receivers[step.children.items[0]] = receiver;
-                },
-            };
+                        receiver.reference = if (registration.receiver.reference) |reference| switch (reference) {
+                            .placement => |placement| .{ .placement = .{ .call = placement.call, .path = plan.steps.items[step.children.items[0]].path } },
+                            else => null,
+                        } else null;
+                        try receiver.putField("value", output);
+                        try receiver.putField("page", try registration.receiver.getField("page", self.allocator));
+                        try receiver.putField("document", try registration.receiver.getField("document", self.allocator));
+                        std.debug.assert(step.children.items.len == 1);
+                        receivers[step.children.items[0]] = receiver;
+                    },
+                }
+            }
         }
     }
 
@@ -797,15 +971,69 @@ const Analyzer = struct {
 
     fn registerLambda(self: *Analyzer, lambda: ast.LambdaExpr, env: *const FunctionEnv) !Label {
         var label = self.lambdaLabel(lambda);
-        // Intern the captured value facts as part of closure identity. A cached
-        // higher-order call must not hide a later closure with different fields.
-        const key = try self.activationKey(.{ .label = label, .env = env.*, .owner = null });
+        var captured = FunctionEnv.init(self.allocator);
+        {
+            const references = try self.capture_index.lambdaNames(lambda);
+            for (references) |name| if (env.get(name)) |value| try captured.bind(name, value);
+        }
+        const key = try self.activationKey(.{ .label = label, .env = captured, .owner = null });
         if (self.capture_keys.get(key)) |existing| return existing;
         label.lambda.capture_id = self.capture_keys.count() + 1;
         try self.lambda_exprs.put(label.lambda, lambda);
-        try self.lambda_captures.put(label.lambda, try env.clone());
+        try self.lambda_captures.put(label.lambda, captured);
         try self.capture_keys.put(key, label);
         return label;
+    }
+
+    fn publishInputs(self: *Analyzer) !void {
+        const store = &self.state.displays.inputs;
+        store.clear();
+        const allocator = store.arena.allocator();
+        var closures = std.HashMap(Label, *input_facts.Closure, LabelContext, std.hash_map.default_max_load_percentage).init(self.allocator);
+        for (self.typed_inputs.items) |entry| try store.entries.append(allocator, .{
+            .input = try entry.input.clone(allocator),
+            .receiver = try self.exportInput(entry.receiver, allocator, &closures),
+        });
+    }
+
+    fn exportInput(self: *Analyzer, value: ValueFacts, allocator: std.mem.Allocator, closures: *std.HashMap(Label, *input_facts.Closure, LabelContext, std.hash_map.default_max_load_percentage)) anyerror!input_facts.Value {
+        const candidates = try allocator.alloc(input_facts.Value.Callable, value.labels.count());
+        var labels = value.labels.keyIterator();
+        var index: usize = 0;
+        while (labels.next()) |label| : (index += 1) candidates[index] = switch (label.*) {
+            .function => |key| .{ .function = key },
+            .lambda => |key| blk: {
+                if (closures.get(label.*)) |existing| break :blk .{ .closure = existing };
+                const closure = try allocator.create(input_facts.Closure);
+                try closures.put(label.*, closure);
+                const env = self.lambda_captures.get(key).?;
+                const bindings = try allocator.alloc(input_facts.Value.Field, env.values.count());
+                var iterator = env.values.iterator();
+                var position: usize = 0;
+                while (iterator.next()) |binding| : (position += 1) bindings[position] = .{
+                    .name = try allocator.dupe(u8, binding.key_ptr.*),
+                    .value = try self.exportInput(binding.value_ptr.*, allocator, closures),
+                };
+                closure.* = .{ .module_id = key.module_id, .lambda = self.lambda_exprs.get(key).?, .bindings = bindings };
+                break :blk .{ .closure = closure };
+            },
+        };
+        const fields = try allocator.alloc(input_facts.Value.Field, value.fields.count());
+        var iterator = value.fields.iterator();
+        index = 0;
+        while (iterator.next()) |field| : (index += 1) fields[index] = .{
+            .name = try allocator.dupe(u8, field.key_ptr.*),
+            .value = try self.exportInput(field.value_ptr.*, allocator, closures),
+        };
+        const children = try allocator.alloc(input_facts.Value, value.children.items.len);
+        for (value.children.items, children) |child, *output| output.* = try self.exportInput(child, allocator, closures);
+        const reference: ?input_facts.Value.Reference = if (value.unknown_reference or value.unknown_objects or value.objects.count() != 0) .unknown else if (value.reference) |reference| switch (reference) {
+            .placement => |placement| .{ .placement = .{ .call = placement.call, .path = try allocator.dupe(usize, placement.path) } },
+            else => reference,
+        } else null;
+        const selected_types = try allocator.alloc(ast.Type, value.selected_types.items.len);
+        for (value.selected_types.items, selected_types) |ty, *output| output.* = try ty.clone(allocator);
+        return .{ .selected_types = selected_types, .unknown = value.unknown, .candidates = candidates, .fields = fields, .children = children, .reference = reference, .string_literal = if (value.string_literal) |literal| try allocator.dupe(u8, literal) else null };
     }
 
     fn activationKey(self: *Analyzer, activation: Activation) ![]const u8 {
@@ -828,6 +1056,34 @@ const Analyzer = struct {
     }
 
     fn appendValue(self: *Analyzer, out: *std.ArrayList(u8), value: ValueFacts) anyerror!void {
+        if (value.unknown_string) try out.appendSlice(self.allocator, "string:?");
+        if (value.unknown_reference) try out.appendSlice(self.allocator, "reference:?");
+        if (value.reference) |reference| switch (reference) {
+            .unknown => try out.appendSlice(self.allocator, "reference:?"),
+            .document => try out.appendSlice(self.allocator, "doc"),
+            .page => try out.appendSlice(self.allocator, "page"),
+            .placement => |placement| {
+                try out.appendSlice(self.allocator, try std.fmt.allocPrint(self.allocator, "place:{d}:", .{placement.call}));
+                for (placement.path) |position| try out.appendSlice(self.allocator, try std.fmt.allocPrint(self.allocator, "{d}/", .{position}));
+            },
+        };
+        // Intern exact types, including defining modules and type arguments.
+        // Display names alone can collide across modules. Sort the set so joins
+        // with different insertion orders share the same closure identity.
+        var type_keys = std.ArrayList(usize).empty;
+        for (value.selected_types.items) |ty| {
+            const key = for (self.input_type_keys.items, 0..) |existing, index| {
+                if (ast.Type.eql(ty, existing)) break index;
+            } else blk: {
+                const index = self.input_type_keys.items.len;
+                try self.input_type_keys.append(self.allocator, ty);
+                break :blk index;
+            };
+            try type_keys.append(self.allocator, key);
+        }
+        std.mem.sort(usize, type_keys.items, {}, std.sort.asc(usize));
+        for (type_keys.items) |key| try out.appendSlice(self.allocator, try std.fmt.allocPrint(self.allocator, "select:{d};", .{key}));
+        if (value.string_literal) |literal| try out.appendSlice(self.allocator, try std.fmt.allocPrint(self.allocator, "string:{d}:{s}", .{ literal.len, literal }));
         try out.appendSlice(self.allocator, if (value.unknown) "?[" else "[");
         var labels = std.ArrayList(Label).empty;
         var iterator = value.labels.keyIterator();
@@ -946,4 +1202,21 @@ fn spanLessThan(left: ast.Span, right: ast.Span) bool {
 
 fn stringLessThan(_: void, lhs: []const u8, rhs: []const u8) bool {
     return std.mem.lessThan(u8, lhs, rhs);
+}
+
+fn optionalStringEql(left: ?[]const u8, right: ?[]const u8) bool {
+    if (left) |value| return if (right) |other| std.mem.eql(u8, value, other) else false;
+    return right == null;
+}
+
+fn referenceEql(left: ?input_facts.Value.Reference, right: ?input_facts.Value.Reference) bool {
+    if (left) |value| {
+        const other = right orelse return false;
+        if (std.meta.activeTag(value) != std.meta.activeTag(other)) return false;
+        return switch (value) {
+            .unknown, .page, .document => true,
+            .placement => |placement| placement.call == other.placement.call and std.mem.eql(usize, placement.path, other.placement.path),
+        };
+    }
+    return right == null;
 }

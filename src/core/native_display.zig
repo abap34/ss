@@ -62,14 +62,16 @@ pub const Plan = struct {
 pub const Store = struct {
     allocator: std.mem.Allocator,
     plans: std.ArrayList(Plan) = .empty,
+    inputs: @import("placement_inputs.zig").Store,
     call_targets: std.AutoHashMap(u64, usize),
     typed_group_calls: std.AutoHashMap(u64, void),
 
     pub fn init(allocator: std.mem.Allocator) Store {
-        return .{ .allocator = allocator, .call_targets = .init(allocator), .typed_group_calls = .init(allocator) };
+        return .{ .allocator = allocator, .call_targets = .init(allocator), .typed_group_calls = .init(allocator), .inputs = .init(allocator) };
     }
 
     pub fn deinit(self: *Store) void {
+        self.inputs.deinit();
         for (self.plans.items) |*plan| plan.deinit();
         self.plans.deinit(self.allocator);
         self.call_targets.deinit();
