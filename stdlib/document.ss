@@ -1,3 +1,4 @@
+import std:document/content as { PageNumber, format_page_number }
 import std:text/style
 import std:theme as *
 import std:internal/document as generated
