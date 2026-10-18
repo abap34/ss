@@ -38,6 +38,7 @@ const RelationCandidate = struct {
     source_anchor: []const u8,
     evaluated_offset: f64,
     source_node: ?core.NodeId = null,
+    statement_start: ?usize = null,
 };
 
 pub fn collect(
@@ -105,8 +106,14 @@ fn appendAxisAdjustments(
         return;
     }
     if (local_count == relation_count) {
+        var insertion_before: usize = page_span.end;
+        for (candidates.items) |candidate| insertion_before = @min(insertion_before, candidate.statement_start.?);
         for (candidates.items) |candidate| {
+            const reference_start = adjustments.items.len;
             if (candidate.source_node) |source_id| try appendReferencePositions(allocator, adjustments, report, editor, path, page_span, axis, source_id, &positioned);
+            // A reference pin appended after a local child update could replace
+            // that update when the reference is an ancestor group.
+            for (adjustments.items[reference_start..]) |*adjustment| adjustment.insertion_before = insertion_before;
             try adjustments.append(allocator, .{
                 .action = .{ .replace = candidate.source_edit.? },
                 .target = binding,
@@ -207,8 +214,10 @@ fn relationCandidate(
     page_span: source_relation.ByteSpan,
     relation: Relation,
 ) ?RelationCandidate {
+    const source_edit = if (relation.kind == .explicit) localSourceEdit(relation, path, page_span) else null;
     return .{
-        .source_edit = if (relation.kind == .explicit) localSourceEdit(relation, path, page_span) else null,
+        .source_edit = source_edit,
+        .statement_start = if (source_edit != null) relation.location.?.start else null,
         .target_anchor = @tagName(relation.target_anchor),
         .source = relationSourceBinding(editor, relation.source) orelse return null,
         .source_anchor = switch (relation.source) {

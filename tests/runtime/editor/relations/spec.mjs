@@ -332,7 +332,7 @@ end
         const guideBefore = scenario.name === "image-reference" || scenario.name === "centered-reference-chain"
           ? previewBounds(snapshot, editingTarget(snapshot, "guide").node_id)
           : null;
-        for (let step = 0; step < 2; step += 1) {
+        for (let step = 0; step < 3; step += 1) {
           const target = editingTarget(snapshot, "item");
           const from = previewBounds(snapshot, target.node_id);
           const to = { ...from, x: from.x + (scenario.dx ?? 25), y: from.y + (scenario.dy ?? 20) };

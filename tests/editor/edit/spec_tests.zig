@@ -573,6 +573,90 @@ test "relative position accepts compact constraint spacing" {
     try expectFixtureOutput(allocator, "relative/compact.ss", updated);
 }
 
+test "relative position keeps reference pins before multiline local updates" {
+    try checkReferencePins(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, checkReferencePins, .{});
+}
+
+fn checkReferencePins(allocator: std.mem.Allocator) !void {
+    const source =
+        \\page Example
+        \\  let pair = place!(text("Guide") |=| text("Item"))
+        \\  let item = first(children(pair))
+        \\  ;; Preserve the local relation.
+        \\  ~!~ item.left ==
+        \\    pair.center_x + 16 ;; Keep this comment.
+        \\end
+        \\
+    ;
+    var result = (try edit.relativePosition(allocator, source, .{ .start = 0, .end = source.len }, &.{
+        .{
+            .action = .{ .append_update = null },
+            .target = "pair",
+            .target_anchor = "left",
+            .source = "page",
+            .source_anchor = "left",
+            .evaluated_offset = 96,
+            .delta = 0,
+            .insertion_before = std.mem.indexOf(u8, source, "~!~").?,
+        },
+        .{
+            .action = .{ .replace = relationSource(source, "item.left", "pair.center_x", "+ 16") },
+            .target = "item",
+            .target_anchor = "left",
+            .source = "pair",
+            .source_anchor = "center_x",
+            .evaluated_offset = 16,
+            .delta = 25,
+        },
+        .{
+            .action = .{ .append_update = null },
+            .target = "item",
+            .target_anchor = "top",
+            .source = "page",
+            .source_anchor = "top",
+            .evaluated_offset = -100,
+            .delta = -20,
+        },
+    })).?;
+    defer result.deinit(allocator);
+    const updated = try edit.applyEdits(allocator, source, result.edits);
+    defer allocator.free(updated);
+    try std.testing.expectEqualStrings(
+        \\page Example
+        \\  let pair = place!(text("Guide") |=| text("Item"))
+        \\  let item = first(children(pair))
+        \\  ;; Preserve the local relation.
+        \\  ~!~ pair.left == page.left + 96
+        \\  ~!~ item.left ==
+        \\    pair.center_x + 41 ;; Keep this comment.
+        \\  ~!~ item.top == page.top - 120
+        \\end
+        \\
+    , updated);
+}
+
+test "relative position rejects reference insertion inside a statement" {
+    const source = "page Example\n  text!(\"Item\")\nend\n";
+    for ([_]usize{ source.len, std.mem.indexOf(u8, source, "Item").? }) |before| {
+        try std.testing.expectError(error.InvalidConstraintOrigin, edit.relativePosition(
+            std.testing.allocator,
+            source,
+            .{ .start = 0, .end = source.len },
+            &.{.{
+                .action = .{ .append_update = null },
+                .target = "item",
+                .target_anchor = "left",
+                .source = "page",
+                .source_anchor = "left",
+                .evaluated_offset = 96,
+                .delta = 0,
+                .insertion_before = before,
+            }},
+        ));
+    }
+}
+
 test "relative position accepts spaces around endpoint separators" {
     const allocator = std.testing.allocator;
     const source = try readFixture(allocator, "relative/spaced.ss");

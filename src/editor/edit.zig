@@ -149,53 +149,68 @@ pub fn relativePosition(
 ) !?Result {
     var edits = std.ArrayList(TextEdit).empty;
     errdefer deinitEdits(allocator, &edits);
-    var additions = std.ArrayList(u8).empty;
-    defer additions.deinit(allocator);
-    var insertion: ?usize = null;
-    var insertion_indent: []const u8 = "";
+    const Addition = struct { offset: usize, text: std.ArrayList(u8) = .empty };
+    var additions = std.ArrayList(Addition).empty;
+    defer {
+        for (additions.items) |*addition| addition.text.deinit(allocator);
+        additions.deinit(allocator);
+    }
 
     for (adjustments) |adjustment| {
         switch (adjustment.action) {
             .replace => |origin| {
                 const offset_source = if (origin.offset) |span| try sourceSlice(source, span) else null;
+                const text = try relation.adjustedOffset(
+                    allocator,
+                    offset_source,
+                    adjustment.evaluated_offset,
+                    adjustment.delta,
+                    origin.offset == null,
+                );
+                errdefer allocator.free(text);
                 try edits.append(allocator, .{
                     .start = if (origin.offset) |span| span.start else origin.source.end,
                     .end = if (origin.offset) |span| span.end else origin.source.end,
-                    .text = try relation.adjustedOffset(
-                        allocator,
-                        offset_source,
-                        adjustment.evaluated_offset,
-                        adjustment.delta,
-                        origin.offset == null,
-                    ),
+                    .text = text,
                 });
             },
             .append_update => |origin| {
-                if (insertion == null) {
-                    insertion = pageEndLineStart(source, page_span) orelse return null;
-                    insertion_indent = pageBodyIndent(source, page_span, insertion.?);
-                }
+                const insertion = if (adjustment.insertion_before) |before| blk: {
+                    if (before < page_span.start or before >= page_span.end or before >= source.len) return error.InvalidConstraintOrigin;
+                    const start = lineStartBefore(source, before, page_span.start);
+                    if (std.mem.trim(u8, source[start..before], " \t\r").len != 0) return error.InvalidConstraintOrigin;
+                    break :blk start;
+                } else pageEndLineStart(source, page_span) orelse return null;
+                const insertion_indent = pageBodyIndent(source, page_span, insertion);
+                const addition_index = for (additions.items, 0..) |addition, index| {
+                    if (addition.offset == insertion) break index;
+                } else blk: {
+                    try additions.append(allocator, .{ .offset = insertion });
+                    break :blk additions.items.len - 1;
+                };
+                const text = &additions.items[addition_index].text;
                 const offset_source = if (origin) |source_edit|
                     if (source_edit.offset) |span| try sourceSlice(source, span) else null
                 else
                     null;
                 try relation.appendAdjusted(
                     allocator,
-                    &additions,
+                    text,
                     true,
                     insertion_indent,
                     adjustment,
                     offset_source,
                 );
-                try additions.append(allocator, '\n');
+                try text.append(allocator, '\n');
             },
         }
     }
-    if (insertion) |offset| {
-        try edits.append(allocator, .{
-            .start = offset,
-            .end = offset,
-            .text = try additions.toOwnedSlice(allocator),
+    try edits.ensureUnusedCapacity(allocator, additions.items.len);
+    for (additions.items) |*addition| {
+        edits.appendAssumeCapacity(.{
+            .start = addition.offset,
+            .end = addition.offset,
+            .text = try addition.text.toOwnedSlice(allocator),
         });
     }
     return .{ .edits = try edits.toOwnedSlice(allocator) };
