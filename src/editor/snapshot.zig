@@ -570,9 +570,8 @@ fn appendOutlineNode(
     try item.intField("id", node.id);
     try item.intField("parent_id", parent_id);
     try item.intField("page_id", page_id);
-    try item.stringField("kind", if (node.object_kind == .overlay) "group" else "object");
-    try item.stringField("label", node.role orelse node.name);
-    try item.optionalStringField("role", node.role);
+    try item.stringField("kind", if (core.layout.graph.isGroupNode(node)) "group" else "object");
+    try item.stringField("label", node.name);
     try item.end();
     if (state.childrenOf(node_id)) |children| {
         for (children) |child_id| try appendOutlineNode(items, state, seen, page_id, node_id, child_id);

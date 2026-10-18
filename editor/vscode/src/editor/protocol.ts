@@ -53,7 +53,6 @@ export interface LayoutObject {
   id: number;
   page_id: number;
   name: string;
-  role?: string | null;
   x: number;
   y: number;
   width: number;
@@ -141,7 +140,6 @@ export interface OutlineItem {
   page_id: number;
   kind: "page" | "group" | "object";
   label: string;
-  role?: string | null;
 }
 
 export interface EditingTarget {

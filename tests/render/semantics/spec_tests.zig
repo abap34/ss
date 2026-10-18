@@ -52,7 +52,6 @@ test "typed headings and user displays preserve semantic attributes without role
     for (state.graph.nodes.items) |node| {
         if (node.kind != .object) continue;
         try testing.expect(node.placement != null);
-        try testing.expect(node.role == null);
         try testing.expectEqual(@as(usize, 0), node.fields.items.len);
     }
     var state_layout = LayoutFixture.init(&state);

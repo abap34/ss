@@ -51,11 +51,6 @@ fn isSingleUnderscore(text: []const u8) bool {
     return std.mem.eql(u8, text, "_");
 }
 
-pub fn parseRoleName(text: []const u8) ?core.Role {
-    if (text.len == 0) return null;
-    return text;
-}
-
 pub const ParsedPayload = struct {
     object_kind: core.ObjectKind,
     payload_kind: core.PayloadKind,

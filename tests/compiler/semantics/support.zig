@@ -15,7 +15,6 @@ pub const BodyTextDefaults = struct {
 };
 
 pub const ObjectStateExpectation = struct {
-    role: ?[]const u8 = null,
     content: ?[]const u8 = null,
     attached: ?bool = null,
     discarded: ?bool = null,
@@ -725,10 +724,6 @@ pub fn expectObjectState(
     var count: usize = 0;
     for (state.graph.nodes.items) |node| {
         if (node.kind != .object) continue;
-        if (expected.role) |role| {
-            const node_role = node.role orelse continue;
-            if (!std.mem.eql(u8, node_role, role)) continue;
-        }
         if (expected.content) |content| {
             const node_content = core.nodeContent(&node) orelse continue;
             if (!std.mem.eql(u8, node_content, content)) continue;

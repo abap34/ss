@@ -711,9 +711,8 @@ fn printDiagnosticNodeField(state: anytype, node_id: anytype) void {
     const id = node_id orelse return;
     const node = state.getNode(id) orelse return;
     var buffer: [192]u8 = undefined;
-    const role = node.role orelse "-";
     const payload = if (node.payload_kind) |payload_kind| @tagName(payload_kind) else "-";
-    const label = std.fmt.bufPrint(&buffer, "#{d} {s} role={s} payload={s}", .{ id, node.name, role, payload }) catch return;
+    const label = std.fmt.bufPrint(&buffer, "#{d} {s} payload={s}", .{ id, node.name, payload }) catch return;
     printBoxField("object", label);
 }
 
@@ -979,7 +978,7 @@ fn constraintTargetLabel(allocator: std.mem.Allocator, state: anytype, constrain
 
 fn nodeLabel(state: anytype, node_id: anytype) []const u8 {
     const node = state.getNode(node_id) orelse return "unknown";
-    return node.role orelse node.name;
+    return node.name;
 }
 
 pub fn isExpectedCliError(err: anyerror) bool {

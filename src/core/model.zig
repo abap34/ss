@@ -42,8 +42,6 @@ pub const FunctionKeyContext = struct {
 };
 
 pub const NominalId = language_type.NominalId;
-pub const Role = []const u8;
-pub const GroupRole: Role = "group";
 
 pub const PropertyPath = @import("property_path.zig");
 
@@ -110,6 +108,7 @@ pub const NodeKind = enum {
 };
 
 pub const ObjectKind = enum {
+    group,
     text,
     source,
     overlay,
@@ -430,7 +429,6 @@ pub const Node = struct {
     attached: bool = false,
     discarded: bool = false,
     placement: ?Placement = null,
-    role: ?Role = null,
     object_kind: ?ObjectKind = null,
     payload_kind: ?PayloadKind = null,
     content: ?[]const u8 = null,
@@ -891,10 +889,6 @@ pub const TypeMismatchCode = enum {
     UnmatchedInputType,
 };
 
-pub fn roleEq(role: ?Role, expected: []const u8) bool {
-    return role != null and std.mem.eql(u8, role.?, expected);
-}
-
 pub fn nodeField(node: *const Node, key: []const u8) ?Value {
     if (node.placement) |placement| {
         if (placement.display == .native) {
@@ -1013,5 +1007,5 @@ pub const Query = struct {
 /// Expanded displays and input groups own the bounds of their children.
 pub fn isGroupNode(node: *const Node) bool {
     if (node.placement) |placement| return placement.display == .expanded or placement.display == .group;
-    return roleEq(node.role, GroupRole);
+    return node.object_kind == .group;
 }

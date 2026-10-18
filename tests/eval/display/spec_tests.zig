@@ -364,7 +364,6 @@ test "native text display: a user display reaches Markdown preparation through i
     try testing.expectEqual(count, state.nodeCount());
     try testing.expect(state.childrenOf(child) == null);
     const node = state.getNode(child).?;
-    try testing.expect(node.role == null);
     try testing.expectEqual(@as(usize, 0), node.fields.items.len);
     try testing.expectEqual(core.ObjectKind.text, node.object_kind.?);
     try testing.expectEqualStrings("# Overview\n\n**Typed** text", core.nodeDisplayContent(node));
@@ -375,7 +374,7 @@ test "native text display: a user display reaches Markdown preparation through i
     try testing.expectEqual(core.markdown.ParseMode.block, prepared.parse_mode);
     try testing.expect(prepared.markdown_doc.?.blocks.items.len >= 2);
     try testing.expectEqualStrings("# Overview\n\n**Typed** text", prepared.content);
-    try testing.expectEqual(core.ObjectKind.overlay, state.getNode(parent).?.object_kind.?);
+    try testing.expectEqual(core.ObjectKind.group, state.getNode(parent).?.object_kind.?);
     try testing.expectEqual(core.render_policy.RenderKind.chrome_only, core.render_policy.resolveKind(&state, state.getNode(parent).?));
     var pages = try core.prepared.prepare(testing.allocator, &state);
     defer pages.deinit(testing.allocator);
@@ -418,7 +417,6 @@ test "native image display: immutable inputs retain asset styles and independent
         try testing.expectEqual(if (id == child) second_page else first_page, node.placement.?.page_id);
         try testing.expectEqual(core.ObjectKind.asset, node.object_kind.?);
         try testing.expectEqual(core.PayloadKind.image_ref, node.payload_kind.?);
-        try testing.expect(node.role == null);
         try testing.expect(node.content == null);
         try testing.expectEqual(@as(usize, 0), node.fields.items.len);
         const paint = core.render_policy.resolve(&state, node);
@@ -477,7 +475,6 @@ test "native code display: source, language and styles remain immutable across p
     for (ids, languages, [_]f32{ 18, 22, 18 }) |id, language, size| {
         const node = state.getNode(id).?;
         try testing.expectEqual(core.native_display.Kind.code, node.placement.?.display.native);
-        try testing.expect(node.role == null);
         try testing.expect(node.content == null);
         try testing.expectEqual(@as(usize, 0), node.fields.items.len);
         const paint = core.render_policy.resolve(&state, node);
@@ -531,7 +528,6 @@ test "code constructors: values allocate only at placement and defaults are inde
         const node = state.getNode(id).?;
         try testing.expectEqual(core.native_display.Kind.code, node.placement.?.display.native);
         try testing.expectEqualStrings("return 1", core.nodeContent(node).?);
-        try testing.expect(node.role == null);
         try testing.expectEqual(@as(usize, 0), node.fields.items.len);
         const paint = core.render_policy.resolve(&state, node);
         try testing.expectEqual(size, paint.text.?.font_size);
@@ -663,7 +659,6 @@ test "native text display: public Text preserves complete block styles without m
     try testing.expectEqual(@as(usize, 2), roots.len);
     for (roots, [_]f32{ 23, 29 }, 0..) |root, font_size, index| {
         const node = state.getNode(root).?;
-        try testing.expect(node.role == null);
         try testing.expectEqual(@as(usize, 0), node.fields.items.len);
         const paint = core.render_policy.resolve(&state, node);
         try testing.expectEqual(font_size, paint.text.?.font_size);
@@ -709,7 +704,6 @@ test "native text display: an immutable theme block can be used directly and upd
         try testing.expectEqual(size, paint.text.?.font_size);
         try testing.expectEqual(@as(f32, 47), paint.text.?.line_height);
         try testing.expectEqual(@as(f32, 42), core.nodeField(node, "layout").?.record.field("spacing_after").?.number);
-        try testing.expect(node.role == null);
         try testing.expectEqual(@as(usize, 0), node.fields.items.len);
     }
 }
@@ -741,7 +735,6 @@ test "native text display: every bundled theme resolves the same text paint from
         try testing.expectEqualDeep(previous_paint.text, typed_paint.text);
         try testing.expectEqualDeep(previous_paint.underline, typed_paint.underline);
         try testing.expectEqual(core.markdown.parseModeForNode(&state, previous), core.markdown.parseModeForNode(&state, typed));
-        try testing.expect(typed.role == null);
         try testing.expectEqual(@as(usize, 0), typed.fields.items.len);
     }
 }
@@ -969,7 +962,6 @@ test "page numbers: standard display waits for all pages and retains custom form
         try testing.expectEqual(@as(usize, 1), roots.len);
         const number = state.getNode(roots[0]).?;
         try testing.expectEqualStrings("PageNumber", number.placement.?.value.record.ty.class_name.?);
-        try testing.expect(number.role == null);
         try testing.expectEqual(@as(usize, 0), number.fields.items.len);
         const child = state.getNode(state.childrenOf(number.id).?[0]).?;
         try testing.expectEqualStrings(expected, core.nodeDisplayContent(child));
@@ -1255,7 +1247,6 @@ test "native latex display: immutable body and configuration survive reuse and d
     for ([_]core.NodeId{ roots[0], roots[1], child }, 0..) |id, index| {
         const node = state.getNode(id).?;
         try testing.expectEqual(core.native_display.Kind.latex, node.placement.?.display.native);
-        try testing.expect(node.role == null);
         try testing.expectEqual(@as(usize, 0), node.fields.items.len);
         const paint = core.render_policy.resolve(&state, node);
         try testing.expectEqual(core.render_policy.RenderKind.latex, paint.kind);
@@ -1314,7 +1305,6 @@ test "math display: public constructors preserve source, configuration and typed
         const leaf = state.getNode(children[0]).?;
         try testing.expectEqual(core.native_display.Kind.latex, leaf.placement.?.display.native);
         try testing.expectEqual(input.page_id, leaf.placement.?.page_id);
-        try testing.expect(leaf.role == null);
         const paint = core.render_policy.resolve(&state, leaf);
         try testing.expectEqual(@as(f32, if (index == 1) 2 else 1), paint.latex.?.scale);
         try testing.expectEqual(@as(f32, if (index == 2) 0 else 8), paint.chrome.pad_x);
@@ -1678,7 +1668,6 @@ test "native path display: immutable geometry, paint and markers survive reuse a
         try testing.expectEqual(core.native_display.Kind.path_shape, node.placement.?.display.native);
         try testing.expectEqualStrings("PathShape", node.placement.?.value.record.ty.class_name.?);
         try testing.expectEqual(if (index == 2) pages[1] else pages[0], node.placement.?.page_id);
-        try testing.expect(node.role == null);
         try testing.expectEqual(@as(usize, 0), node.fields.items.len);
         const paint = core.render_policy.resolve(&state, node).vector_path.?;
         try testing.expectEqual(@as(f32, if (index == 1) 240 else 180), paint.natural_size.?.width);
@@ -1759,7 +1748,6 @@ test "native icon display: immutable inputs preserve identity, paint and bundled
     for (selected.ids.items, 0..) |id, index| {
         const node = state.getNode(id).?;
         try testing.expectEqual(core.native_display.Kind.icon, node.placement.?.display.native);
-        try testing.expect(node.role == null);
         try testing.expect(node.content == null);
         try testing.expectEqual(@as(usize, 0), node.fields.items.len);
         const paint = core.render_policy.resolve(&state, node);
@@ -1898,7 +1886,6 @@ test "native text display: public constructors preserve explicit TeX configurati
     try testing.expectEqual(@as(usize, 3), roots.len);
     for (roots, [_][]const u8{ "explicit", "changed", "" }, [_]f32{ 20, 31, 20 }) |root, preamble, size| {
         const node = state.getNode(root).?;
-        try testing.expect(node.role == null);
         try testing.expectEqual(@as(usize, 0), node.fields.items.len);
         try testing.expectEqual(size, core.render_policy.resolve(&state, node).text.?.font_size);
         const config_value = try core.latex_config.forNode(node);

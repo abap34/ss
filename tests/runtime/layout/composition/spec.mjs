@@ -306,7 +306,7 @@ let a = text!("Already placed")
 let b = text!("Also placed")
 place!(a ${operator} b)
 end
-`, "TypeMismatch");
+`, "InvalidGroupInput");
   }
 
   await expectFailure("negative-split-gap", `import std:text as { Text }
@@ -611,7 +611,7 @@ end
   assert.equal(copies.length, 2);
   assert.notEqual(copies[0].id, copies[1].id);
   assertClose(copies[0].width, copies[1].width, "reused values received unequal cells");
-  await expectFailure("group-page-selection", "document\nplace_on!(new_page(docctx(), \"main\"), group(pages(docctx())))\nend\n", "TypeMismatch");
+  await expectFailure("group-page-selection", "document\nplace_on!(new_page(docctx(), \"main\"), group(pages(docctx())))\nend\n", "InvalidGroupInput");
 }
 
 async function testEqualEvaluation() {

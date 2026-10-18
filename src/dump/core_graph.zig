@@ -47,7 +47,6 @@ fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, state: *core.Docu
     try item.intField("id", node.id);
     try item.enumTagField("kind", node.kind);
     try item.stringField("name", node.name);
-    try item.optionalStringField("role", node.role);
     try item.optionalEnumTagField("object_kind", node.object_kind);
     try item.optionalEnumTagField("payload_kind", node.payload_kind);
     try item.optionalStringField("content", content);

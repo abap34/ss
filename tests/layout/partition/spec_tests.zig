@@ -158,8 +158,8 @@ test "layout partition: solving one page preserves other frames and fallback ord
     var nodes: [3]core.NodeId = undefined;
     for (&nodes) |*node| {
         const page = try state.addPage("page");
-        node.* = try state.makeObject(page, "body", null, .text, .text, "body");
-        _ = try state.makeObject(page, "next", null, .text, .text, "next");
+        node.* = try state.makeObject(page, "body", .text, .text, "body");
+        _ = try state.makeObject(page, "next", .text, .text, "next");
         try state.constraints.addAnchor(state.allocator, node.*, .left, .{ .page = .left }, 60, null);
     }
     var measured = MeasuredPages{};
@@ -206,10 +206,10 @@ test "layout partition: implicit groups retain page ownership and foreign endpoi
     defer geometry.deinit();
     const first = try state.addPage("first");
     const second = try state.addPage("second");
-    const a = try state.makeObject(first, "a", null, .text, .text, "a");
-    const b = try state.makeObject(first, "b", null, .text, .text, "b");
-    const foreign = try state.makeObject(second, "foreign", null, .text, .text, "foreign");
-    const unused = try state.createObjectWithOrigin("unused", null, .text, .text, "unused", null);
+    const a = try state.makeObject(first, "a", .text, .text, "a");
+    const b = try state.makeObject(first, "b", .text, .text, "b");
+    const foreign = try state.makeObject(second, "foreign", .text, .text, "foreign");
+    const unused = try state.createObjectWithOrigin("unused", .text, .text, "unused", null);
     const group = try state.createGroupWithOrigin(&.{ a, b }, null);
     try state.constraints.addAnchor(state.allocator, group, .left, .{ .page = .left }, 10, null);
     try state.constraints.addAnchor(state.allocator, a, .left, .{ .node = .{ .node_id = foreign, .anchor = .left } }, 20, null);
@@ -247,9 +247,9 @@ test "layout partition: unreferenced inferred groups do not change the solved gr
     var geometry = LayoutFixture.init(&state);
     defer geometry.deinit();
     const page = try state.addPage("page");
-    const first = try state.createObjectWithOrigin("first", null, .text, .text, "First", null);
-    const shared = try state.createObjectWithOrigin("shared", null, .text, .text, "Shared", null);
-    const last = try state.createObjectWithOrigin("last", null, .text, .text, "Last", null);
+    const first = try state.createObjectWithOrigin("first", .text, .text, "First", null);
+    const shared = try state.createObjectWithOrigin("shared", .text, .text, "Shared", null);
+    const last = try state.createObjectWithOrigin("last", .text, .text, "Last", null);
     for ([_]core.NodeId{ first, shared, last }) |id| try state.placeObjectOnPage(page, id);
     const left = try state.createGroupWithOrigin(&.{ first, shared }, null);
     const right = try state.createGroupWithOrigin(&.{ shared, last }, null);
@@ -279,10 +279,10 @@ test "layout partition: referenced groups include nested bounding groups but not
     var geometry = LayoutFixture.init(&state);
     defer geometry.deinit();
     const page = try state.addPage("page");
-    const first = try state.makeObject(page, "first", null, .text, .text, "First");
-    const second = try state.makeObject(page, "second", null, .text, .text, "Second");
-    const third = try state.makeObject(page, "third", null, .text, .text, "Third");
-    const after = try state.makeObject(page, "after", null, .text, .text, "After");
+    const first = try state.makeObject(page, "first", .text, .text, "First");
+    const second = try state.makeObject(page, "second", .text, .text, "Second");
+    const third = try state.makeObject(page, "third", .text, .text, "Third");
+    const after = try state.makeObject(page, "after", .text, .text, "After");
     const inner = try state.createGroupWithOrigin(&.{ first, second }, null);
     const outer = try state.createGroupWithOrigin(&.{ inner, third }, null);
     const unrelated = try state.createGroupWithOrigin(&.{ first, third }, null);
@@ -308,9 +308,9 @@ test "layout partition: empty partial and cross-page groups are excluded" {
     defer geometry.deinit();
     const first_page = try state.addPage("first");
     const second_page = try state.addPage("second");
-    const first = try state.makeObject(first_page, "first", null, .text, .text, "First");
-    const second = try state.makeObject(second_page, "second", null, .text, .text, "Second");
-    const unplaced = try state.createObjectWithOrigin("unplaced", null, .text, .text, "Unplaced", null);
+    const first = try state.makeObject(first_page, "first", .text, .text, "First");
+    const second = try state.makeObject(second_page, "second", .text, .text, "Second");
+    const unplaced = try state.createObjectWithOrigin("unplaced", .text, .text, "Unplaced", null);
     const empty = try state.createGroupWithOrigin(&.{}, null);
     const partial = try state.createGroupWithOrigin(&.{ first, unplaced }, null);
     const mixed = try state.createGroupWithOrigin(&.{ first, second }, null);
@@ -334,7 +334,7 @@ test "layout partition: prepared graphs read updated offsets without repeating p
     var geometry = LayoutFixture.init(&state);
     defer geometry.deinit();
     const page = try state.addPage("page");
-    const object = try state.makeObject(page, "object", null, .text, .text, "body");
+    const object = try state.makeObject(page, "object", .text, .text, "body");
     try state.constraints.addAnchor(state.allocator, object, .left, .{ .page = .left }, 10, null);
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);

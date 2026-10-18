@@ -161,7 +161,7 @@ end
           assert(numbers.length === 1, `${name} should receive exactly one page number`);
           assertClose(numbers[0].y, 20, `${name} page number position`);
           const actual = objects.filter((item) => !isPageNumber(item));
-          const metadata = (items) => items.map(({ name, role, content, fields }) => ({ name, role, content, fields }));
+          const metadata = (items) => items.map(({ name, content, fields }) => ({ name, content, fields }));
           deepStrictEqual(metadata(actual), metadata(expected), `${name}: numbering changed existing content or style`);
           for (let index = 0; index < expected.length; index += 1) {
             for (const field of ["x", "y", "width", "height"]) {

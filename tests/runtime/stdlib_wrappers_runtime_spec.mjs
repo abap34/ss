@@ -30,7 +30,7 @@ end
     const dump = JSON.parse(await readFile(dumpPath, "utf8"));
     const node = dump.nodes.find((candidate) => candidate.content === source);
     assert(node, `latex node was not found: ${JSON.stringify(dump.nodes)}`);
-    assert(node.role === null, `typed latex unexpectedly has a role: ${JSON.stringify(node)}`);
+    assert(!Object.hasOwn(node, "role"), `unexpected role field: ${JSON.stringify(node)}`);
     assert(node.placement?.input.type.name === "Latex", `latex constructor lost its input type: ${JSON.stringify(node)}`);
     assert(node.placement?.display.kind === "latex", `latex constructor lost its display: ${JSON.stringify(node)}`);
     assert(node.render.kind === "latex", `latex should render its literal body: ${JSON.stringify(node)}`);

@@ -29,7 +29,6 @@ fn addLayoutFixture(state: *core.DocumentState, geometry: *LayoutFixture) !void 
     const object_id = try state.makeObject(
         page_id,
         "object",
-        null,
         .text,
         .text,
         "content",
@@ -135,7 +134,7 @@ fn releasePreparedLayoutInputs(allocator: std.mem.Allocator, retain_state: bool)
     var state_owned = true;
     defer if (state_owned) state.deinit();
     const page_id = try state.addPage("retained");
-    _ = try state.makeObject(page_id, "object", null, .text, .text, "content");
+    _ = try state.makeObject(page_id, "object", .text, .text, "content");
     var output = analysis.snapshot.LayoutHookOutput{ .reuse_inputs = .{
         .pages = try core.prepared.prepare(allocator, &state),
         .font_environment = std.mem.zeroes(render_text.FontEnvironment),

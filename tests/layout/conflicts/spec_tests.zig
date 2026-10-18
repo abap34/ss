@@ -35,7 +35,6 @@ fn addFixture(state: *core.DocumentState, geometry: *LayoutFixture) !Fixture {
     const first_object = try state.makeObject(
         first_page,
         "first-object",
-        null,
         .text,
         .text,
         "first",
@@ -43,7 +42,6 @@ fn addFixture(state: *core.DocumentState, geometry: *LayoutFixture) !Fixture {
     const second_object = try state.makeObject(
         second_page,
         "second-object",
-        null,
         .text,
         .text,
         "second",

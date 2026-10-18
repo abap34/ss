@@ -73,7 +73,7 @@ test "runtime contracts: placement references validate the complete registered i
     try testing.expectEqual(placed.object, anchor.anchor.node.node_id);
     try testing.expectEqual(core.Anchor.right, anchor.anchor.node.anchor);
     try testing.expectError(error.UnknownField, eval_value.placementMember(&state, placed.object, "content"));
-    const legacy = core.Value{ .object = try state.makeObject(page, "old", null, .text, .text, "Text") };
+    const legacy = core.Value{ .object = try state.makeObject(page, "old", .text, .text, "Text") };
     try testing.expect(contracts.valueConformsToType(&state, placed, expected));
     try testing.expect(contracts.valueConformsToType(&state, placed, Type.placement));
     try testing.expect(!contracts.valueConformsToType(&state, placed, different));

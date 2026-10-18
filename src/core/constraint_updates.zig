@@ -53,7 +53,7 @@ pub fn resolve(state: *document_state.DocumentState) !void {
     for (state.constraints.updates.items, 0..) |update, index| {
         if (!update.active or update.role != .position) continue;
         const node = state.getNode(update.target_node) orelse continue;
-        if (!model.roleEq(node.role, model.GroupRole)) continue;
+        if (!model.isGroupNode(node)) continue;
 
         var nodes = std.AutoHashMap(model.NodeId, void).init(state.allocator);
         errdefer nodes.deinit();

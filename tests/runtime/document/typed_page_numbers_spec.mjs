@@ -32,7 +32,7 @@ try {
     assert.equal(text.placement.page, number.placement.page);
     assert.equal(number.y, 28);
     assert(Math.abs(number.x + number.width - 1216) < 0.01);
-    assert.equal(number.role, null);
+    assert(!Object.hasOwn(number, "role"));
     assert.equal(number.placement.display.state, "expanded");
   }
   const contents = byType("Toc");
@@ -45,7 +45,7 @@ try {
   assert.equal(byType("Image").length, 1);
   assert.equal(byType("Code").length, 1);
   assert.equal(dump.nodes.filter(node => node.kind === "object").length, placed.length);
-  for (const node of placed) assert.equal(node.role, null);
+  for (const node of placed) assert(!Object.hasOwn(node, "role"));
   run("render", "--quiet", source, "--output", path.join(output, "slides.pdf"));
   assert.equal((await readFile(path.join(output, "slides.pdf"))).subarray(0, 5).toString(), "%PDF-");
   const numbering = path.join(root, "tests/fixtures/typed-document/numbering.ss");
