@@ -71,7 +71,6 @@ import std:query as {
   pages,
   objs_all,
   doc_objs,
-  page_of,
 }
 import std:graphics as {
   PathShape,
