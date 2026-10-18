@@ -352,7 +352,7 @@ pub fn resolveKind(state: anytype, node: *const Node) RenderKind {
         .native => |kind| return switch (kind) {
             .text => .text,
             .image => .raster_asset,
-            .pdf => .vector_asset,
+            .pdf, .icon => .vector_asset,
             .code => .code,
             .latex => .latex,
             .path_shape => .vector_path,

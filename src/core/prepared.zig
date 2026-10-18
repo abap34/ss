@@ -6,6 +6,7 @@ const render_env = @import("render_env.zig");
 const render_policy = @import("render_policy.zig");
 const partition = @import("../layout/partition.zig");
 const fields = @import("fields.zig");
+const fontawesome = @import("fontawesome.zig");
 
 pub const ObjectSemantics = union(enum) {
     auto,
@@ -148,7 +149,12 @@ fn recordFileInputs(state: *DocumentState, object: *const PreparedObject) !void 
     const inputs = state.file_inputs orelse return;
     if (!object.attached) return;
     switch (object.render.kind) {
-        .vector_asset, .raster_asset => try inputs.record(state.asset_base_dir, object.content, .file),
+        .vector_asset, .raster_asset => {
+            const bundled_icon = for (object.asset_deps) |dep| {
+                if (dep.kind == .icon) break true;
+            } else false;
+            if (!bundled_icon) try inputs.record(state.asset_base_dir, object.content, .file);
+        },
         else => {},
     }
     var uses_latex = object.render.kind == .latex;
@@ -218,6 +224,13 @@ pub fn prepareObjectWithRender(
             if (render.asset != null and render.asset.?.format == .pdf) {
                 try asset_deps.append(allocator, .{
                     .kind = .vector_pdf,
+                    .source = content,
+                    .content_start = 0,
+                    .content_end = content.len,
+                });
+            } else if (fontawesome.parseSource(content) != null) {
+                try asset_deps.append(allocator, .{
+                    .kind = .icon,
                     .source = content,
                     .content_start = 0,
                     .content_end = content.len,
