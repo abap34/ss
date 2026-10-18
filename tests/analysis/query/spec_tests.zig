@@ -860,3 +860,34 @@ test "analysis query spec: composition spacing completes in member and with expr
         try testing.expect(found);
     }
 }
+
+test "analysis query spec: qualified constants support navigation and field completion" {
+    const path = "stdlib/internal/qualified-values-query-test.ss";
+    const imported_path = "stdlib/internal/query-values.ss";
+    const imported = "type Style { size: Number = 18 }\nconst defaults: Style = Style {}\n";
+    const source =
+        \\import ./query-values as lib
+        \\page main
+        \\  let defaults = "local"
+        \\  let original = lib::defaults
+        \\  let size = lib::defaults.size
+        \\end
+    ;
+    var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+    defer sources.deinit();
+    try sources.put(path, source);
+    try sources.put(imported_path, imported);
+    var snapshot = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{});
+    defer snapshot.deinit();
+    try testing.expect(!snapshot.diagnostics.hasErrors());
+    const request = analysis.query.types.SourceRequest{
+        .path = path,
+        .source = source,
+        .offset = std.mem.indexOf(u8, source, "lib::defaults").? + "lib::def".len,
+    };
+    const definitions = try analysis.snapshot.definitionAt(testing.allocator, &snapshot, request, .{ .budget_ms = 1000 });
+    defer testing.allocator.free(definitions);
+    try testing.expectEqual(@as(usize, 1), definitions.len);
+    try testing.expect(std.mem.endsWith(u8, definitions[0].path orelse "", "query-values.ss"));
+    try expectAppliedField(&snapshot, path, source, "lib::defaults.size", "size", "Number", 0);
+}

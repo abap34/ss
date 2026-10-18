@@ -662,7 +662,7 @@ fn evalExpr(
         .ident => |ident| blk: {
             const name = ident.name;
             const sema = SemanticEnv.init(state, evaluation.declarations, functions).forModule(evaluation.module_id);
-            switch (try evaluation.name_resolution_cache.resolveValue(&sema, core.Value, ast.CallableName.bare(name), env.get(name))) {
+            switch (try evaluation.name_resolution_cache.resolveValue(&sema, core.Value, ident.reference(), env.get(name))) {
                 .local => |value| break :blk try value.clone(state.allocator),
                 .constant => |resolved| break :blk try evalConstValue(evaluation, page_id, scope, current_origin, resolved),
                 .function => |resolved| break :blk .{ .function = try eval_functions.functionRefForInModule(state.allocator, resolved.module_id, resolved.decl) },

@@ -167,7 +167,7 @@ fn exprInfoWithOptions(
         },
         .ident => |ident| blk: {
             const name = ident.name;
-            switch (try options.context.name_resolution.resolveValue(sema, TypeInfo, ast.CallableName.bare(name), env.get(name))) {
+            switch (try options.context.name_resolution.resolveValue(sema, TypeInfo, ident.reference(), env.get(name))) {
                 .local => |info| {
                     if (info.failed) return error.AlreadyDiagnosed;
                     break :blk info;
@@ -466,7 +466,7 @@ fn inferMemberInfo(
     if (member.name_hole) |hole_id| return infoFromHole(hole_id);
     if (member.target.* == .ident) {
         const enum_name = member.target.ident.name;
-        if ((try options.context.name_resolution.resolveValue(sema, TypeInfo, ast.CallableName.bare(enum_name), env.get(enum_name))) == .unknown) {
+        if ((try options.context.name_resolution.resolveValue(sema, TypeInfo, member.target.ident.reference(), env.get(enum_name))) == .unknown) {
             if (sema.enumExists(null, enum_name)) {
                 if (member.optional) {
                     try addUserReportAtSpan(state, origin, member.name_span, "InvalidOptionalMember", "enum cases use '.'; '?.' requires a value receiver", .{});

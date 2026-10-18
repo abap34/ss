@@ -551,6 +551,14 @@ pub const CallableName = struct {
         return .{ .name = name };
     }
 
+    /// Borrow a value reference's name without allocating or taking ownership.
+    pub fn fromText(text: []const u8) CallableName {
+        if (std.mem.indexOf(u8, text, "::")) |separator| {
+            return qualified(text[0..separator], text[separator + 2 ..]);
+        }
+        return bare(text);
+    }
+
     pub fn qualified(qualifier: []const u8, name: []const u8) CallableName {
         return .{ .qualifier = qualifier, .name = name };
     }
@@ -991,6 +999,17 @@ pub const StringLiteral = struct {
 pub const IdentifierExpr = struct {
     name: []const u8,
     name_span: ?Span = null,
+
+    pub fn reference(self: IdentifierExpr) CallableName {
+        var result = CallableName.fromText(self.name);
+        result.span = self.name_span;
+        result.name_span = self.name_span;
+        if (self.name_span) |span| if (result.qualifier) |qualifier| {
+            result.qualifier_span = .{ .start = span.start, .end = span.start + qualifier.len };
+            result.name_span = .{ .start = span.end - result.name.len, .end = span.end };
+        };
+        return result;
+    }
 
     pub fn deinit(self: *IdentifierExpr, allocator: Allocator) void {
         allocator.free(self.name);

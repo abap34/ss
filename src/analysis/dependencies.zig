@@ -974,7 +974,7 @@ pub const Analyzer = struct {
     }
 
     fn addVariableRead(self: *Analyzer, summary: *AccessSummary, name: []const u8) !void {
-        switch (try self.valueBinding(ast.CallableName.bare(name))) {
+        switch (try self.valueBinding(ast.CallableName.fromText(name))) {
             .local => |policy| {
                 if (policy == .scheduled) try summary.addRead(Resource.makeVariable(self.variable_scope, name));
                 try self.addBoundSelectionReads(summary, name);
@@ -1105,7 +1105,7 @@ pub const Analyzer = struct {
         self.value_fact_depth += 1;
         defer self.value_fact_depth -= 1;
         return switch (expr) {
-            .ident => |ident| try self.withPropertyTarget(try self.callableValue(ast.CallableName.bare(ident.name)), self.property_target_bindings.get(ident.name)),
+            .ident => |ident| try self.withPropertyTarget(try self.callableValue(ident.reference()), self.property_target_bindings.get(ident.name)),
             .lambda => |lambda| blk: {
                 const allocator = self.value_storage.allocator();
                 var bindings = std.ArrayList(CapturedBinding).empty;
@@ -2363,7 +2363,7 @@ pub const Analyzer = struct {
             .ident => |ident| blk: {
                 const name = ident.name;
                 if (self.property_target_bindings.get(name)) |target| break :blk target;
-                switch (try self.valueBinding(ast.CallableName.bare(name))) {
+                switch (try self.valueBinding(ast.CallableName.fromText(name))) {
                     .constant => |resolved| break :blk try self.propertyTargetConst(resolved),
                     else => {},
                 }
@@ -2617,7 +2617,7 @@ pub const Analyzer = struct {
             .ident => |ident| blk: {
                 const name = ident.name;
                 if (self.object_role_bindings.get(name)) |role_name| break :blk role_name;
-                switch (try self.valueBinding(ast.CallableName.bare(name))) {
+                switch (try self.valueBinding(ast.CallableName.fromText(name))) {
                     .constant => |resolved| break :blk try self.objectRoleConst(resolved),
                     else => {},
                 }
@@ -2933,7 +2933,7 @@ fn literalStringExpr(self: *Analyzer, expr: ast.Expr) anyerror!?[]const u8 {
         .color => |value| value,
         .ident => |ident| blk: {
             if (self.string_bindings.get(ident.name)) |value| break :blk value;
-            switch (try self.valueBinding(ast.CallableName.bare(ident.name))) {
+            switch (try self.valueBinding(ident.reference())) {
                 .constant => |resolved| {
                     if (self.visiting.contains(resolved.key)) break :blk null;
                     try self.visiting.put(resolved.key, {});

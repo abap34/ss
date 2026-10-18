@@ -157,7 +157,7 @@ pub fn typeForExpr(allocator: std.mem.Allocator, budget: ?QueryBudget, snapshot:
         .record => |record| try typeForConstruction(allocator, budget, snapshot, module_id, offset, record),
         .record_update => |update| try typeForExpr(allocator, budget, snapshot, module_id, offset, update.target.*),
         .ident => |ident| blk: {
-            switch (try selectedValue(budget, snapshot, module_id, offset, ast.CallableName.bare(ident.name))) {
+            switch (try selectedValue(budget, snapshot, module_id, offset, ident.reference())) {
                 .local => |binding| {
                     if (binding.object_class) |id| {
                         break :blk if (binding.value_type.kind == .selection) binding.value_type else ast.Type.objectId(id);

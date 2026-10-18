@@ -2833,3 +2833,29 @@ test "syntax spec: parenthesized qualified expressions are distinct from typed l
     try testing.expectEqualStrings("library::Item", lambda.params.items[0].ty.class_name.?);
     try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source});
 }
+
+test "syntax spec: qualified values parse standalone with members and updates" {
+    const source =
+        \\const style: Style = library:: defaults
+        \\page main
+        \\  let copied = library::defaults with { size = 24 }
+        \\  let size = library::defaults.size
+        \\  let fallback = library::optional ?? library::defaults
+        \\  let reference = (library::format)
+        \\end
+    ;
+    var parsed = try parse(source);
+    defer parsed.deinit();
+    const ident = parsed.module.constants.items[0].value.ident;
+    try testing.expectEqualStrings("library::defaults", ident.name);
+    const reference = ident.reference();
+    try expectSpanText(source, reference.qualifier_span.?, "library");
+    try expectSpanText(source, reference.name_span.?, "defaults");
+    try expectSpanText(source, reference.span.?, "library:: defaults");
+    const statements = parsed.module.pages.items[0].statements.items;
+    try testing.expectEqualStrings("library::defaults", statements[0].kind.let_binding.expr.record_update.target.ident.name);
+    try testing.expectEqualStrings("library::defaults", statements[1].kind.let_binding.expr.member.target.ident.name);
+    try testing.expectEqualStrings("library::optional", statements[2].kind.let_binding.expr.coalesce.target.ident.name);
+    try testing.expectEqualStrings("library::format", statements[3].kind.let_binding.expr.ident.name);
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source});
+}

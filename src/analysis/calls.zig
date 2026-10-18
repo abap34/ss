@@ -443,7 +443,7 @@ const Analyzer = struct {
             .hole => return ValueFacts.init(self.allocator),
             .ident => |ident| {
                 const name = ident.name;
-                switch (try self.sema.resolveValue(ValueFacts, ast.CallableName.bare(name), env.get(name))) {
+                switch (try self.sema.resolveValue(ValueFacts, ident.reference(), env.get(name))) {
                     .local => |labels| return try labels.clone(self.allocator),
                     .constant => |resolved| return try self.constFacts(resolved),
                     .function => |resolved| return try ValueFacts.singleton(self.allocator, self.namedLabel(resolved.key)),

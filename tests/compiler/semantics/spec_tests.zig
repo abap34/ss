@@ -8374,3 +8374,88 @@ test "compiler semantics: obsolete document generation helpers are unavailable" 
         try expectDiagnostic(source, "bytes:", "UnknownFunction");
     }
 }
+
+test "compiler semantics: qualified constants preserve nominal values updates and shadowing" {
+    try expectObjectContentWithTwoOverlays(
+        \\import std:prelude as *
+        \\import ./lib/a as styles
+        \\page main
+        \\  let defaults = "local"
+        \\  let changed = styles::defaults with { size = 24 }
+        \\  text!(defaults ++ ":" ++ str(styles::defaults.size) ++ ":" ++ str(changed.size))
+        \\end
+    ,
+        \\import ./b as { defaults }
+    ,
+        \\type Style { size: Number = 18 }
+        \\const defaults: Style = Style {}
+    , "local:18:24");
+    try buildSource(
+        \\import std:text as text
+        \\import std:layout as layout
+        \\page main
+        \\  layout::place!(text::text("Styled", text::default_text_style with { text.size = 24 }))
+        \\end
+    );
+}
+
+test "compiler semantics: qualified function values and constants retain defining modules" {
+    try expectObjectContentWithTwoOverlays(
+        \\import std:prelude as *
+        \\import ./lib/a as first
+        \\import ./lib/b as second
+        \\fn format(value: String) -> String = "local"
+        \\page main
+        \\  let left = first::format
+        \\  let right = second::formatter
+        \\  text!(left("A") ++ ":" ++ right("B"))
+        \\end
+    ,
+        \\const prefix: String = "first-"
+        \\fn format(value: String) -> String = prefix ++ value
+    ,
+        \\const prefix: String = "second-"
+        \\fn format(value: String) -> String = prefix ++ value
+        \\const formatter: String -> String = format
+    , "first-A:second-B");
+}
+
+test "compiler semantics: qualified constants preserve scheduled reads" {
+    try expectObjectContentWithTwoOverlays(
+        \\import std:prelude as *
+        \\import ./lib/a as config
+        \\page main
+        \\  text!(config::caption)
+        \\end
+        \\document
+        \\  docctx().footer_text = "Scheduled"
+        \\end
+    ,
+        \\import ./b as values
+        \\const caption: String = values::caption
+    ,
+        \\import std:prelude as *
+        \\const caption: String = docctx().footer_text ?? "Missing"
+    , "Scheduled");
+}
+
+test "compiler semantics: qualified values cannot bypass display purity" {
+    try expectOverlayDiagnostic(
+        \\import std:prelude as *
+        \\import ./lib/bad as effects
+        \\type Item { label: String }
+        \\fn display(self: Placed<Item>) -> Text
+        \\  let change = effects::change
+        \\  change()
+        \\  return text(self.value.label)
+        \\end
+        \\page main
+        \\  place!(Item { label = "Item" })
+        \\end
+    ,
+        \\import std:prelude as *
+        \\fn change() -> Void
+        \\  docctx().footer_text = "Changed"
+        \\end
+    , "lib/bad.ss:bytes:", "ImpureDisplayFunction");
+}
