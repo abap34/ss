@@ -687,11 +687,11 @@ test "native text display: public Text preserves complete block styles without m
 
 test "native text display: an immutable theme block can be used directly and updated independently" {
     var state = try documentWithModules(
-        \\import std:themes/academic as academic
+        \\import std:themes/default as base
         \\import std:text as { Text }
         \\fn/! styled(content: String, style: TextBlockStyle) -> Text = Text { content = content style = style }
         \\page main
-        \\  let theme = academic::default_theme()
+        \\  let theme = base::default_theme()
         \\  styled!("Original", theme.h1)
         \\  styled!("Changed", theme.h1 with { text.size = 44 })
         \\  styled!("Reused", theme.h1)
@@ -703,19 +703,19 @@ test "native text display: an immutable theme block can be used directly and upd
     try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
     const roots = state.placementRootsOf(state.graph.page_order.items[0]);
     try testing.expectEqual(@as(usize, 3), roots.len);
-    for (roots, [_]f32{ 32, 44, 32 }) |root, size| {
+    for (roots, [_]f32{ 40, 44, 40 }) |root, size| {
         const node = state.getNode(root).?;
         const paint = core.render_policy.resolve(&state, node);
         try testing.expectEqual(size, paint.text.?.font_size);
-        try testing.expectEqual(@as(f32, 36), paint.text.?.line_height);
-        try testing.expectEqual(@as(f32, 48), core.nodeField(node, "layout").?.record.field("spacing_after").?.number);
+        try testing.expectEqual(@as(f32, 47), paint.text.?.line_height);
+        try testing.expectEqual(@as(f32, 42), core.nodeField(node, "layout").?.record.field("spacing_after").?.number);
         try testing.expect(node.role == null);
         try testing.expectEqual(@as(usize, 0), node.fields.items.len);
     }
 }
 
 test "native text display: every bundled theme resolves the same text paint from a block value" {
-    for ([_][]const u8{ "default", "academic", "pop" }) |name| {
+    for ([_][]const u8{"default"}) |name| {
         const source = try std.fmt.allocPrint(testing.allocator,
             \\import std:themes/{s} as theme_api
             \\import std:text as {{ Text }}
@@ -1801,7 +1801,6 @@ test "native icon display: catalog names are validated without treating them as 
     }
 }
 
-
 test "asset constructors: unused values neither allocate objects nor read assets" {
     var state = try documentWithModules(
         \\import std:assets as assets
@@ -1862,7 +1861,6 @@ test "asset constructors: reused paths retain their source through helpers and d
     }
 }
 
-
 test "latex constructor: unused bodies do not allocate placements or require external tools" {
     var state = try documentWithModules(
         \\import std:math as formulas
@@ -1878,7 +1876,6 @@ test "latex constructor: unused bodies do not allocate placements or require ext
     try testing.expectEqual(@as(usize, 2), state.nodeCount());
     try testing.expectEqual(@as(usize, 0), state.diagnostics.entries.items.len);
 }
-
 
 test "native text display: public constructors preserve explicit TeX configuration and input independence" {
     var state = try documentWithModules(
@@ -1915,7 +1912,6 @@ test "native text display: public constructors preserve explicit TeX configurati
     }
 }
 
-
 test "document constructors: unused metadata does not allocate placements or run callbacks" {
     var state = try documentWithModules(
         \\import std:document as doc
@@ -1934,7 +1930,6 @@ test "document constructors: unused metadata does not allocate placements or run
     try testing.expectEqual(@as(usize, 2), state.nodeCount());
     try testing.expectEqual(@as(usize, 0), state.diagnostics.entries.items.len);
 }
-
 
 test "fold evaluation: aggregate accumulators own nested selections independently" {
     var state = try documentWithModules(

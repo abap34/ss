@@ -6,11 +6,6 @@ fn text_object(content: String, role: String, style: TextBlockStyle) -> Object
   return apply_text_block_style(target, style)
 end
 
-fn rule_object(style: RuleBlockStyle) -> Object
-  let target = new("", "rule", "text")
-  return apply_rule_block_style(target, style)
-end
-
 fn apply_text_block_style(target: Object, style: TextBlockStyle) -> Object
   target.text = style.text
   target.layout = style.layout
@@ -45,13 +40,6 @@ fn apply_markdown_text_style(target: Object, theme: Theme) -> Object
   return target
 end
 
-fn apply_figure_block_style(target: Object, style: FigureBlockStyle) -> Object
-  target.text = style.text
-  target.layout = style.layout
-  target.chrome = style.chrome
-  return target
-end
-
 fn apply_code_block_style(target: Object, style: CodeBlockStyle) -> Object
   target.text = render::text_with_code_theme(style.text, style.highlight)
   target.code = style.highlight.code
@@ -64,11 +52,5 @@ fn apply_asset_block_style(target: Object, style: AssetBlockStyle) -> Object
   target.layout = style.layout
   target.asset = style.asset
   target.chrome = style.chrome
-  return target
-end
-
-fn apply_rule_block_style(target: Object, style: RuleBlockStyle) -> Object
-  target.rule = style.rule
-  target.layout = style.layout
   return target
 end

@@ -1,3 +1,3 @@
 page demo
-head! "Move me"
+heading! "Move me"
 end

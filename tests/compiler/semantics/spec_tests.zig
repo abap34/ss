@@ -661,13 +661,13 @@ test "compiler semantics: default alias supports theme override with prelude pla
 
 test "compiler semantics: theme text size override keeps automatic line height" {
     try expectDumpContains(
-        \\import std:themes/academic as *
+        \\import std:themes/default as *
         \\
         \\page ok
-        \\  let title = head!("large text
-        \\next line", current_theme().head with {
-        \\    title.text.size = 64
-        \\    title.text.line_height = none
+        \\  let title = heading!("large text
+        \\next line", 1, current_theme().h1 with {
+        \\    text.size = 64
+        \\    text.line_height = none
         \\  })
         \\end
         \\
@@ -680,27 +680,9 @@ test "compiler semantics: theme text size override keeps automatic line height" 
 test "compiler semantics: stdlib theme toc works through default aliases" {
     try buildSource(
         \\import std:themes/default
-        \\
         \\page table_of_contents
         \\  toc!("Contents")
         \\end
-        \\
-    );
-    try buildSource(
-        \\import std:themes/academic
-        \\
-        \\page table_of_contents
-        \\  toc!("Contents")
-        \\end
-        \\
-    );
-    try buildSource(
-        \\import std:themes/pop
-        \\
-        \\page table_of_contents
-        \\  toc!("Contents")
-        \\end
-        \\
     );
 }
 
@@ -858,75 +840,25 @@ test "compiler semantics: math and latex are public without obsolete aliases" {
     , "case.ss:bytes:", "UnknownFunction: unknown function: tex_preamble");
 }
 
-test "compiler semantics: stdlib theme components build when imported by theme alias" {
+test "compiler semantics: stdlib display values build with explicit default theme styles" {
     try buildSourceWithAssetFixtures(
-        \\import std:themes/default
-        \\
-        \\page default_text
-        \\  h1!("Title")
-        \\  h2!("Subtitle")
-        \\  head!("Head")
-        \\  subtitle!("Subhead")
-        \\  text!("Body")
-        \\  latex!("$x^2$")
-        \\  code!("print('x')", "python")
-        \\  code_file!("snippet.zig", "zig")
-        \\  annotate!("before target after", "target", "note")
+        \\import std:themes/default as base
+        \\const theme: Theme = base::default_theme()
+        \\page main
+        \\  heading!("Heading", 1, theme.h1)
+        \\  text!("Body", theme.body)
+        \\  code!("print(1)", "python", theme.code)
         \\end
-        \\
-        \\page default_title
-        \\  title!("Title")
-        \\  subtitle!("Subtitle")
-        \\  byline!("Author")
+        \\page assets
+        \\  image!("image.svg", theme.image)
+        \\  pdf!("doc.pdf", theme.pdf)
         \\end
-        \\
-    );
-    try buildSourceWithAssetFixtures(
-        \\import std:themes/academic
-        \\
-        \\page academic_text
-        \\  h1!("Title")
-        \\  h2!("Subtitle")
-        \\  h3!("Section")
-        \\  head!("Head")
-        \\  subtitle!("Subhead")
-        \\  text!("Body")
-        \\  code!("print('x')", "python")
-        \\  code_file!("snippet.zig", "zig")
-        \\  annotate!("before target after", "target", "note")
+        \\page contents
+        \\  toc!("Contents", theme.toc)
+        \\  let number = pageno!(theme.page_number)
+        \\  ~ number.bottom == page.bottom + 20
+        \\  ~ number.right == page.right - 24
         \\end
-        \\
-        \\page academic_title
-        \\  title!("Title")
-        \\  subtitle!("Subtitle")
-        \\  byline!("Author")
-        \\end
-        \\
-    );
-    try buildSourceWithAssetFixtures(
-        \\import std:themes/pop
-        \\
-        \\page pop_text
-        \\  h1!("Title")
-        \\  h2!("Subtitle")
-        \\  head!("Head")
-        \\  subtitle!("Subhead")
-        \\  text!("Body")
-        \\  latex!("$x^2$")
-        \\  image!("image.svg")
-        \\  pdf!("doc.pdf")
-        \\  code!("print('x')", "python")
-        \\  code_file!("snippet.zig", "zig")
-        \\  note!("note")
-        \\  annotate!("before target after", "target", "note")
-        \\end
-        \\
-        \\page pop_title
-        \\  title!("Title")
-        \\  subtitle!("Subtitle")
-        \\  byline!("Author")
-        \\end
-        \\
     );
 }
 
@@ -1060,27 +992,31 @@ test "compiler semantics: implicit prelude does not propagate through bare-name 
 }
 
 test "compiler semantics: later bare-name import overrides earlier imports" {
-    try expectObjectFieldPath(
-        \\import std:themes/default as *
-        \\import std:themes/academic as *
-        \\
+    try expectObjectContentWithTwoOverlays(
+        \\import "lib/a" as *
+        \\import "lib/b" as *
         \\page ok
-        \\  h2!("later", default_theme().h2)
+        \\  text!(label())
         \\end
-        \\
-    , "text", &.{"size"}, "28");
+    ,
+        \\fn label() -> String = "first"
+    ,
+        \\fn label() -> String = "second"
+    , "second");
 }
 
 test "compiler semantics: later alias import overrides earlier aliases" {
-    try expectObjectFieldPath(
-        \\import std:themes/default as theme
-        \\import std:themes/academic as theme
-        \\
+    try expectObjectContentWithTwoOverlays(
+        \\import "lib/a" as theme
+        \\import "lib/b" as theme
         \\page ok
-        \\  h2!("later", theme::default_theme().h2)
+        \\  text!(theme::label())
         \\end
-        \\
-    , "text", &.{"size"}, "28");
+    ,
+        \\fn label() -> String = "first"
+    ,
+        \\fn label() -> String = "second"
+    , "second");
 }
 
 test "compiler semantics: imported local definitions override their imports" {
@@ -3319,7 +3255,7 @@ test "compiler semantics: member sugar reads and writes properties and content" 
         \\
         \\document
         \\  docctx().footer_text = "footer"
-        \\  footers!(docctx().footer_text ?? "")
+        \\  foreach(pages(docctx()), (p: Page) |-> place_on!(p, text(docctx().footer_text ?? "")))
         \\end
         \\
         \\page ok
@@ -5693,7 +5629,7 @@ test "compiler semantics: returned object placement covers connected generated o
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  place_on!(pagectx(), head("Connected helper"))
+        \\  place_on!(pagectx(), text("Connected helper") // text("Child"))
         \\end
         \\
     , "UnplacedObject");
@@ -8754,7 +8690,6 @@ test "compiler semantics: typed displays reject writes through ordinary helpers"
     , "bytes:", "ImpureDisplayFunction");
 }
 
-
 test "compiler semantics: fold preserves numeric and record accumulator types" {
     try expectObjectContent(
         \\type Count { total: Number = 0 }
@@ -8796,7 +8731,6 @@ test "compiler semantics: fold rejects accumulator input and output mismatches" 
     );
 }
 
-
 test "compiler semantics: fold does not retain a literal fact from its initial value" {
     try expectDiagnostic(
         \\page example
@@ -8805,4 +8739,12 @@ test "compiler semantics: fold does not retain a literal fact from its initial v
         \\  select(item, query)
         \\end
     , "bytes:", "select query must be a statically known string");
+}
+
+test "compiler semantics: excluded standard components are not available as implicit functions" {
+    for ([_][]const u8{ "box", "figure", "callout", "head", "annotate", "cols2", "connect", "footers!", "watermark!", "logos!", "csv_map" }) |name| {
+        const source = try std.fmt.allocPrint(testing.allocator, "page example\n  {s}()\nend\n", .{name});
+        defer testing.allocator.free(source);
+        try expectDiagnostic(source, "bytes:", "UnknownFunction");
+    }
 }

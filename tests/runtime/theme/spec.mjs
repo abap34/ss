@@ -12,8 +12,7 @@ const fixtures = path.resolve(specDir, "../../fixtures/runtime/theme");
 
 await testEveryMarkdownHeadingStyleReachesRenderIr();
 await testProjectThemeWrapperPreservesMarkdownHeadingStyle();
-await testThemeOptionsAndHeadRuleGap();
-await testVariantThemeOptions();
+await testThemeOptions();
 
 async function testEveryMarkdownHeadingStyleReachesRenderIr() {
   const node = await dumpTextNode(path.join(fixtures, "markdown-headings"), "HeadingOne");
@@ -52,17 +51,16 @@ async function testProjectThemeWrapperPreservesMarkdownHeadingStyle() {
   );
 }
 
-async function testThemeOptionsAndHeadRuleGap() {
+async function testThemeOptions() {
   const nodes = await dumpNodes(path.join(fixtures, "options-default"));
   const body = findTextNode(nodes, "SettingsBody");
   const heading = findTextNode(nodes, "SettingsHead");
   const title = findTextNode(nodes, "SettingsTitle");
   const author = findTextNode(nodes, "SettingsAuthor");
-  const callout = findTextNode(nodes, "SettingsCallout");
   const original = findTextNode(nodes, "OriginalTheme");
   const fontOnly = findTextNode(nodes, "FontOnly");
-  const pageNumber = nodes.find((node) => node.role === "pageno");
-  const rule = nodes.find((node) => node.role === "rule" && node.parent === heading.parent);
+  const number = nodes.find((node) => node.placement?.input.type.name === "PageNumber");
+  const pageNumber = nodes.find((node) => node.id === number.placement.children[0]);
 
   assert(body.render?.text, `body text paint was not emitted: ${JSON.stringify(body.render)}`);
   assert(body.render.text.font.family === "Fixture Sans", `body font: ${body.render.text.font.family}`);
@@ -73,64 +71,17 @@ async function testThemeOptionsAndHeadRuleGap() {
   assertColor(body.render.text.markdown_headings?.h2?.color, [16 / 255, 32 / 255, 48 / 255], "markdown h2 color");
 
   assert(heading.render?.text?.font.family === "Fixture Sans", `head font: ${heading.render?.text?.font.family}`);
-  assertColor(heading.render?.text?.color, [36 / 255, 104 / 255, 172 / 255], "head color");
-  assert(rule?.render?.rule, `head rule paint was not emitted: ${JSON.stringify(rule)}`);
-  assertColor(rule.render.rule.stroke, [36 / 255, 104 / 255, 172 / 255], "head rule color");
-  assertNear(heading.y - (rule.y + rule.height), 12, "head rule gap");
+  assertColor(heading.render?.text?.color, [36 / 255, 104 / 255, 172 / 255], "heading color");
 
   assert(title.render?.text?.font.family === "Fixture Sans", `title font: ${title.render?.text?.font.family}`);
   assertColor(title.render?.text?.color, [16 / 255, 32 / 255, 48 / 255], "title color");
   assertColor(author.render?.text?.color, [112 / 255, 128 / 255, 144 / 255], "byline color");
-  assert(callout.render?.text?.font.family === "Fixture Sans", `callout font: ${callout.render?.text?.font.family}`);
-  assert(callout.render?.text?.code_font.family === "Fixture Mono", `callout code font: ${callout.render?.text?.code_font.family}`);
   assert(pageNumber?.render?.text?.font.family === "Fixture Sans", `page number font: ${pageNumber?.render?.text?.font.family}`);
   assertColor(pageNumber?.render?.text?.color, [112 / 255, 128 / 255, 144 / 255], "page number color");
 
   assert(original.render?.text?.font.family === "Helvetica", `default theme was mutated: ${original.render?.text?.font.family}`);
   assert(fontOnly.render?.text?.font.family === "Fixture Sans", `font-only setting was not applied: ${fontOnly.render?.text?.font.family}`);
   assertColor(fontOnly.render?.text?.color, [0.07, 0.08, 0.10], "font-only preserved body color");
-}
-
-async function testVariantThemeOptions() {
-  const cases = [
-    {
-      fixture: "options-academic",
-      prefix: "Academic",
-      font: "Academic Sans",
-      codeFont: "Academic Mono",
-      text: [24 / 255, 48 / 255, 72 / 255],
-      accent: [40 / 255, 104 / 255, 168 / 255],
-      muted: [104 / 255, 120 / 255, 136 / 255],
-    },
-    {
-      fixture: "options-pop",
-      prefix: "Pop",
-      font: "Pop Sans",
-      codeFont: "Pop Mono",
-      text: [32 / 255, 56 / 255, 80 / 255],
-      accent: [56 / 255, 120 / 255, 184 / 255],
-      muted: [112 / 255, 128 / 255, 144 / 255],
-    },
-  ];
-
-  for (const item of cases) {
-    const nodes = await dumpNodes(path.join(fixtures, item.fixture));
-    const body = findTextNode(nodes, `${item.prefix}Body`);
-    const heading = findTextNodeWithRole(nodes, `${item.prefix}Head`, "title");
-    const author = findTextNode(nodes, `${item.prefix}Author`);
-    const callout = findTextNode(nodes, `${item.prefix}Callout`);
-    const pageNumber = nodes.find((node) => node.role === "pageno");
-
-    assert(body.render?.text?.font.family === item.font, `${item.fixture} body font`);
-    assert(body.render.text.code_font.family === item.codeFont, `${item.fixture} code font`);
-    assertColor(body.render.text.color, item.text, `${item.fixture} body color`);
-    assertColor(heading.render?.text?.color, item.accent, `${item.fixture} head color`);
-    assertColor(author.render?.text?.color, item.muted, `${item.fixture} author color`);
-    assert(callout.render?.text?.font.family === item.font, `${item.fixture} callout font`);
-    assertColor(callout.render?.text?.color, item.muted, `${item.fixture} callout color`);
-    assert(pageNumber?.render?.text?.font.family === item.font, `${item.fixture} page number font`);
-    assertColor(pageNumber?.render?.text?.color, item.muted, `${item.fixture} page number color`);
-  }
 }
 
 async function dumpTextNode(fixture, contentFragment) {
@@ -155,12 +106,6 @@ async function dumpNodes(fixture) {
 function findTextNode(nodes, contentFragment) {
   const node = nodes.find((candidate) => candidate.content?.includes(contentFragment));
   assert(node, `text node containing ${contentFragment} was not found: ${JSON.stringify(nodes)}`);
-  return node;
-}
-
-function findTextNodeWithRole(nodes, contentFragment, role) {
-  const node = nodes.find((candidate) => candidate.role === role && candidate.content?.includes(contentFragment));
-  assert(node, `${role} node containing ${contentFragment} was not found: ${JSON.stringify(nodes)}`);
   return node;
 }
 

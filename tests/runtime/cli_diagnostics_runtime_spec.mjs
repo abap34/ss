@@ -54,7 +54,7 @@ async function testColoredDiagnosticsHighlightProgramBody() {
       path.join(project, "slide.ss"),
       `page broken
 let title = text!("hello", color = c"#ff0033")
-let call = box!(title) ?? text!("fallback")
+let call = place!(title) ?? text!("fallback")
 let multiline = """hello
 world"""
 let raw = <<

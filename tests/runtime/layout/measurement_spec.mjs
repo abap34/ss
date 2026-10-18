@@ -31,7 +31,7 @@ async function testNaturalTitleWidthDoesNotSelfWrap() {
       `import std:themes/default as *
 
 page title
-head! "original inline math"
+heading! "original inline math"
 end
 `,
       "utf8",
@@ -39,7 +39,7 @@ end
 
     const dump = await dumpSlide(project, dumpPath);
     const title = nodeByContent(dump, "original inline math");
-    assert(title.height <= 50, `title should fit on one line, got ${frameSummary(title)}`);
+    assert(title.height <= title.render.text.line_height + 0.01, `title should fit on one line, got ${frameSummary(title)}`);
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -81,8 +81,8 @@ async function testSplitTablesReserveTheirFinalHeight() {
   for (const table of tables) {
     assert(close(table.width, 552), `Unexpected split width: ${frameSummary(table)}`);
     assert(table.height > 150, `Wrapped table header was not measured: ${frameSummary(table)}`);
-    assert(close(intro.y - table.y - table.height, 28), "Split table overlapped the preceding component");
-    assert(close(table.y - after.y - after.height, 28), "Following component overlapped a split table");
+    assert(close(intro.y - table.y - table.height, 32), "Split table overlapped the preceding component");
+    assert(close(table.y - after.y - after.height, 24), "Following component overlapped a split table");
   }
   assert(close((intro.y + intro.height + after.y) / 2, 360), "Measured components were not centered together");
   assert(dump.diagnostics.length === 0, `Split fixture diagnostics: ${JSON.stringify(dump.diagnostics)}`);
@@ -356,7 +356,7 @@ end
 function bodyBoxSource() {
   return `import std:themes/default as *
 
-fn body_box!(body_text: String) -> Object
+fn body_box!(body_text: String) -> Placed<Text>
   let chrome = place_on!(pagectx(), new("", "panel", "text"))
   chrome.chrome = ChromeStyle {
     fill = c"0.97,0.98,1"

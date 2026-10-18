@@ -91,7 +91,7 @@ async function testPageAnchorFixture() {
     }
     for (const objects of [baseline, anchored, centered]) {
       assertClose(objects.find((item) => item.role === "pageno").y, 20, "generated page number anchor");
-      assertClose(objects.find((item) => item.role === "footer").y, 20, "generated footer anchor");
+      assertClose(objects.find((item) => item.content === "Page anchors and automatic placement").y, 20, "generated footer anchor");
     }
   } finally {
     await rm(project, { recursive: true, force: true });
@@ -116,7 +116,7 @@ let body = text!("Several words wrap across lines while retaining their measured
 end
 
 page headed
-head!("Fixed heading")
+heading!("Fixed heading")
 let body = text!("Body below a heading and a rule")
 ~ body.width == 320
 end
@@ -125,10 +125,8 @@ page composed
 let left = text("Left column with several words that wrap")
 let upper = text("Right upper paragraph")
 let lower = text("Right lower paragraph")
-~ left.width == 240
-~ upper.width == 220
-~ lower.width == 220
-place_on!(pagectx(), left || (upper // lower))
+let composed = place!(left || (upper // lower))
+~ composed.width == 492
 end
 `;
       await writeFile(path.join(project, "slide.ss"), imports + pages, "utf8");

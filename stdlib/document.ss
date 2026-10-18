@@ -5,16 +5,8 @@ import std:theme as *
 import std:internal/document as generated
 import std:internal/style as styles
 
-fn pagenos!(format: String? = none, style: TextBlockStyle = current_theme().generated.pageno) -> Void
+fn pagenos!(format: String? = none, style: TextBlockStyle = current_theme().page_number) -> Void
   generated::mk_pagenos!(docctx(), format, (obj: Object) |-> styles::apply_text_block_style(obj, style))
-end
-
-fn footers!(content: String, style: TextBlockStyle = current_theme().generated.footer) -> Void
-  generated::mk_footers!(docctx(), content, (obj: Object) |-> styles::apply_text_block_style(obj, style))
-end
-
-fn watermark!(content: String, style: TextBlockStyle = current_theme().generated.watermark) -> Void
-  generated::mk_marks!(docctx(), content, (obj: Object) |-> styles::apply_text_block_style(obj, style))
 end
 
 fn/! pageno(style: TextBlockStyle = TextBlockStyle {}, format: (Page, Document) -> String = format_page_number) -> PageNumber
@@ -31,10 +23,6 @@ end
 
 fn doc_bg(fill_name: Color?) -> Void
   docctx().background_fill = fill_name
-end
-
-fn logos!(path_value: String, scale: Number = 1) -> Void
-  generated::logos!(path_value, scale)
 end
 
 fn need_titles() -> Void

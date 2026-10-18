@@ -878,7 +878,7 @@ test "absolute position binds an unbound component call" {
     const allocator = std.testing.allocator;
     const source = try readFixture(allocator, "binding/quoted.ss");
     defer allocator.free(source);
-    const statement_start = std.mem.indexOf(u8, source, "head!").?;
+    const statement_start = std.mem.indexOf(u8, source, "heading!").?;
     const statement_end = statement_start + std.mem.indexOfScalar(u8, source[statement_start..], '\n').?;
     var result = (try edit.absolutePosition(
         allocator,
@@ -901,7 +901,7 @@ test "absolute position converts line text before binding it" {
     const allocator = std.testing.allocator;
     const source = try readFixture(allocator, "binding/line.ss");
     defer allocator.free(source);
-    const statement_start = std.mem.indexOf(u8, source, "head!").?;
+    const statement_start = std.mem.indexOf(u8, source, "heading!").?;
     const statement_end = statement_start + std.mem.indexOfScalar(u8, source[statement_start..], '\n').?;
     var result = (try edit.absolutePosition(
         allocator,

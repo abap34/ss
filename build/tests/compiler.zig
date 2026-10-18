@@ -32,14 +32,6 @@ pub fn register(suite: Suite, modules: project.ProjectModules, compiler_mod: *Mo
         import("compiler", compiler_mod),
     }, true);
     _ = suite.add(execution_spec_mod, .{ .name = "test-execution-graph", .description = "Check execution graph state effects and diagnostics" });
-    const csv_parser_mod = createModule(ctx, "src/eval/csv.zig", &.{
-        import("utils", modules.utils),
-    }, true);
-    const csv_parser_spec_mod = createModule(ctx, "tests/eval/csv/spec_tests.zig", &.{
-        import("csv", csv_parser_mod),
-        import("utils", modules.utils),
-    }, true);
-    _ = suite.add(csv_parser_spec_mod, .{ .name = "test-csv-parser", .description = "Check CSV parser allocation failure and cancellation" });
     const eval_cancellation_spec_mod = createModule(ctx, "tests/eval/cancellation/spec_tests.zig", &.{
         import("compiler", compiler_mod),
     }, true);

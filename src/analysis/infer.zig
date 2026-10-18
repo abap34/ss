@@ -1410,12 +1410,7 @@ fn validateCallbackShape(
         });
         return error.InvalidArity;
     }
-    if (descriptor.op == .csv_map) {
-        const supplied_types = [_]Type{ Type.string, Type.number, Type.number, Type.boolean };
-        for (supplied_types, 0..) |ty, index| {
-            try ensureType(state, allocator, infoFromType(ty), callback_info.ty.fn_params[index], origin, .UnmatchedArgumentType);
-        }
-    } else if (supplied_arg_count == 1) {
+    if (supplied_arg_count == 1) {
         const item_type = try selectionItemType(state, selection_info, origin);
         try ensureType(state, allocator, infoFromType(item_type), callback_info.ty.fn_params[0], origin, .UnmatchedArgumentType);
     } else if (supplied_arg_count == 2) {

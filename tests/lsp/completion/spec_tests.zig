@@ -572,7 +572,10 @@ test "analysis completion: record update paths complete record fields" {
         try expectUnique(result);
         try expectHas(result, "body");
         try expectHas(result, "h1");
-        try expectHas(result, "callout");
+        try expectHas(result, "page_number");
+        try expectMissing(result, "callout");
+        try expectMissing(result, "figure");
+        try expectMissing(result, "head");
         try expectMissing(result, "size");
         try expectMissing(result, "page");
         try expectMissing(result, "String");
@@ -604,7 +607,10 @@ test "analysis completion: record update paths complete record fields" {
         try expectUnique(result);
         try expectHas(result, "body");
         try expectHas(result, "h1");
-        try expectHas(result, "callout");
+        try expectHas(result, "page_number");
+        try expectMissing(result, "callout");
+        try expectMissing(result, "figure");
+        try expectMissing(result, "head");
         try expectMissing(result, "size");
         try expectMissing(result, "page");
         try expectMissing(result, "String");
@@ -627,7 +633,10 @@ test "analysis completion: record update paths complete record fields" {
         try expectUnique(result);
         try expectHas(result, "body");
         try expectHas(result, "h1");
-        try expectHas(result, "callout");
+        try expectHas(result, "page_number");
+        try expectMissing(result, "callout");
+        try expectMissing(result, "figure");
+        try expectMissing(result, "head");
         try expectMissing(result, "size");
         try expectMissing(result, "page");
         try expectMissing(result, "String");
@@ -637,7 +646,7 @@ test "analysis completion: record update paths complete record fields" {
         var result = try case.completeSourceAfter(request_source, "body.text.size =");
         defer result.deinit(case.allocator);
         try expectUnique(result);
-        try expectMissing(result, "generated");
+        try expectMissing(result, "page_number");
         try expectHas(result, "page");
     }
 }
