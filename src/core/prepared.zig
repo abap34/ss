@@ -122,7 +122,18 @@ fn preparePage(allocator: std.mem.Allocator, state: *DocumentState, page_layout:
         for (objects.items) |*object| object.deinit(allocator);
         objects.deinit(allocator);
     }
-    for (page_layout.node_ids) |node_id| {
+    // Layout membership may be discovered through constraints before containment.
+    // Paint attached subtrees in their declared child order instead.
+    var remaining = std.AutoHashMap(model.NodeId, void).init(allocator);
+    defer remaining.deinit();
+    for (page_layout.node_ids) |id| try remaining.put(id, {});
+    var pending = std.ArrayList(model.NodeId).empty;
+    defer pending.deinit(allocator);
+    try appendReversed(allocator, &pending, page_layout.node_ids);
+    try appendReversed(allocator, &pending, state.childrenOf(page_id) orelse &.{});
+    while (pending.pop()) |node_id| {
+        if (!remaining.remove(node_id)) continue;
+        try appendReversed(allocator, &pending, state.childrenOf(node_id) orelse &.{});
         const node = state.getNode(node_id) orelse continue;
         if (node.kind != .object) continue;
         var unit = try prepareObject(allocator, state, node);
@@ -139,6 +150,14 @@ fn preparePage(allocator: std.mem.Allocator, state: *DocumentState, page_layout:
         .background = render_policy.resolvePageBackground(state, page),
         .objects = try objects.toOwnedSlice(allocator),
     };
+}
+
+fn appendReversed(allocator: std.mem.Allocator, pending: *std.ArrayList(model.NodeId), ids: []const model.NodeId) !void {
+    var index = ids.len;
+    while (index > 0) {
+        index -= 1;
+        try pending.append(allocator, ids[index]);
+    }
 }
 
 pub fn prepareObject(allocator: std.mem.Allocator, state: *DocumentState, node: *const model.Node) !PreparedObject {
