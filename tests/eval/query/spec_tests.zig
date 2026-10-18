@@ -47,6 +47,92 @@ fn queryWithAllocator(allocator: std.mem.Allocator, state: *core.DocumentState, 
     try testing.expectEqualSlices(core.NodeId, state.graph.page_order.items, pages.ids.items);
 }
 
+test "typed queries: placing functions can read the children of their own groups" {
+    var state = try document(
+        \\import std:prelude as *
+        \\fn make_pair!(target: Page) -> Placed<Group<Text, Text>>
+        \\  let root = place_on!(target, group(text("First"), text("Second")))
+        \\  let count = selection_count(children(root))
+        \\  place_on!(target, text(str(count)))
+        \\  return root
+        \\end
+        \\page main
+        \\  make_pair!(pagectx())
+        \\  make_pair!(pagectx())
+        \\end
+    );
+    defer state.deinit();
+    var graph = try checkedGraph(&state);
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const roots = state.placementRootsOf(state.graph.page_order.items[0]);
+    try testing.expectEqual(@as(usize, 4), roots.len);
+    for ([_]usize{ 0, 2 }) |index| {
+        const children = state.childrenOf(roots[index]).?;
+        try testing.expectEqual(@as(usize, 2), children.len);
+        for (children, [_][]const u8{ "First", "Second" }) |child, expected| {
+            try testing.expectEqualStrings(expected, core.nodeDisplayContent(state.getNode(child).?));
+        }
+        try testing.expectEqualStrings("2", core.nodeDisplayContent(state.getNode(roots[index + 1]).?));
+    }
+    try testing.expect(state.childrenOf(roots[0]).?[0] != state.childrenOf(roots[2]).?[0]);
+}
+
+test "typed queries: structural group reads compose through nested scopes and helpers" {
+    const cases = [_]struct { expression: []const u8, expected: []const u8 }{
+        .{ .expression = "selection_count(children(root))", .expected = "2" },
+        .{ .expression = "selection_count(descendants(root))", .expected = "4" },
+        .{ .expression = "selection_count(select<Text>(root))", .expected = "3" },
+        .{ .expression = "selection_count(children(first(select<Group<Text, Text>>(root))))", .expected = "2" },
+        .{ .expression = "selection_count(children(first(select<Text>(root))))", .expected = "0" },
+        .{ .expression = "count_children(root)", .expected = "2" },
+        .{ .expression = "count_children(first(select<Group<Text, Text>>(root)))", .expected = "2" },
+        .{ .expression = "(() |-> count_children(root))()", .expected = "2" },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(testing.allocator,
+            \\import std:prelude as *
+            \\fn count_children(target: Placement) -> Number = selection_count(children(target))
+            \\fn inspect!(target: Page) -> Placed<Text>
+            \\  let root = place_on!(target, group(text("First"), group(text("Second"), text("Third"))))
+            \\  return place_on!(target, text(str({s})))
+            \\end
+            \\page main
+            \\  inspect!(pagectx())
+            \\  inspect!(pagectx())
+            \\end
+        , .{case.expression});
+        defer testing.allocator.free(source);
+        var state = try document(source);
+        defer state.deinit();
+        var graph = try checkedGraph(&state);
+        defer graph.deinit();
+        try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+        const roots = state.placementRootsOf(state.graph.page_order.items[0]);
+        try testing.expectEqual(@as(usize, 4), roots.len);
+        for ([_]usize{ 1, 3 }) |index| try testing.expectEqualStrings(case.expected, core.nodeDisplayContent(state.getNode(roots[index]).?));
+    }
+}
+
+test "typed queries: inline group registration supplies children before querying them" {
+    var state = try document(
+        \\import std:prelude as *
+        \\fn count!(target: Page) -> Placed<Text>
+        \\  return place_on!(target, text(str(selection_count(children(place_on!(target, group(text("First"), text("Second"))))))))
+        \\end
+        \\page main
+        \\  count!(pagectx())
+        \\end
+    );
+    defer state.deinit();
+    var graph = try checkedGraph(&state);
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const roots = state.placementRootsOf(state.graph.page_order.items[0]);
+    try testing.expectEqual(@as(usize, 2), roots.len);
+    try testing.expectEqualStrings("2", core.nodeDisplayContent(state.getNode(roots[1]).?));
+}
+
 test "typed queries: a preceding table of contents waits for generated headings and preserves construction order" {
     const source = try std.Io.Dir.cwd().readFileAlloc(testing.io, "tests/fixtures/typed-query/slide.ss", testing.allocator, .limited(64 * 1024));
     defer testing.allocator.free(source);

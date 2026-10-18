@@ -137,14 +137,28 @@ pub const ExecutionGraph = struct {
                     var summary = try definition.steps.items[index].clone(self.allocator);
                     var moved = false;
                     errdefer if (!moved) summary.deinit();
-                    summary.writes_layout_input = true;
+                    summary.writes_layout_input = step.target != .group;
                     for (step.children.items) |child_index| {
                         const child = plan.steps.items[child_index];
-                        try summary.addWrite(.{ .objects = .{
+                        const resource = dependencies.Resource{ .objects = .{
                             .input_type = child.input,
                             .placement = .exact(definition.call_id, child.path),
                             .page_scope = definition.page_scope,
-                        } });
+                        } };
+                        if (step.target == .group) {
+                            // Registering a value also registers its complete
+                            // group structure. Only user displays create later
+                            // structure, in their own execution unit.
+                            var ancestor = step.parent;
+                            while (ancestor) |parent| {
+                                if (plan.steps.items[parent].target != .group) break;
+                                ancestor = plan.steps.items[parent].parent;
+                            }
+                            const registration = if (ancestor) |parent| first_unit + parent else producer;
+                            try self.units.items[registration].summary.addWrite(resource);
+                        } else {
+                            try summary.addWrite(resource);
+                        }
                     }
                     const module_id = switch (step.target) {
                         .native, .group => source.module_id,

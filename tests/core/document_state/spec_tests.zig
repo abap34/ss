@@ -1473,3 +1473,61 @@ fn exerciseGroupClone(allocator: std.mem.Allocator) !void {
 test "document state spec: group values clone independently under allocation failure" {
     try allocation_testing.checkAllAllocationFailures(testing.allocator, exerciseGroupClone, .{});
 }
+
+fn exerciseGroupRegistration(allocator: std.mem.Allocator, display_child: bool) !void {
+    var state = try initEmptyDocumentStateWithAllocator(allocator);
+    defer state.deinit();
+    const page = try state.addPage("Page");
+    var input = try placementInput(allocator);
+    defer input.deinit(allocator);
+    var inner = core.Value{ .group = .{ .ty = try (ast.Type{ .kind = .group }).withArguments(allocator, &.{ input.record.ty, input.record.ty }) } };
+    defer inner.deinit(allocator);
+    try inner.group.children.ensureTotalCapacity(allocator, 2);
+    inner.group.children.appendAssumeCapacity(try input.clone(allocator));
+    inner.group.children.appendAssumeCapacity(try input.clone(allocator));
+    var outer = core.Value{ .group = .{ .ty = try (ast.Type{ .kind = .group }).withArguments(allocator, &.{ input.record.ty, inner.group.ty }) } };
+    defer outer.deinit(allocator);
+    try outer.group.children.ensureTotalCapacity(allocator, 2);
+    outer.group.children.appendAssumeCapacity(try input.clone(allocator));
+    outer.group.children.appendAssumeCapacity(try inner.clone(allocator));
+    const parent = if (display_child) try state.registerPlacement(page, input, null) else page;
+    state.graph.composition_cursor = .{ .source_order = 17 };
+    const count = state.nodeCount();
+    const next = state.graph.next_id;
+    const ownership = state.graph.direct_page_ownership.items.len;
+    const containment = state.graph.contains.count();
+    const roots = state.placementRootsOf(page).len;
+    const registered: anyerror!core.NodeId = if (display_child) blk: {
+        const children = state.registerPlacementChildren(parent, &.{outer}, null) catch |err| break :blk err;
+        break :blk children[0];
+    } else state.registerPlacement(page, outer, null);
+    const id = registered catch |err| {
+        try testing.expectEqual(count, state.nodeCount());
+        try testing.expectEqual(next, state.graph.next_id);
+        try testing.expectEqual(ownership, state.graph.direct_page_ownership.items.len);
+        try testing.expectEqual(containment, state.graph.contains.count());
+        try testing.expectEqual(roots, state.placementRootsOf(page).len);
+        try testing.expectEqual(@as(usize, 0), state.graph.composition_cursor.?.sequence);
+        return err;
+    };
+    try testing.expectEqual(next, id);
+    try testing.expectEqual(count + 5, state.nodeCount());
+    try testing.expectEqual(next + 5, state.graph.next_id);
+    try testing.expectEqual(roots + @intFromBool(!display_child), state.placementRootsOf(page).len);
+    try testing.expectEqual(@as(usize, @intFromBool(!display_child)), state.graph.composition_cursor.?.sequence);
+    const children = state.childrenOf(id).?;
+    try testing.expectEqual(@as(usize, 2), children.len);
+    const nested = state.childrenOf(children[1]).?;
+    try testing.expectEqual(@as(usize, 2), nested.len);
+    for ([_]core.NodeId{ id, children[0], children[1], nested[0], nested[1] }) |node_id| {
+        try testing.expectEqual(page, state.getNode(node_id).?.placement.?.page_id);
+        try testing.expectEqual(page, state.parentPageOf(node_id).?);
+    }
+    for (nested) |node_id| try testing.expectEqual(children[1], state.getNode(node_id).?.placement.?.parent_id);
+}
+
+test "document state spec: group structure registers atomically without evaluating displays" {
+    for ([_]bool{ false, true }) |display_child| {
+        try allocation_testing.checkAllAllocationFailures(testing.allocator, exerciseGroupRegistration, .{display_child});
+    }
+}

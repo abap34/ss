@@ -697,7 +697,21 @@ pub const DocumentState = struct {
         input: Value,
         origin: ?model.SourceOrigin,
     ) !NodeId {
-        if (input == .void) return error.InvalidValueTag;
+        const id = self.graph.next_id;
+        _ = try self.registerPlacements(parent_id, &.{input}, origin);
+        return id;
+    }
+
+    /// Publish a display's direct children and their immutable group structure
+    /// together. Failed registration leaves identities and containment intact.
+    pub fn registerPlacementChildren(self: *DocumentState, parent_id: NodeId, inputs: []const Value, origin: ?model.SourceOrigin) ![]const NodeId {
+        const parent = self.getNode(parent_id) orelse return error.UnknownNode;
+        if (parent.discarded or parent.placement == null) return error.InvalidPlacementParent;
+        if (self.childrenOf(parent_id)) |existing| if (existing.len != 0) return error.InvalidPlacementParent;
+        return self.registerPlacements(parent_id, inputs, origin);
+    }
+
+    fn registerPlacements(self: *DocumentState, parent_id: NodeId, inputs: []const Value, origin: ?model.SourceOrigin) ![]const NodeId {
         const parent = self.getNode(parent_id) orelse return error.UnknownNode;
         if (parent.discarded) return error.InvalidPlacementParent;
         const is_root = parent.kind == .page;
@@ -705,21 +719,44 @@ pub const DocumentState = struct {
             placement.page_id
         else
             return error.InvalidPlacementParent;
-
-        var value = try input.clone(self.allocator);
-        errdefer value.deinit(self.allocator);
+        const GroupChildren = struct { id: NodeId, children: std.ArrayList(NodeId) };
+        var nodes = std.ArrayList(Node).empty;
+        defer nodes.deinit(self.allocator);
+        errdefer for (nodes.items) |*node| node.deinit(self.allocator);
+        var groups = std.ArrayList(GroupChildren).empty;
+        defer groups.deinit(self.allocator);
+        errdefer for (groups.items) |*group| group.children.deinit(self.allocator);
         const owned_origin = if (origin) |source| try self.copyOrigin(source) else null;
-        try self.graph.nodes.ensureUnusedCapacity(self.allocator, 1);
-        try self.graph.direct_page_ownership.ensureUnusedCapacity(self.allocator, 1);
+        for (inputs) |input| try self.appendPlacementNode(&nodes, parent_id, page_id, input, owned_origin);
 
+        // Group children are part of the input value, so their identities and
+        // parent relations do not depend on evaluating a display function.
+        var index: usize = 0;
+        while (index < nodes.items.len) : (index += 1) {
+            const node = nodes.items[index];
+            const value = node.placement.?.value;
+            if (value != .group) continue;
+            var children = std.ArrayList(NodeId).empty;
+            errdefer children.deinit(self.allocator);
+            try children.ensureTotalCapacity(self.allocator, value.group.children.items.len);
+            for (value.group.children.items) |input| {
+                const id = self.graph.next_id + @as(NodeId, @intCast(nodes.items.len));
+                try self.appendPlacementNode(&nodes, node.id, page_id, input, owned_origin);
+                children.appendAssumeCapacity(id);
+            }
+            try groups.append(self.allocator, .{ .id = node.id, .children = children });
+        }
+
+        try self.graph.nodes.ensureUnusedCapacity(self.allocator, nodes.items.len);
+        try self.graph.direct_page_ownership.ensureUnusedCapacity(self.allocator, nodes.items.len);
+        try self.graph.contains.ensureUnusedCapacity(@intCast(groups.items.len + 1));
         const children = try self.graph.contains.getOrPut(parent_id);
         if (!children.found_existing) children.value_ptr.* = .empty;
         errdefer if (!children.found_existing) {
             children.value_ptr.deinit(self.allocator);
             _ = self.graph.contains.remove(parent_id);
         };
-        try children.value_ptr.ensureUnusedCapacity(self.allocator, 1);
-
+        try children.value_ptr.ensureUnusedCapacity(self.allocator, inputs.len);
         const roots: ?*std.ArrayList(NodeId) = if (is_root) blk: {
             const entry = try self.graph.page_placement_roots.getOrPut(page_id);
             if (!entry.found_existing) entry.value_ptr.* = .empty;
@@ -727,77 +764,50 @@ pub const DocumentState = struct {
                 entry.value_ptr.deinit(self.allocator);
                 _ = self.graph.page_placement_roots.remove(page_id);
             };
-            try entry.value_ptr.ensureUnusedCapacity(self.allocator, 1);
+            try entry.value_ptr.ensureUnusedCapacity(self.allocator, inputs.len);
             break :blk entry.value_ptr;
         } else null;
 
-        // All fallible work precedes publication. Failed registrations neither
-        // consume an identity/order position nor leave a partially attached node.
-        const id = self.graph.next_id;
-        self.graph.next_id += 1;
-        self.graph.direct_page_ownership.appendAssumeCapacity(.{ .first = page_id, .count = 1 });
-        self.graph.nodes.appendAssumeCapacity(.{
-            .id = id,
-            .kind = .object,
-            .name = "placement",
-            .attached = true,
-            .placement = .{ .value = value, .parent_id = parent_id, .page_id = page_id },
-            .composition_order = if (is_root) self.nextCompositionOrder() else null,
-            .origin = owned_origin,
-        });
-        if (is_root) {
-            const position = self.compositionInsertionIndex(children.value_ptr.items, id);
-            children.value_ptr.insertAssumeCapacity(position, id);
-            const root_position = self.compositionInsertionIndex(roots.?.items, id);
-            roots.?.insertAssumeCapacity(root_position, id);
-        } else {
-            // A display's children retain its output order, independently of
-            // the execution unit that happened to expand their parent.
-            children.value_ptr.appendAssumeCapacity(id);
-        }
-        return id;
-    }
-
-    /// Publish all direct children of a display together. Allocation failure
-    /// leaves its child collection and the node identity sequence unchanged.
-    pub fn registerPlacementChildren(self: *DocumentState, parent_id: NodeId, inputs: []const Value, origin: ?model.SourceOrigin) ![]const NodeId {
-        const parent = self.getNode(parent_id) orelse return error.UnknownNode;
-        if (parent.discarded) return error.InvalidPlacementParent;
-        const page_id = (parent.placement orelse return error.InvalidPlacementParent).page_id;
-        if (self.childrenOf(parent_id)) |existing| if (existing.len != 0) return error.InvalidPlacementParent;
-        var nodes = std.ArrayList(Node).empty;
-        defer nodes.deinit(self.allocator);
-        errdefer for (nodes.items) |*node| node.deinit(self.allocator);
-        try nodes.ensureTotalCapacity(self.allocator, inputs.len);
-        const owned_origin = if (origin) |source| try self.copyOrigin(source) else null;
-        for (inputs, 0..) |input, offset| {
-            if (input.presentationType() == null) return error.InvalidValueTag;
-            const value = try input.clone(self.allocator);
-            nodes.appendAssumeCapacity(.{
-                .id = self.graph.next_id + @as(NodeId, @intCast(offset)),
-                .kind = .object,
-                .name = "placement",
-                .attached = true,
-                .placement = .{ .value = value, .parent_id = parent_id, .page_id = page_id },
-                .origin = owned_origin,
-            });
-        }
-        try self.graph.nodes.ensureUnusedCapacity(self.allocator, nodes.items.len);
-        try self.graph.direct_page_ownership.ensureUnusedCapacity(self.allocator, nodes.items.len);
-        const children = try self.graph.contains.getOrPut(parent_id);
-        if (!children.found_existing) children.value_ptr.* = .empty;
-        errdefer if (!children.found_existing) {
-            children.value_ptr.deinit(self.allocator);
-            _ = self.graph.contains.remove(parent_id);
-        };
-        try children.value_ptr.ensureUnusedCapacity(self.allocator, nodes.items.len);
-        for (nodes.items) |node| {
-            children.value_ptr.appendAssumeCapacity(node.id);
+        // Every allocation precedes publication of the whole structural tree.
+        for (nodes.items, 0..) |*node, offset| {
+            if (is_root and offset < inputs.len) node.composition_order = self.nextCompositionOrder();
+            self.graph.nodes.appendAssumeCapacity(node.*);
             self.graph.direct_page_ownership.appendAssumeCapacity(.{ .first = page_id, .count = 1 });
-            self.graph.nodes.appendAssumeCapacity(node);
+        }
+        for (groups.items) |group| self.graph.contains.putAssumeCapacity(group.id, group.children);
+        for (0..inputs.len) |offset| {
+            const id = self.graph.next_id + @as(NodeId, @intCast(offset));
+            if (is_root) {
+                const position = self.compositionInsertionIndex(children.value_ptr.items, id);
+                children.value_ptr.insertAssumeCapacity(position, id);
+                const root_position = self.compositionInsertionIndex(roots.?.items, id);
+                roots.?.insertAssumeCapacity(root_position, id);
+            } else {
+                children.value_ptr.appendAssumeCapacity(id);
+            }
         }
         self.graph.next_id += @intCast(nodes.items.len);
         return children.value_ptr.items;
+    }
+
+    fn appendPlacementNode(self: *DocumentState, nodes: *std.ArrayList(Node), parent_id: NodeId, page_id: NodeId, input: Value, origin: ?model.SourceOrigin) !void {
+        if (input.presentationType() == null) return error.InvalidValueTag;
+        var value = try input.clone(self.allocator);
+        errdefer value.deinit(self.allocator);
+        try nodes.append(self.allocator, .{
+            .id = self.graph.next_id + @as(NodeId, @intCast(nodes.items.len)),
+            .kind = .object,
+            .name = "placement",
+            .attached = true,
+            .placement = .{
+                .value = value,
+                .parent_id = parent_id,
+                .page_id = page_id,
+                .display = if (input == .group) .group else .pending,
+            },
+            .object_kind = if (input == .group) .group else null,
+            .origin = origin,
+        });
     }
 
     pub fn createObjectWithOrigin(
