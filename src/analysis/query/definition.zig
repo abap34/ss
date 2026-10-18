@@ -104,7 +104,7 @@ fn appendStructuredTarget(
     }
     if (context.targetKindIs(.member_name) or context.targetKindIs(.enum_case_name)) {
         if (context.qualifier) |receiver| {
-            const binding = try resolve_query.selectedValue(context.budget, snapshot, current_module_id, context.offset, ast.CallableName.bare(receiver));
+            const binding = try resolve_query.selectedValue(context.budget, snapshot, current_module_id, context.offset, ast.CallableName.fromText(receiver));
             if (binding == .unknown) return appendEnumCaseTarget(context.budget, allocator, out, snapshot, current_module_id, receiver, context.target, request_path);
         }
     }

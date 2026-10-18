@@ -64,7 +64,7 @@ const PageContextRequirement = struct {
             .hole => null,
             .ident => |ident| blk: {
                 const name = ident.name;
-                break :blk switch (try self.sema.resolveValue(void, ast.CallableName.bare(name), if (scope.contains(name)) {} else null)) {
+                break :blk switch (try self.sema.resolveValue(void, ident.reference(), if (scope.contains(name)) {} else null)) {
                     .constant => |resolved| if (try self.constRequiresPage(resolved.key, resolved.decl)) .{ .constant = resolved.decl } else null,
                     .function => |resolved| if (try self.functionRequiresPage(resolved.key, resolved.decl)) .{ .function = resolved.decl } else null,
                     else => null,

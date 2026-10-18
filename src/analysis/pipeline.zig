@@ -518,7 +518,7 @@ const PlacementEffectAnalyzer = struct {
             => false,
             .ident => |ident| blk: {
                 if (locals.contains(ident.name)) break :blk false;
-                const resolved = sema.resolvedConst(ast.CallableName.bare(ident.name)) orelse break :blk false;
+                const resolved = sema.resolvedConst(ident.reference()) orelse break :blk false;
                 break :blk try self.constValue(resolved);
             },
             .lambda => |lambda| blk: {
@@ -607,7 +607,7 @@ const PlacementEffectAnalyzer = struct {
         return switch (callback_expr) {
             .ident => |ident| blk: {
                 if (locals.contains(ident.name)) break :blk false;
-                const resolved = sema.resolvedFunction(ast.CallableName.bare(ident.name)) orelse break :blk false;
+                const resolved = sema.resolvedFunction(ident.reference()) orelse break :blk false;
                 break :blk try self.functionBody(resolved.key, resolved.module_id, resolved.decl);
             },
             else => false,

@@ -670,7 +670,7 @@ fn sourceNameInType(budget: ?QueryBudget, ty: ast.Type, offset: usize) ?SourceNa
 fn sourceNameInExpr(budget: ?QueryBudget, expr: ast.Expr, offset: usize) ?SourceNameTarget {
     if (expired(budget)) return null;
     return switch (expr) {
-        .ident => |ident| if (spanContainsOptional(ident.name_span, offset)) .{
+        .ident => |ident| if (ident.reference().isQualified()) sourceNameInCallable(ident.reference(), offset) else if (spanContainsOptional(ident.name_span, offset)) .{
             .text = ident.name,
             .kind = .identifier,
         } else null,

@@ -2140,22 +2140,13 @@ const Parser = struct {
             name_owned = false;
             return .{ .call = try self.makeUnaryStringCall(name, text) };
         }
-        if (name.isQualified()) {
-            if (!self.eof() and self.source[self.pos] == '.') {
-                const name_span = name.span;
-                name_owned = false;
-                const text = try self.takeQualifiedNameText(name);
-                return .{ .ident = .{ .name = text, .name_span = name_span } };
-            }
-            return self.fail(error.ExpectedChar);
-        }
         if (std.mem.endsWith(u8, name.name, "!")) {
             return self.fail(error.ExpectedChar);
         }
-        if (!self.eof() and self.source[self.pos] != '(') {
-            return .{ .ident = .{ .name = name.name, .name_span = name.name_span } };
-        }
-        return .{ .ident = .{ .name = name.name, .name_span = name.name_span } };
+        const name_span = name.span;
+        name_owned = false;
+        const text = try self.takeQualifiedNameText(name);
+        return .{ .ident = .{ .name = text, .name_span = name_span } };
     }
 
     fn takeQualifiedNameText(self: *Parser, name: ast.CallableName) ![]const u8 {
