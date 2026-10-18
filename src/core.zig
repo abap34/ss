@@ -26,6 +26,7 @@ pub const Frame = model.Frame;
 pub const Axis = model.Axis;
 pub const AxisState = model.AxisState;
 pub const Node = model.Node;
+pub const placement_inputs = @import("core/placement_inputs.zig");
 pub const native_display = @import("core/native_display.zig");
 pub const RenderEnvEntry = model.RenderEnvEntry;
 pub const ContentProvenance = model.ContentProvenance;

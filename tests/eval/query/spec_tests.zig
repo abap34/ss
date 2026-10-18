@@ -656,3 +656,174 @@ test "typed queries: group child captures distinguish dependency summaries" {
         try testing.expectEqualStrings(expected, core.nodeDisplayContent(text));
     }
 }
+
+test "typed queries: stored closures retain captures and wait for document property writes" {
+    var state = try document(
+        \\import std:text/content as native
+        \\type Item { format: () -> String }
+        \\type Summary {}
+        \\fn display(self: Placed<Item>) -> native::Text = native::Text { content = "Item" }
+        \\fn display(self: Placed<Summary>) -> native::Text
+        \\  let items = select<Item>(self.document)
+        \\  let last = fold(items, Item { format = () |-> "Initial" }, (acc: Item, item: Placed<Item>) |-> item.value)
+        \\  return native::Text { content = last.format() ++ ":" ++ join(items, ",", (item: Placed<Item>) |-> item.value.format()) }
+        \\end
+        \\fn item(label: String, context: Document) -> Item
+        \\  return Item { format = () |-> (context.footer_text ?? "Missing") ++ label }
+        \\end
+        \\page summary
+        \\  place_on!(pagectx(), Summary {})
+        \\end
+        \\page body
+        \\  place_on!(pagectx(), group(item("A", docctx()), item("B", docctx())))
+        \\  docctx().footer_text = "Ready"
+        \\end
+    );
+    defer state.deinit();
+    var graph = try checkedGraph(&state);
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const summary = state.placementRootsOf(state.graph.page_order.items[0])[0];
+    try testing.expectEqualStrings("ReadyB:ReadyA,ReadyB", core.nodeDisplayContent(state.getNode(state.childrenOf(summary).?[0]).?));
+}
+
+test "typed queries: ordinary calls through filtered unions retain all function candidates" {
+    var state = try document(
+        \\import std:text/content as native
+        \\type Item { format: () -> String }
+        \\type Wrapped { value: Item }
+        \\fn display(self: Placed<Item>) -> native::Text = native::Text { content = "Item" }
+        \\fn display(self: Placed<Wrapped>) -> Item = self.value.value
+        \\fn item(label: String) -> Item = Item { format = () |-> label }
+        \\page main
+        \\  let selected = select<Item>(pagectx())
+        \\  let filtered = filter((selected | selected) - select<Item>(first(selected)), (item: Placed<Item>) |-> true)
+        \\  place_on!(pagectx(), native::Text { content = first(filtered).value.format() })
+        \\  place_on!(pagectx(), Wrapped { value = item("First") })
+        \\  place_on!(pagectx(), item("Unused") with { format = () |-> "Second" })
+        \\end
+    );
+    defer state.deinit();
+    var graph = try checkedGraph(&state);
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const roots = state.placementRootsOf(state.graph.page_order.items[0]);
+    try testing.expectEqualStrings("First", core.nodeDisplayContent(state.getNode(roots[0]).?));
+}
+
+test "typed queries: callback candidates respect exact generic input types" {
+    var state = try document(
+        \\import std:text/content as native
+        \\type Item<T> { value: T format: () -> String }
+        \\type Summary {}
+        \\fn display<T>(self: Placed<Item<T>>) -> native::Text = native::Text { content = "Item" }
+        \\fn display(self: Placed<Summary>) -> native::Text
+        \\  return native::Text { content = first(select<Item<String>>(self.document)).value.format() }
+        \\end
+        \\fn mutate() -> String
+        \\  new_page(docctx(), "Unexpected")
+        \\  return "Bad"
+        \\end
+        \\page main
+        \\  place_on!(pagectx(), Summary {})
+        \\  place_on!(pagectx(), Item<Number> { value = 1 format = mutate })
+        \\  place_on!(pagectx(), Item<String> { value = "Text" format = () |-> "Good" })
+        \\end
+    );
+    defer state.deinit();
+    var graph = try checkedGraph(&state);
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const root = state.placementRootsOf(state.graph.page_order.items[0])[0];
+    try testing.expectEqualStrings("Good", core.nodeDisplayContent(state.getNode(state.childrenOf(root).?[0]).?));
+}
+
+test "typed queries: display rejects an impure candidate reached through a selection" {
+    var state = try document(
+        \\import std:text/content as native
+        \\type Item { format: () -> String }
+        \\type Summary {}
+        \\fn display(self: Placed<Item>) -> native::Text = native::Text { content = "Item" }
+        \\fn display(self: Placed<Summary>) -> native::Text
+        \\  return native::Text { content = first(select<Item>(self.document)).value.format() }
+        \\end
+        \\fn mutate() -> String
+        \\  new_page(docctx(), "Unexpected")
+        \\  return "Bad"
+        \\end
+        \\page main
+        \\  place_on!(pagectx(), Summary {})
+        \\  place_on!(pagectx(), Item { format = () |-> "Good" })
+        \\  place_on!(pagectx(), Item { format = mutate })
+        \\end
+    );
+    defer state.deinit();
+    try testing.expectError(error.ImpureDisplayFunction, analyzeGraph(&state));
+    try testing.expectEqual(@as(usize, 0), state.graph.page_order.items.len);
+}
+
+test "typed queries: recursion through an input callback is rejected before evaluation" {
+    var state = try document(
+        \\import std:text/content as native
+        \\type Item { format: () -> String }
+        \\fn display(self: Placed<Item>) -> native::Text = native::Text { content = "Item" }
+        \\fn recursive() -> String = first(select<Item>(docctx())).value.format()
+        \\page main
+        \\  place_on!(pagectx(), Item { format = recursive })
+        \\  place_on!(pagectx(), native::Text { content = recursive() })
+        \\end
+    );
+    defer state.deinit();
+    try testing.expectError(error.RecursiveFunction, analyzeGraph(&state));
+    try testing.expectEqual(@as(usize, 0), state.graph.page_order.items.len);
+}
+
+test "typed queries: captured selections cannot be mutated through stored callbacks" {
+    var state = try document(
+        \\import std:text/content as native
+        \\type Item {}
+        \\type Action { run: () -> Selection<Placed<Item>> }
+        \\fn display(self: Placed<Item>) -> native::Text = native::Text { content = "Item" }
+        \\fn display(self: Placed<Action>) -> native::Text = native::Text { content = "Action" }
+        \\fn add!(item: Placed<Item>) -> Void
+        \\  place_on!(pagectx(), Item {})
+        \\end
+        \\page main
+        \\  first(select<Action>(pagectx())).value.run()
+        \\  let items = select<Item>(pagectx())
+        \\  place_on!(pagectx(), Action { run = () |-> foreach(items, (item: Placed<Item>) |-> add!(item)) })
+        \\  place_on!(pagectx(), Item {})
+        \\end
+    );
+    defer state.deinit();
+    try testing.expectError(error.InvalidSelectionMutation, analyzeGraph(&state));
+}
+
+test "typed queries: fold checks callbacks obtained after the initial accumulator" {
+    var state = try document(
+        \\import std:text/content as native
+        \\type Item { format: () -> String }
+        \\type Summary {}
+        \\fn display(self: Placed<Item>) -> native::Text = native::Text { content = "Item" }
+        \\fn next(acc: Item, item: Placed<Item>) -> Item
+        \\  acc.format()
+        \\  return item.value
+        \\end
+        \\fn display(self: Placed<Summary>) -> native::Text
+        \\  let result = fold(select<Item>(self.document), Item { format = () |-> "Good" }, next)
+        \\  return native::Text { content = "Summary" }
+        \\end
+        \\fn mutate() -> String
+        \\  new_page(docctx(), "Unexpected")
+        \\  return "Bad"
+        \\end
+        \\page main
+        \\  place_on!(pagectx(), Summary {})
+        \\  place_on!(pagectx(), Item { format = mutate })
+        \\  place_on!(pagectx(), Item { format = () |-> "Good" })
+        \\end
+    );
+    defer state.deinit();
+    try testing.expectError(error.ImpureDisplayFunction, analyzeGraph(&state));
+    try testing.expectEqual(@as(usize, 0), state.graph.page_order.items.len);
+}
