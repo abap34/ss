@@ -2807,3 +2807,29 @@ test "syntax spec: incomplete generic input preserves subsequent declarations" {
     defer recovered.deinit(testing.allocator);
     try testing.expectEqualStrings("Kept", recovered.module.records.items[0].name);
 }
+
+test "syntax spec: parenthesized qualified expressions are distinct from typed lambdas" {
+    const source =
+        \\page Qualified
+        \\  let value = (library::Item { value = 1 })
+        \\  let call = (library::make(1))
+        \\  let reference = (library::Kind.value)
+        \\  let group = (library::Item { value = 1 } // other)
+        \\  let function = (value: library::Item) |-> value
+        \\end
+    ;
+    var parsed = try parse(source);
+    defer parsed.deinit();
+    const statements = parsed.module.pages.items[0].statements.items;
+    try testing.expectEqualStrings("library::Item", statements[0].kind.let_binding.expr.record.type_name);
+    const call = statements[1].kind.let_binding.expr.call;
+    try testing.expectEqualStrings("library", call.callee.qualifier.?);
+    try testing.expectEqualStrings("make", call.callee.name);
+    const reference = statements[2].kind.let_binding.expr.member.target.ident;
+    try testing.expectEqualStrings("library::Kind", reference.name);
+    const group = try expectComposition(statements[3].kind.let_binding.expr, .vertical);
+    try testing.expectEqualStrings("library::Item", group.args.items[0].record.type_name);
+    const lambda = statements[4].kind.let_binding.expr.lambda;
+    try testing.expectEqualStrings("library::Item", lambda.params.items[0].ty.class_name.?);
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source});
+}
