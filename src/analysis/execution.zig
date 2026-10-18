@@ -132,18 +132,21 @@ pub const ExecutionGraph = struct {
             for (source.summary.placements.items) |definition| {
                 const plan_index = state.displays.call_targets.get(definition.call_id).?;
                 const plan = state.displays.plans.items[plan_index];
-                var previous = producer;
+                const first_unit = self.units.items.len;
                 for (plan.steps.items, 0..) |step, index| {
                     var summary = try definition.steps.items[index].clone(self.allocator);
                     var moved = false;
                     errdefer if (!moved) summary.deinit();
                     summary.writes_layout_input = true;
-                    if (index + 1 < plan.steps.items.len) try summary.addWrite(.{ .objects = .{
-                        .input_type = plan.steps.items[index + 1].input,
-                        .placement_call = definition.call_id,
-                        .depth = .exact(index + 1),
-                        .page_scope = definition.page_scope,
-                    } });
+                    for (step.children.items) |child_index| {
+                        const child = plan.steps.items[child_index];
+                        try summary.addWrite(.{ .objects = .{
+                            .input_type = child.input,
+                            .placement_call = definition.call_id,
+                            .depth = .exact(child.depth),
+                            .page_scope = definition.page_scope,
+                        } });
+                    }
                     const module_id = switch (step.target) {
                         .native => source.module_id,
                         .function => |key| key.module_id,
@@ -164,8 +167,10 @@ pub const ExecutionGraph = struct {
                         .kind = .{ .display = .{ .producer = producer, .call_id = definition.call_id, .plan = plan_index, .step = index } },
                     });
                     moved = true;
-                    try self.edges.append(self.allocator, .{ .from = previous, .to = unit });
-                    previous = unit;
+                    try self.edges.append(self.allocator, .{
+                        .from = if (step.parent) |parent| first_unit + parent else producer,
+                        .to = unit,
+                    });
                 }
             }
         }

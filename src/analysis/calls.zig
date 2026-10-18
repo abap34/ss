@@ -652,13 +652,18 @@ const Analyzer = struct {
         self.returns.clearRetainingCapacity();
         for (self.typed_displays.items) |registration| {
             self.current_origin = registration.origin;
-            var receiver = registration.receiver;
-            for (self.state.displays.plans.items[registration.plan].steps.items) |step| switch (step.target) {
+            const plan = self.state.displays.plans.items[registration.plan];
+            const receivers = try self.allocator.alloc(ValueFacts, plan.steps.items.len);
+            defer self.allocator.free(receivers);
+            receivers[0] = registration.receiver;
+            for (plan.steps.items, 0..) |step, index| switch (step.target) {
                 .native => {},
                 .function => |key| {
-                    const output = try self.invokeNamed(self.namedLabel(key), key.module_id, self.state.functions.get(key).?, &.{receiver});
-                    receiver = ValueFacts.init(self.allocator);
+                    const output = try self.invokeNamed(self.namedLabel(key), key.module_id, self.state.functions.get(key).?, &.{receivers[index]});
+                    var receiver = ValueFacts.init(self.allocator);
                     try receiver.putField("value", output);
+                    std.debug.assert(step.children.items.len == 1);
+                    receivers[step.children.items[0]] = receiver;
                 },
             };
         }

@@ -174,9 +174,12 @@ pub const EvalContext = struct {
         return child;
     }
 
-    pub fn expandDisplayTarget(self: *EvalContext, id: core.NodeId, target: core.native_display.Target) !?core.NodeId {
+    pub fn expandDisplayTarget(self: *EvalContext, id: core.NodeId, target: core.native_display.Target) ![]const core.NodeId {
         switch (target) {
-            .function => |function| return try self.expandDisplay(id, function),
+            .function => |function| {
+                _ = try self.expandDisplay(id, function);
+                return self.state.childrenOf(id) orelse return error.InvalidDisplayPlan;
+            },
             .native => |kind| {
                 try checkCancellation(self);
                 const node = self.state.getNode(id) orelse return error.UnknownNode;
@@ -187,7 +190,7 @@ pub const EvalContext = struct {
                     .pending => {},
                     .native => |existing| {
                         if (existing != kind) return error.DisplayTargetMismatch;
-                        return null;
+                        return &.{};
                     },
                     .running => return error.DisplayExpansionCycle,
                     .expanded => return error.DisplayTargetMismatch,
@@ -199,7 +202,7 @@ pub const EvalContext = struct {
                     .text => .text,
                 };
                 placement.display = .{ .native = kind };
-                return null;
+                return &.{};
             },
         }
     }
@@ -551,18 +554,19 @@ fn executeUnit(
     switch (unit.kind) {
         .display => |display| {
             const plan = state.displays.plans.items[display.plan];
-            const target = plan.steps.items[display.step].target;
+            const step = plan.steps.items[display.step];
             const index = evaluation.execution_unit.?;
             const inputs = evaluation.display_inputs.items[index].items;
-            // A plan's stages occupy consecutive graph units. Keep their inputs
-            // in the evaluator rather than rescanning every document node.
-            const next: ?*std.ArrayList(core.NodeId) = if (display.step + 1 < plan.steps.items.len)
-                &evaluation.display_inputs.items[index + 1]
-            else
-                null;
-            if (next) |pending| try pending.ensureUnusedCapacity(evaluation.allocator, inputs.len);
+            const first_unit = index - display.step;
+            for (step.children.items) |child_step| {
+                try evaluation.display_inputs.items[first_unit + child_step].ensureUnusedCapacity(evaluation.allocator, inputs.len);
+            }
             for (inputs) |id| {
-                if (try evaluation.expandDisplayTarget(id, target)) |child| next.?.appendAssumeCapacity(child);
+                const children = try evaluation.expandDisplayTarget(id, step.target);
+                if (children.len != step.children.items.len) return error.InvalidDisplayPlan;
+                for (children, step.children.items) |child, child_step| {
+                    evaluation.display_inputs.items[first_unit + child_step].appendAssumeCapacity(child);
+                }
             }
         },
         .document_statement => |document_statement| {

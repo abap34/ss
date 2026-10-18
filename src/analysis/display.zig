@@ -18,18 +18,23 @@ pub fn prepare(
 ) !Plan {
     var plan = Plan{ .allocator = allocator };
     errdefer plan.deinit();
-    var current = input;
-    var current_origin = origin;
-    while (true) {
+    const Pending = struct { input: ast.Type, origin: core.SourceOrigin, parent: ?usize };
+    var pending = std.ArrayList(Pending).empty;
+    defer pending.deinit(allocator);
+    try pending.append(allocator, .{ .input = input, .origin = origin, .parent = null });
+    while (pending.pop()) |entry| {
         try state.checkAnalysisCanceled();
+        const current = entry.input;
+        const current_origin = entry.origin;
+        const parent = entry.parent;
         if (current.nominalId()) |id| {
             // There are finitely many nominal declarations. Repeated visits to
             // each declaration must strictly decrease a natural-number measure.
             // This admits Wrapper<Wrapper<Text>> -> Wrapper<Text> -> Text while
             // rejecting exact cycles and growing generic display instantiations.
-            var index = plan.steps.items.len;
-            while (index > 0) {
-                index -= 1;
+            var ancestor = parent;
+            while (ancestor) |index| {
+                ancestor = plan.steps.items[index].parent;
                 const earlier = plan.steps.items[index].input;
                 const earlier_id = earlier.nominalId() orelse continue;
                 if (!id.eql(earlier_id)) continue;
@@ -50,20 +55,20 @@ pub fn prepare(
             }
         }
         const target = try infer.prepareDisplay(allocator, state, sema, current, current_origin, context);
-        var owned = try current.clone(allocator);
-        plan.steps.append(allocator, .{ .input = owned, .target = target }) catch |err| {
-            owned.deinit(allocator);
-            return err;
-        };
+        const index = try plan.append(current, target, parent);
         switch (target) {
-            .native => return plan,
+            .native => {},
             .function => |key| {
                 const declaration = state.functions.get(key).?;
-                current = declaration.result_type;
-                current_origin = state.sourceOrigin(key.module_id, declaration.span);
+                try pending.append(allocator, .{
+                    .input = declaration.result_type,
+                    .origin = state.sourceOrigin(key.module_id, declaration.span),
+                    .parent = index,
+                });
             },
         }
     }
+    return plan;
 }
 
 fn typeSize(ty: ast.Type) usize {
