@@ -1040,12 +1040,11 @@ const Parser = struct {
         if (!source.startsWithAt(self.source, self.pos, "::")) return first;
         self.pos += 2;
         const second = try self.parseIdentifierWithSpan();
-        defer {
-            self.allocator.free(first.text);
-            self.allocator.free(second.text);
-        }
+        defer self.allocator.free(second.text);
+        const text = try std.fmt.allocPrint(self.allocator, "{s}::{s}", .{ first.text, second.text });
+        self.allocator.free(first.text);
         return .{
-            .text = try std.fmt.allocPrint(self.allocator, "{s}::{s}", .{ first.text, second.text }),
+            .text = text,
             .span = .{ .start = first.span.start, .end = second.span.end },
         };
     }
@@ -2215,7 +2214,7 @@ const Parser = struct {
         }
         if (!scanner.scanIdentifier(self.source, &probe)) return false;
         source.skipInlineSpaces(self.source, &probe);
-        if (probe < self.source.len and self.source[probe] == ':') return true;
+        if (probe < self.source.len and self.source[probe] == ':' and !source.startsWithAt(self.source, probe, "::")) return true;
 
         var depth: usize = 1;
         while (probe < self.source.len) : (probe += 1) {
