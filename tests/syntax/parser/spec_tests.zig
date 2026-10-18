@@ -575,8 +575,8 @@ test "syntax spec: functions can use expression bodies" {
     var parsed = try parse(
         \\fn square(x: Number) -> Number = x * x
         \\
-        \\fn remember() -> Void =
-        \\  set_prop(
+        \\fn remember(action: (Document, String, Number) -> Void) -> Void =
+        \\  action(
         \\    docctx(),
         \\    "layout_h_center_offset",
         \\    42,
@@ -597,7 +597,7 @@ test "syntax spec: functions can use expression bodies" {
     const remember = parsed.module.functions.items[1];
     try testing.expectEqualStrings("remember", remember.name);
     try testing.expectEqual(@as(usize, 1), remember.statements.items.len);
-    _ = try expectCall(remember.statements.items[0].kind.expr_stmt, "set_prop", 3);
+    _ = try expectCall(remember.statements.items[0].kind.expr_stmt, "action", 3);
 
     const badge = parsed.module.functions.items[2];
     try testing.expectEqualStrings("badge", badge.name);
@@ -680,7 +680,7 @@ test "syntax spec: void functions may omit explicit return values" {
 test "syntax spec: function types and lambdas are source syntax" {
     var parsed = try parse(
         \\fn make_label(text_value: String) -> Page -> Placement
-        \\  return (page_value: Page) |-> place_on!(page_value, new(text_value, "body", "text"))
+        \\  return (page_value: Page) |-> place_on!(page_value, text(text_value))
         \\end
         \\
         \\fn use(callback: (Page -> Placement) -> Document, pair: (Page, Document) -> Placement, thunk: () -> Number) -> Number
@@ -850,7 +850,7 @@ test "syntax spec: paired placement functions expand to plain and placing defini
 
     const bad_source =
         \\fn/! note!() -> Text
-        \\  return new("", "body", "text")
+        \\  return text("")
         \\end
         \\
     ;
@@ -1463,10 +1463,8 @@ test "syntax spec: lambda body may start on a later line" {
         \\      |->
         \\        place_on!(
         \\          page_value,
-        \\          new(
-        \\            str(page_index(page_value)),
-        \\            "body",
-        \\            "text"
+        \\          text(
+        \\            str(page_index(page_value))
         \\          )
         \\        )
         \\  )

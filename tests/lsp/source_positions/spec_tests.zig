@@ -75,9 +75,9 @@ test "LSP source positions: tokens count non-BMP strings as UTF-16" {
 }
 
 test "LSP source positions: paired function keyword spans all four characters" {
-    const result = try tokens.json(testing.allocator, "  fn/! make() -> Object\nend\n");
+    const result = try tokens.json(testing.allocator, "  fn/! make() -> Text\nend\n");
     defer testing.allocator.free(result);
-    try testing.expectEqualStrings("{\"data\":[0,2,4,0,0,0,5,4,1,0,0,7,2,7,0,0,3,6,5,0,1,0,3,0,0]}", result);
+    try testing.expectEqualStrings("{\"data\":[0,2,4,0,0,0,5,4,1,0,0,7,2,7,0,0,3,4,5,0,1,0,3,0,0]}", result);
 }
 
 test "LSP source positions: colors use UTF-16 offsets after non-BMP strings" {

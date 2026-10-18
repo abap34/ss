@@ -3,7 +3,7 @@ Document block, control flow, and properties
 ================================================================================
 
 document
-  page_no_all()
+  initialize()
 end
 
 page "Control"
@@ -13,7 +13,7 @@ page "Control"
     if index then
       property title "data-kind" item
     else
-      set_prop(title, "fallback", c"#fff")
+      record_event(title, "fallback", c"#fff")
     end
   end
 end
