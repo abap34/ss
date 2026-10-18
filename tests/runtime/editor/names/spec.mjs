@@ -19,7 +19,7 @@ fn movable_item_2() -> Number
   return 2
 end
 
-fn movable!() -> Object
+fn movable!() -> Placed<Text>
   return text!("Move me")
 end
 

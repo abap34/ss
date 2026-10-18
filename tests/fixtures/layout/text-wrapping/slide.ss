@@ -20,9 +20,9 @@ page ordered
 let body_content = <<
 1. silver green violet
 >>
-let body = text!(body_content, current_theme() with {
-  body.text.size = 31.25
-  body.text.line_height = 40
+let body = text!(body_content, current_theme().body with {
+  text.size = 31.25
+  text.line_height = 40
 })
 end
 

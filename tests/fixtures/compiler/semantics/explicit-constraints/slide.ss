@@ -8,8 +8,8 @@ fn beside(a: Object, b: Object, gap: Number = 24) -> Constraints
 end
 
 page main
-  let a = text!("Explicit")
-  let b = text!("constraints")
+  let a = body_obj!("Explicit")
+  let b = body_obj!("constraints")
   ~ a.left == page.left + 96
   ~ a.top == page.top - 96
   ~ beside(a, b)

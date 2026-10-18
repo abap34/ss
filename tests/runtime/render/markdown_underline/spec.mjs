@@ -10,10 +10,10 @@ try {
   await writeFile(path.join(project, "slide.ss"), `import std:themes/default as *
 
 page underline
-let body = text!("before _custom_ after", current_theme() with {
-  body.text.size = 32
-  body.text.line_height = 42
-  body.text.markdown.underline = MarkdownUnderlineStyle { color = c"#cc3366" opacity = 0.35 width = 5 offset = 3 dash = "7,3" }
+let body = text!("before _custom_ after", current_theme().body with {
+  text.size = 32
+  text.line_height = 42
+  text.markdown.underline = MarkdownUnderlineStyle { color = c"#cc3366" opacity = 0.35 width = 5 offset = 3 dash = "7,3" }
 })
 ~ body.left == page.left + 80
 ~ body.top == page.top - 80

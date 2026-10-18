@@ -59,17 +59,14 @@ async function testLatexRendererUsesReferenceHeight() {
       `import std:themes/default as *
 
 page inline_math_size
-let body = text! <<
+let body = text!(<<
 $\\FallbackMath{x}$
 $\\FallbackMath{x_i^j}$
->>
+>>, default_text_style, LatexConfig { preamble = "\\newcommand{\\FallbackMath}[1]{#1}" })
 ~ body.left == page.left + 96
 ~ body.right == body.left + 35
 end
 
-document
-  latex_preamble("\\newcommand{\\FallbackMath}[1]{#1}")
-end
 `,
       "utf8",
     );

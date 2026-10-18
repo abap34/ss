@@ -7,6 +7,6 @@ fn label(item: Object?) -> String = item?.content ?? "missing"
 page main
   let present = Branch { leaf = Leaf {} }
   let absent = Branch {}
-  text!(str(width(none)) ++ ":" ++ str(width(absent)) ++ ":" ++ str(width(present)))
-  text!(label(none))
+  body_obj!(str(width(none)) ++ ":" ++ str(width(absent)) ++ ":" ++ str(width(present)))
+  body_obj!(label(none))
 end

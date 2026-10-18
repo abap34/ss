@@ -559,7 +559,7 @@ asset_base_dir = "."
 `, "utf8");
     const libSource = `import std:prelude as *
 
-fn label!(value: String) -> Object
+fn label!(value: String) -> Placed<Text>
   return text!(value)
 end
 `;
@@ -1115,8 +1115,8 @@ end
 function featureSource(title, color) {
   return `import std:prelude as *
 
-fn themed!(theme: Theme) -> Object
-  return text!("typed", theme)
+fn themed!(theme: Theme) -> Placed<Text>
+  return text!("typed", theme.body)
 end
 
 type LocalStyle {
@@ -1128,8 +1128,8 @@ type Badge = object {
 }
 
 page feature
-let heading = text!("${title}", current_theme() with {
-  body.text.color = c"${color}"
+let heading = text!("${title}", current_theme().body with {
+  text.color = c"${color}"
 })
 end
 `;

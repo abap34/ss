@@ -86,12 +86,9 @@ async function testDebugLayoutTracePreservesPreambleReadFailure() {
       `import std:themes/default as *
 
 page formula
-text!("Inline $\\ArchiveMacro$ fallback")
+text!("Inline $\\ArchiveMacro$ fallback", default_text_style, LatexConfig { preamble = readlines("preamble.tex") })
 end
 
-document
-  latex_preamble_file("preamble.tex")
-end
 `,
       "utf8",
     );
@@ -103,8 +100,8 @@ end
     );
     const output = `${result.stdout}\n${result.stderr}`;
     assert(result.code !== 0, "layout trace should fail when its LaTeX preamble path is a directory");
-    assert(output.includes("RenderFailed:"), `preamble failure did not produce a source diagnostic:\n${output}`);
-    assert(output.includes("LaTeX preamble 'preamble.tex' could not be read"), `preamble failure omitted its operation:\n${output}`);
+    assert(output.includes("ReadlinesFailed:"), `preamble failure did not produce a source diagnostic:\n${output}`);
+    assert(output.includes("could not read preamble.tex"), `preamble failure omitted its operation:\n${output}`);
     assert(output.includes(preamblePath), `preamble failure omitted the resolved path:\n${output}`);
     assert(output.includes("file was expected"), `preamble failure omitted the actual cause:\n${output}`);
     assert(!output.includes("LayoutTraceWriteFailed:"), `preamble input failure was mislabeled as trace output failure:\n${output}`);
@@ -218,7 +215,7 @@ async function writeDeck(project) {
 page one
 text!("hello")
 text!("world")
-let item = text!("old")
+let item = body_obj!("old")
 item.link_id = "one"
 text!(content(item))
 end

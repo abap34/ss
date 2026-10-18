@@ -10,10 +10,10 @@ An inline ![star](fa:star) keeps its position between the surrounding words as t
 | :--- | ---: |
 | Several words wrap inside this cell | ![star](fa:star) beside text |
 >>
-let body = text!(body_content, current_theme() with {
-  body.text.size = 24
-  body.text.line_height = 36
-  body.layout.wrap = WrapMode.on
+let body = text!(body_content, current_theme().body with {
+  text.size = 24
+  text.line_height = 36
+  layout.wrap = WrapMode.on
 })
 ~ body.left == page.left + 80
 ~ body.right == body.left + 320

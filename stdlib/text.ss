@@ -1,12 +1,12 @@
-import std:text/style as { TextBlockStyle }
+import std:text/style as { TextBlockStyle, default_text_style }
+import std:math/types as { LatexConfig }
 import std:text/content as { Text }
 import std:text/types as { SemanticRole, SemanticStyle, RenderKind, TextParseMode, FontStyle, FontStretch, FontFace, MarkdownUnderlineStyle, MarkdownQuoteStyle, TextMathStyle, MarkdownListStyle, MarkdownTableStyle, MarkdownCodeStyle, MarkdownStyle, TextStyle, MarkdownHeadingStyle, MarkdownHeadingStyles, UnderlineStyle, RuleStyle }
 import std:theme as theme
 import std:internal/style as styles
 
-fn/! text(content: String, style: theme::Theme = theme::current_theme()) -> Object
-  let result = new(content, "body", "text")
-  return styles::apply_markdown_text_style(result, style)
+fn/! text(content: String, style: TextBlockStyle = default_text_style, config: LatexConfig = LatexConfig {}) -> Text
+  return Text { content = content style = style config = config }
 end
 
 fn/! title(content: String, style: TextBlockStyle = theme::current_theme().h1) -> Object

@@ -458,7 +458,7 @@ fn expectObjectState(source: []const u8, expected: compiler_semantics.ObjectStat
 test "compiler semantics: composition type diagnostics identify the operand" {
     const source =
         \\page example
-        \\  let a = text!("A")
+        \\  let a = text("A")
         \\  a || (a // 123)
         \\end
         \\
@@ -471,7 +471,7 @@ test "compiler semantics: composition type diagnostics identify the operand" {
     const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
     const start = std.mem.indexOf(u8, source, "123").?;
     const expected_origin = try std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ start, start + 3 });
-    try compiler_semantics.expectDiagnostic(testing.io, allocator, path, source, expected_origin, "TypeMismatch");
+    try compiler_semantics.expectDiagnostic(testing.io, allocator, path, source, expected_origin, "InvalidGroupInput");
     const typed_source =
         \\import std:text as { Text }
         \\page example
@@ -490,7 +490,7 @@ test "compiler semantics: imported function return inference diagnostics keep ca
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  text(bad())
+        \\  text!(bad())
         \\end
         \\
     ,
@@ -622,7 +622,7 @@ test "compiler semantics: stdlib editor variable info keeps theme object classes
         \\end
         \\
         \\page ok
-        \\  let t = text! "body"
+        \\  let t = body_obj! "body"
         \\  t.link_id = "body"
         \\end
         \\
@@ -785,15 +785,6 @@ test "compiler semantics: stdlib core components build when called directly" {
         \\  pageno!()
         \\end
         \\
-        \\page frame_components
-        \\  box!(text("frame_s"), ChromeStyle { pad_x = 8 pad_y = 6 })
-        \\  box!(text("frame"), ChromeStyle { pad_x = 8 pad_y = 6 })
-        \\  box!(text("surround"), ChromeStyle { pad_x = 8 pad_y = 6 })
-        \\  box!(text("border_p"), ChromeStyle { pad_x = 8 pad_y = 6 stroke = c"0.2,0.2,0.2" line_width = 1 radius = 4 })
-        \\  box!(text("border"))
-        \\  box!(text("outline"))
-        \\end
-        \\
         \\page asset_components
         \\  image!("image.svg")
         \\  pdf!("doc.pdf")
@@ -802,27 +793,6 @@ test "compiler semantics: stdlib core components build when called directly" {
         \\page citation_component
         \\  let target = text!("body [1]")
         \\  citation!(1, "reference")
-        \\end
-        \\
-        \\page shape_components
-        \\  let source = text!("source")
-        \\  let target = text!("target")
-        \\  ~ source.left == page.left + 120
-        \\  ~ source.top == page.top - 180
-        \\  ~ target.left == source.right + 180
-        \\  ~ target.top == source.top + 80
-        \\  let annotation = callout_parts(source, "note")
-        \\  ~ annotation.note.left == page.left + 560
-        \\  ~ annotation.note.top == page.top - 140
-        \\  ~ annotation.note.width == 220
-        \\  place_on!(pagectx(), annotation.root)
-        \\  annotate!("before target after", "target", "note", MarkedCalloutStyle {
-        \\    x = 160
-        \\    top_y = 320
-        \\    callout_x = 560
-        \\    callout_top_y = 420
-        \\    callout_width = 220
-        \\  })
         \\end
         \\
     );
@@ -886,27 +856,6 @@ test "compiler semantics: math and latex are public without obsolete aliases" {
         \\end
         \\
     , "case.ss:bytes:", "UnknownFunction: unknown function: tex_preamble");
-}
-
-test "compiler semantics: connector components resolve generic connector rendering" {
-    try expectDumpContains(
-        \\import std:prelude
-        \\
-        \\page shapes
-        \\  let source = text!("source")
-        \\  let target = text!("target")
-        \\  ~ source.left == page.left + 120
-        \\  ~ source.top == page.top - 180
-        \\  ~ target.left == source.right + 180
-        \\  ~ target.top == source.top + 80
-        \\  arrow_connector!(source, target, ConnectorRoute.straight, ConnectorAnchor.right, ConnectorAnchor.left, vector_stroke(c"#2563eb", 2))
-        \\end
-        \\
-    , &.{
-        "\"kind\":\"connector\"",
-        "\"role\":\"connector\"",
-        "\\\"marker_end\\\"",
-    });
 }
 
 test "compiler semantics: stdlib theme components build when imported by theme alias" {
@@ -1048,7 +997,7 @@ test "compiler semantics: qualified calls bypass local shadowing" {
     const source =
         \\import std:text
         \\
-        \\fn/! h2(content: String) -> Object
+        \\fn/! h2(content: String) -> Text
         \\  return text("local")
         \\end
         \\
@@ -1069,7 +1018,7 @@ test "compiler semantics: repeated name resolution keeps module scope" {
         \\import "lib/b" as b
         \\
         \\page ok
-        \\  text(a::get() ++ b::get() ++ a::get())
+        \\  text!(a::get() ++ b::get() ++ a::get())
         \\end
         \\
     ,
@@ -1150,14 +1099,14 @@ test "compiler semantics: imported local definitions override their imports" {
     ,
         \\import std:themes/default
         \\
-        \\fn/! h2(content: String) -> Object
+        \\fn/! h2(content: String) -> Text
         \\  return text("a " ++ content)
         \\end
         \\
     ,
         \\import std:themes/default
         \\
-        \\fn/! h2(content: String) -> Object
+        \\fn/! h2(content: String) -> Text
         \\  return text("b " ++ content)
         \\end
         \\
@@ -1170,7 +1119,7 @@ test "compiler semantics: extensionless path imports can be aliased and opened t
         \\import "lib/types"
         \\
         \\page ok
-        \\  text(types::overlay_value() ++ overlay_value())
+        \\  text!(types::overlay_value() ++ overlay_value())
         \\end
         \\
     ,
@@ -1246,7 +1195,7 @@ test "compiler semantics: duplicate function parameters are rejected" {
         \\end
         \\
         \\page ok
-        \\  text(bad("a", "b"))
+        \\  text!(bad("a", "b"))
         \\end
         \\
     , "case.ss:bytes:", "DuplicateBinding: binding 'x' is already defined in this scope");
@@ -1262,7 +1211,7 @@ test "compiler semantics: function let cannot shadow parameters" {
         \\end
         \\
         \\page ok
-        \\  text(bad("a"))
+        \\  text!(bad("a"))
         \\end
         \\
     , "case.ss:bytes:", "DuplicateBinding: binding 'x' is already defined in this scope");
@@ -1274,7 +1223,7 @@ test "compiler semantics: duplicate lambda parameters are rejected" {
         \\
         \\page bad
         \\  let f = (x: String, x: String) |-> x
-        \\  text(f("a", "b"))
+        \\  text!(f("a", "b"))
         \\end
         \\
     , "case.ss:bytes:", "DuplicateBinding: binding 'x' is already defined in this scope");
@@ -1287,24 +1236,23 @@ test "compiler semantics: lambda parameters can shadow outer bindings" {
         \\page good
         \\  let x = "outer"
         \\  let f = (x: String) |-> x
-        \\  text(f("inner"))
+        \\  text!(f("inner"))
         \\end
         \\
     , "inner");
 }
 
-test "compiler semantics: singleton selections do not depend on object collection writes" {
+test "compiler semantics: singleton selections do not depend on placement collection writes" {
     try buildSource(
         \\import std:prelude as *
-        \\fn wrap(item: Object) -> Selection<Object>
-        \\  return select(item, "self_object")
+        \\fn wrap(item: Placed<Text>) -> Selection<Placed<Text>>
+        \\  return select<Text>(item)
         \\end
         \\page Singleton
-        \\  let a = text("A")
-        \\  let b = text("B")
-        \\  let items = selection_union(wrap(a), wrap(b))
-        \\  let combined = group(items, text("C"))
-        \\  place_on!(pagectx(), combined)
+        \\  let a = text!("A")
+        \\  let b = text!("B")
+        \\  let items = wrap(a) | wrap(b)
+        \\  text!(join(items, "", (item: Placed<Text>) |-> item.value.content))
         \\end
     );
 }
@@ -1330,7 +1278,7 @@ test "compiler semantics: dynamically built text survives lowering" {
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  text("hello" ++ " " ++ "world")
+        \\  text!("hello" ++ " " ++ "world")
         \\end
         \\
     , "hello world");
@@ -1563,7 +1511,7 @@ test "compiler semantics: enum properties serialize as case names" {
         \\  let card = obj("card", "card", "text")
         \\  card.custom_mode = Mode.beta
         \\  if prop_eq(card, "custom_mode", "beta")
-        \\    text("enum-ok")
+        \\    text!("enum-ok")
         \\  end
         \\end
         \\
@@ -1727,7 +1675,7 @@ test "compiler semantics: Color is a static type" {
         \\end
         \\
         \\page bad
-        \\  let body = text("bad")
+        \\  let body = body_obj("bad")
         \\  body.text.color = keep_color("0.1,0.2,0.3")
         \\end
         \\
@@ -1757,7 +1705,7 @@ test "compiler semantics: Color is a static type" {
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let body = text("bad")
+        \\  let body = body_obj("bad")
         \\  body.text.markdown.code.chrome.fill = "red"
         \\end
         \\
@@ -1767,7 +1715,7 @@ test "compiler semantics: Color is a static type" {
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let body = text("bad")
+        \\  let body = body_obj("bad")
         \\  body.text.markdown.bold_color = "red"
         \\end
         \\
@@ -1833,7 +1781,6 @@ test "compiler semantics: text carries themed markdown heading styles" {
     try expectFixtureObjectFieldPath("theme/markdown-heading-text", "markdown_headings", &.{ "h2", "text", "size" }, "35");
     try expectFixtureObjectFieldPath("theme/markdown-heading-text", "markdown_headings", &.{ "h2", "text", "color" }, "0.08235294,0.47843137,0.16862746");
     try expectFixtureObjectFieldPath("theme/markdown-heading-text", "markdown_headings", &.{ "h6", "text", "size" }, "17");
-    try expectFixtureObjectFieldPath("theme/markdown-heading-figure", "markdown_headings", &.{ "h2", "text", "size" }, "38");
 }
 
 test "compiler semantics: shared theme style application keeps text decoration and layout" {
@@ -1993,7 +1940,7 @@ test "compiler semantics: code theme helpers set code and markdown colors" {
         \\page ok
         \\  let colors = palettes::code_theme_one_dark()
         \\  let snippet = code!("fn demo() -> Void\nend", "ss", current_theme().code with { highlight = colors })
-        \\  let body = text("```ss\nfn demo() -> Void\nend\n```", current_theme() with { code.highlight = colors })
+        \\  let body = text!("```ss\nfn demo() -> Void\nend\n```", default_text_style with { text.markdown.code.colors = colors.code })
         \\end
         \\
     ;
@@ -2009,7 +1956,7 @@ test "compiler semantics: default theme applies code theme to code and markdown"
         \\
         \\page ok
         \\  code!("const value = demo(1)", "javascript")
-        \\  text!("```javascript\nconst value = demo(1)\n```")
+        \\  text!("```javascript\nconst value = demo(1)\n```", current_theme().body with { text.markdown.code.colors = current_theme().code.highlight.code })
         \\end
         \\
     ;
@@ -2060,7 +2007,7 @@ test "compiler semantics: structured style value members are typed" {
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let body = text("bad")
+        \\  let body = body_obj("bad")
         \\  body.text = FontFace { family = "Menlo" }
         \\end
         \\
@@ -2149,7 +2096,7 @@ test "compiler semantics: explicit record fields override their defaults" {
         \\  let label = Label {
         \\    text = "explicit"
         \\  }
-        \\  text(label.text)
+        \\  text!(label.text)
         \\end
         \\
     ;
@@ -2184,7 +2131,7 @@ test "compiler semantics: function defaults and closures use callee bindings" {
         \\    }
         \\  })
         \\  let read_size = make_reader(selected)
-        \\  text(str(read_size(0)))
+        \\  text!(str(read_size(0)))
         \\end
         \\
     , "31");
@@ -2207,7 +2154,7 @@ test "compiler semantics: nested record member reads preserve their source value
         \\  let changed = base with {
         \\    body.size = 33
         \\  }
-        \\  text(str(base.body.size) ++ ":" ++ str(changed.body.size) ++ ":" ++ str(base.body.size))
+        \\  text!(str(base.body.size) ++ ":" ++ str(changed.body.size) ++ ":" ++ str(base.body.size))
         \\end
         \\
     , "20:33:20");
@@ -2299,7 +2246,7 @@ test "compiler semantics: theme overlay customizes current and local themes" {
         \\import "./theme" as *
         \\
         \\page ok
-        \\  text!("body")
+        \\  text!("body", current_theme().body)
         \\end
         \\
     , theme_source, "text", &.{"size"}, "22");
@@ -2320,7 +2267,7 @@ test "compiler semantics: theme overlay customizes current and local themes" {
         \\  let local = current_theme() with {
         \\    body.text.size = 18
         \\  }
-        \\  text!("small", local)
+        \\  text!("small", local.body)
         \\end
         \\
     , theme_source, "text", &.{"size"}, "18");
@@ -2378,7 +2325,7 @@ test "compiler semantics: optional fields accept none and coalesce" {
         \\end
         \\
         \\page bad
-        \\  text("bad")
+        \\  text!("bad")
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Color, got Color?");
@@ -2387,7 +2334,7 @@ test "compiler semantics: optional fields accept none and coalesce" {
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let body = text("bad")
+        \\  let body = body_obj("bad")
         \\  body.text.color = none
         \\end
         \\
@@ -2401,7 +2348,7 @@ test "compiler semantics: optional fields accept none and coalesce" {
         \\end
         \\
         \\page ok
-        \\  text(name(none))
+        \\  text!(name(none))
         \\end
         \\
     , "none");
@@ -2426,7 +2373,7 @@ test "compiler semantics: optional fields accept none and coalesce" {
         \\page bad
         \\  let color = c"1,0,0"
         \\  if color?
-        \\    text("bad")
+        \\    text!("bad")
         \\  end
         \\end
         \\
@@ -2450,7 +2397,7 @@ test "compiler semantics: optional fields accept none and coalesce" {
         \\end
         \\
         \\page bad
-        \\  text("bad")
+        \\  text!("bad")
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Color, got String");
@@ -2465,7 +2412,7 @@ test "compiler semantics: optional values are checked at function boundaries" {
         \\end
         \\
         \\page bad
-        \\  let body = text("bad")
+        \\  let body = body_obj("bad")
         \\  body.text.color = take_color(body.text?.markdown?.code?.chrome?.fill)
         \\end
         \\
@@ -2479,7 +2426,7 @@ test "compiler semantics: optional values are checked at function boundaries" {
         \\end
         \\
         \\page bad
-        \\  let body = text("bad")
+        \\  let body = body_obj("bad")
         \\  body.text.markdown.code.chrome.fill = take_maybe("red")
         \\end
         \\
@@ -2497,7 +2444,7 @@ test "compiler semantics: optional values are checked at function boundaries" {
         \\end
         \\
         \\page bad
-        \\  text("bad")
+        \\  text!("bad")
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Color, got Color?");
@@ -2510,7 +2457,7 @@ test "compiler semantics: optional values are checked at function boundaries" {
         \\end
         \\
         \\page bad
-        \\  text("bad")
+        \\  text!("bad")
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Color?, got Number");
@@ -2523,7 +2470,7 @@ test "compiler semantics: optional values are checked at function boundaries" {
         \\end
         \\
         \\page bad
-        \\  text("bad")
+        \\  text!("bad")
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Color, got String");
@@ -2536,7 +2483,7 @@ test "compiler semantics: optional values are checked at function boundaries" {
         \\end
         \\
         \\page bad
-        \\  text("bad")
+        \\  text!("bad")
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Color?, got String");
@@ -2563,7 +2510,7 @@ test "compiler semantics: optional values stay checked through multi-step flows"
         \\end
         \\
         \\page bad
-        \\  let body = text("report")
+        \\  let body = body_obj("report")
         \\  body.text.markdown.code.chrome.fill = none
         \\  let x = may_be_none(body, true)
         \\  let y = must_call_by_notnone(x)
@@ -2593,7 +2540,7 @@ test "compiler semantics: optional values stay checked through multi-step flows"
         \\end
         \\
         \\page bad
-        \\  text("bad")
+        \\  body_obj!("bad")
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Color, got Color?");
@@ -2611,7 +2558,7 @@ test "compiler semantics: optional values stay checked through multi-step flows"
         \\end
         \\
         \\page bad
-        \\  let body = text("body")
+        \\  let body = body_obj("body")
         \\  apply_palette(body, none, c"0.3,0.3,0.3")
         \\end
         \\
@@ -2643,7 +2590,7 @@ test "compiler semantics: optional values stay checked through multi-step flows"
         \\  if status?
         \\    let published = publish(status)
         \\  else
-        \\    text("missing")
+        \\    body_obj!("missing")
         \\  end
         \\end
         \\
@@ -2668,7 +2615,7 @@ test "compiler semantics: optional values stay checked through multi-step flows"
         \\end
         \\
         \\page bad
-        \\  text("bad")
+        \\  body_obj!("bad")
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Status, got OtherStatus");
@@ -2687,7 +2634,7 @@ test "compiler semantics: mismatched if branches are rejected statically" {
         \\end
         \\
         \\page bad
-        \\  text("bad")
+        \\  text!("bad")
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Color, got String");
@@ -2708,7 +2655,7 @@ test "compiler semantics: mismatched if branches are rejected statically" {
         \\end
         \\
         \\page bad
-        \\  text("bad")
+        \\  text!("bad")
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Color?, got Number");
@@ -2727,7 +2674,7 @@ test "compiler semantics: mismatched if branches are rejected statically" {
         \\end
         \\
         \\page bad
-        \\  text("bad")
+        \\  text!("bad")
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Color, got Color?");
@@ -2765,7 +2712,7 @@ test "compiler semantics: mismatched if branches are rejected statically" {
         \\end
         \\
         \\page bad
-        \\  text("bad")
+        \\  text!("bad")
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Status, got OtherStatus");
@@ -2786,7 +2733,7 @@ test "compiler semantics: mismatched if branches are rejected statically" {
         \\end
         \\
         \\page bad
-        \\  text("bad")
+        \\  text!("bad")
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Object<Card>, got Object<Body>");
@@ -2805,7 +2752,7 @@ test "compiler semantics: if branch checks do not depend on optional types" {
         \\end
         \\
         \\page bad
-        \\  text("bad")
+        \\  text!("bad")
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Number, got String");
@@ -2826,7 +2773,7 @@ test "compiler semantics: if branch checks do not depend on optional types" {
         \\end
         \\
         \\page bad
-        \\  text("bad")
+        \\  text!("bad")
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Bool, got String");
@@ -2843,7 +2790,7 @@ test "compiler semantics: if branch checks do not depend on optional types" {
         \\end
         \\
         \\page bad
-        \\  text("bad")
+        \\  text!("bad")
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Number, got Bool");
@@ -2878,7 +2825,7 @@ test "compiler semantics: if branch checks do not depend on optional types" {
         \\end
         \\
         \\page bad
-        \\  text("bad")
+        \\  text!("bad")
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Selection<Page>, got Selection<Object>");
@@ -2903,7 +2850,7 @@ test "compiler semantics: if branch checks do not depend on optional types" {
         \\end
         \\
         \\page bad
-        \\  text("bad")
+        \\  text!("bad")
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Number -> Number, got String -> String");
@@ -2920,7 +2867,7 @@ test "compiler semantics: if branch checks do not depend on optional types" {
         \\end
         \\
         \\page bad
-        \\  text("bad")
+        \\  text!("bad")
         \\end
         \\
     , "case.ss:bytes:", "VoidReturnValue: Void functions must use return without an expression");
@@ -2984,7 +2931,7 @@ test "compiler semantics: enum optional values reject strings and other enums" {
         \\end
         \\
         \\page bad
-        \\  text("bad")
+        \\  text!("bad")
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Mode, got Other");
@@ -3000,7 +2947,7 @@ test "compiler semantics: enum optional values reject strings and other enums" {
         \\end
         \\
         \\page bad
-        \\  text("bad")
+        \\  text!("bad")
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Mode, got Other");
@@ -3011,7 +2958,7 @@ test "compiler semantics: properties require known fields" {
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let body = text("bad")
+        \\  let body = body_obj("bad")
         \\  let key = "text_color"
         \\  set_prop(body, key, c"1,0,0")
         \\end
@@ -3022,7 +2969,7 @@ test "compiler semantics: properties require known fields" {
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let body = text("bad")
+        \\  let body = body_obj("bad")
         \\  body.no_such_field = "x"
         \\end
         \\
@@ -3032,9 +2979,9 @@ test "compiler semantics: properties require known fields" {
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let body = text("bad")
+        \\  let body = body_obj("bad")
         \\  let key = "text_color"
-        \\  text(prop(body, key, "missing"))
+        \\  body_obj!(prop(body, key, "missing"))
         \\end
         \\
     , "case.ss:bytes:", "InvalidProperty: property key must be a known field literal");
@@ -3043,7 +2990,7 @@ test "compiler semantics: properties require known fields" {
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let body = text("bad")
+        \\  let body = body_obj("bad")
         \\  has_prop(body, "no_such_field")
         \\end
         \\
@@ -3053,7 +3000,7 @@ test "compiler semantics: properties require known fields" {
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let body = text("bad")
+        \\  let body = body_obj("bad")
         \\  body.text.color = 1
         \\end
         \\
@@ -3065,7 +3012,7 @@ test "compiler semantics: typed properties reject optional and wrong static valu
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let body = text("bad")
+        \\  let body = body_obj("bad")
         \\  set_prop(body, "text_color", body.text?.markdown?.code?.chrome?.fill)
         \\end
         \\
@@ -3087,7 +3034,7 @@ test "compiler semantics: typed properties reject optional and wrong static valu
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  text("body")
+        \\  body_obj!("body")
         \\  objs_here("body").text.color = none
         \\end
         \\
@@ -3097,7 +3044,7 @@ test "compiler semantics: typed properties reject optional and wrong static valu
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let body = text("bad")
+        \\  let body = body_obj("bad")
         \\  body.text.markdown.code.chrome.fill = 1
         \\end
         \\
@@ -3107,7 +3054,7 @@ test "compiler semantics: typed properties reject optional and wrong static valu
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let body = text("bad")
+        \\  let body = body_obj("bad")
         \\  set_prop(body, "text_markdown_code_fill", "red")
         \\end
         \\
@@ -3174,7 +3121,7 @@ test "compiler semantics: object field defaults are statically typed" {
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  text("body")
+        \\  text!("body", current_theme().body)
         \\end
         \\
     , .{
@@ -3280,8 +3227,8 @@ test "compiler semantics: document page and selection properties are typed" {
         \\end
         \\
         \\page ok
-        \\  text(prop(docctx(), "math_align", "missing"))
-        \\  text("body")
+        \\  body_obj!(prop(docctx(), "math_align", "missing"))
+        \\  body_obj!("body")
         \\  objs_here("body").layout.wrap = WrapMode.off
         \\end
         \\
@@ -3303,7 +3250,7 @@ test "compiler semantics: document page and selection properties are typed" {
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  text("body")
+        \\  body_obj!("body")
         \\  objs_here("body").layout.wrap = "off"
         \\end
         \\
@@ -3319,7 +3266,7 @@ test "compiler semantics: document math alignment uses a typed property" {
         \\end
         \\
         \\page ok
-        \\  text(prop(docctx(), "math_align", "missing"))
+        \\  body_obj!(prop(docctx(), "math_align", "missing"))
         \\end
         \\
     , "left");
@@ -3330,7 +3277,7 @@ test "compiler semantics: math alignment rejects unknown literals" {
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let body = text("$$x^2$$")
+        \\  let body = body_obj("$$x^2$$")
         \\  body.math_align = "sideways"
         \\end
         \\
@@ -3352,7 +3299,7 @@ test "compiler semantics: member sugar reads and writes properties and content" 
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let target = text("hello")
+        \\  let target = body_obj("hello")
         \\  target.content = target.content ++ "!"
         \\end
         \\
@@ -3362,10 +3309,10 @@ test "compiler semantics: member sugar reads and writes properties and content" 
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  let target = text("styled")
+        \\  let target = body_obj("styled")
         \\  target.link_id = "custom"
         \\  if target.link_id?
-        \\    text(target.link_id ?? "missing")
+        \\    body_obj!(target.link_id ?? "missing")
         \\  end
         \\end
         \\
@@ -3495,7 +3442,7 @@ test "compiler semantics: logical not inverts optional presence checks" {
         \\end
         \\
         \\page ok
-        \\  text(none_label(none) ++ ":" ++ none_label(false) ++ ":" ++ none_label(true))
+        \\  text!(none_label(none) ++ ":" ++ none_label(false) ++ ":" ++ none_label(true))
         \\end
         \\
     , "none:some:some");
@@ -3512,7 +3459,7 @@ test "compiler semantics: logical not inverts optional presence checks" {
         \\end
         \\
         \\page ok
-        \\  text(none_label(none) ++ ":" ++ none_label("") ++ ":" ++ none_label("value"))
+        \\  text!(none_label(none) ++ ":" ++ none_label("") ++ ":" ++ none_label("value"))
         \\end
         \\
     , "none:some:some");
@@ -3522,7 +3469,7 @@ test "compiler semantics: logical not inverts optional presence checks" {
         \\
         \\page bad
         \\  if !1
-        \\    text("bad")
+        \\    text!("bad")
         \\  end
         \\end
         \\
@@ -3583,7 +3530,7 @@ test "compiler semantics: pass annotation is rejected" {
         \\end
         \\
         \\page bad
-        \\  text("hello")
+        \\  text!("hello")
         \\end
         \\
     );
@@ -3630,7 +3577,7 @@ test "compiler semantics: scheduled page statements share page scope" {
         \\
         \\page one
         \\  let label = "from page scope"
-        \\  text(label)
+        \\  text!(label)
         \\end
         \\
     , "from page scope");
@@ -3642,7 +3589,7 @@ test "compiler semantics: variable resources keep let bindings before references
         \\
         \\page one
         \\  let label_text = "from variable"
-        \\  text(label_text)
+        \\  text!(label_text)
         \\end
         \\
     , "from variable");
@@ -3657,7 +3604,7 @@ test "compiler semantics: document property writes schedule before reads" {
         \\end
         \\
         \\page first
-        \\  text(docctx().footer_text ?? "unset")
+        \\  text!(docctx().footer_text ?? "unset")
         \\end
         \\
     , "before");
@@ -3666,7 +3613,7 @@ test "compiler semantics: document property writes schedule before reads" {
         \\import std:themes/default as *
         \\
         \\page first
-        \\  text(docctx().footer_text ?? "unset")
+        \\  text!(docctx().footer_text ?? "unset")
         \\end
         \\
         \\document
@@ -3706,6 +3653,7 @@ test "compiler semantics: repeated content definitions are rejected" {
 test "compiler semantics: independent claim properties join before summary reads" {
     try expectObjectState(
         \\import std:themes/default as *
+        \\import std:internal/classes as { Text }
         \\
         \\type Claim = object {
         \\  base = Text
@@ -3752,6 +3700,7 @@ test "compiler semantics: independent claim properties join before summary reads
 test "compiler semantics: repr functions materialize display content" {
     try expectObjectContent(
         \\import std:themes/default as *
+        \\import std:internal/classes as { Text }
         \\
         \\type Claim = object {
         \\  base = Text
@@ -3776,6 +3725,7 @@ test "compiler semantics: repr functions materialize display content" {
 test "compiler semantics: repr reads wait for later property definitions" {
     try expectObjectState(
         \\import std:themes/default as *
+        \\import std:internal/classes as { Text }
         \\
         \\type Claim = object {
         \\  base = Text
@@ -3819,7 +3769,7 @@ test "compiler semantics: implicit display recursion is rejected before evaluati
         \\  return repr(item)
         \\end
         \\page main
-        \\  let item = text!("A")
+        \\  let item = body_obj!("A")
         \\  set_repr(item, self_repr)
         \\end
     , "case.ss:bytes:", "RecursiveFunction");
@@ -3830,7 +3780,7 @@ test "compiler semantics: display recursion through a helper and a later registr
         \\fn label(item: Object) -> String = helper(item)
         \\fn helper(item: Object) -> String = repr(item)
         \\page main
-        \\  let item = text("A")
+        \\  let item = body_obj("A")
         \\  let value = repr(item)
         \\  set_repr(item, label)
         \\end
@@ -3840,8 +3790,8 @@ test "compiler semantics: display recursion through a helper and a later registr
 test "compiler semantics: mutually recursive captured displays are rejected" {
     try expectDiagnostic(
         \\page main
-        \\  let a = text("A")
-        \\  let b = text("B")
+        \\  let a = body_obj("A")
+        \\  let b = body_obj("B")
         \\  set_repr(a, (self: Object) |-> repr(b))
         \\  set_repr(b, (self: Object) |-> repr(a))
         \\end
@@ -3976,7 +3926,7 @@ test "compiler semantics: display registration through record and optional callb
         \\end
         \\fn label(item: Object) -> String = repr(item)
         \\page main
-        \\  attach(text("A"), Formatter { format = label })
+        \\  attach(body_obj("A"), Formatter { format = label })
         \\end
     , "case.ss:bytes:", "RecursiveFunction");
 }
@@ -3986,7 +3936,7 @@ test "compiler semantics: pure higher order display helpers are accepted" {
         \\fn apply(item: Object, format: Object -> String) -> String = format(item)
         \\fn label(item: Object) -> String = apply(item, (value: Object) |-> content(value) ++ "!")
         \\page main
-        \\  set_repr(text!("A"), label)
+        \\  set_repr(body_obj!("A"), label)
         \\end
     , "A!");
 }
@@ -4020,7 +3970,7 @@ test "compiler semantics: imported displays resolve helpers in their definition 
         \\import "./lib/bad" as lib
         \\fn helper(item: Object) -> String = content(item)
         \\page main
-        \\  set_repr(text!("A"), lib::formatter())
+        \\  set_repr(body_obj!("A"), lib::formatter())
         \\end
     ,
         \\fn helper(item: Object) -> String = repr(item)
@@ -4034,7 +3984,7 @@ test "compiler semantics: imported read-only displays keep their definition envi
         \\import "./lib/types" as lib
         \\fn helper(item: Object) -> String = repr(item)
         \\page main
-        \\  set_repr(text!("A"), lib::formatter())
+        \\  set_repr(body_obj!("A"), lib::formatter())
         \\end
     ,
         \\fn helper(item: Object) -> String = content(item)
@@ -4095,7 +4045,7 @@ test "compiler semantics: object link tracking does not authorize nested stored 
 
 test "compiler semantics: aliases of an object constant cannot hide display recursion" {
     try expectDiagnostic(
-        \\const shared: Object = text("A")
+        \\const shared: Object = body_obj("A")
         \\page main
         \\  let a = shared
         \\  let b = shared
@@ -4106,7 +4056,7 @@ test "compiler semantics: aliases of an object constant cannot hide display recu
 
 test "compiler semantics: aliases of an object constant support read-only displays" {
     try expectObjectContent(
-        \\const shared: Object = text("A")
+        \\const shared: Object = body_obj("A")
         \\page main
         \\  let a = shared
         \\  let b = shared
@@ -4153,7 +4103,7 @@ test "compiler semantics: variable and property dependencies reject inverse cycl
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let item = text("old")
+        \\  let item = body_obj("old")
         \\  let current = content(item)
         \\  set_content(item, current)
         \\end
@@ -4204,7 +4154,7 @@ test "compiler semantics: paired expression-bodied functions place returned obje
     try expectObjectContent(
         \\import std:themes/default as *
         \\
-        \\fn/! badge(value: String) -> Object = text(value)
+        \\fn/! badge(value: String) -> Object = body_obj(value)
         \\
         \\page one
         \\  badge!("paired")
@@ -4337,7 +4287,7 @@ test "compiler semantics: closures returned through branch scopes own captured r
         \\  let callback = make()
         \\  let first = callback(2)
         \\  let second = callback(4)
-        \\  text(str(first.value) ++ ":" ++ str(second.value))
+        \\  text!(str(first.value) ++ ":" ++ str(second.value))
         \\end
     , "13:15");
 }
@@ -4356,7 +4306,7 @@ test "compiler semantics: borrowed arguments and defaults preserve record update
         \\  let direct = update(original)
         \\  let callback = (input: Box) |-> update(input)
         \\  let indirect = callback(original)
-        \\  text(str(original.value) ++ ":" ++ str(direct.value) ++ ":" ++ str(indirect.value))
+        \\  text!(str(original.value) ++ ":" ++ str(direct.value) ++ ":" ++ str(indirect.value))
         \\end
     , "7:9:9");
 }
@@ -4378,7 +4328,7 @@ test "compiler semantics: nested captured frames survive growth of the closure s
         defer std.testing.allocator.free(statement);
         try source.appendSlice(std.testing.allocator, statement);
     }
-    try source.appendSlice(std.testing.allocator, "  text(str(saved(5)))\nend\n");
+    try source.appendSlice(std.testing.allocator, "  text!(str(saved(5)))\nend\n");
     try expectObjectContent(source.items, "12");
 }
 
@@ -4395,7 +4345,7 @@ test "compiler semantics: function values use ordinary application" {
         \\end
         \\
         \\page ok
-        \\  text(str(apply(inc, 2)))
+        \\  text!(str(apply(inc, 2)))
         \\end
         \\
     , "3");
@@ -4406,7 +4356,7 @@ test "compiler semantics: direct lambda application works" {
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  text(str(((x: Number) |-> x + 4)(1)))
+        \\  text!(str(((x: Number) |-> x + 4)(1)))
         \\end
         \\
     , "5");
@@ -4419,7 +4369,7 @@ test "compiler semantics: constants can hold function values" {
         \\const plus_one: Number -> Number = (x: Number) |-> x + 1
         \\
         \\page ok
-        \\  text(str(plus_one(2)))
+        \\  text!(str(plus_one(2)))
         \\end
         \\
     , "3");
@@ -4475,7 +4425,7 @@ test "compiler semantics: returned lambdas are directly applicable" {
         \\end
         \\
         \\page ok
-        \\  text(str(add_two()(1)))
+        \\  text!(str(add_two()(1)))
         \\end
         \\
     , "3");
@@ -4502,7 +4452,7 @@ test "compiler semantics: returned named functions flow through branches" {
         \\end
         \\
         \\page ok
-        \\  text(str(choose(true)(2)) ++ "," ++ str(choose(false)(2)))
+        \\  text!(str(choose(true)(2)) ++ "," ++ str(choose(false)(2)))
         \\end
         \\
     , "3,1");
@@ -4513,7 +4463,7 @@ test "compiler semantics: join accepts an inline typed lambda" {
         \\import std:themes/default as *
         \\
         \\page one
-        \\  text(join(pages(docctx()), ",", (page_value: Page) |-> str(page_index(page_value))))
+        \\  text!(join(pages(docctx()), ",", (page_value: Page) |-> str(page_index(page_value))))
         \\end
         \\
         \\page two
@@ -4527,7 +4477,7 @@ test "compiler semantics: fold accepts an inline typed lambda" {
         \\import std:themes/default as *
         \\
         \\page one
-        \\  text(fold(pages(docctx()), "", (acc: String, page_value: Page) |-> acc ++ str(page_index(page_value))))
+        \\  text!(fold(pages(docctx()), "", (acc: String, page_value: Page) |-> acc ++ str(page_index(page_value))))
         \\end
         \\
         \\page two
@@ -4550,11 +4500,11 @@ test "compiler semantics: foreach_enumerate passes one-based indices" {
         \\end
         \\
         \\page one
-        \\  text!("A")
+        \\  body_obj!("A")
         \\end
         \\
         \\page two
-        \\  text!("B")
+        \\  body_obj!("B")
         \\end
         \\
         \\document
@@ -4577,7 +4527,7 @@ test "compiler semantics: foreach_enumerate checks callback argument order" {
         \\end
         \\
         \\page bad
-        \\  text("A")
+        \\  text!("A")
         \\  foreach_enumerate(doc_objs(docctx(), "body"), wrong)
         \\end
         \\
@@ -4721,7 +4671,7 @@ test "compiler semantics: function value application checks argument types" {
         \\
         \\page bad
         \\  let f = (x: Number) |-> x + 1
-        \\  text(str(f("oops")))
+        \\  text!(str(f("oops")))
         \\end
         \\
     );
@@ -4731,7 +4681,7 @@ test "compiler semantics: function value application checks argument types" {
         \\
         \\page bad
         \\  let value = 1
-        \\  text(str(value(2)))
+        \\  text!(str(value(2)))
         \\end
         \\
     );
@@ -4746,7 +4696,7 @@ test "compiler semantics: function return annotations are checked for function v
         \\end
         \\
         \\page bad
-        \\  text(str(bad()(1)))
+        \\  text!(str(bad()(1)))
         \\end
         \\
     );
@@ -4778,7 +4728,7 @@ test "compiler semantics: function-value recursion is rejected" {
         \\end
         \\
         \\page bad
-        \\  text(str(bad(1)))
+        \\  text!(str(bad(1)))
         \\end
         \\
     );
@@ -4795,7 +4745,7 @@ test "compiler semantics: function-value recursion is rejected" {
         \\end
         \\
         \\page bad
-        \\  text(str(bad(1)))
+        \\  text!(str(bad(1)))
         \\end
         \\
     );
@@ -5315,7 +5265,7 @@ test "compiler semantics: mutual recursion is rejected" {
         \\end
         \\
         \\page bad
-        \\  text(str(first(1)))
+        \\  text!(str(first(1)))
         \\end
         \\
     );
@@ -5330,7 +5280,7 @@ test "compiler semantics: function-returning lambda recursion is rejected" {
         \\end
         \\
         \\page bad
-        \\  text(str(make_bad()(1)))
+        \\  text!(str(make_bad()(1)))
         \\end
         \\
     );
@@ -5414,7 +5364,7 @@ test "compiler semantics: fold cannot mutate the iterated page selection" {
         \\end
         \\
         \\page bad
-        \\  text(fold(pages(docctx()), "", add_page))
+        \\  text!(fold(pages(docctx()), "", add_page))
         \\end
         \\
     );
@@ -5430,7 +5380,7 @@ test "compiler semantics: join cannot mutate the iterated page selection" {
         \\end
         \\
         \\page bad
-        \\  text(join(pages(docctx()), "", add_page))
+        \\  text!(join(pages(docctx()), "", add_page))
         \\end
         \\
     );
@@ -5443,7 +5393,7 @@ test "compiler semantics: layout reads cannot feed layout input" {
         \\page bad
         \\  let t = text("hello")
         \\  let h = frame_height(t)
-        \\  text(str(h))
+        \\  text!(str(h))
         \\end
         \\
     );
@@ -5465,7 +5415,7 @@ test "compiler semantics: return type inference sees branch-local bindings" {
         \\
         \\page ok
         \\  let title = branch_label(true)
-        \\  text(title)
+        \\  text!(title)
         \\end
         \\
     );
@@ -5652,10 +5602,10 @@ test "compiler semantics: constraint-referenced groups are layout values" {
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  let left = text! "left"
-        \\  let detail = text! "detail"
-        \\  let right = text! "right"
-        \\  cols2(group(left, detail), right)
+        \\  let left = text "left"
+        \\  let detail = text "detail"
+        \\  let right = text "right"
+        \\  place!(group(left, detail) || right)
         \\end
         \\
     , "UnplacedObject");
@@ -5680,8 +5630,8 @@ test "compiler semantics: constraints resolve record member object anchors" {
         \\end
         \\
         \\page ok
-        \\  let left = text! "left"
-        \\  let right = text! "right"
+        \\  let left = body_obj! "left"
+        \\  let right = body_obj! "right"
         \\  let parts = make_parts(left, right)
         \\  let caption = note! "caption"
         \\  ~ caption.top == parts.root.bottom - 16
@@ -5929,7 +5879,7 @@ test "compiler semantics: underscore let binding is not a variable" {
         \\
         \\page bad
         \\  let _ = new("discarded", "body", "text")
-        \\  text(_)
+        \\  text!(_)
         \\end
         \\
     , "case.ss:bytes:", "UnknownIdentifier: unknown identifier: _");
@@ -6180,8 +6130,7 @@ test "compiler semantics: aliased tautological self-anchor constraints are accep
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  let a = text("a")
-        \\  place_on!(pagectx(), a)
+        \\  let a = text!("a")
         \\  let b = a
         \\  ~ b.top == a.top
         \\end
@@ -6322,7 +6271,7 @@ test "compiler semantics: object class annotations are checked through selection
         \\page ok
         \\  place_on!(pagectx(), obj("A", "card", "text"))
         \\  let card_obj = first_card(objs_here("card"))
-        \\  text(content(card_obj))
+        \\  text!(content(card_obj))
         \\end
         \\
     );
@@ -6430,7 +6379,7 @@ test "compiler semantics: object class optional and selection mismatches are rej
         \\end
         \\
         \\page bad
-        \\  text("body")
+        \\  text!("body")
         \\  first_card(keep_body(objs_here("body")))
         \\end
         \\
@@ -6722,7 +6671,7 @@ test "compiler semantics: equal branch returns retain query facts and stop at re
         \\  return "children"
         \\end
         \\page main
-        \\  let item = text!("x")
+        \\  let item = body_obj!("x")
         \\  let result = select(item, query_name(false))
         \\  let index = page_index(result ?? pagectx())
         \\end
@@ -6736,7 +6685,7 @@ test "compiler semantics: constant concatenation and argument facts resolve quer
         \\  return value
         \\end
         \\page main
-        \\  let item = text!("x")
+        \\  let item = body_obj!("x")
         \\  let result = select(item, identity(query))
         \\  let index = page_index(result ?? pagectx())
         \\end
@@ -6881,7 +6830,7 @@ test "compiler semantics: returned closures keep captured property targets" {
         \\  return () |-> (item.link_id ?? "missing")
         \\end
         \\page main
-        \\  let item = text!("A")
+        \\  let item = body_obj!("A")
         \\  let read = reader(item)
         \\  note!(read())
         \\  item.link_id = "marked"
@@ -6899,7 +6848,7 @@ test "compiler semantics: record and optional function calls retain write effect
         \\  return callback(item)
         \\end
         \\page main
-        \\  let item = text!("A")
+        \\  let item = body_obj!("A")
         \\  note!(item.link_id ?? "missing")
         \\  apply_to(item, Action { run = mark })
         \\end
@@ -6910,7 +6859,7 @@ test "compiler semantics: unused closures do not execute property writes" {
     try expectObjectContent(
         \\import std:themes/default as *
         \\page main
-        \\  let item = text!("A")
+        \\  let item = body_obj!("A")
         \\  let unused = () |-> set_prop(item, "link_id", "unused")
         \\  item.link_id = "marked"
         \\  note!(item.link_id ?? "missing")
@@ -6923,7 +6872,7 @@ test "compiler semantics: selected callback aliases retain transitive reads" {
         \\import std:themes/default as *
         \\fn label(item: Object) -> String = (item.link_id ?? "missing")
         \\page main
-        \\  let item = text!("A")
+        \\  let item = body_obj!("A")
         \\  let callback = label
         \\  note!(join(objs_here("body"), ",", callback))
         \\  item.link_id = "marked"
@@ -6939,7 +6888,7 @@ test "compiler semantics: nested imported closures preserve callback effects and
         \\fn mark(item: Object) -> Object = set_prop(item, "link_id", "marked")
         \\fn helper(item: Object) -> String = "wrong"
         \\page main
-        \\  let item = text!("A")
+        \\  let item = body_obj!("A")
         \\  let callback = a::wrap(mark)
         \\  note!(a::reader(item)())
         \\  b::invoke(callback, item)
@@ -6963,7 +6912,7 @@ test "compiler semantics: default callbacks contribute effects in their definiti
         \\fn mark(item: Object) -> Object = set_prop(item, "link_id", "marked")
         \\fn apply_to(item: Object, callback: Object -> Object = mark) -> Object = callback(item)
         \\page main
-        \\  let item = text!("A")
+        \\  let item = body_obj!("A")
         \\  note!(item.link_id ?? "missing")
         \\  apply_to(item)
         \\end
@@ -6978,7 +6927,7 @@ test "compiler semantics: unused default arguments still contribute writes" {
     try expectObjectContent(
         \\fn initialize(item: Object, ignored: Object = set_prop(item, "link_id", "Ready")) -> String = "done"
         \\page main
-        \\  let item = text!("Target")
+        \\  let item = body_obj!("Target")
         \\  note!(item.link_id ?? "missing")
         \\  note!(initialize(item))
         \\end
@@ -6989,8 +6938,8 @@ test "compiler semantics: default reads use preceding parameters and distinguish
     try expectObjectContent(
         \\fn read(item: Object, selected: Object = item, value: String = selected.link_id ?? "missing") -> String = value
         \\page main
-        \\  let first = text!("First")
-        \\  let second = text!("Second")
+        \\  let first = body_obj!("First")
+        \\  let second = body_obj!("Second")
         \\  note!(read(first) ++ ":" ++ read(second))
         \\  first.link_id = "A"
         \\  second.link_id = "B"
@@ -7002,7 +6951,7 @@ test "compiler semantics: explicit arguments do not evaluate default effects" {
     try expectObjectContent(
         \\fn label(item: Object, value: String = item.link_id ?? "missing") -> String = value
         \\page main
-        \\  let item = text!("Target")
+        \\  let item = body_obj!("Target")
         \\  item.link_id = label(item, "Ready")
         \\  note!(item.link_id ?? "missing")
         \\end
@@ -7039,7 +6988,7 @@ test "compiler semantics: later parameters do not shadow names in earlier defaul
         \\fn other(item: Object) -> String = "wrong"
         \\fn read(item: Object, value: String = source(item), source: Object -> String = other) -> String = value
         \\page main
-        \\  let item = text!("Target")
+        \\  let item = body_obj!("Target")
         \\  note!(read(item))
         \\  item.link_id = "Ready"
         \\end
@@ -7052,7 +7001,7 @@ test "compiler semantics: default facts and effects use the definition module" {
         \\import ./lib/b as b
         \\const selected_role: String = "other"
         \\page main
-        \\  let item = text!("Target")
+        \\  let item = body_obj!("Target")
         \\  note!(b::read(item))
         \\  item.link_id = "Ready"
         \\  txt_obj!("A", "tagged")
@@ -7079,7 +7028,7 @@ test "compiler semantics: callback effects distinguish specializations and retur
         \\fn pack(callback: Object -> Object) -> Action = Action { run = callback }
         \\fn apply_to(item: Object, action: Action) -> Object = action.run(item)
         \\page main
-        \\  let item = text!("A")
+        \\  let item = body_obj!("A")
         \\  apply_to(item, pack(identity))
         \\  note!(item.link_id ?? "missing")
         \\  apply_to(item, pack(identity) with { run = mark })
@@ -7095,10 +7044,10 @@ test "compiler semantics: function aliases retain effects across document blocks
         \\  let callback = label
         \\end
         \\document
-        \\  let item = text("A")
+        \\  let item = body_obj("A")
         \\  let value = callback(item)
         \\  item.link_id = "marked"
-        \\  let output = text(value)
+        \\  let output = body_obj(value)
         \\  place_on!(new_page(docctx(), "main"), output)
         \\end
     , "marked");
@@ -7111,7 +7060,7 @@ test "compiler semantics: finite higher order reentry retains inner callback eff
         \\fn apply_to(item: Object, callback: Object -> Object) -> Object = callback(item)
         \\fn indirect(item: Object) -> Object = apply_to(item, mark)
         \\page main
-        \\  let item = text!("A")
+        \\  let item = body_obj!("A")
         \\  note!(item.link_id ?? "missing")
         \\  apply_to(item, indirect)
         \\end
@@ -7126,7 +7075,7 @@ test "compiler semantics: finite higher order reentry preserves returned functio
         \\fn apply_factory(factory: () -> (Object -> String)) -> Object -> String = factory()
         \\fn nested() -> Object -> String = apply_factory(direct)
         \\page main
-        \\  let item = text!("A")
+        \\  let item = body_obj!("A")
         \\  let callback = apply_factory(nested)
         \\  note!(callback(item))
         \\  item.link_id = "marked"
@@ -7137,6 +7086,7 @@ test "compiler semantics: finite higher order reentry preserves returned functio
 test "compiler semantics: broad reads survive narrower overlapping reads" {
     try expectObjectContent(
         \\import std:themes/default as *
+        \\import std:internal/classes as { Text }
         \\type Tagged = object {
         \\  base = Text
         \\  roles = ["tagged"]
@@ -7170,7 +7120,7 @@ test "compiler semantics: selected aliases retain object property dependencies" 
 test "compiler semantics: constant object aliases retain shared identity" {
     try expectObjectContent(
         \\import std:themes/default as *
-        \\const shared: Object = text("A")
+        \\const shared: Object = body_obj("A")
         \\fn identity(item: Object) -> Object = item
         \\page main
         \\  let a = shared
@@ -7185,7 +7135,7 @@ test "compiler semantics: separate constructor calls retain distinct identities"
     try expectObjectContent(
         \\import std:themes/default as *
         \\fn make() -> Object
-        \\  let item = text("A")
+        \\  let item = body_obj("A")
         \\  return item
         \\end
         \\page main
@@ -7209,8 +7159,8 @@ test "compiler semantics: display closures retain transitive captured reads" {
         \\  return (self: Object) |-> other.link_id ?? "missing"
         \\end
         \\page main
-        \\  let other = text!("other")
-        \\  let item = text!("A")
+        \\  let other = body_obj!("other")
+        \\  let item = body_obj!("A")
         \\  set_repr(item, label(other))
         \\  note!("repr=" ++ repr(item))
         \\  other.link_id = "X"
@@ -7222,8 +7172,8 @@ test "compiler semantics: nested display calls propagate property reads" {
     try expectObjectContent(
         \\import std:themes/default as *
         \\page main
-        \\  let inner = text!("A")
-        \\  let outer = text!("B")
+        \\  let inner = body_obj!("A")
+        \\  let outer = body_obj!("B")
         \\  set_repr(inner, (self: Object) |-> content(self) ++ (docctx().footer_text ?? ""))
         \\  set_repr(outer, (self: Object) |-> repr(inner))
         \\  note!("repr=" ++ repr(outer))
@@ -7266,7 +7216,7 @@ test "compiler semantics: dependency queries include deferred display reads" {
     try expectDiagnostic(
         \\import std:themes/default as *
         \\page main
-        \\  let item = text!("A")
+        \\  let item = body_obj!("A")
         \\  set_repr(item, (self: Object) |-> docctx().footer_text ?? "")
         \\  note!(repr(item))
         \\  ;; ^dep?
@@ -7281,7 +7231,7 @@ test "compiler semantics: materialized displays cannot read solved geometry" {
     try expectDiagnostic(
         \\fn label(item: Object) -> String = str(frame_width(item))
         \\page main
-        \\  set_repr(text!("A"), label)
+        \\  set_repr(body_obj!("A"), label)
         \\end
     , "bytes:", "LayoutDependencyCycle");
 }
@@ -7407,7 +7357,7 @@ test "compiler semantics: property assignment and set_prop reject embedded funct
     try expectDiagnostic(
         \\fn identity(value: Number) -> Number = value
         \\page main
-        \\  let item = text!("A")
+        \\  let item = body_obj!("A")
         \\  item.link_id = identity
         \\end
     , "bytes:", "InvalidProperty");
@@ -7416,7 +7366,7 @@ test "compiler semantics: property assignment and set_prop reject embedded funct
         \\type Wrapper { action: Action }
         \\fn identity(value: Number) -> Number = value
         \\page main
-        \\  let item = text!("A")
+        \\  let item = body_obj!("A")
         \\  item.link_id = Wrapper { action = Action { callback = identity } }
         \\end
     , "bytes:", "InvalidProperty");
@@ -7424,7 +7374,7 @@ test "compiler semantics: property assignment and set_prop reject embedded funct
         \\type Action { callback: Number -> Number }
         \\fn identity(value: Number) -> Number = value
         \\page main
-        \\  let item = text!("A")
+        \\  let item = body_obj!("A")
         \\  set_prop(item, "link_id", Action { callback = identity })
         \\end
     , "bytes:", "InvalidProperty");
@@ -7436,7 +7386,7 @@ test "compiler semantics: local records may contain functions and register displ
         \\fn label(item: Object) -> String = "X"
         \\page main
         \\  let action = Action { callback = label }
-        \\  let item = text!("A")
+        \\  let item = body_obj!("A")
         \\  set_repr(item, action.callback)
         \\end
     , "X");
@@ -7484,7 +7434,7 @@ test "compiler semantics: optional object members retain property dependencies" 
     try expectObjectContent(
         \\fn label(item: Object?) -> String = item?.link_id ?? "missing"
         \\page main
-        \\  let item = text!("Target")
+        \\  let item = body_obj!("Target")
         \\  note!(label(item))
         \\  item.link_id = "Ready"
         \\end
@@ -7492,7 +7442,7 @@ test "compiler semantics: optional object members retain property dependencies" 
     try expectObjectContent(
         \\fn label(item: Object?) -> String = item?.content ?? "missing"
         \\page main
-        \\  text!(label(none))
+        \\  body_obj!(label(none))
         \\end
     , "missing");
 }
@@ -7540,12 +7490,12 @@ test "compiler semantics: void calls share direct indirect apply record and call
         \\  action(item, value)
         \\end
         \\page main
-        \\  let a = text!("A")
-        \\  let b = text!("B")
-        \\  let c = text!("C")
-        \\  let d = text!("D")
-        \\  let e = text!("E")
-        \\  let f = text!("F")
+        \\  let a = body_obj!("A")
+        \\  let b = body_obj!("B")
+        \\  let c = body_obj!("C")
+        \\  let d = body_obj!("D")
+        \\  let e = body_obj!("E")
+        \\  let f = body_obj!("F")
         \\  mark(a, "direct")
         \\  let apply_mark = mark
         \\  apply_mark(b, "indirect")
@@ -7632,8 +7582,8 @@ test "compiler semantics: imported void function values keep definition module d
     try buildSourceWithOverlay(
         \\import "./lib/types" as lib
         \\page main
-        \\  let a = text!("A")
-        \\  let b = text!("B")
+        \\  let a = body_obj!("A")
+        \\  let b = body_obj!("B")
         \\  lib::mark(a)
         \\  let f = lib::action()
         \\  f(b, "indirect")
@@ -7668,7 +7618,7 @@ test "compiler semantics: explicit constraint registration rejects page anchor m
 test "compiler semantics: constraint registration rejects layout feedback" {
     try expectLoweringErrorDiagnostic(
         \\page main
-        \\  let item = text!("Item")
+        \\  let item = body_obj!("Item")
         \\  ~ (item.left == pagectx().left + frame_x(item))
         \\end
     , "LayoutDependencyCycle");
@@ -7721,7 +7671,7 @@ test "compiler semantics: registration is an effect even in a String returning d
 test "compiler semantics: saved constraint values cannot feed solved geometry back into layout" {
     try expectLoweringErrorDiagnostic(
         \\page main
-        \\  let item = text!("Item")
+        \\  let item = body_obj!("Item")
         \\  let rules = (item.left == pagectx().left + frame_x(item))
         \\  ~ rules
         \\end
@@ -7745,8 +7695,8 @@ test "compiler semantics: nested record anchors wait for both delayed root bindi
         \\type Inner { item: Object }
         \\type Outer { inner: Inner }
         \\page main
-        \\  let target = Outer { inner = Inner { item = text!(docctx().footer_text ?? "missing") } }
-        \\  let source = Outer { inner = Inner { item = text!(docctx().watermark ?? "missing") } }
+        \\  let target = Outer { inner = Inner { item = body_obj!(docctx().footer_text ?? "missing") } }
+        \\  let source = Outer { inner = Inner { item = body_obj!(docctx().watermark ?? "missing") } }
         \\  ~ target.inner.item.left == source.inner.item.right + 24
         \\end
         \\document
@@ -7791,7 +7741,7 @@ test "compiler semantics: generic anchor paths reject nonplacement fields" {
 test "compiler semantics: anchor paths reject mutable object property traversal" {
     try expectDiagnostic(
         \\page main
-        \\  let item = text!("Item")
+        \\  let item = body_obj!("Item")
         \\  ~ item.text.left == page.left + 40
         \\end
     , "case.ss:bytes:", "InvalidConstraintObject");
@@ -8117,6 +8067,7 @@ test "compiler semantics: explicit none refines an optional callable in a record
 test "compiler semantics: object-valued properties start a new property owner" {
     try expectDumpContains(
         \\import std:themes/default as *
+        \\import std:internal/classes as { Text }
         \\type Linked = object {
         \\  base = Text
         \\  roles = ["linked"]
@@ -8221,11 +8172,11 @@ test "compiler semantics: cached placement summaries retain their caller page" {
     try expectDumpContains(
         \\import std:themes/default as *
         \\page first
-        \\  note!("first=" ++ str(selection_count(objs_here("body"))))
+        \\  note!("first=" ++ str(selection_count(select<Text>(pagectx()))))
         \\  text!("A")
         \\end
         \\page second
-        \\  note!("second=" ++ str(selection_count(objs_here("body"))))
+        \\  note!("second=" ++ str(selection_count(select<Text>(pagectx()))))
         \\  text!("B")
         \\end
     , &.{ "first=1", "second=1" });
@@ -8234,8 +8185,8 @@ test "compiler semantics: cached placement summaries retain their caller page" {
 test "compiler semantics: queries retain placement order across dependency scheduling" {
     try expectDumpContains(
         \\page main
-        \\  text!(docctx().footer_text ?? "unset")
-        \\  text!("Second")
+        \\  body_obj!(docctx().footer_text ?? "unset")
+        \\  body_obj!("Second")
         \\  note!("order=" ++ join(objs_here("body"), ",", (o: Object) |-> content(o)))
         \\end
         \\document
@@ -8247,9 +8198,9 @@ test "compiler semantics: queries retain placement order across dependency sched
 test "compiler semantics: explicit group argument order determines descendant query order" {
     try expectDumpContains(
         \\page main
-        \\  let a = text("A")
-        \\  let b = text("B")
-        \\  let c = text("C")
+        \\  let a = body_obj("A")
+        \\  let b = body_obj("B")
+        \\  let c = body_obj("C")
         \\  place_on!(pagectx(), group(c, group(b, a)))
         \\  note!("order=" ++ join(objs_here("body"), ",", (o: Object) |-> content(o)))
         \\end
@@ -8260,14 +8211,14 @@ test "compiler semantics: dynamic pages retain authored positions among static p
     try expectDumpContains(
         \\document
         \\  let first = new_page(docctx(), docctx().footer_text ?? "unset")
-        \\  place_on!(first, text("Dynamic first"))
+        \\  place_on!(first, body_obj("Dynamic first"))
         \\end
         \\page middle
         \\  note!("middle=" ++ str(page_index(pagectx())))
         \\end
         \\document
         \\  let last = new_page(docctx(), "last")
-        \\  place_on!(last, text("Dynamic last"))
+        \\  place_on!(last, body_obj("Dynamic last"))
         \\  docctx().footer_text = "first"
         \\  docctx().watermark = "order=" ++ join(doc_objs(docctx(), "body"), ",", (o: Object) |-> content(o))
         \\end
@@ -8316,7 +8267,7 @@ test "compiler semantics: constraint operators reject numbers and wrong registra
 
 test "compiler semantics: symbolic anchor names cannot be shadowed by object fields" {
     try expectDiagnostic(
-        \\type Card = object { base = Text left: Number = 10 }
+        \\type Card = object { base = Flow left: Number = 10 }
     , "case.ss:bytes:", "ReservedAnchorField");
     try buildSource(
         \\type Margins { left: Number = 10 right: Number = 20 }
@@ -8477,8 +8428,8 @@ test "compiler semantics: generic concrete bodies preserve deferred property rea
     try expectDumpContains(
         \\fn read<T>(value: T) -> String = value.link_id ?? "missing"
         \\page main
-        \\  let input = text!("Input")
-        \\  let output = text!(read(input))
+        \\  let input = body_obj!("Input")
+        \\  let output = body_obj!(read(input))
         \\  input.link_id = "Forward"
         \\end
     , &.{"\"content\":\"Forward\""});
@@ -8584,8 +8535,8 @@ test "compiler semantics: generic type defaults preserve deferred callback reads
         \\}
         \\page main
         \\  let reader = Reader<Body> {}
-        \\  let input = text!("Input")
-        \\  text!(reader.read(input))
+        \\  let input = body_obj!("Input")
+        \\  body_obj!(reader.read(input))
         \\  input.link_id = "Deferred generic default"
         \\end
     , &.{"\"content\":\"Deferred generic default\""});
@@ -8632,7 +8583,7 @@ test "compiler semantics: generic type defaults cannot expand without terminatio
 
 test "compiler semantics: type defaults read document collections in dependency order" {
     try expectDumpContains(
-        \\type Count<T> { amount: Number = selection_count(objs_all("body")) }
+        \\type Count<T> { amount: Number = selection_count(select<Text>(docctx())) }
         \\page first
         \\  let count = Count<Number> {}
         \\  title!(str(count.amount))
@@ -8662,7 +8613,7 @@ test "compiler semantics: generic type construction retains imported nominal ide
 
 test "compiler semantics: concrete type defaults preserve placement effects" {
     try expectDiagnostic(
-        \\type Component<T> { child: Object = text!("Implicit placement") }
+        \\type Component<T> { child: Object = body_obj!("Implicit placement") }
         \\fn make() -> Component<Number> = Component<Number> {}
         \\page main
         \\  let invalid = make()

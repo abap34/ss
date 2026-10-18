@@ -1,4 +1,5 @@
 import std:themes/default as *
+import std:internal/classes as { Text }
 
 type Link = object {
   base = Text
@@ -9,7 +10,7 @@ fn formatter(fallback: Object) -> Object -> String
   return (item: Object) |-> repr(item.peer ?? fallback) ++ "!"
 end
 page main
-  let leaf = text("leaf")
+  let leaf = body_obj("leaf")
   let a = txt_obj("A", "link")
   a.peer = leaf
   set_repr(a, formatter(leaf))

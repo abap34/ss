@@ -1,7 +1,7 @@
 import std:themes/default as *
 
 fn component!() -> Object
-  let item = text!("fallback")
+  let item = body_obj!("fallback")
   ~ item.center_x == page.center_x
   ~ item.top == page.top - 60
   return item

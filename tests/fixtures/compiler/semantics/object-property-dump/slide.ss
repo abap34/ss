@@ -6,7 +6,7 @@ type Linked = object {
 }
 
 page main
-  let target = text!("Target")
+  let target = body_obj!("Target")
   let holder = txt_obj!("Holder", "linked")
   holder.referent = target
   holder.wrapped = Reference { target = target }
