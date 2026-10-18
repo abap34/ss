@@ -53,7 +53,7 @@ end
       ellipse.workspaceEdit?.changes?.[uri] ?? [],
     );
     assert(
-      ellipseSource.includes("let circle_item = ellipse!(80, 70, VectorStyle"),
+      ellipseSource.includes("let circle_item = circle!(80, 70, VectorStyle"),
       `circle tool did not emit editable ellipse dimensions: ${ellipseSource}`,
     );
 
@@ -253,10 +253,10 @@ end
 
     const canonicalStyle =
       'VectorStyle { fill = solid_fill(c"#e8f1ff", 1) stroke = solid_stroke(c"#2563eb", 1.6) }';
-    const standardShapesSource = source.replace("end\n", `  let ellipse_item = ellipse!(140, 80, ${canonicalStyle})
+    const standardShapesSource = source.replace("end\n", `  let ellipse_item = circle!(140, 80, ${canonicalStyle})
   let arrow_item = arrow_shape!(170, 90, ${canonicalStyle})
   let bubble_item = speech_bubble!(180, 120, ${canonicalStyle})
-  let fixed_circle_item = circle!(80, ${canonicalStyle})
+  let fixed_circle_item = circle!(80, 80, ${canonicalStyle})
 end
 `);
     diagnosticsPromise = client.waitForDiagnostics(uri);
@@ -286,8 +286,8 @@ end
       candidate.binding === "fixed_circle_item"
     );
     assert(
-      fixedCircle?.kind === "circle" && fixedCircle.resize === false,
-      `diameter-only circle unexpectedly exposed independent dimensions: ${JSON.stringify(fixedCircle)}`,
+      fixedCircle?.kind === "circle" && fixedCircle.resize === true,
+      `circle did not expose independently editable dimensions: ${JSON.stringify(fixedCircle)}`,
     );
   });
 

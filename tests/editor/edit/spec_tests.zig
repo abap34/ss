@@ -313,7 +313,7 @@ test "shape insertion preserves circle dimensions and disabled paint" {
     defer result.deinit(allocator);
     const updated = try edit.applyEdits(allocator, source, result.edits);
     defer allocator.free(updated);
-    try std.testing.expect(std.mem.indexOf(u8, updated, "ellipse!(80, 80, VectorStyle") != null);
+    try std.testing.expect(std.mem.indexOf(u8, updated, "circle!(80, 80, VectorStyle") != null);
     try std.testing.expect(std.mem.indexOf(u8, updated, "fill = no_fill()") != null);
     try std.testing.expect(std.mem.indexOf(u8, updated, "stroke = no_stroke()") != null);
     try std.testing.expect(std.mem.indexOf(u8, updated, "page.left + 0") == null);

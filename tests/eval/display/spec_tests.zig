@@ -1654,12 +1654,12 @@ test "native path display: immutable geometry, paint and markers survive reuse a
         \\const input: g::PathShape = g::PathShape {
         \\  path = path(p::move_to(0, 0), p::line_to(1, 1))
         \\  width = 180 height = 90
-        \\  marker_end = g::marker_arrow_filled()
+        \\  marker_end = g::marker_arrow_open()
         \\}
         \\page first
         \\  place!(t::Text { content = str(selection_count(select<g::PathShape>(pagectx()))) })
         \\  place!(input)
-        \\  place!(input with { width = 240 style.stroke.width = 4 marker_start = g::marker_circle() })
+        \\  place!(input with { width = 240 style.stroke.width = 4 marker_start = g::MarkerStyle { path = path(p::move_to(0, 0), p::line_to(1, 1)) } })
         \\end
         \\page second
         \\  place!(Diagram { shape = input })

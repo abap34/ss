@@ -256,7 +256,7 @@ fn appendConstructor(
 ) !void {
     switch (shape) {
         .rectangle => |value| try appendClosedConstructor(allocator, out, "rectangle!", value),
-        .circle => |value| try appendClosedConstructor(allocator, out, "ellipse!", value),
+        .circle => |value| try appendClosedConstructor(allocator, out, "circle!", value),
         .arrow => |value| try appendClosedConstructor(allocator, out, "arrow_shape!", value),
         .speech_bubble => |value| try appendClosedConstructor(allocator, out, "speech_bubble!", value),
         .line => |value| try appendLineConstructor(allocator, out, "line!", value),

@@ -29,8 +29,15 @@ page normal
   let curved = place!(graphics::PathShape {
     path = path(paths::move_to(0.1, 0.8), paths::cubic_to(0.2, 0.1, 0.7, 0.9, 0.9, 0.2))
     width = 200 height = 120
-    marker_start = graphics::marker_circle(10, c"#7c3aed")
-    marker_end = graphics::marker_arrow_filled(16, c"#7c3aed")
+    marker_start = graphics::MarkerStyle {
+      path = path(paths::move_to(1, 0.5), paths::arc_to(0.5, 0.5, 0, false, true, 0, 0.5), paths::arc_to(0.5, 0.5, 0, false, true, 1, 0.5), paths::close_path())
+      fill = paint::solid_fill(c"#7c3aed") stroke = paint::no_stroke()
+    }
+    marker_end = graphics::MarkerStyle {
+      path = path(paths::move_to(0, 0), paths::line_to(1, 0.5), paths::line_to(0, 1), paths::close_path())
+      width = 16 height = 16
+      fill = paint::solid_fill(c"#7c3aed") stroke = paint::no_stroke()
+    }
     style = graphics::VectorStyle { stroke = paint::vector_stroke(c"#7c3aed", 3) }
   })
   ~ title.left == page.left + 64
