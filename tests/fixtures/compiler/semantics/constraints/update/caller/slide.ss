@@ -1,7 +1,7 @@
 import std:themes/default as *
 
-fn component!() -> Object
-  let item = body_obj!("caller")
+fn component!() -> Placed<Text>
+  let item = text!("caller")
   ~!~item.left == page.left + 40
   ~ item.top == page.top - 60
   return item

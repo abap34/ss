@@ -1619,13 +1619,6 @@ test "compiler semantics: markdown underline uses a structured style" {
     , "case.ss:bytes:", "TypeMismatch: expected Number, got String");
 }
 
-test "compiler semantics: set_prop rejects a duplicate property definition" {
-    try expectFixtureLoweringErrorDiagnostic(
-        "theme/set-prop",
-        "DuplicatePropertyDefinition: property 'text' is already defined on this target",
-    );
-}
-
 test "compiler semantics: text carries themed markdown heading styles" {
     try expectFixtureObjectFieldPath("theme/markdown-heading-text", "markdown_headings", &.{ "h2", "text", "size" }, "35");
     try expectFixtureObjectFieldPath("theme/markdown-heading-text", "markdown_headings", &.{ "h2", "text", "color" }, "0.08235294,0.47843137,0.16862746");
@@ -2015,11 +2008,10 @@ test "compiler semantics: record update makes updated style leaves explicit" {
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  let body = body_obj("style")
         \\  let style = TextStyle {} with {
         \\    size = 31
         \\  }
-        \\  body.text = style
+        \\  text!("style", default_text_style with { text = style })
         \\end
         \\
     , "text", &.{"size"}, "31");
@@ -2123,29 +2115,17 @@ test "compiler semantics: theme values customize imported defaults and local sty
 
 test "compiler semantics: user record declarations define typed record values" {
     try expectObjectFieldPath(
-        \\import std:themes/default as *
-        \\
         \\type CaptionStyle {
         \\  size: Number = 18
         \\  color: Color = c"0.2,0.2,0.2"
         \\}
-        \\
         \\fn large(style: CaptionStyle) -> CaptionStyle
-        \\  return CaptionStyle {
-        \\    size = style.size + 4
-        \\    color = style.color
-        \\  }
+        \\  return CaptionStyle { size = style.size + 4 color = style.color }
         \\end
-        \\
-        \\page ok
-        \\  let body = body_obj("caption")
+        \\page main
         \\  let style = large(CaptionStyle { size = 20 })
-        \\  body.text = TextStyle {
-        \\    size = style.size
-        \\    color = style.color
-        \\  }
+        \\  text!("caption", default_text_style with { text = TextStyle { size = style.size color = style.color } })
         \\end
-        \\
     , "text", &.{"size"}, "24");
 }
 
@@ -2158,9 +2138,8 @@ test "compiler semantics: optional fields accept none and coalesce" {
         \\end
         \\
         \\page ok
-        \\  let body = body_obj("ok")
-        \\  body.text.markdown.code.chrome.fill = none
-        \\  body.text.color = fallback(body.text?.markdown?.code?.chrome?.fill)
+        \\  let style = default_text_style with { text.markdown.code.chrome.fill = none }
+        \\  text!("ok", style with { text.color = fallback(style.text.markdown.code.chrome.fill) })
         \\end
         \\
     );
@@ -2182,11 +2161,10 @@ test "compiler semantics: optional fields accept none and coalesce" {
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let body = body_obj("bad")
-        \\  body.text.color = none
+        \\  let style = TextStyle {} with { color = none }
         \\end
         \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'text.color' expects Color, got None");
+    , "case.ss:bytes:", "TypeMismatch: expected Color, got None");
 
     try expectObjectContent(
         \\import std:themes/default as *
@@ -2205,11 +2183,11 @@ test "compiler semantics: optional fields accept none and coalesce" {
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  let body = body_obj("body")
-        \\  if body.text?.markdown?.code?.chrome?.fill?
-        \\    body_obj("still-set")
+        \\  let style = default_text_style with { text.markdown.code.chrome.fill = none }
+        \\  if style.text.markdown.code.chrome.fill?
+        \\    text!("still-set")
         \\  else
-        \\    body_obj("unset")
+        \\    text!("unset")
         \\  end
         \\end
         \\
@@ -2260,8 +2238,8 @@ test "compiler semantics: optional values are checked at function boundaries" {
         \\end
         \\
         \\page bad
-        \\  let body = body_obj("bad")
-        \\  body.text.color = take_color(body.text?.markdown?.code?.chrome?.fill)
+        \\  let style = TextStyle {}
+        \\  let invalid = take_color(style.markdown.code.chrome.fill)
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Color, got Color?");
@@ -2274,8 +2252,8 @@ test "compiler semantics: optional values are checked at function boundaries" {
         \\end
         \\
         \\page bad
-        \\  let body = body_obj("bad")
-        \\  body.text.markdown.code.chrome.fill = take_maybe("red")
+        \\  let style = TextStyle {}
+        \\  let invalid = take_maybe("red")
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Color?, got String");
@@ -2341,11 +2319,11 @@ test "compiler semantics: optional values stay checked through multi-step flows"
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\fn may_be_none(target: Body, prefer_markup: Bool) -> Color?
+        \\fn may_be_none(target: TextStyle, prefer_markup: Bool) -> Color?
         \\  if prefer_markup
-        \\    return target.text?.markdown?.code?.chrome?.fill
+        \\    return target.markdown.code.chrome.fill
         \\  else
-        \\    if target.link_id?
+        \\    if target.line_height?
         \\      return c"0.1,0.2,0.3"
         \\    else
         \\      return none
@@ -2358,11 +2336,10 @@ test "compiler semantics: optional values stay checked through multi-step flows"
         \\end
         \\
         \\page bad
-        \\  let body = body_obj("report")
-        \\  body.text.markdown.code.chrome.fill = none
-        \\  let x = may_be_none(body, true)
+        \\  let style = TextStyle {} with { markdown.code.chrome.fill = none }
+        \\  let x = may_be_none(style, true)
         \\  let y = must_call_by_notnone(x)
-        \\  body.text.color = y
+        \\  let invalid = TextStyle {} with { color = y }
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Color, got Color?");
@@ -2388,7 +2365,7 @@ test "compiler semantics: optional values stay checked through multi-step flows"
         \\end
         \\
         \\page bad
-        \\  body_obj!("bad")
+        \\  text!("bad")
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Color, got Color?");
@@ -2396,21 +2373,21 @@ test "compiler semantics: optional values stay checked through multi-step flows"
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\fn apply_palette(target: Body, primary: Color?, secondary: Color?) -> Void
+        \\fn apply_palette(target: TextStyle, primary: Color?, secondary: Color?) -> TextStyle
         \\  let chosen = primary
-        \\  if target.link_id?
-        \\    target.text.color = chosen
+        \\  if target.line_height?
+        \\    return target with { color = chosen }
         \\  else
-        \\    target.text.markdown.code.chrome.fill = secondary
+        \\    return target with { markdown.code.chrome.fill = secondary }
         \\  end
         \\end
         \\
         \\page bad
-        \\  let body = body_obj("body")
-        \\  apply_palette(body, none, c"0.3,0.3,0.3")
+        \\  let style = TextStyle {}
+        \\  apply_palette(style, none, c"0.3,0.3,0.3")
         \\end
         \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'text.color' expects Color, got Color?");
+    , "case.ss:bytes:", "TypeMismatch: expected Color, got Color?");
 
     try expectDiagnostic(
         \\import std:themes/default as *
@@ -2438,7 +2415,7 @@ test "compiler semantics: optional values stay checked through multi-step flows"
         \\  if status?
         \\    let published = publish(status)
         \\  else
-        \\    body_obj!("missing")
+        \\    text!("missing")
         \\  end
         \\end
         \\
@@ -2463,7 +2440,7 @@ test "compiler semantics: optional values stay checked through multi-step flows"
         \\end
         \\
         \\page bad
-        \\  body_obj!("bad")
+        \\  text!("bad")
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Status, got OtherStatus");
@@ -2490,9 +2467,9 @@ test "compiler semantics: mismatched if branches are rejected statically" {
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\fn maybe_accent(target: Body, use_saved: Bool, force_number: Bool) -> Color?
+        \\fn maybe_accent(target: TextStyle, use_saved: Bool, force_number: Bool) -> Color?
         \\  if use_saved
-        \\    return target.text?.markdown?.code?.chrome?.fill
+        \\    return target.markdown.code.chrome.fill
         \\  else
         \\    if force_number
         \\      return 1
@@ -2511,12 +2488,12 @@ test "compiler semantics: mismatched if branches are rejected statically" {
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\fn choose_from_branch_local(target: Body, maybe_color: Color?, prefer_saved: Bool) -> Color
+        \\fn choose_from_branch_local(target: TextStyle, maybe_color: Color?, prefer_saved: Bool) -> Color
         \\  if prefer_saved
         \\    let chosen = maybe_color
         \\    return chosen
         \\  else
-        \\    let chosen = target.text?.color ?? c"0,0,0"
+        \\    let chosen = target.color
         \\    return chosen
         \\  end
         \\end
@@ -2530,20 +2507,20 @@ test "compiler semantics: mismatched if branches are rejected statically" {
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\fn paint_target(target: Body, maybe_color: Color?, use_optional: Bool) -> Void
+        \\fn paint_target(target: TextStyle, maybe_color: Color?, use_optional: Bool) -> TextStyle
         \\  if use_optional
-        \\    target.text.color = maybe_color
+        \\    return target with { color = maybe_color }
         \\  else
-        \\    target.text.color = c"0.1,0.1,0.1"
+        \\    return target with { color = c"0.1,0.1,0.1" }
         \\  end
         \\end
         \\
         \\page bad
-        \\  let body = text("body")
-        \\  paint_target(body, none, true)
+        \\  let style = TextStyle {}
+        \\  paint_target(style, none, true)
         \\end
         \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'text.color' expects Color, got Color?");
+    , "case.ss:bytes:", "TypeMismatch: expected Color, got Color?");
 
     try expectDiagnostic(
         \\import std:themes/default as *
@@ -2645,20 +2622,20 @@ test "compiler semantics: if branch checks do not depend on optional types" {
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\fn configure_text(target: Body, compact: Bool) -> Void
+        \\fn configure_text(target: TextStyle, compact: Bool) -> TextStyle
         \\  if compact
-        \\    target.text.size = "small"
+        \\    return target with { size = "small" }
         \\  else
-        \\    target.text.size = 24
+        \\    return target with { size = 24 }
         \\  end
         \\end
         \\
         \\page bad
-        \\  let body = text("body")
-        \\  configure_text(body, true)
+        \\  let style = TextStyle {}
+        \\  configure_text(style, true)
         \\end
         \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'text.size' expects Number, got String");
+    , "case.ss:bytes:", "TypeMismatch: expected Number, got String");
 
     try expectDiagnostic(
         \\import std:themes/default as *
@@ -2667,7 +2644,7 @@ test "compiler semantics: if branch checks do not depend on optional types" {
         \\  if use_pages
         \\    return pages(docctx())
         \\  else
-        \\    return objs_here("body")
+        \\    return select<Text>(docctx())
         \\  end
         \\end
         \\
@@ -2675,7 +2652,7 @@ test "compiler semantics: if branch checks do not depend on optional types" {
         \\  text!("bad")
         \\end
         \\
-    , "case.ss:bytes:", "TypeMismatch: expected Selection<Page>, got Selection<Object>");
+    , "case.ss:bytes:", "TypeMismatch: expected Selection<Page>, got Selection<Placed<Text>>");
 
     try expectDiagnostic(
         \\import std:themes/default as *
@@ -2800,112 +2777,52 @@ test "compiler semantics: enum optional values reject strings and other enums" {
     , "case.ss:bytes:", "TypeMismatch: expected Mode, got Other");
 }
 
-test "compiler semantics: properties require known fields" {
+test "compiler semantics: document and page settings require declared fields" {
     try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\page bad
-        \\  let body = body_obj("bad")
-        \\  let key = "text_color"
-        \\  set_prop(body, key, c"1,0,0")
+        \\document
+        \\  docctx().no_such_field = 1
         \\end
-        \\
-    , "case.ss:bytes:", "InvalidProperty: property key must be a known field literal");
+    , "case.ss:bytes:", "UnknownField");
 
     try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\page bad
-        \\  let body = body_obj("bad")
-        \\  body.no_such_field = "x"
+        \\page main
+        \\  let invalid = pagectx().no_such_field
         \\end
-        \\
-    , "case.ss:bytes:", "UnknownField: unknown field: no_such_field");
+    , "case.ss:bytes:", "UnknownField");
 
     try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\page bad
-        \\  let body = body_obj("bad")
-        \\  let key = "text_color"
-        \\  body_obj!(prop(body, key, "missing"))
+        \\page main
+        \\  pagectx().no_such_field = 1
         \\end
-        \\
-    , "case.ss:bytes:", "InvalidProperty: property key must be a known field literal");
-
-    try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\page bad
-        \\  let body = body_obj("bad")
-        \\  has_prop(body, "no_such_field")
-        \\end
-        \\
-    , "case.ss:bytes:", "UnknownField: unknown field: no_such_field");
-
-    try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\page bad
-        \\  let body = body_obj("bad")
-        \\  body.text.color = 1
-        \\end
-        \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'text.color' expects Color, got Number");
+    , "case.ss:bytes:", "UnknownField");
 }
 
-test "compiler semantics: typed properties reject optional and wrong static values" {
+test "compiler semantics: typed settings and value updates reject incompatible values" {
     try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\page bad
-        \\  let body = body_obj("bad")
-        \\  set_prop(body, "text_color", body.text?.markdown?.code?.chrome?.fill)
-        \\end
-        \\
-    , "case.ss:bytes:", "UnknownField: unknown field: text_color");
-
-    try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
         \\document
         \\  docctx().background_fill = "white"
         \\end
-        \\
-        \\page bad
+        \\page main
         \\end
-        \\
     , "case.ss:bytes:", "InvalidFieldValue: field 'background_fill' expects Color?, got String");
 
     try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\page bad
-        \\  body_obj!("body")
-        \\  objs_here("body").text.color = none
+        \\page main
+        \\  pagectx().layout_h_center_offset = none
         \\end
-        \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'text.color' expects Color, got None");
+    , "case.ss:bytes:", "InvalidFieldValue: field 'layout_h_center_offset' expects Number, got None");
 
     try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\page bad
-        \\  let body = body_obj("bad")
-        \\  body.text.markdown.code.chrome.fill = 1
+        \\page main
+        \\  pagectx().background_fill = 1
         \\end
-        \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'text.markdown.code.chrome.fill' expects Color?, got Number");
+    , "case.ss:bytes:", "InvalidFieldValue: field 'background_fill' expects Color?, got Number");
 
     try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\page bad
-        \\  let body = body_obj("bad")
-        \\  set_prop(body, "text_markdown_code_fill", "red")
+        \\page main
+        \\  let style = TextStyle {} with { markdown.code.chrome.fill = 1 }
         \\end
-        \\
-    , "case.ss:bytes:", "UnknownField: unknown field: text_markdown_code_fill");
+    , "case.ss:bytes:", "TypeMismatch: expected Color?, got Number");
 }
 
 test "compiler semantics: ordinary field defaults evaluate with their declared types" {
@@ -3002,28 +2919,28 @@ test "compiler semantics: ordinary field defaults evaluate with their declared t
     , "case.ss:bytes:", "InvalidFieldDefault");
 }
 
-test "compiler semantics: document page and selection properties are typed" {
+test "compiler semantics: resource settings and immutable styles retain declared enum types" {
     try expectObjectContent(
+        \\fn label(policy: LayoutPolicy) -> String = "center"
         \\document
         \\  docctx().layout_h = LayoutPolicy.center
         \\end
-        \\page ok
-        \\  text!(prop(docctx(), "layout_h", "missing"))
-        \\  body_obj!("body")
-        \\  objs_here("body").layout.wrap = WrapMode.off
+        \\page main
+        \\  text!(label(docctx().layout_h))
         \\end
     , "center");
+
     try expectDiagnostic(
         \\document
         \\  docctx().layout_h = "left"
         \\end
     , "case.ss:bytes:", "InvalidFieldValue: field 'layout_h' expects LayoutPolicy, got String");
+
     try expectDiagnostic(
-        \\page bad
-        \\  body_obj!("body")
-        \\  objs_here("body").layout.wrap = "off"
+        \\page main
+        \\  let style = LayoutStyle {} with { wrap = "off" }
         \\end
-    , "case.ss:bytes:", "InvalidFieldValue: field 'layout.wrap' expects WrapMode, got String");
+    , "case.ss:bytes:", "TypeMismatch: expected WrapMode, got String");
 }
 
 test "compiler semantics: document and page settings exclude presentation styles" {
@@ -3049,127 +2966,67 @@ test "compiler semantics: math alignment rejects unknown literals" {
     , "case.ss:bytes:", "UnknownEnumCase: enum 'Align' has no case 'sideways'");
 }
 
-test "compiler semantics: member sugar reads and writes properties and content" {
-    try expectLoweringErrorDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\page bad
-        \\  let target = body_obj("hello")
+test "compiler semantics: member access distinguishes immutable inputs and resource settings" {
+    try expectDiagnostic(
+        \\page main
+        \\  let target = text("hello")
         \\  target.content = target.content ++ "!"
         \\end
-        \\
-    , "ExecutionDependencyCycle: document evaluation dependencies contain a cycle");
+    , "case.ss:bytes:", "ImmutableValue");
 
     try expectObjectContent(
-        \\import std:themes/default as *
-        \\
-        \\page ok
-        \\  let target = body_obj("styled")
-        \\  target.link_id = "custom"
-        \\  if target.link_id?
-        \\    body_obj!(target.link_id ?? "missing")
-        \\  end
+        \\type Label { content: String }
+        \\page main
+        \\  let original = Label { content = "old" }
+        \\  let changed = original with { content = "custom" }
+        \\  text!(changed.content ++ ":" ++ original.content)
         \\end
-        \\
-    , "custom");
+    , "custom:old");
 
     try expectObjectContent(
-        \\import std:themes/default as *
-        \\
         \\document
         \\  docctx().layout_h_center_offset = 42
         \\  foreach(pages(docctx()), (p: Page) |-> place_on!(p, text(str(docctx().layout_h_center_offset))))
         \\end
-        \\
-        \\page ok
+        \\page main
         \\end
-        \\
     , "42");
 }
 
-test "compiler semantics: chained member assignment writes through record fields" {
-    const source =
-        \\import std:themes/default as *
-        \\
-        \\type Parts {
-        \\  root: Object
-        \\  middle: Object
-        \\}
-        \\
-        \\fn make_parts() -> Parts
-        \\  let middle = body_obj("middle")
-        \\  return Parts {
-        \\    root = group(middle)
-        \\    middle = middle
-        \\  }
+test "compiler semantics: nested value fields preserve resource references for assignment" {
+    try expectObjectContent(
+        \\type Inner { target: Page }
+        \\type Outer { inner: Inner }
+        \\fn wrap(target: Page) -> Outer = Outer { inner = Inner { target = target } }
+        \\page main
+        \\  let wrapper = wrap(pagectx())
+        \\  text!(str(pagectx().layout_h_center_offset))
+        \\  wrapper.inner.target.layout_h_center_offset = 42
         \\end
-        \\
-        \\page ok
-        \\  let parts = make_parts()
-        \\  place_on!(pagectx(), parts.root)
-        \\  parts.middle.link_id = "changed"
-        \\  parts.middle.text.color = c"#ff0000"
-        \\end
-        \\
-    ;
-
-    try expectObjectContent(source, "middle");
-    try expectObjectProperty(source, "link_id", "changed");
-    try expectObjectFieldPath(source, "text", &.{"color"}, "1,0,0");
+    , "42");
 }
 
-test "compiler semantics: member reads materialize typed property values" {
+test "compiler semantics: member reads preserve concrete field types" {
     try expectObjectContent(
-        \\import std:themes/default as *
-        \\
-        \\fn wrap_label(value: WrapMode) -> String
-        \\  return "wrap"
+        \\type Label { content: String style: TextBlockStyle }
+        \\fn wrap_label(value: WrapMode) -> String = "wrap"
+        \\fn link_label(value: String) -> String = value
+        \\page main
+        \\  let target = Label {
+        \\    content = "custom"
+        \\    style = default_text_style with { layout.wrap = WrapMode.off text.size = 24 }
+        \\  }
+        \\  text!(wrap_label(target.style.layout.wrap) ++ ":" ++ str(target.style.text.size) ++ ":" ++ link_label(target.content))
         \\end
-        \\
-        \\fn link_label(value: String) -> String
-        \\  return value
-        \\end
-        \\
-        \\fn render_label(value: RenderKind) -> String
-        \\  return "render"
-        \\end
-        \\
-        \\page ok
-        \\  let target = body_obj("typed")
-        \\  target.layout.wrap = WrapMode.off
-        \\  target.text.size = 24
-        \\  target.link_id = "custom"
-        \\  target.text.markdown.code.chrome.fill = c"0.1,0.2,0.3"
-        \\  let panel_obj = new("", "panel", "text")
-        \\  let other = body_obj("color")
-        \\  other.text.color = target.text?.markdown?.code?.chrome?.fill ?? c"0,0,0"
-        \\  body_obj(wrap_label(target.layout?.wrap ?? WrapMode.on) ++ ":" ++ str(target.text?.size ?? 0) ++ ":" ++ link_label(target.link_id ?? "fallback"))
-        \\  body_obj(render_label(panel_obj.render_kind ?? RenderKind.text))
-        \\end
-        \\
     , "wrap:24:custom");
-
-    try expectObjectContent(
-        \\import std:themes/default as *
-        \\
-        \\fn render_label(value: RenderKind) -> String
-        \\  return "render"
-        \\end
-        \\
-        \\page ok
-        \\  let panel_obj = new("", "panel", "text")
-        \\  body_obj(render_label(panel_obj.render_kind ?? RenderKind.text))
-        \\end
-        \\
-    , "render");
 }
 
 test "compiler semantics: logical not inverts optional presence checks" {
     try expectObjectContent(
         \\import std:themes/default as *
         \\
-        \\fn optional_color_label(target: Body) -> String
-        \\  if !target.text?.markdown?.code?.chrome?.fill?
+        \\fn optional_color_label(target: TextStyle) -> String
+        \\  if !target.markdown.code.chrome.fill?
         \\    return "none"
         \\  else
         \\    return "some"
@@ -3177,10 +3034,9 @@ test "compiler semantics: logical not inverts optional presence checks" {
         \\end
         \\
         \\page ok
-        \\  let unset = body_obj("unset")
-        \\  let set = body_obj("set")
-        \\  set.text.markdown.code.chrome.fill = c"0.1,0.2,0.3"
-        \\  body_obj(optional_color_label(unset) ++ ":" ++ optional_color_label(set))
+        \\  let unset = TextStyle {} with { markdown.code.chrome.fill = none }
+        \\  let set = TextStyle {} with { markdown.code.chrome.fill = c"0.1,0.2,0.3" }
+        \\  text!(optional_color_label(unset) ++ ":" ++ optional_color_label(set))
         \\end
         \\
     , "none:some");
@@ -3251,18 +3107,6 @@ test "compiler semantics: page numbers accept default and custom format function
         \\page two
         \\end
     , "1 of 2");
-}
-
-test "compiler semantics: removed render kind chrome case is rejected" {
-    try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\page bad
-        \\  let panel_obj = new("", "panel", "text")
-        \\  panel_obj.render_kind = RenderKind.chrome
-        \\end
-        \\
-    , "case.ss:bytes:", "UnknownEnumCase: enum 'RenderKind' has no case 'chrome'");
 }
 
 test "compiler semantics: pass annotation is rejected" {
@@ -3361,31 +3205,24 @@ test "compiler semantics: document property writes schedule before reads" {
     , "22");
 }
 
-test "compiler semantics: content definitions cannot replace constructor content" {
-    try expectLoweringErrorDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\page one
-        \\  let item = new("old", "body", "text")
-        \\  let observed = new(content(item), "note", "text")
-        \\  set_content(item, "new")
+test "compiler semantics: presentation content is immutable" {
+    try expectDiagnostic(
+        \\page main
+        \\  let item = text("old")
+        \\  item.content = "new"
         \\end
-        \\
-    , "DuplicateContentDefinition: object content is already defined");
+    , "case.ss:bytes:", "ImmutableValue");
 }
 
-test "compiler semantics: repeated content definitions are rejected" {
-    try expectLoweringErrorDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\page one
-        \\  let item = new("old", "body", "text")
-        \\  set_content(item, "one")
-        \\  set_content(item, "two")
-        \\  let observed = new(content(item), "note", "text")
+test "compiler semantics: successive content updates preserve each prior value" {
+    try expectObjectContent(
+        \\page main
+        \\  let original = text("old")
+        \\  let first = original with { content = "one" }
+        \\  let second = first with { content = "two" }
+        \\  text!(original.content ++ ":" ++ first.content ++ ":" ++ second.content)
         \\end
-        \\
-    , "DuplicateContentDefinition: object content is already defined");
+    , "old:one:two");
 }
 
 test "compiler semantics: immutable claim inputs combine with construction ordered numbering" {
@@ -3521,15 +3358,13 @@ test "compiler semantics: displays cannot create pages or read external files" {
 
 test "compiler semantics: variable and property dependencies reject inverse cycles" {
     try expectLoweringErrorDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\page bad
-        \\  let item = body_obj("old")
-        \\  let current = content(item)
-        \\  set_content(item, current)
+        \\document
+        \\  let current = docctx().layout_h_center_offset
+        \\  docctx().layout_h_center_offset = current
         \\end
-        \\
-    , "ExecutionDependencyCycle: document evaluation dependencies contain a cycle");
+        \\page main
+        \\end
+    , "ExecutionDependencyCycle");
 }
 
 test "compiler semantics: void functions may finish without explicit return" {
@@ -3797,34 +3632,16 @@ test "compiler semantics: constants can hold function values" {
 }
 
 test "compiler semantics: constants are evaluated once as value bindings" {
-    const source =
-        \\import std:themes/default as *
-        \\
-        \\type Parts {
-        \\  root: Object
-        \\  middle: Object
-        \\}
-        \\
-        \\fn make_parts() -> Parts
-        \\  let middle = body_obj("middle")
-        \\  return Parts {
-        \\    root = group(middle)
-        \\    middle = middle
-        \\  }
+    try expectObjectContent(
+        \\const target: Page = new_page(docctx(), "constant")
+        \\document
+        \\  place_on!(target, text("First"))
+        \\  place_on!(target, text("Second"))
         \\end
-        \\
-        \\const parts: Parts = make_parts()
-        \\
-        \\page ok
-        \\  parts.middle.link_id = "changed"
-        \\  parts.middle.text.color = c"#ff0000"
-        \\  place_on!(pagectx(), parts.root)
+        \\page main
+        \\  text!("pages=" ++ str(page_count(docctx())))
         \\end
-        \\
-    ;
-
-    try expectObjectProperty(source, "link_id", "changed");
-    try expectObjectFieldPath(source, "text", &.{"color"}, "1,0,0");
+    , "pages=2");
 }
 
 test "compiler semantics: constants cannot require a page context" {
@@ -4031,7 +3848,7 @@ test "compiler semantics: void lambda callbacks execute their effects" {
         \\import std:themes/default as *
         \\
         \\fn side_effect!(page_value: Page) -> Void
-        \\  place_on!(page_value, new("side", "body", "text"))
+        \\  place_on!(page_value, text("side"))
         \\end
         \\
         \\document
@@ -4081,20 +3898,13 @@ test "compiler semantics: function return annotations are checked for function v
     );
 }
 
-test "compiler semantics: function values cannot be stored as properties" {
-    try expectBuildFails(
-        \\import std:themes/default as *
-        \\
-        \\fn id(x: Number) -> Number
-        \\  return x
+test "compiler semantics: resource settings cannot store function values" {
+    try expectDiagnostic(
+        \\fn identity(value: Number) -> Number = value
+        \\page main
+        \\  pagectx().layout_h_center_offset = identity
         \\end
-        \\
-        \\page bad
-        \\  let obj = text("bad")
-        \\  set_prop(obj, "wrap", id)
-        \\end
-        \\
-    );
+    , "case.ss:bytes:", "InvalidProperty");
 }
 
 test "compiler semantics: function-value recursion is rejected" {
@@ -5194,18 +5004,17 @@ test "compiler semantics: page anchors cannot be constraint targets" {
     );
 }
 
-test "compiler semantics: aliased object self-anchor constraints are rejected" {
-    try expectBuildFails(
+test "compiler semantics: aliased placement self-anchor constraints are rejected" {
+    try testing.expectError(error.ConstraintConflict, buildSource(
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let a = text("a")
-        \\  place_on!(pagectx(), a)
+        \\  let a = text!("a")
         \\  let b = a
         \\  ~ b.top == a.top + 100
         \\end
         \\
-    );
+    ));
 }
 
 test "compiler semantics: aliased tautological self-anchor constraints are accepted" {
@@ -5222,28 +5031,26 @@ test "compiler semantics: aliased tautological self-anchor constraints are accep
 }
 
 test "compiler semantics: explicit layout conflicts are rejected" {
-    try expectBuildFails(
+    try testing.expectError(error.ConstraintConflict, buildSource(
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let a = text("a")
-        \\  place_on!(pagectx(), a)
+        \\  let a = text!("a")
         \\  ~ a.left == page.left + 100
         \\  ~ a.left == page.left + 120
         \\end
         \\
-    );
+    ));
 
-    try expectBuildFails(
+    try testing.expectError(error.NegativeFrameSize, buildSource(
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let a = text("a")
-        \\  place_on!(pagectx(), a)
+        \\  let a = text!("a")
         \\  ~ a.left == a.right + 10
         \\end
         \\
-    );
+    ));
 }
 
 test "compiler semantics: page constraint updates replace component positioning and preserve size" {
@@ -5733,41 +5540,45 @@ test "compiler semantics: return joins and selection algebra preserve justified 
     });
 }
 
-test "compiler semantics: dependency roles include nested and fallthrough returns" {
+test "compiler semantics: query filters preserve nested and fallthrough field results" {
     try expectObjectContent(
-        \\import std:themes/default as *
-        \\fn role_for(important: Bool) -> String
+        \\type Tagged { content: String tag: Number }
+        \\fn display(self: Placed<Tagged>) -> Text = text(self.value.content)
+        \\fn tag_for(important: Bool) -> Number
         \\  if important
         \\    if important
-        \\      let role = "claim"
-        \\      return role
+        \\      let tag = 1
+        \\      return tag
         \\    end
         \\  end
-        \\  return "aside"
+        \\  return 0
         \\end
         \\page summary
-        \\  text!("claims=" ++ join(doc_objs(docctx(), "claim"), ",", (o: Object) |-> content(o)))
+        \\  let matches = filter(select<Tagged>(docctx()), (item: Placed<Tagged>) |-> item.value.tag == 1)
+        \\  text!("claims=" ++ join(matches, ",", (item: Placed<Tagged>) |-> item.value.content))
         \\end
         \\page body
-        \\  txt_obj!("A", role_for(true))
+        \\  place!(Tagged { content = "A" tag = tag_for(true) })
         \\end
     , "claims=A");
 }
 
-test "compiler semantics: dependency role joins include unknown return expressions" {
+test "compiler semantics: query filters wait for computed input fields" {
     try expectObjectContent(
-        \\import std:themes/default as *
-        \\fn role_for(flag: Bool) -> String
+        \\type Tagged { content: String tag: Number }
+        \\fn display(self: Placed<Tagged>) -> Text = text(self.value.content)
+        \\fn tag_for(flag: Bool) -> Number
         \\  if flag
-        \\    return str(123)
+        \\    return 100 + 23
         \\  end
-        \\  return "aside"
+        \\  return 0
         \\end
         \\page summary
-        \\  text!("items=" ++ join(doc_objs(docctx(), "123"), ",", (o: Object) |-> content(o)))
+        \\  let matches = filter(select<Tagged>(docctx()), (item: Placed<Tagged>) |-> item.value.tag == 123)
+        \\  text!("items=" ++ join(matches, ",", (item: Placed<Tagged>) |-> item.value.content))
         \\end
         \\page body
-        \\  txt_obj!("A", role_for(true))
+        \\  place!(Tagged { content = "A" tag = tag_for(true) })
         \\end
     , "items=A");
 }
@@ -5790,20 +5601,22 @@ test "compiler semantics: property target returns join page identities across br
     , "picked=42");
 }
 
-test "compiler semantics: returned object roles join all branches before placement" {
+test "compiler semantics: typed queries include values returned by branching constructors" {
     try expectObjectContent(
-        \\import std:themes/default as *
-        \\fn pick(flag: Bool) -> Object
+        \\type Tagged { content: String tag: Number }
+        \\fn display(self: Placed<Tagged>) -> Text = text(self.value.content)
+        \\fn pick(flag: Bool) -> Tagged
         \\  if flag
-        \\    return txt_obj("A", "claim")
+        \\    return Tagged { content = "A" tag = 1 }
         \\  end
-        \\  return txt_obj("B", "aside")
+        \\  return Tagged { content = "B" tag = 0 }
         \\end
         \\page summary
-        \\  text!("claims=" ++ join(doc_objs(docctx(), "claim"), ",", (o: Object) |-> content(o)))
+        \\  let matches = filter(select<Tagged>(docctx()), (item: Placed<Tagged>) |-> item.value.tag == 1)
+        \\  text!("claims=" ++ join(matches, ",", (item: Placed<Tagged>) |-> item.value.content))
         \\end
         \\page body
-        \\  place_on!(pagectx(), pick(true))
+        \\  place!(pick(true))
         \\end
     , "claims=A");
 }
@@ -5833,17 +5646,16 @@ test "compiler semantics: higher order writes determine execution order" {
 
 test "compiler semantics: returned closures keep captured property targets" {
     try expectObjectContent(
-        \\import std:themes/default as *
-        \\fn reader(item: Object) -> (() -> String)
-        \\  return () |-> (item.link_id ?? "missing")
+        \\fn reader(item: Page) -> (() -> String)
+        \\  return () |-> str(item.layout_h_center_offset)
         \\end
         \\page main
-        \\  let item = body_obj!("A")
+        \\  let item = pagectx()
         \\  let read = reader(item)
         \\  text!(read())
-        \\  item.link_id = "marked"
+        \\  item.layout_h_center_offset = 42
         \\end
-    , "marked");
+    , "42");
 }
 
 test "compiler semantics: record and optional function calls retain write effects" {
@@ -6020,24 +5832,25 @@ test "compiler semantics: default facts and effects use the definition module" {
     try expectObjectContentWithTwoOverlays(
         \\import ./lib/a as a
         \\import ./lib/b as b
-        \\const selected_role: String = "other"
+        \\const selected_level: Number = 2
         \\page main
-        \\  let item = body_obj!("Target")
+        \\  let item = pagectx()
         \\  text!(b::read(item))
-        \\  item.link_id = "Ready"
-        \\  txt_obj!("A", "tagged")
+        \\  item.layout_h_center_offset = 42
+        \\  heading!("A")
         \\end
     ,
-        \\const selected_role: String = "tagged"
-        \\fn role(value: String = selected_role) -> String = value
-        \\fn identity(item: Object, selected: Object = item) -> Object = selected
+        \\const selected_level: Number = 1
+        \\fn level(value: Number = selected_level) -> Number = value
+        \\fn identity(item: Page, selected: Page = item) -> Page = selected
     ,
         \\import ./a as a
-        \\const selected_role: String = "wrong"
-        \\fn read(item: Object, value: String = a::identity(item).link_id ?? "missing") -> String
-        \\  return value ++ ":" ++ str(selection_count(doc_objs(docctx(), a::role())))
+        \\const selected_level: Number = 99
+        \\fn read(item: Page, value: Number = a::identity(item).layout_h_center_offset) -> String
+        \\  let selected = filter(select<Heading>(docctx()), (item: Placed<Heading>) |-> item.value.level == a::level())
+        \\  return str(value) ++ ":" ++ str(selection_count(selected))
         \\end
-    , "Ready:1");
+    , "42:1");
 }
 
 test "compiler semantics: callback effects distinguish specializations and returned record updates" {
@@ -6258,38 +6071,38 @@ test "compiler semantics: primitive callbacks accept broader parameter types" {
     , "X");
 }
 
-test "compiler semantics: property reads reject selections and nonobject content" {
+test "compiler semantics: property reads require a value or a single resource reference" {
     try expectDiagnostic(
         \\page main
-        \\  let value = objs_here("body").link_id
+        \\  let invalid = select<Text>(docctx()).value
         \\end
-    , "bytes:", "InvalidProperty");
+    , "case.ss:bytes:", "InvalidProperty");
+
     try expectDiagnostic(
         \\page main
-        \\  let value = pagectx().content
+        \\  let invalid = pagectx().content
         \\end
-    , "bytes:", "InvalidProperty");
+    , "case.ss:bytes:", "InvalidProperty");
+
     try expectDiagnostic(
         \\document
-        \\  let value = docctx().content
+        \\  let invalid = docctx().content
         \\end
-    , "bytes:", "InvalidProperty");
-    try expectDiagnostic(
-        \\page main
-        \\  let value = prop(objs_here("body"), "link_id", "none")
-        \\end
-    , "bytes:", "InvalidProperty");
+    , "case.ss:bytes:", "InvalidProperty");
 }
 
-test "compiler semantics: selections remain writable and individual objects readable" {
+test "compiler semantics: finite callbacks can write selected page settings" {
     try expectObjectContent(
-        \\import std:themes/default as *
-        \\page main
-        \\  let item = txt_obj!("A", "tagged")
-        \\  objs(pagectx(), "tagged").link_id = "X"
-        \\  text!(item.link_id ?? "missing")
+        \\fn mark(target: Page) -> Void
+        \\  target.layout_h_center_offset = 42
         \\end
-    , "X");
+        \\document
+        \\  foreach(pages(docctx()), mark)
+        \\end
+        \\page main
+        \\  text!(str(pagectx().layout_h_center_offset))
+        \\end
+    , "42");
 }
 
 test "compiler semantics: immutable types retain callable fields through nested optional values" {
@@ -6318,31 +6131,22 @@ test "compiler semantics: immutable types retain callable fields through nested 
     , "3:3");
 }
 
-test "compiler semantics: property assignment and set_prop reject embedded function values" {
+test "compiler semantics: resource settings reject nested function values" {
     try expectDiagnostic(
         \\fn identity(value: Number) -> Number = value
         \\page main
-        \\  let item = body_obj!("A")
-        \\  item.link_id = identity
+        \\  pagectx().background_fill = identity
         \\end
-    , "bytes:", "InvalidProperty");
+    , "case.ss:bytes:", "InvalidProperty");
+
     try expectDiagnostic(
         \\type Action { callback: Number -> Number }
         \\type Wrapper { action: Action }
         \\fn identity(value: Number) -> Number = value
         \\page main
-        \\  let item = body_obj!("A")
-        \\  item.link_id = Wrapper { action = Action { callback = identity } }
+        \\  pagectx().background_fill = Wrapper { action = Action { callback = identity } }
         \\end
-    , "bytes:", "InvalidProperty");
-    try expectDiagnostic(
-        \\type Action { callback: Number -> Number }
-        \\fn identity(value: Number) -> Number = value
-        \\page main
-        \\  let item = body_obj!("A")
-        \\  set_prop(item, "link_id", Action { callback = identity })
-        \\end
-    , "bytes:", "InvalidProperty");
+    , "case.ss:bytes:", "InvalidProperty");
 }
 
 test "compiler semantics: immutable inputs may contain functions used by displays" {
@@ -6432,10 +6236,10 @@ test "compiler semantics: optional function members retain termination checking"
 
 test "compiler semantics: optional member results cannot be assignment targets" {
     try expectDiagnostic(
-        \\type Holder { item: Object? = none }
+        \\type Holder { item: Page? = none }
         \\page main
-        \\  let holder = Holder { item = text!("A") }
-        \\  (holder?.item).link_id = "X"
+        \\  let holder = Holder { item = pagectx() }
+        \\  (holder?.item).layout_h_center_offset = 42
         \\end
     , "bytes:", "InvalidProperty");
 }
@@ -6725,17 +6529,18 @@ test "compiler semantics: first and callbacks retain explicit page element types
         \\  text!(ids(pages(docctx())))
         \\end
     , "1:1");
+
     try expectDiagnostic(
+        \\fn read(item: Placed<Text>) -> String = item.value.content
         \\page main
-        \\  let query = "document" ++ "_pages"
-        \\  text!(content(first(select(docctx(), query))))
+        \\  text!(read(first(pages(docctx()))))
         \\end
-    , "case.ss:bytes:", "TypeMismatch: expected Object, got Page");
+    , "case.ss:bytes:", "TypeMismatch: expected Placed<Text>, got Page");
 }
 
 test "compiler semantics: first requires a known selection element type" {
     try expectDiagnostic(
-        \\fn invalid(items: Selection) -> Object
+        \\fn invalid(items: Selection) -> Placement
         \\  return first(items)
         \\end
         \\page main
@@ -6745,10 +6550,10 @@ test "compiler semantics: first requires a known selection element type" {
 
 test "compiler semantics: selection callbacks require known element types" {
     const operations = [_][]const u8{
-        "foreach(items, (item: Object) |-> content(item))",
-        "foreach_enumerate(items, (item: Object, index: Number) |-> content(item))",
-        "join(items, \",\", (item: Object) |-> content(item))",
-        "fold(items, \"\", (acc: String, item: Object) |-> acc ++ content(item))",
+        "foreach(items, (item: Placement) |-> \"item\")",
+        "foreach_enumerate(items, (item: Placement, index: Number) |-> \"item\")",
+        "join(items, \",\", (item: Placement) |-> \"item\")",
+        "fold(items, \"\", (acc: String, item: Placement) |-> acc ++ \"item\")",
     };
     for (operations) |operation| {
         const source = try std.fmt.allocPrint(testing.allocator, "fn invalid(items: Selection) -> Void\n  {s}\nend\npage main\nend\n", .{operation});
@@ -6757,16 +6562,17 @@ test "compiler semantics: selection callbacks require known element types" {
     }
 }
 
-test "compiler semantics: erased selections cannot be returned as object selections or grouped" {
+test "compiler semantics: erased selections cannot be returned as typed selections or grouped" {
     try expectDiagnostic(
-        \\fn invalid(items: Selection) -> Selection<Object>
+        \\fn invalid(items: Selection) -> Selection<Placed<Text>>
         \\  return items
         \\end
         \\page main
         \\end
     , "case.ss:bytes:", "TypeMismatch");
+
     try expectDiagnostic(
-        \\fn invalid(items: Selection) -> Object
+        \\fn invalid(items: Selection) -> Group<Text>
         \\  return group(items)
         \\end
         \\page main
@@ -6774,17 +6580,10 @@ test "compiler semantics: erased selections cannot be returned as object selecti
     , "case.ss:bytes:", "TypeMismatch");
 }
 
-test "compiler semantics: erased selections cannot receive object properties" {
+test "compiler semantics: erased selections cannot be property assignment targets" {
     try expectDiagnostic(
         \\fn invalid(items: Selection) -> Void
-        \\  items.link_id = "invalid"
-        \\end
-        \\page main
-        \\end
-    , "case.ss:bytes:", "InvalidProperty");
-    try expectDiagnostic(
-        \\fn invalid(items: Selection) -> Void
-        \\  set_prop(items, "link_id", "invalid")
+        \\  items.layout_h_center_offset = 42
         \\end
         \\page main
         \\end
@@ -6849,155 +6648,145 @@ test "compiler semantics: ordinary values reject overlapping writes in both orde
     }
 }
 
-test "compiler semantics: aliased nested property definitions conflict" {
+test "compiler semantics: nested aliases retain duplicate resource definitions" {
     try expectLoweringErrorDiagnostic(
-        \\import std:themes/default as *
+        \\type Inner { target: Page }
+        \\type Outer { inner: Inner }
         \\page main
-        \\  let a = txt_obj!("A", "body")
-        \\  let b = a
-        \\  a.layout.x = 100
-        \\  b.layout.x = 200
+        \\  let target = pagectx()
+        \\  let alias = Outer { inner = Inner { target = target } }
+        \\  target.layout_h_center_offset = 100
+        \\  alias.inner.target.layout_h_center_offset = 200
         \\end
     , "DuplicatePropertyDefinition");
 }
 
-test "compiler semantics: nested reads wait for whole property definitions" {
-    try expectDumpContains(
-        \\import std:themes/default as *
+test "compiler semantics: computed value fields wait for resource definitions" {
+    try expectObjectContent(
+        \\type Settings { offset: Number }
+        \\fn settings(target: Page) -> Settings = Settings { offset = target.layout_h_center_offset }
         \\page main
-        \\  let a = txt_obj!("A", "body")
-        \\  text!("x=" ++ str(a.layout?.x ?? 0))
-        \\  a.layout = LayoutStyle { x = 300 }
+        \\  let target = pagectx()
+        \\  let value = settings(target)
+        \\  text!("x=" ++ str(value.offset))
+        \\  target.layout_h_center_offset = 300
         \\end
-    , &.{"x=300"});
+    , "x=300");
 }
 
-test "compiler semantics: whole property reads wait for sibling definitions" {
-    try expectDumpContains(
-        \\import std:themes/default as *
-        \\page main
-        \\  let a = txt_obj!("A", "body")
-        \\  let style = a.layout ?? LayoutStyle {}
-        \\  text!("x=" ++ str(style.x) ++ ",y=" ++ str(style.right_inset))
-        \\  a.layout.x = 300
-        \\  a.layout.right_inset = 200
-        \\end
-    , &.{"x=300,y=200"});
-}
-
-test "compiler semantics: property paths preserve objects carried through returned records" {
-    try expectDumpContains(
-        \\import std:themes/default as *
-        \\type Box { item: Object }
-        \\fn wrap(item: Object) -> Box
-        \\  return Box { item = item }
+test "compiler semantics: computed aggregates wait for every resource field they read" {
+    try expectObjectContent(
+        \\type Settings { horizontal: Number vertical: Number }
+        \\fn settings(target: Page) -> Settings
+        \\  return Settings { horizontal = target.layout_h_center_offset vertical = target.layout_v_center_offset }
         \\end
         \\page main
-        \\  let a = txt_obj!("A", "body")
-        \\  let box = wrap(a)
-        \\  text!("x=" ++ str(box.item.layout?.x ?? 0))
-        \\  box.item.layout.x = 300
+        \\  let target = pagectx()
+        \\  let value = settings(target)
+        \\  text!("x=" ++ str(value.horizontal) ++ ",y=" ++ str(value.vertical))
+        \\  target.layout_h_center_offset = 300
+        \\  target.layout_v_center_offset = 200
         \\end
-    , &.{"x=300"});
+    , "x=300,y=200");
 }
 
-test "compiler semantics: property paths detect record aliases of an object" {
+test "compiler semantics: property paths preserve resources carried through returned values" {
+    try expectObjectContent(
+        \\type Box { item: Page }
+        \\fn wrap(item: Page) -> Box = Box { item = item }
+        \\page main
+        \\  let target = pagectx()
+        \\  let box = wrap(target)
+        \\  text!("x=" ++ str(box.item.layout_h_center_offset))
+        \\  box.item.layout_h_center_offset = 300
+        \\end
+    , "x=300");
+}
+
+test "compiler semantics: property paths detect value aliases of a resource" {
     try expectLoweringErrorDiagnostic(
-        \\import std:themes/default as *
-        \\type Box { item: Object }
+        \\type Box { item: Page }
         \\page main
-        \\  let a = txt_obj!("A", "body")
-        \\  let box = Box { item = a }
-        \\  a.layout.x = 100
-        \\  box.item.layout.x = 200
+        \\  let target = pagectx()
+        \\  let box = Box { item = target }
+        \\  target.layout_h_center_offset = 100
+        \\  box.item.layout_h_center_offset = 200
         \\end
     , "DuplicatePropertyDefinition");
 }
 
-test "compiler semantics: fresh local property definitions satisfy subsequent reads" {
-    try expectDumpContains(
-        \\import std:themes/default as *
+test "compiler semantics: fresh value construction satisfies subsequent local reads" {
+    try expectObjectContent(
         \\fn make_label() -> String
-        \\  let item = txt_obj("A", "body")
-        \\  item.layout.x = 123
-        \\  let style = item.layout ?? LayoutStyle {}
-        \\  return "x=" ++ str(style.x)
+        \\  let style = TextStyle { size = 123 }
+        \\  return "x=" ++ str(style.size)
         \\end
         \\page main
         \\  text!(make_label())
         \\end
-    , &.{"x=123"});
+    , "x=123");
 }
 
-test "compiler semantics: fresh local reads cannot precede their definitions" {
-    try expectLoweringErrorDiagnostic(
-        \\import std:themes/default as *
+test "compiler semantics: fresh value updates preserve prior local reads" {
+    try expectObjectContent(
         \\fn make_label() -> String
-        \\  let item = txt_obj("A", "body")
-        \\  let x = item.layout?.x ?? 0
-        \\  item.layout.x = 123
-        \\  return "x=" ++ str(x)
+        \\  let original = TextStyle { size = 0 }
+        \\  let before = original.size
+        \\  let changed = original with { size = 123 }
+        \\  return str(before) ++ ":" ++ str(changed.size)
         \\end
         \\page main
         \\  text!(make_label())
         \\end
-    , "ExecutionDependencyCycle");
+    , "0:123");
 }
 
 test "compiler semantics: property definition cannot read its own final value" {
     try expectLoweringErrorDiagnostic(
-        \\import std:themes/default as *
         \\page main
-        \\  let item = txt_obj!("A", "body")
-        \\  item.layout.x = (item.layout?.x ?? 0) + 1
+        \\  let target = pagectx()
+        \\  target.layout_h_center_offset = target.layout_h_center_offset + 1
         \\end
     , "ExecutionDependencyCycle");
 }
 
 test "compiler semantics: optional nested reads retain sibling property precision" {
-    try expectDumpContains(
-        \\import std:themes/default as *
+    try expectObjectContent(
+        \\type Wrapper { target: Page? = none }
         \\page main
-        \\  let item = txt_obj!("A", "body")
-        \\  item.layout.x = (item.layout?.right_inset ?? 0) + 1
-        \\  item.layout.right_inset = 123
-        \\  text!(str(item.layout?.x ?? 0))
+        \\  let target = pagectx()
+        \\  let wrapper = Wrapper { target = target }
+        \\  target.layout_h_center_offset = (wrapper.target?.layout_v_center_offset ?? 0) + 1
+        \\  target.layout_v_center_offset = 123
+        \\  text!(str(target.layout_h_center_offset))
         \\end
-    , &.{"124"});
+    , "124");
 }
 
-test "compiler semantics: escaping local objects retain unresolved final property reads" {
-    try expectLoweringErrorDiagnostic(
-        \\import std:themes/default as *
-        \\fn make_item() -> Object
-        \\  let item = txt_obj("A", "body")
-        \\  let x = item.layout?.x ?? 0
-        \\  item.link_id = str(x)
-        \\  return item
-        \\end
+test "compiler semantics: returned presentation inputs remain immutable" {
+    try expectDiagnostic(
+        \\type Item { input: Text }
+        \\fn make() -> Item = Item { input = text("A") }
         \\page main
-        \\  let item = make_item()
-        \\  item.layout.x = 123
-        \\  place_on!(pagectx(), item)
+        \\  let result = make()
+        \\  result.input.content = "B"
         \\end
-    , "ExecutionDependencyCycle");
+    , "case.ss:bytes:", "ImmutableValue");
 }
 
-test "compiler semantics: returned initialized objects keep internal reads satisfied" {
-    try expectDumpContains(
-        \\import std:themes/default as *
-        \\fn make_item() -> Object
-        \\  let item = txt_obj("A", "body")
-        \\  item.layout.x = 123
-        \\  item.link_id = str(item.layout?.x ?? 0)
-        \\  return item
+test "compiler semantics: returned initialized values retain fields derived from local inputs" {
+    try expectObjectContent(
+        \\type Item { input: Text label: String }
+        \\fn make() -> Item
+        \\  let input = text("A", default_text_style with { text.size = 123 })
+        \\  return Item { input = input label = str(input.style.text.size) }
         \\end
         \\page main
-        \\  let item = make_item()
-        \\  text!(item.link_id ?? "missing")
-        \\  place_on!(pagectx(), item)
+        \\  let result = make()
+        \\  text!(result.label)
+        \\  place!(result.input)
         \\end
-    , &.{"123"});
+    , "123");
 }
 
 test "compiler semantics: absent input fields use ordinary optional fallbacks" {
@@ -7063,31 +6852,29 @@ test "compiler semantics: child page reads follow typed group display expansion"
     , "1");
 }
 
-test "compiler semantics: unplaced objects do not belong to document queries" {
-    try expectDumpContains(
-        \\import std:themes/default as *
+test "compiler semantics: unplaced values do not belong to document queries" {
+    try expectObjectContent(
         \\page main
-        \\  let a = txt_obj("Detached", "body")
-        \\  text!("members=" ++ str(selection_count(doc_objs(docctx(), "body"))))
+        \\  let unused = heading("Detached")
+        \\  text!("members=" ++ str(selection_count(select<Heading>(docctx()))))
         \\end
-    , &.{"members=0"});
+    , "members=0");
 }
 
-test "compiler semantics: placement facts follow returned groups and record aliases" {
-    try expectDumpContains(
-        \\import std:themes/default as *
-        \\type Parts { root: Object }
-        \\fn bundle(a: Object, b: Object) -> Parts
+test "compiler semantics: placement facts follow returned groups and ordinary value aliases" {
+    try expectObjectContent(
+        \\type Parts { root: Group<Heading, Group<Heading>> }
+        \\fn bundle(a: Heading, b: Heading) -> Parts
         \\  return Parts { root = group(a, group(b)) }
         \\end
         \\page main
-        \\  let a = txt_obj("A", "body")
-        \\  let b = txt_obj("B", "body")
+        \\  let a = heading("A")
+        \\  let b = heading("B")
         \\  let parts = bundle(a, b)
-        \\  text!("members=" ++ str(selection_count(doc_objs(docctx(), "body"))))
-        \\  place_on!(pagectx(), parts.root)
+        \\  text!("members=" ++ str(selection_count(select<Heading>(docctx()))))
+        \\  place!(parts.root)
         \\end
-    , &.{"members=2"});
+    , "members=2");
 }
 
 test "compiler semantics: returned placements retain their page ownership" {
@@ -7112,14 +6899,13 @@ test "compiler semantics: returned placements retain their page ownership" {
     , "case.ss:bytes:", "UnknownFunction");
 }
 
-test "compiler semantics: repeated placement is rejected" {
-    try expectLoweringErrorDiagnostic(
-        \\import std:themes/default as *
+test "compiler semantics: placed references cannot be placed again" {
+    try expectDiagnostic(
         \\page main
-        \\  let a = txt_obj!("A", "body")
-        \\  place_on!(pagectx(), a)
+        \\  let item = text!("A")
+        \\  place_on!(pagectx(), item)
         \\end
-    , "DuplicatePlacement");
+    , "case.ss:bytes:", "InvalidPlacementInput");
 }
 
 test "compiler semantics: cached placement summaries retain their caller page" {
@@ -7150,15 +6936,15 @@ test "compiler semantics: queries retain placement order across dependency sched
 }
 
 test "compiler semantics: explicit group argument order determines descendant query order" {
-    try expectDumpContains(
+    try expectObjectContent(
         \\page main
-        \\  let a = body_obj("A")
-        \\  let b = body_obj("B")
-        \\  let c = body_obj("C")
-        \\  place_on!(pagectx(), group(c, group(b, a)))
-        \\  text!("order=" ++ join(objs_here("body"), ",", (o: Object) |-> content(o)))
+        \\  let a = heading("A")
+        \\  let b = heading("B")
+        \\  let c = heading("C")
+        \\  place!(group(c, group(b, a)))
+        \\  text!("order=" ++ join(select<Heading>(pagectx()), ",", (item: Placed<Heading>) |-> item.value.title))
         \\end
-    , &.{"order=C,B,A"});
+    , "order=C,B,A");
 }
 
 test "compiler semantics: dynamic pages retain authored positions among static pages" {
@@ -7187,8 +6973,8 @@ test "compiler semantics: optional fallback preserves an optional result" {
         \\  return primary ?? fallback
         \\end
         \\page main
-        \\  let body = new("Optional colors", "body", "text")
-        \\  body.text.color = choose(none, c"#123456") ?? c"#000000"
+        \\  let style = default_text_style with { text.color = choose(none, c"#123456") ?? c"#000000" }
+        \\  text!("Optional colors", style)
         \\end
     );
     try expectDiagnostic(
@@ -7272,7 +7058,7 @@ test "compiler semantics: explicit type arguments cannot be ignored" {
         \\end
     , "case.ss:bytes:", "InvalidTypeArity");
     try expectDiagnostic(
-        \\fn read(value: Selection<Page, Object>) -> Void
+        \\fn read(value: Selection<Page, Placement>) -> Void
         \\end
         \\page main
         \\end
@@ -7383,14 +7169,14 @@ test "compiler semantics: generic calls reject mismatches and polymorphic values
 }
 
 test "compiler semantics: generic concrete bodies preserve deferred property reads" {
-    try expectDumpContains(
-        \\fn read<T>(value: T) -> String = value.link_id ?? "missing"
+    try expectObjectContent(
+        \\fn read<T>(value: T) -> String = str(value.layout_h_center_offset)
         \\page main
-        \\  let input = body_obj!("Input")
-        \\  let output = body_obj!(read(input))
-        \\  input.link_id = "Forward"
+        \\  let input = pagectx()
+        \\  text!(read(input))
+        \\  input.layout_h_center_offset = 42
         \\end
-    , &.{"\"content\":\"Forward\""});
+    , "42");
 }
 
 test "compiler semantics: changing type arguments cannot conceal recursion" {
@@ -7487,17 +7273,17 @@ test "compiler semantics: concrete type defaults own distinct generic callbacks"
 }
 
 test "compiler semantics: generic type defaults preserve deferred callback reads" {
-    try expectDumpContains(
+    try expectObjectContent(
         \\type Reader<T> {
-        \\  read: (T) -> String = (value: T) |-> value.link_id ?? "Missing"
+        \\  read: (T) -> String = (value: T) |-> str(value.layout_h_center_offset)
         \\}
         \\page main
-        \\  let reader = Reader<Body> {}
-        \\  let input = body_obj!("Input")
-        \\  body_obj!(reader.read(input))
-        \\  input.link_id = "Deferred generic default"
+        \\  let reader = Reader<Page> {}
+        \\  let input = pagectx()
+        \\  text!(reader.read(input))
+        \\  input.layout_h_center_offset = 42
         \\end
-    , &.{"\"content\":\"Deferred generic default\""});
+    , "42");
 }
 
 test "compiler semantics: applied types reject incompatible fields and updates" {
@@ -7571,7 +7357,7 @@ test "compiler semantics: generic type construction retains imported nominal ide
 
 test "compiler semantics: concrete type defaults preserve placement effects" {
     try expectDiagnostic(
-        \\type Component<T> { child: Object = body_obj!("Implicit placement") }
+        \\type Component<T> { child: Placed<Text> = text!("Implicit placement") }
         \\fn make() -> Component<Number> = Component<Number> {}
         \\page main
         \\  let invalid = make()
