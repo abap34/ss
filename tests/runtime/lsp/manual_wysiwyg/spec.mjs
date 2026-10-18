@@ -626,7 +626,7 @@ end
     const initialModuleSource = `import std:themes/default as *
 
 fn watched_item!() -> Placed<Text>
-  return text!("Watched module", current_theme().body with {
+  return text!("Watched module", default_theme().body with {
     text.color = c"#ff0000"
   })
 end

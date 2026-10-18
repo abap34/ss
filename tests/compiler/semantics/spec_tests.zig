@@ -665,7 +665,7 @@ test "compiler semantics: theme text size override keeps automatic line height" 
         \\
         \\page ok
         \\  let title = heading!("large text
-        \\next line", 1, current_theme().h1 with {
+        \\next line", 1, default_theme().h1 with {
         \\    text.size = 64
         \\    text.line_height = none
         \\  })
@@ -1854,12 +1854,10 @@ test "compiler semantics: code theme helpers set code and markdown colors" {
         \\import std:themes/default as *
         \\import std:code as palettes
         \\
-        \\document
-        \\  set_theme(default_theme() with { code.highlight = palettes::code_theme_one_dark() })
-        \\end
+        \\const theme: Theme = default_theme() with { code.highlight = palettes::code_theme_one_dark() }
         \\
         \\page ok
-        \\  code!("fn demo() -> Void\nend", "ss")
+        \\  code!("fn demo() -> Void\nend", "ss", theme.code)
         \\  text!("```ss\nfn demo() -> Void\nend\n```")
         \\end
         \\
@@ -1871,7 +1869,7 @@ test "compiler semantics: code theme helpers set code and markdown colors" {
         \\
         \\page ok
         \\  let colors = palettes::code_theme_one_dark()
-        \\  let snippet = code!("fn demo() -> Void\nend", "ss", current_theme().code with { highlight = colors })
+        \\  let snippet = code!("fn demo() -> Void\nend", "ss", default_theme().code with { highlight = colors })
         \\  let body = text!("```ss\nfn demo() -> Void\nend\n```", default_text_style with { text.markdown.code.colors = colors.code })
         \\end
         \\
@@ -1888,7 +1886,7 @@ test "compiler semantics: default theme applies code theme to code and markdown"
         \\
         \\page ok
         \\  code!("const value = demo(1)", "javascript")
-        \\  text!("```javascript\nconst value = demo(1)\n```", current_theme().body with { text.markdown.code.colors = current_theme().code.highlight.code })
+        \\  text!("```javascript\nconst value = demo(1)\n```", default_theme().body with { text.markdown.code.colors = default_theme().code.highlight.code })
         \\end
         \\
     ;
@@ -2154,20 +2152,18 @@ test "compiler semantics: record update rejects invalid paths and values" {
     , "case.ss:bytes:", "OverlappingValueUpdate: update path 'font' overlaps 'font.family'");
 }
 
-test "compiler semantics: theme overlay customizes current and local themes" {
+test "compiler semantics: theme values customize imported defaults and local styles" {
     const theme_source =
         \\import std:themes/default as *
         \\import std:text as base
         \\
-        \\document
-        \\  set_theme(default_theme() with {
+        \\const presentation: Theme = default_theme() with {
         \\    body.text.size = 22
         \\    h1.text.color = c"#123456"
-        \\  })
-        \\end
+        \\  }
         \\
-        \\fn/! h1(text_value: String, theme: Theme = current_theme()) -> Object
-        \\  return base::h1(text_value, theme.h1 with {
+        \\fn/! h1(text_value: String, theme: Theme = presentation) -> Text
+        \\  return base::text(text_value, theme.h1 with {
         \\    text.size = 44
         \\  })
         \\end
@@ -2178,7 +2174,7 @@ test "compiler semantics: theme overlay customizes current and local themes" {
         \\import "./theme" as *
         \\
         \\page ok
-        \\  text!("body", current_theme().body)
+        \\  text!("body", presentation.body)
         \\end
         \\
     , theme_source, "text", &.{"size"}, "22");
@@ -2196,7 +2192,7 @@ test "compiler semantics: theme overlay customizes current and local themes" {
         \\import "./theme" as *
         \\
         \\page ok
-        \\  let local = current_theme() with {
+        \\  let local = presentation with {
         \\    body.text.size = 18
         \\  }
         \\  text!("small", local.body)
@@ -3053,7 +3049,7 @@ test "compiler semantics: object field defaults are statically typed" {
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  text!("body", current_theme().body)
+        \\  text!("body", default_theme().body)
         \\end
         \\
     , .{
@@ -8775,4 +8771,17 @@ test "compiler semantics: public display type names agree with constructors and 
         defer testing.allocator.free(source);
         try buildSource(source);
     }
+}
+
+test "compiler semantics: mutable document theme APIs are unavailable" {
+    try expectDiagnostic(
+        \\page example
+        \\  set_theme(default_theme())
+        \\end
+    , "bytes:", "UnknownFunction");
+    try expectDiagnostic(
+        \\page example
+        \\  let theme = current_theme()
+        \\end
+    , "bytes:", "UnknownFunction");
 }

@@ -1,7 +1,7 @@
 import std:themes/default as *
 
 page bold_sans
-let heading = text!("[BOLD]:", current_theme().body with {
+let heading = text!("[BOLD]:", default_theme().body with {
   text.size = 104
   text.line_height = 120
   text.font.family = "sans-serif"
@@ -10,7 +10,7 @@ let heading = text!("[BOLD]:", current_theme().body with {
 ~ heading.left == page.left + 64
 ~ heading.top == page.top - 48
 
-let mixed = text!("ALPHA [BETA]: 2026", current_theme().body with {
+let mixed = text!("ALPHA [BETA]: 2026", default_theme().body with {
   text.size = 76
   text.line_height = 92
   text.font.family = "sans-serif"
@@ -19,7 +19,7 @@ let mixed = text!("ALPHA [BETA]: 2026", current_theme().body with {
 ~ mixed.left == heading.left
 ~ mixed.top == heading.bottom - 24
 
-let punctuation = text!("[] : :: ; ! ? ( ) { }", current_theme().body with {
+let punctuation = text!("[] : :: ; ! ? ( ) { }", default_theme().body with {
   text.size = 84
   text.line_height = 100
   text.font.family = "sans-serif"
@@ -28,7 +28,7 @@ let punctuation = text!("[] : :: ; ! ? ( ) { }", current_theme().body with {
 ~ punctuation.left == heading.left
 ~ punctuation.top == mixed.bottom - 24
 
-let ascenders = text!("MWgjpqy [0:8]", current_theme().body with {
+let ascenders = text!("MWgjpqy [0:8]", default_theme().body with {
   text.size = 92
   text.line_height = 108
   text.font.family = "sans-serif"
@@ -39,7 +39,7 @@ let ascenders = text!("MWgjpqy [0:8]", current_theme().body with {
 end
 
 page bold_monospace
-let brackets = text!("[CODE]:", current_theme().body with {
+let brackets = text!("[CODE]:", default_theme().body with {
   text.size = 104
   text.line_height = 120
   text.font.family = "monospace"
@@ -48,7 +48,7 @@ let brackets = text!("[CODE]:", current_theme().body with {
 ~ brackets.left == page.left + 64
 ~ brackets.top == page.top - 48
 
-let symbols = text!("AZaz09 [] : ; ! ?", current_theme().body with {
+let symbols = text!("AZaz09 [] : ; ! ?", default_theme().body with {
   text.size = 76
   text.line_height = 92
   text.font.family = "monospace"
@@ -57,7 +57,7 @@ let symbols = text!("AZaz09 [] : ; ! ?", current_theme().body with {
 ~ symbols.left == brackets.left
 ~ symbols.top == brackets.bottom - 24
 
-let pairs = text!("[A:B] (C;D) {E!F} @#%&*", current_theme().body with {
+let pairs = text!("[A:B] (C;D) {E!F} @#%&*", default_theme().body with {
   text.size = 72
   text.line_height = 88
   text.font.family = "monospace"
@@ -66,7 +66,7 @@ let pairs = text!("[A:B] (C;D) {E!F} @#%&*", current_theme().body with {
 ~ pairs.left == brackets.left
 ~ pairs.top == symbols.bottom - 24
 
-let metrics = text!("Hgjpqy_-=+ 00:11", current_theme().body with {
+let metrics = text!("Hgjpqy_-=+ 00:11", default_theme().body with {
   text.size = 72
   text.line_height = 88
   text.font.family = "monospace"
@@ -77,7 +77,7 @@ let metrics = text!("Hgjpqy_-=+ 00:11", current_theme().body with {
 end
 
 page markdown_bold
-let enclosed = text!("**[BOLD]:**", current_theme().body with {
+let enclosed = text!("**[BOLD]:**", default_theme().body with {
   text.size = 96
   text.line_height = 112
   text.font.family = "sans-serif"
@@ -85,7 +85,7 @@ let enclosed = text!("**[BOLD]:**", current_theme().body with {
 ~ enclosed.left == page.left + 64
 ~ enclosed.top == page.top - 48
 
-let outer = text!("[**BOLD**]:", current_theme().body with {
+let outer = text!("[**BOLD**]:", default_theme().body with {
   text.size = 96
   text.line_height = 112
   text.font.family = "sans-serif"
@@ -93,7 +93,7 @@ let outer = text!("[**BOLD**]:", current_theme().body with {
 ~ outer.left == enclosed.left
 ~ outer.top == enclosed.bottom - 20
 
-let mixed = text!("BEFORE [**BOLD**]: AFTER", current_theme().body with {
+let mixed = text!("BEFORE [**BOLD**]: AFTER", default_theme().body with {
   text.size = 64
   text.line_height = 80
   text.font.family = "sans-serif"
@@ -101,7 +101,7 @@ let mixed = text!("BEFORE [**BOLD**]: AFTER", current_theme().body with {
 ~ mixed.left == enclosed.left
 ~ mixed.top == outer.bottom - 20
 
-let punctuation = text!("**[] : :: ; ! ? ( ) { }**", current_theme().body with {
+let punctuation = text!("**[] : :: ; ! ? ( ) { }**", default_theme().body with {
   text.size = 72
   text.line_height = 88
   text.font.family = "sans-serif"
@@ -111,7 +111,7 @@ let punctuation = text!("**[] : :: ; ! ? ( ) { }**", current_theme().body with {
 end
 
 page mixed_script_bold
-let labels = text!("**[目的] [手法] [結果]**", current_theme().body with {
+let labels = text!("**[目的] [手法] [結果]**", default_theme().body with {
   text.size = 88
   text.line_height = 104
   text.font.family = "sans-serif"
@@ -119,7 +119,7 @@ let labels = text!("**[目的] [手法] [結果]**", current_theme().body with {
 ~ labels.left == page.left + 64
 ~ labels.top == page.top - 48
 
-let colon = text!("**実践的な改善手法のひとつ: 解析を複数に分割して段階的に行う**", current_theme().body with {
+let colon = text!("**実践的な改善手法のひとつ: 解析を複数に分割して段階的に行う**", default_theme().body with {
   text.size = 48
   text.line_height = 64
   text.font.family = "sans-serif"
@@ -127,7 +127,7 @@ let colon = text!("**実践的な改善手法のひとつ: 解析を複数に分
 ~ colon.left == labels.left
 ~ colon.top == labels.bottom - 32
 
-let brackets = text!("**[大括弧] (丸括弧) {波括弧} <山括弧>**", current_theme().body with {
+let brackets = text!("**[大括弧] (丸括弧) {波括弧} <山括弧>**", default_theme().body with {
   text.size = 64
   text.line_height = 80
   text.font.family = "sans-serif"
@@ -137,7 +137,7 @@ let brackets = text!("**[大括弧] (丸括弧) {波括弧} <山括弧>**", curr
 end
 
 page decorations
-let underline = text!("_[UNDERLINE]: MWgjpqy 0:8_", current_theme().body with {
+let underline = text!("_[UNDERLINE]: MWgjpqy 0:8_", default_theme().body with {
   text.size = 76
   text.line_height = 92
   text.font.family = "sans-serif"
@@ -145,7 +145,7 @@ let underline = text!("_[UNDERLINE]: MWgjpqy 0:8_", current_theme().body with {
 ~ underline.left == page.left + 64
 ~ underline.top == page.top - 64
 
-let strike = text!("~~[STRIKE]: MWgjpqy 0:8~~", current_theme().body with {
+let strike = text!("~~[STRIKE]: MWgjpqy 0:8~~", default_theme().body with {
   text.size = 76
   text.line_height = 92
   text.font.family = "sans-serif"
@@ -153,7 +153,7 @@ let strike = text!("~~[STRIKE]: MWgjpqy 0:8~~", current_theme().body with {
 ~ strike.left == underline.left
 ~ strike.top == underline.bottom - 48
 
-let link = text!("[LINK: MWgjpqy 0:8](https://example.com/metrics)", current_theme().body with {
+let link = text!("[LINK: MWgjpqy 0:8](https://example.com/metrics)", default_theme().body with {
   text.size = 76
   text.line_height = 92
   text.font.family = "sans-serif"

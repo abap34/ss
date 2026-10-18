@@ -500,7 +500,7 @@ test "native code display: source, language and styles remain immutable across p
     try testing.expectEqualSlices(core.NodeId, &ids, selected.ids.items);
 }
 
-test "code constructors: values allocate only at placement and defaults are independent of mutable themes" {
+test "code constructors: values allocate only at placement and defaults are independent of explicit theme values" {
     var state = try documentWithModules(
         \\import std:code as c
         \\fn duplicate<T>(value: T) -> Group<T, T> = value || value
@@ -508,10 +508,10 @@ test "code constructors: values allocate only at placement and defaults are inde
         \\  let unused: c::Code = c::code("Unused")
         \\end
         \\page used
-        \\  set_theme(default_theme() with { code.text.size = 99 })
+        \\  let custom = default_theme() with { code.text.size = 99 }
         \\  let value: c::Code = c::code("return 1", "python")
         \\  let direct: Placed<c::Code> = c::code!("return 1", "python")
-        \\  let changed = place!(value with { style.text.size = 22 })
+        \\  let changed = place!(value with { style = custom.code })
         \\  let copies = place!(duplicate(value))
         \\  let count = selection_count(select<c::Code>(pagectx()))
         \\  ~ direct.width == count * 40
@@ -527,7 +527,7 @@ test "code constructors: values allocate only at placement and defaults are inde
     const children = state.childrenOf(roots[2]).?;
     try testing.expectEqual(@as(usize, 2), children.len);
     const ids = [_]core.NodeId{ roots[0], roots[1], children[0], children[1] };
-    for (ids, [_]f32{ 16, 22, 16, 16 }) |id, size| {
+    for (ids, [_]f32{ 16, 99, 16, 16 }) |id, size| {
         const node = state.getNode(id).?;
         try testing.expectEqual(core.native_display.Kind.code, node.placement.?.display.native);
         try testing.expectEqualStrings("return 1", core.nodeContent(node).?);

@@ -983,13 +983,13 @@ end
       `import std:text as default
 
 fn/! success_text(content: String) -> Text
-  return default::text(content, current_theme().body with {
+  return default::text(content, default_theme().body with {
     text.cjk_bold_passes = 3
   })
 end
 
 fn/! danger_text(content: String) -> Text
-  return default::text(content, current_theme().body with {
+  return default::text(content, default_theme().body with {
     text.cjk_bold_passes = 3
   })
 end

@@ -73,7 +73,7 @@ async function testProjectCompletionLifecycle() {
 import std:text as *
 
 fn module_label!(text_value: String, color_name: Color = c"0.07,0.08,0.10") -> Placed<Text>
-  return text!(text_value, current_theme().body with {
+  return text!(text_value, default_theme().body with {
     text.size = 24
     text.color = color_name
   })
@@ -431,7 +431,7 @@ fn themed(theme_value: Theme) -> Text
 end
 
 page title
-  place!(themed(current_theme()))
+  place!(themed(default_theme()))
 end
 `;
     await writeFile(slide, localSource, "utf8");

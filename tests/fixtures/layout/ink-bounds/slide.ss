@@ -1,7 +1,7 @@
 import std:themes/default as *
 
 page ink_bounds
-let left = text!("j", current_theme().body with {
+let left = text!("j", default_theme().body with {
   text.size = 24
   text.line_height = 36
   text.font.family = "DejaVu Serif"
@@ -10,7 +10,7 @@ let left = text!("j", current_theme().body with {
 ~ left.left == page.left
 ~ left.top == page.top - 80
 
-let right = text!("f", current_theme().body with {
+let right = text!("f", default_theme().body with {
   text.size = 24
   text.line_height = 36
   text.font.family = "DejaVu Serif"

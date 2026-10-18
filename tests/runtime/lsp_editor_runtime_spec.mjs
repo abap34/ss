@@ -1128,7 +1128,7 @@ type Badge = object {
 }
 
 page feature
-let heading = text!("${title}", current_theme().body with {
+let heading = text!("${title}", default_theme().body with {
   text.color = c"${color}"
 })
 end
