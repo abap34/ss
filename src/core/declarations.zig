@@ -2,31 +2,6 @@ const std = @import("std");
 const ast = @import("ast");
 const model = @import("model");
 
-pub const ClassDescriptor = struct {
-    name: []const u8,
-    base: ?model.NominalId,
-    module_id: u32,
-    span: ast.Span = .{ .start = 0, .end = 0 },
-};
-
-pub const RoleDescriptor = struct {
-    name: []const u8,
-    class_name: []const u8,
-    class_module_id: u32,
-    module_id: u32,
-};
-
-pub const FieldDescriptor = struct {
-    name: []const u8,
-    name_span: ?ast.Span = null,
-    class_name: []const u8,
-    class_module_id: u32,
-    value_type: ast.Type,
-    default_value: ?*const ast.Expr,
-    default_property_value: ?[]const u8,
-    module_id: u32,
-};
-
 pub const RecordDescriptor = struct {
     decl: *const ast.RecordDecl,
     name: []const u8,
@@ -100,17 +75,10 @@ pub const DeclarationIndex = struct {
     allocator: std.mem.Allocator,
     types: std.ArrayList(TypeDescriptor),
     records: std.ArrayList(RecordDescriptor),
-    classes: std.ArrayList(ClassDescriptor),
-    roles: std.ArrayList(RoleDescriptor),
-    fields: std.ArrayList(FieldDescriptor),
     record_fields: std.ArrayList(RecordFieldDescriptor),
     type_by_module: ModuleNameMap,
     record_by_module: ModuleNameMap,
     display_by_type: DisplayMap,
-    class_by_module: ModuleNameMap,
-    role_by_name: std.StringHashMap(usize),
-    field_by_name: std.StringHashMap(?usize),
-    field_by_class: MemberMap,
     record_field_by_record: MemberMap,
 
     pub fn init(allocator: std.mem.Allocator) DeclarationIndex {
@@ -118,17 +86,10 @@ pub const DeclarationIndex = struct {
             .allocator = allocator,
             .types = .empty,
             .records = .empty,
-            .classes = .empty,
-            .roles = .empty,
-            .fields = .empty,
             .record_fields = .empty,
             .type_by_module = ModuleNameMap.init(allocator),
             .record_by_module = ModuleNameMap.init(allocator),
             .display_by_type = DisplayMap.init(allocator),
-            .class_by_module = ModuleNameMap.init(allocator),
-            .role_by_name = std.StringHashMap(usize).init(allocator),
-            .field_by_name = std.StringHashMap(?usize).init(allocator),
-            .field_by_class = MemberMap.init(allocator),
             .record_field_by_record = MemberMap.init(allocator),
         };
     }
@@ -136,17 +97,10 @@ pub const DeclarationIndex = struct {
     pub fn deinit(self: *DeclarationIndex) void {
         self.types.deinit(self.allocator);
         self.records.deinit(self.allocator);
-        self.classes.deinit(self.allocator);
-        self.roles.deinit(self.allocator);
-        self.fields.deinit(self.allocator);
         self.record_fields.deinit(self.allocator);
         self.type_by_module.deinit();
         self.record_by_module.deinit();
         self.display_by_type.deinit();
-        self.class_by_module.deinit();
-        self.role_by_name.deinit();
-        self.field_by_name.deinit();
-        self.field_by_class.deinit();
         self.record_field_by_record.deinit();
     }
 
@@ -159,51 +113,9 @@ pub const DeclarationIndex = struct {
         return self.display_by_type.get(id);
     }
 
-    pub fn classInModule(self: *const DeclarationIndex, module_id: u32, name: []const u8) ?ClassDescriptor {
-        const index = self.class_by_module.get(.{ .module_id = module_id, .name = name }) orelse return null;
-        return self.classes.items[index];
-    }
-
-    pub fn classById(self: *const DeclarationIndex, id: model.NominalId) ?ClassDescriptor {
-        const index = self.class_by_module.get(id) orelse return null;
-        return self.classes.items[index];
-    }
-
-    pub fn roleByName(self: *const DeclarationIndex, name: []const u8) ?RoleDescriptor {
-        const index = self.role_by_name.get(name) orelse return null;
-        return self.roles.items[index];
-    }
-
-    pub fn classBase(self: *const DeclarationIndex, id: model.NominalId) ?model.NominalId {
-        const class = self.classById(id) orelse return null;
-        return class.base;
-    }
-
-    pub fn roleClass(self: *const DeclarationIndex, name: []const u8) ?model.NominalId {
-        const role = self.roleByName(name) orelse return null;
-        return .{ .module_id = role.class_module_id, .name = role.class_name };
-    }
-
     pub fn typeInModule(self: *const DeclarationIndex, module_id: u32, name: []const u8) ?TypeDescriptor {
         const index = self.type_by_module.get(.{ .module_id = module_id, .name = name }) orelse return null;
         return self.types.items[index];
-    }
-
-    pub fn field(self: *const DeclarationIndex, class_id: model.NominalId, field_name: []const u8) ?FieldDescriptor {
-        var current: ?model.NominalId = class_id;
-        var remaining_bases = self.classes.items.len;
-        while (current) |name| {
-            if (self.fieldInClass(name, field_name)) |descriptor| return descriptor;
-            if (remaining_bases == 0) return null;
-            remaining_bases -= 1;
-            current = self.classBase(name);
-        }
-        return null;
-    }
-
-    pub fn fieldByName(self: *const DeclarationIndex, field_name: []const u8) ?FieldDescriptor {
-        const index = (self.field_by_name.get(field_name) orelse return null) orelse return null;
-        return self.fields.items[index];
     }
 
     pub fn recordField(self: *const DeclarationIndex, id: model.NominalId, field_name: []const u8) ?RecordFieldDescriptor {
@@ -214,11 +126,6 @@ pub const DeclarationIndex = struct {
     pub fn settingsField(self: *const DeclarationIndex, field_name: []const u8) ?RecordFieldDescriptor {
         const module_id = self.settings_module_id orelse return null;
         return self.recordField(.{ .module_id = module_id, .name = "PageSettings" }, field_name);
-    }
-
-    fn fieldInClass(self: *const DeclarationIndex, class_id: model.NominalId, field_name: []const u8) ?FieldDescriptor {
-        const index = self.field_by_class.get(.{ .module_id = class_id.module_id, .owner = class_id.name, .member = field_name }) orelse return null;
-        return self.fields.items[index];
     }
 };
 
@@ -232,16 +139,6 @@ pub fn build(allocator: std.mem.Allocator, state: anytype) !DeclarationIndex {
         for (state.modules.order.items) |module_id| {
             const module = state.moduleById(module_id) orelse continue;
             try indexModule(&index, module);
-        }
-    }
-    var fields = index.field_by_class.valueIterator();
-    while (fields.next()) |field_index| {
-        const field = index.fields.items[field_index.*];
-        const entry = try index.field_by_name.getOrPut(field.name);
-        if (!entry.found_existing) {
-            entry.value_ptr.* = field_index.*;
-        } else if (entry.value_ptr.*) |previous| {
-            if (!ast.Type.eql(index.fields.items[previous].value_type, field.value_type)) entry.value_ptr.* = null;
         }
     }
     return index;
@@ -296,39 +193,4 @@ fn appendRecordFields(index: *DeclarationIndex, module_id: u32, record_name: []c
         });
         try index.record_field_by_record.put(.{ .module_id = module_id, .owner = record_name, .member = field.name }, field_index);
     }
-}
-
-fn appendRoles(index: *DeclarationIndex, module_id: u32, class_id: model.NominalId, roles: []const []const u8) !void {
-    for (roles) |role| {
-        const role_index = index.roles.items.len;
-        try index.roles.append(index.allocator, .{
-            .name = role,
-            .class_name = class_id.name,
-            .class_module_id = class_id.module_id,
-            .module_id = module_id,
-        });
-        try index.role_by_name.put(role, role_index);
-    }
-}
-
-fn appendFields(index: *DeclarationIndex, module_id: u32, class_id: model.NominalId, fields: []const ast.FieldDecl) !void {
-    for (fields) |field| {
-        const field_index = index.fields.items.len;
-        try index.fields.append(index.allocator, .{
-            .name = field.name,
-            .name_span = field.name_span,
-            .class_name = class_id.name,
-            .class_module_id = class_id.module_id,
-            .value_type = field.value_type,
-            .default_value = field.default_value,
-            .default_property_value = field.default_property_value,
-            .module_id = module_id,
-        });
-        try index.field_by_class.put(.{ .module_id = class_id.module_id, .owner = class_id.name, .member = field.name }, field_index);
-    }
-}
-
-fn localName(name: []const u8) []const u8 {
-    const separator = std.mem.lastIndexOf(u8, name, "::") orelse return name;
-    return name[separator + 2 ..];
 }

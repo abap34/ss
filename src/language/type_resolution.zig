@@ -11,7 +11,6 @@ pub const TypeName = struct {
 pub const BindingKind = enum {
     builtin,
     record,
-    object,
     enum_type,
 };
 

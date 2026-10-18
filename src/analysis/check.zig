@@ -490,7 +490,6 @@ fn checkTopLevelStatementInner(
 fn recordBindingType(state: *core.DocumentState, module_id: core.SourceModuleId, span: ?ast.Span, info: semantic_types.TypeInfo) !void {
     try state.recordBindingType(module_id, span, .{
         .ty = if (info.hole) |hole| Type.hole(hole.hole_id) else info.ty,
-        .object_class = info.object_class,
     });
 }
 
@@ -546,8 +545,8 @@ fn validateAnchorRef(
             const path = anchorObjectPath(anchor_ref) orelse return;
             const info = try resolveAnchorPathInfo(state, sema, env, origin, path);
             if (info.hole != null) return;
-            if (!isObjectLike(info) and (is_target or info.ty.kind != .page)) {
-                try ensureType(state, allocator, info, Type.object, origin, .UnmatchedArgumentType);
+            if (!isPlacementReference(info) and (is_target or info.ty.kind != .page)) {
+                try ensureType(state, allocator, info, Type.placement, origin, .UnmatchedArgumentType);
             }
         },
     }
@@ -597,9 +596,9 @@ fn resolveAnchorPathInfo(
     return info;
 }
 
-fn isObjectLike(info: semantic_types.TypeInfo) bool {
+fn isPlacementReference(info: semantic_types.TypeInfo) bool {
     return switch (info.ty.kind) {
-        .object, .placed, .placement => true,
+        .placed, .placement => true,
         else => false,
     };
 }

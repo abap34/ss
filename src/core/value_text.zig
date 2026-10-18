@@ -82,7 +82,7 @@ pub fn typedPropertyValue(allocator: std.mem.Allocator, text: []const u8, ty: as
             if (parsed != .path) return error.InvalidValueTag;
             break :blk parsed;
         },
-        .object => blk: {
+        .placed, .placement => blk: {
             var parsed = try parsePropertyValue(allocator, text);
             errdefer deinitParsedPropertyValue(allocator, &parsed);
             if (parsed != .object) return error.InvalidValueTag;

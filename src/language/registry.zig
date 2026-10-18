@@ -54,7 +54,6 @@ pub const PrimitiveCall = enum {
     constrain_on,
     report_error,
     report_warning,
-    require_asset_exists,
     path,
 };
 
@@ -68,7 +67,6 @@ pub fn primitiveAllowsDisplayEvaluation(op: PrimitiveCall) bool {
         .constrain_on,
         .report_error,
         .report_warning,
-        .require_asset_exists,
         .readlines,
         => false,
         .pagectx,
@@ -196,7 +194,7 @@ const primitive_descriptors = [_]PrimitiveDescriptor{
     .{ .op = .pagectx, .name = "pagectx", .min_arity = 0, .max_arity = 0, .arg_names = &.{}, .arg_types = &.{}, .result_type = Type.page, .context = .page, .summary = "Return the current page context" },
     .{ .op = .docctx, .name = "docctx", .min_arity = 0, .max_arity = 0, .arg_names = &.{}, .arg_types = &.{}, .result_type = Type.document, .summary = "Return the current document context" },
     .{ .op = .select, .name = "select", .min_arity = 1, .max_arity = 255, .arg_names = &.{ "scope", "query_name" }, .arg_types = &.{ Type.any, Type.string }, .type_parameter_count = 1, .result_type = Type.selection(.any), .result_policy = .select_query, .summary = "Select typed placements within a document, page, or placement subtree" },
-    .{ .op = .anchor, .name = "anchor", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "object", "anchor_name" }, .arg_types = &.{ Type.object, Type.string }, .result_type = Type.anchor, .summary = "Return an object anchor" },
+    .{ .op = .anchor, .name = "anchor", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "placement", "anchor_name" }, .arg_types = &.{ Type.placement, Type.string }, .result_type = Type.anchor, .summary = "Return a placement anchor" },
     .{ .op = .page_anchor, .name = "page_anchor", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "page", "anchor_name" }, .arg_types = &.{ Type.page, Type.string }, .result_type = Type.anchor, .summary = "Return a page anchor" },
     .{ .op = .num_eq, .name = "num_eq", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.boolean, .summary = "Return whether left is equal to right" },
     .{ .op = .num_ne, .name = "num_ne", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.boolean, .summary = "Return whether left is unequal to right" },
@@ -243,7 +241,6 @@ const primitive_descriptors = [_]PrimitiveDescriptor{
     .{ .op = .constrain_on, .name = "constrain_on!", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "page", "constraints" }, .arg_types = &.{ Type.page, Type.constraints }, .result_type = .{ .kind = .void }, .summary = "Register constraints on a page" },
     .{ .op = .report_error, .name = "report_error", .min_arity = 1, .max_arity = 1, .arg_names = &.{"message"}, .arg_types = &.{Type.string}, .result_type = Type.string, .summary = "Report error diagnostics from user-defined checks" },
     .{ .op = .report_warning, .name = "report_warning", .min_arity = 1, .max_arity = 1, .arg_names = &.{"message"}, .arg_types = &.{Type.string}, .result_type = Type.string, .summary = "Report warning diagnostics from user-defined checks" },
-    .{ .op = .require_asset_exists, .name = "require_asset_exists", .min_arity = 1, .max_arity = 1, .arg_names = &.{"object"}, .arg_types = &.{Type.object}, .result_type = Type.object, .summary = "Check that the referenced file for an asset object exists" },
     .{ .op = .path, .name = "path", .min_arity = 1, .max_arity = 255, .arg_names = &.{"command"}, .arg_types = &.{Type.recordType("PathCommand")}, .type_module = "std:graphics/types", .result_type = Type.path, .summary = "Build an immutable vector path from path commands" },
 };
 

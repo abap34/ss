@@ -192,12 +192,7 @@ pub fn complete(allocator: std.mem.Allocator, snapshot: *const snapshot_api.Anal
     const context = Context.init(req, &work);
     if (!context.suppressed) {
         if (context.member) {
-            out.add("content", .property, null);
-            // Unknown receiver types admit fields from multiple classes/records.
-            for (snapshot.fields) |field| {
-                if (!work.step()) break;
-                out.add(field.name, .property, null);
-            }
+            // Unknown receivers admit fields from ordinary types.
             for (snapshot.record_fields) |field| {
                 if (!work.step()) break;
                 out.add(field.name, .property, null);

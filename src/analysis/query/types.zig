@@ -59,8 +59,6 @@ pub const CompletionKind = enum {
     property,
     enum_case,
     type_decl,
-    class,
-    role,
 };
 
 pub const CompletionCandidate = struct {

@@ -58,12 +58,6 @@ pub fn stateSource(state: *core.DocumentState, pages: *core.prepared.PreparedPag
         entry.value_ptr.span = edit.mapSpan(entry.value_ptr.span);
         if (entry.value_ptr.name_span) |*span| span.* = edit.mapSpan(span.*);
     };
-    for (state.declaration_index.classes.items) |*item| if (item.module_id == module.id) {
-        item.span = edit.mapSpan(item.span);
-    };
-    for (state.declaration_index.fields.items) |*item| if (item.module_id == module.id) {
-        if (item.name_span) |*span| span.* = edit.mapSpan(span.*);
-    };
     for (state.declaration_index.record_fields.items) |*item| if (item.module_id == module.id) {
         if (item.name_span) |*span| span.* = edit.mapSpan(span.*);
     };
@@ -116,9 +110,6 @@ pub fn snapshotSource(snapshot: *analysis.snapshot.AnalysisSnapshot, edit: *cons
             const location = lines.locationAt(edit.mapOffset(old_offset));
             item.line = location.line;
             item.column = location.column;
-        };
-        for (snapshot.fields) |*item| if (item.module_id == module.id) {
-            if (item.name_span) |*span| span.* = edit.mapSpan(span.*);
         };
         for (snapshot.record_fields) |*item| if (item.module_id == module.id) {
             if (item.name_span) |*span| span.* = edit.mapSpan(span.*);

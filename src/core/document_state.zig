@@ -172,7 +172,6 @@ const BindingLocation = struct {
 // These types borrow the analyzed source generation, like function signatures.
 pub const BindingType = struct {
     ty: ast.Type,
-    object_class: ?model.NominalId = null,
 };
 
 pub const Definition = struct {

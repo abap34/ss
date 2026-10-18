@@ -109,7 +109,10 @@ test "fallback analysis: an unknown receiver admits known fields without type re
     defer completion.deinit(testing.allocator);
     try testing.expectEqual(.property, (try candidate(completion, "size")).kind);
     try testing.expectEqual(.property, (try candidate(completion, "color")).kind);
-    for (completion.items) |item| try testing.expect(item.kind == .property);
+    for (completion.items) |item| {
+        try testing.expect(item.kind == .property);
+        try testing.expect(!std.mem.eql(u8, item.label, "content"));
+    }
 }
 
 test "fallback analysis: comments and strings do not introduce declarations or hover targets" {
@@ -195,7 +198,7 @@ test "fallback analysis: its own deadline stops scanning snapshot facts" {
         fn now(context: *const anyopaque) i128 {
             const self: *@This() = @ptrCast(@alignCast(@constCast(context)));
             self.calls += 1;
-            return @as(i128, @intCast(self.calls)) * std.time.ns_per_ms;
+            return @as(i128, @intCast(self.calls)) * (std.time.ns_per_ms / 8);
         }
     };
     var clock = AdvancingClock{};
@@ -204,9 +207,9 @@ test "fallback analysis: its own deadline stops scanning snapshot facts" {
     var timed = try api.completeAt(testing.allocator, &snapshot, req, timed_options);
     defer timed.deinit(testing.allocator);
     try testing.expect(timed.is_incomplete);
-    _ = try candidate(timed, "content");
+    _ = try candidate(timed, "size");
     for (timed.items) |item| try testing.expect(!std.mem.eql(u8, item.label, "last_field"));
-    try testing.expect(clock.calls < 16);
+    try testing.expect(clock.calls < 32);
 }
 
 test "fallback analysis: cancellation prevents the replacement analysis" {

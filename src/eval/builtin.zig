@@ -387,11 +387,6 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             try ctx.emitDiagnosticReport(.warning, message);
             break :blk .{ .string = message };
         },
-        .require_asset_exists => blk: {
-            const object_id = try ctx.evalObjectArg(call, 0);
-            try ctx.checkAssetExists(object_id);
-            break :blk .{ .object = object_id };
-        },
         .path => blk: {
             var values = std.ArrayList(core.Value).empty;
             defer values.deinit(ctx.state.allocator);

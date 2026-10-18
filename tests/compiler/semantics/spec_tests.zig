@@ -4986,6 +4986,7 @@ test "compiler semantics: legacy object APIs are unavailable" {
         .{ .name = "prop_eq", .call = "prop_eq(pagectx(), \"layout_h\", \"left\")" },
         .{ .name = "set_content", .call = "set_content(text!(\"old\"), \"new\")" },
         .{ .name = "set_prop", .call = "set_prop(pagectx(), \"layout_h_center_offset\", 42)" },
+        .{ .name = "require_asset_exists", .call = "require_asset_exists(text!(\"old\"))" },
         .{ .name = "objs", .call = "objs(pagectx(), \"body\")" },
         .{ .name = "objs_here", .call = "objs_here(\"body\")" },
         .{ .name = "objs_all", .call = "objs_all(\"body\")" },
@@ -6115,13 +6116,13 @@ test "compiler semantics: property reads require a value or a single resource re
         \\page main
         \\  let invalid = pagectx().content
         \\end
-    , "case.ss:bytes:", "InvalidProperty");
+    , "case.ss:bytes:", "UnknownField: unknown field: content");
 
     try expectDiagnostic(
         \\document
         \\  let invalid = docctx().content
         \\end
-    , "case.ss:bytes:", "InvalidProperty");
+    , "case.ss:bytes:", "UnknownField: unknown field: content");
 }
 
 test "compiler semantics: finite callbacks can write selected page settings" {

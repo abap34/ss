@@ -202,7 +202,6 @@ pub const ImportFact = struct {
 
 pub const TypeDefinitionKind = enum {
     record,
-    object,
     enum_type,
 };
 
@@ -238,7 +237,6 @@ pub const VariableBinding = struct {
     value_type: ast.Type = ast.Type.any,
     name: []u8,
     type_label: []u8,
-    object_class: ?core.NominalId = null,
     module_id: core.SourceModuleId,
     scope_kind: core.DefinitionScopeKind,
     scope_name: ?[]u8 = null,
@@ -246,28 +244,6 @@ pub const VariableBinding = struct {
     span_end: usize,
     visible_start: usize,
     visible_end: usize,
-};
-
-pub const RoleBinding = struct {
-    name: []u8,
-    type_label: []u8,
-    module_id: core.SourceModuleId,
-};
-
-pub const ClassFact = struct {
-    name: []u8,
-    base: ?core.NominalId = null,
-    module_id: core.SourceModuleId,
-};
-
-pub const FieldFact = struct {
-    value_type: ast.Type = ast.Type.any,
-    name: []u8,
-    class_name: []u8,
-    class_module_id: core.SourceModuleId,
-    type_label: []u8,
-    module_id: core.SourceModuleId,
-    name_span: ?ast.Span = null,
 };
 
 pub const RecordFact = struct {
@@ -374,9 +350,6 @@ pub const AnalysisSnapshot = struct {
     value_definition_index: DeclarationLookup = .empty,
     type_definition_index: DeclarationLookup = .empty,
     variable_bindings: []VariableBinding = &.{},
-    role_bindings: []RoleBinding = &.{},
-    classes: []ClassFact = &.{},
-    fields: []FieldFact = &.{},
     records: []RecordFact = &.{},
     record_fields: []RecordFieldFact = &.{},
     enum_cases: []EnumCaseFact = &.{},
@@ -411,9 +384,6 @@ pub const AnalysisSnapshot = struct {
         snapshot.holes = if (holes) |tables| try cloneHoles(allocator, type_storage, tables) else &.{};
         snapshot.value_bindings = try collectValueBindings(allocator, type_storage, state);
         snapshot.variable_bindings = try collectVariableBindings(allocator, type_storage, state);
-        snapshot.role_bindings = try collectRoleBindings(allocator, declaration_index.roles.items);
-        snapshot.classes = try collectClasses(allocator, declaration_index.classes.items);
-        snapshot.fields = try collectFields(allocator, type_storage, declaration_index.fields.items);
         snapshot.records = try collectRecords(allocator, declaration_index.records.items);
         snapshot.record_fields = try collectRecordFields(allocator, type_storage, declaration_index.record_fields.items);
         snapshot.enum_cases = try collectEnumCases(allocator, declaration_index.types.items);
@@ -504,9 +474,6 @@ pub const AnalysisSnapshot = struct {
         self.type_definition_index.deinit(self.allocator);
         deinitValueBindings(self.allocator, self.value_bindings);
         deinitVariableBindings(self.allocator, self.variable_bindings);
-        deinitRoleBindings(self.allocator, self.role_bindings);
-        deinitClasses(self.allocator, self.classes);
-        deinitFields(self.allocator, self.fields);
         deinitRecords(self.allocator, self.records);
         deinitRecordFields(self.allocator, self.record_fields);
         deinitEnumCases(self.allocator, self.enum_cases);
@@ -1394,22 +1361,16 @@ fn collectVariableBindings(
         if (definition.kind != .variable) continue;
         const known_info = state.bindingTypeAt(definition.module_id, definition.span_start);
         const info: @TypeOf(known_info.?) = known_info orelse .{ .ty = ast.Type.any };
-        const retained_type = if (info.ty.kind == .selection and info.object_class != null) blk: {
-            const item = ast.Type.objectId(info.object_class.?);
-            break :blk try type_storage.retain(.{ .kind = .selection, .arguments = &.{item} });
-        } else try type_storage.retain(info.ty);
+        const retained_type = try type_storage.retain(info.ty);
         const type_label: []u8 = if (known_info != null) @constCast(try semantic_types.typeInfoLabelAlloc(allocator, .{ .ty = info.ty })) else try allocator.dupe(u8, "unknown");
         errdefer allocator.free(type_label);
         const name = try allocator.dupe(u8, definition.name);
         errdefer allocator.free(name);
-        const object_class: ?core.NominalId = if (info.object_class) |id| .{ .module_id = id.module_id, .name = try allocator.dupe(u8, id.name) } else null;
-        errdefer if (object_class) |id| allocator.free(id.name);
         const scope_name = if (definition.scope_name) |scope_name| try allocator.dupe(u8, scope_name) else null;
         errdefer if (scope_name) |value| allocator.free(value);
         try out.append(allocator, .{
             .name = name,
             .type_label = type_label,
-            .object_class = object_class,
             .value_type = retained_type,
             .module_id = definition.module_id,
             .scope_kind = definition.scope_kind,
@@ -1432,96 +1393,7 @@ fn deinitVariableBindingItems(allocator: std.mem.Allocator, bindings: []Variable
     for (bindings) |binding| {
         allocator.free(binding.name);
         allocator.free(binding.type_label);
-        if (binding.object_class) |id| allocator.free(id.name);
         if (binding.scope_name) |scope_name| allocator.free(scope_name);
-    }
-}
-
-fn collectRoleBindings(allocator: std.mem.Allocator, roles: []const declarations.RoleDescriptor) ![]RoleBinding {
-    var out = std.ArrayList(RoleBinding).empty;
-    errdefer {
-        deinitRoleBindingItems(allocator, out.items);
-        out.deinit(allocator);
-    }
-    for (roles) |role| try out.append(allocator, .{
-        .name = try allocator.dupe(u8, role.name),
-        .type_label = try allocator.dupe(u8, role.class_name),
-        .module_id = role.module_id,
-    });
-    return out.toOwnedSlice(allocator);
-}
-
-fn deinitRoleBindings(allocator: std.mem.Allocator, bindings: []RoleBinding) void {
-    deinitRoleBindingItems(allocator, bindings);
-    allocator.free(bindings);
-}
-
-fn deinitRoleBindingItems(allocator: std.mem.Allocator, bindings: []RoleBinding) void {
-    for (bindings) |binding| {
-        allocator.free(binding.name);
-        allocator.free(binding.type_label);
-    }
-}
-
-fn collectClasses(allocator: std.mem.Allocator, classes: []const declarations.ClassDescriptor) ![]ClassFact {
-    var out = std.ArrayList(ClassFact).empty;
-    errdefer {
-        deinitClassItems(allocator, out.items);
-        out.deinit(allocator);
-    }
-    for (classes) |item| try out.append(allocator, .{
-        .name = try allocator.dupe(u8, item.name),
-        .base = if (item.base) |base| .{ .module_id = base.module_id, .name = try allocator.dupe(u8, base.name) } else null,
-        .module_id = item.module_id,
-    });
-    return out.toOwnedSlice(allocator);
-}
-
-fn deinitClasses(allocator: std.mem.Allocator, classes: []ClassFact) void {
-    deinitClassItems(allocator, classes);
-    allocator.free(classes);
-}
-
-fn deinitClassItems(allocator: std.mem.Allocator, classes: []ClassFact) void {
-    for (classes) |item| {
-        allocator.free(item.name);
-        if (item.base) |base| allocator.free(base.name);
-    }
-}
-
-fn collectFields(allocator: std.mem.Allocator, type_storage: *TypeStorage, fields: []const declarations.FieldDescriptor) ![]FieldFact {
-    var out = std.ArrayList(FieldFact).empty;
-    errdefer {
-        deinitFieldItems(allocator, out.items);
-        out.deinit(allocator);
-    }
-    for (fields) |item| {
-        const retained_type = try type_storage.retain(item.value_type);
-        const type_label = try item.value_type.formatAlloc(allocator);
-        errdefer allocator.free(type_label);
-        try out.append(allocator, .{
-            .name = try allocator.dupe(u8, item.name),
-            .class_name = try allocator.dupe(u8, item.class_name),
-            .class_module_id = item.class_module_id,
-            .type_label = @constCast(type_label),
-            .value_type = retained_type,
-            .module_id = item.module_id,
-            .name_span = item.name_span,
-        });
-    }
-    return out.toOwnedSlice(allocator);
-}
-
-fn deinitFields(allocator: std.mem.Allocator, fields: []FieldFact) void {
-    deinitFieldItems(allocator, fields);
-    allocator.free(fields);
-}
-
-fn deinitFieldItems(allocator: std.mem.Allocator, fields: []FieldFact) void {
-    for (fields) |item| {
-        allocator.free(item.name);
-        allocator.free(item.class_name);
-        allocator.free(item.type_label);
     }
 }
 

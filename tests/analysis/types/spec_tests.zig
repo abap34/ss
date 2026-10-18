@@ -68,7 +68,7 @@ test "analysis type spec: known type mismatch remains a mismatch" {
 
 test "analysis type spec: holes nested in type arguments block assignment" {
     const incomplete = Type.selectionType(Type.selectionType(Type.hole(9)));
-    const complete = Type.selectionType(Type.selection(.object));
+    const complete = Type.selectionType(Type.selection(.placement));
     switch (analysis_types.assignability(.{ .ty = incomplete }, complete)) {
         .blocked_by_hole => |id| try testing.expectEqual(@as(u32, 9), id),
         else => return error.ExpectedBlockedByHole,

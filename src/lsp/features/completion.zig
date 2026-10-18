@@ -100,7 +100,5 @@ fn kind(completion_kind: analysis_snapshot.CompletionKind) usize {
         .property => 10,
         .enum_case => 20,
         .type_decl => 25,
-        .class => 7,
-        .role => 20,
     };
 }
