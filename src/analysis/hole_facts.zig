@@ -47,7 +47,6 @@ fn moduleExpectedTypes(
         for (page.statements.items) |stmt| try statementExpectedTypes(allocator, sema, stmt, holes, null);
     }
     for (program.records.items) |decl| try objectFieldDefaultExpectedTypes(allocator, sema, decl.fields.items, holes);
-    for (program.objects.items) |decl| try objectFieldDefaultExpectedTypes(allocator, sema, decl.fields.items, holes);
 }
 
 fn statementExpectedTypes(
@@ -161,7 +160,7 @@ fn recordFieldExpectedTypes(
 fn objectFieldDefaultExpectedTypes(
     allocator: std.mem.Allocator,
     sema: *const SemanticEnv,
-    fields: []const ast.ObjectFieldDecl,
+    fields: []const ast.FieldDecl,
     holes: *syntax_hole.Result,
 ) !void {
     for (fields) |field| {

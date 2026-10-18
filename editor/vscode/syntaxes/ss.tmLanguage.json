@@ -90,11 +90,11 @@
       "patterns": [
         {
           "name": "keyword.control.ss",
-          "match": "\\bfn/!|\\b(?:import|as|const|document|page|fn|let|with|return|end|type|enum|object|base|roles|property|if|then|else|for|in)\\b"
+          "match": "\\bfn/!|\\b(?:import|as|const|document|page|fn|let|with|return|end|type|enum|property|if|then|else|for|in)\\b"
         },
         {
           "name": "storage.type.ss",
-          "match": "\\b(?:document|page|object|selection|metadata|anchor|string|number|bool|boolean|void|Void|constraints)\\b"
+          "match": "\\b(?:Document|Page|Group|Placed|Placement|Anchor|String|Color|Number|Bool|Constraints|Path|Void|None|Selection)\\b"
         },
         {
           "name": "constant.language.boolean.ss",

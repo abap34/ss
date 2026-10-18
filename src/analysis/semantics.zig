@@ -58,26 +58,6 @@ pub fn checkTypeDeclarations(allocator: std.mem.Allocator, state: *core.Document
         var names = std.StringHashMap([]const u8).init(allocator);
         defer names.deinit();
 
-        for (module.syntax.objects.items) |object_decl| {
-            if (isBuiltinTypeName(object_decl.name)) {
-                const origin = core.SourceOrigin.at(origin_path, object_decl.span);
-
-                try state.addValidationDiagnostic(.@"error", null, null, origin, .{
-                    .user_report = .{ .code = "DuplicateType", .message = try std.fmt.allocPrint(state.allocator, "type '{s}' conflicts with a built-in type", .{object_decl.name}) },
-                });
-                return error.UnknownType;
-            }
-            if (names.get(object_decl.name)) |existing_kind| {
-                const origin = core.SourceOrigin.at(origin_path, object_decl.span);
-
-                try state.addValidationDiagnostic(.@"error", null, null, origin, .{
-                    .user_report = .{ .code = "DuplicateType", .message = try std.fmt.allocPrint(state.allocator, "{s} type '{s}' is already defined in this module", .{ existing_kind, object_decl.name }) },
-                });
-                return error.UnknownType;
-            }
-            try names.put(object_decl.name, "object");
-        }
-
         for (module.syntax.functions.items) |func| {
             try checkTypeParameterNames(state, origin_path, func.type_params.items);
         }
@@ -167,15 +147,6 @@ pub fn checkTypeAnnotations(
                 };
             }
         }
-        for (module.syntax.objects.items) |object_decl| {
-            for (object_decl.fields.items) |field| {
-                const diagnostic_count = state.diagnostics.entries.items.len;
-                checkFieldTypeAnnotation(allocator, state, sema, module_id, origin_path, field) catch |err| {
-                    try continueAfterDiagnostic(state, diagnostic_count, err);
-                    had_diagnostics = true;
-                };
-            }
-        }
 
         for (module.syntax.functions.items) |func| {
             const origin = core.SourceOrigin.at(origin_path, func.span);
@@ -242,7 +213,7 @@ fn checkFieldTypeAnnotation(
     sema: *const SemanticEnv,
     module_id: core.SourceModuleId,
     origin_path: []const u8,
-    field: ast.ObjectFieldDecl,
+    field: ast.FieldDecl,
 ) !void {
     const origin = core.SourceOrigin.at(origin_path, field.span);
 
@@ -288,13 +259,6 @@ fn resolveModuleTypeReferences(
         for (record_decl.fields.items) |*field| {
             try resolveTypeReference(&field.value_type, module_id, &scoped_sema);
             if (field.default_value) |default_value| try resolveExprTypeReferences(allocator, default_value, module_id, &scoped_sema);
-        }
-    }
-    for (program.objects.items) |*object_decl| {
-        if (object_decl.base) |base| object_decl.base_module_id = resolvedClassModule(sema, module_id, base);
-        for (object_decl.fields.items) |*field| {
-            try resolveTypeReference(&field.value_type, module_id, sema);
-            if (field.default_value) |default_value| try resolveExprTypeReferences(allocator, default_value, module_id, sema);
         }
     }
     for (program.functions.items) |*func| {
@@ -418,9 +382,6 @@ fn resolveModuleEnumCaseExpressions(
     sema: *const SemanticEnv,
     program: *ast.Module,
 ) !void {
-    for (program.objects.items) |*object_decl| {
-        try resolveFieldEnumCaseExpressions(allocator, module_id, sema, object_decl.fields.items);
-    }
     for (program.records.items) |*record_decl| {
         try resolveFieldEnumCaseExpressions(allocator, module_id, sema, record_decl.fields.items);
     }
@@ -452,7 +413,7 @@ fn resolveFieldEnumCaseExpressions(
     allocator: std.mem.Allocator,
     module_id: core.SourceModuleId,
     sema: *const SemanticEnv,
-    fields_list: []ast.ObjectFieldDecl,
+    fields_list: []ast.FieldDecl,
 ) !void {
     for (fields_list) |*field| {
         const default_value = field.default_value orelse continue;
@@ -468,9 +429,6 @@ fn resolveModuleFieldDefaults(
     sema: *const SemanticEnv,
     program: *ast.Module,
 ) !void {
-    for (program.objects.items) |*object_decl| {
-        try materializeFieldDefaults(allocator, module_id, sema, object_decl.fields.items);
-    }
     for (program.records.items) |*record_decl| {
         if (record_decl.type_params.items.len != 0) continue;
         try materializeFieldDefaults(allocator, module_id, sema, record_decl.fields.items);
@@ -481,7 +439,7 @@ fn materializeFieldDefaults(
     allocator: std.mem.Allocator,
     module_id: core.SourceModuleId,
     sema: *const SemanticEnv,
-    fields_list: []ast.ObjectFieldDecl,
+    fields_list: []ast.FieldDecl,
 ) !void {
     for (fields_list) |*field| {
         const property_value = if (field.default_value) |default_value|
@@ -494,7 +452,7 @@ fn materializeFieldDefaults(
 
 fn setDefaultPropertyValue(
     allocator: std.mem.Allocator,
-    field: *ast.ObjectFieldDecl,
+    field: *ast.FieldDecl,
     maybe_value: ?[]const u8,
 ) !void {
     if (field.default_property_value) |value| allocator.free(value);

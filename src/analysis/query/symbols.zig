@@ -10,7 +10,6 @@ pub const Kind = enum {
     page,
     enum_type,
     record,
-    object_class,
 };
 
 pub const Symbol = struct {
@@ -32,7 +31,6 @@ pub fn collect(allocator: std.mem.Allocator, _: []const u8, program: ast.Module)
     for (program.pages.items) |decl| try appendFromSpan(allocator, &out, decl.name, .page, decl.span, decl.name_span);
     for (program.types.items) |decl| try appendFromSpan(allocator, &out, decl.name, .enum_type, decl.span, decl.name_span);
     for (program.records.items) |decl| try appendFromSpan(allocator, &out, decl.name, .record, decl.span, decl.name_span);
-    for (program.objects.items) |decl| try appendFromSpan(allocator, &out, decl.name, .object_class, decl.span, decl.name_span);
 
     return out.toOwnedSlice(allocator);
 }

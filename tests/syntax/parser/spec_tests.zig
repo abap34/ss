@@ -422,7 +422,7 @@ test "syntax spec: qualified callable names preserve source spans" {
 test "syntax spec: declaration names preserve source spans" {
     const source_text =
         \\enum Mode { light dark }
-        \\type Widget = object {
+        \\type Widget {
         \\  title: String
         \\}
         \\type Theme {
@@ -438,10 +438,10 @@ test "syntax spec: declaration names preserve source spans" {
     defer parsed.deinit();
 
     try expectSpanText(source_text, parsed.module.types.items[0].name_span.?, "Mode");
-    try expectSpanText(source_text, parsed.module.objects.items[0].name_span.?, "Widget");
-    try expectSpanText(source_text, parsed.module.objects.items[0].fields.items[0].name_span.?, "title");
-    try expectSpanText(source_text, parsed.module.records.items[0].name_span.?, "Theme");
-    try expectSpanText(source_text, parsed.module.records.items[0].fields.items[0].name_span.?, "accent");
+    try expectSpanText(source_text, parsed.module.records.items[0].name_span.?, "Widget");
+    try expectSpanText(source_text, parsed.module.records.items[0].fields.items[0].name_span.?, "title");
+    try expectSpanText(source_text, parsed.module.records.items[1].name_span.?, "Theme");
+    try expectSpanText(source_text, parsed.module.records.items[1].fields.items[0].name_span.?, "accent");
     try expectSpanText(source_text, parsed.module.constants.items[0].name_span.?, "accent");
     try expectSpanText(source_text, parsed.module.functions.items[0].name_span.?, "helper");
     try expectSpanText(source_text, parsed.module.pages.items[0].name_span.?, "First");
@@ -582,7 +582,7 @@ test "syntax spec: functions can use expression bodies" {
         \\    42,
         \\  )
         \\
-        \\fn/! badge(text_value: String) -> Object = text(text_value)
+        \\fn/! badge(text_value: String) -> Text = text(text_value)
         \\
     );
     defer parsed.deinit();
@@ -679,11 +679,11 @@ test "syntax spec: void functions may omit explicit return values" {
 
 test "syntax spec: function types and lambdas are source syntax" {
     var parsed = try parse(
-        \\fn make_label(text_value: String) -> Page -> Object
+        \\fn make_label(text_value: String) -> Page -> Placement
         \\  return (page_value: Page) |-> place_on!(page_value, new(text_value, "body", "text"))
         \\end
         \\
-        \\fn use(callback: (Page -> Object) -> Document, pair: (Page, Document) -> Object, thunk: () -> Number) -> Number
+        \\fn use(callback: (Page -> Placement) -> Document, pair: (Page, Document) -> Placement, thunk: () -> Number) -> Number
         \\  return thunk()
         \\end
         \\
@@ -695,7 +695,7 @@ test "syntax spec: function types and lambdas are source syntax" {
     try testing.expectEqual(@as(usize, 1), make_label.result_type.fn_params.len);
     try testing.expectEqual(Type.Kind.page, make_label.result_type.fn_params[0].kind);
     try testing.expect(make_label.result_type.fn_result != null);
-    try testing.expectEqual(Type.Kind.object, make_label.result_type.fn_result.?.kind);
+    try testing.expectEqual(Type.Kind.placement, make_label.result_type.fn_result.?.kind);
     switch (make_label.statements.items[0].kind.return_expr) {
         .lambda => |lambda| {
             try testing.expectEqual(@as(usize, 1), lambda.params.items.len);
@@ -737,7 +737,7 @@ test "syntax spec: bang suffix is limited to callable names" {
     _ = try expectCall(parsed.module.pages.items[0].statements.items[2].kind.expr_stmt, "code!", 1);
 
     try expectParseError(error.ExpectedChar,
-        \\type Bad! = object {
+        \\type Bad! {
         \\}
         \\
     );
@@ -813,7 +813,7 @@ test "syntax spec: incomplete function type is not accepted as a surface type" {
 
 test "syntax spec: paired placement functions expand to plain and placing definitions" {
     var parsed = try parse(
-        \\fn/! note(text_value: String, tone: String = "soft") -> Object
+        \\fn/! note(text_value: String, tone: String = "soft") -> Text
         \\  return text(text_value)
         \\end
         \\
@@ -849,7 +849,7 @@ test "syntax spec: paired placement functions expand to plain and placing defini
     }
 
     const bad_source =
-        \\fn/! note!() -> Object
+        \\fn/! note!() -> Text
         \\  return new("", "body", "text")
         \\end
         \\
@@ -949,7 +949,7 @@ test "syntax spec: incomplete enum declarations are rejected while parsing" {
 test "syntax spec: failed constant and type declarations release parsed ownership" {
     try expectParseErrorWithoutLeaks(
         error.ExpectedChar,
-        "const value: (Page -> Object)?\n",
+        "const value: (Page -> Placement)?\n",
     );
     try expectParseErrorWithoutLeaks(error.ExpectedChar, "type Mode\n");
     try expectParseErrorWithoutLeaks(error.ExpectedTypeAnnotation,
@@ -957,7 +957,7 @@ test "syntax spec: failed constant and type declarations release parsed ownershi
         \\
     );
     try expectParseErrorWithoutLeaks(
-        error.ExpectedChar,
+        error.ExpectedTypeAnnotation,
         "type Card = object\n",
     );
 }
@@ -1053,7 +1053,7 @@ test "syntax spec: recovering blocks propagate every allocation failure" {
     );
 }
 
-test "syntax spec: failed object declarations release parsed ownership" {
+test "syntax spec: failed type declarations release parsed ownership" {
     try expectParseErrorWithoutLeaks(error.ExpectedChar, "type Theme\n");
     try expectParseErrorWithoutLeaks(error.ExpectedTypeAnnotation,
         \\type Theme {
@@ -1062,22 +1062,19 @@ test "syntax spec: failed object declarations release parsed ownership" {
         \\
     );
     try expectParseErrorWithoutLeaks(error.ExpectedChar,
-        \\type Card = object {
+        \\type Card {
         \\  label: String = "caption"
         \\
     );
 }
 
-test "syntax spec: object declarations survive every allocation failure" {
+test "syntax spec: type declarations survive every allocation failure" {
     try allocation_testing.checkAllAllocationFailures(
         testing.allocator,
         parseAndDeinitSource,
         .{
-            \\type Card = object {
-            \\  base = OldBase
-            \\  base = NewBase
-            \\  roles = ["card", "panel"]
-            \\  handler: Selection<(Page -> Object)?> = build
+            \\type Card {
+            \\  handler: Selection<(Page -> Placement)?> = build
             \\}
             \\
         },
@@ -1087,7 +1084,7 @@ test "syntax spec: object declarations survive every allocation failure" {
         parseAndDeinitSource,
         .{
             \\type Theme {
-            \\  handler: Selection<(Page -> Object)?> = build
+            \\  handler: Selection<(Page -> Placement)?> = build
             \\}
             \\
         },
@@ -1096,7 +1093,7 @@ test "syntax spec: object declarations survive every allocation failure" {
 
 test "syntax spec: optional types compose with functions and selections" {
     var parsed = try parse(
-        \\fn keep(callback: (Page -> Object)?, maker: Page -> Object?, items: Selection<Text>?) -> Void
+        \\fn keep(callback: (Page -> Placement)?, maker: Page -> Placement?, items: Selection<Text>?) -> Void
         \\end
         \\
     );
@@ -1107,12 +1104,12 @@ test "syntax spec: optional types compose with functions and selections" {
     try testing.expectEqual(Type.Kind.optional, callback.kind);
     try testing.expectEqual(Type.Kind.function, callback.optional_child.?.kind);
     try testing.expectEqual(Type.Kind.page, callback.optional_child.?.fn_params[0].kind);
-    try testing.expectEqual(Type.Kind.object, callback.optional_child.?.fn_result.?.kind);
+    try testing.expectEqual(Type.Kind.placement, callback.optional_child.?.fn_result.?.kind);
 
     const maker = keep.params.items[1].ty;
     try testing.expectEqual(Type.Kind.function, maker.kind);
     try testing.expectEqual(Type.Kind.optional, maker.fn_result.?.kind);
-    try testing.expectEqual(Type.Kind.object, maker.fn_result.?.optional_child.?.kind);
+    try testing.expectEqual(Type.Kind.placement, maker.fn_result.?.optional_child.?.kind);
 
     const items = keep.params.items[2].ty;
     try testing.expectEqual(Type.Kind.optional, items.kind);
@@ -1124,7 +1121,7 @@ test "syntax spec: optional types compose with functions and selections" {
 test "syntax spec: failed function declarations release parsed ownership" {
     try expectParseErrorWithoutLeaks(
         error.ExpectedChar,
-        "fn bad(items: Selection<(Page -> Object)?) -> Void\nend\n",
+        "fn bad(items: Selection<(Page -> Placement)?) -> Void\nend\n",
     );
     try expectParseErrorWithoutLeaks(error.RequiredParameterAfterDefault,
         \\fn bad(a: Number = 1, b: Number) -> Number
@@ -1142,17 +1139,16 @@ test "syntax spec: failed function declarations release parsed ownership" {
 
 test "syntax spec: expression parsing survives every allocation failure" {
     const source =
-        \\import std:internal/classes as classes
+        \\import std:text as classes
         \\enum Align { left center }
-        \\type Card = object {
-        \\  roles = ["card"]
+        \\type Card {
         \\  label: String = "caption"
         \\}
         \\type Theme {
         \\  body: String = "body"
         \\}
         \\const default_tone: String = "soft"
-        \\fn choose(callback: (Page -> Object)?, tone: String = "soft") -> Object
+        \\fn choose(callback: (Page -> Placement)?, tone: String = "soft") -> Placement
         \\  let applied = ((value: String) |-> classes::text(value))(tone)
         \\  let updated = Theme { body = tone } with {
         \\    body.text.size = -(1 + 2)
@@ -1192,10 +1188,10 @@ test "syntax spec: failed parenthesized expressions release parsed ownership" {
 
 test "syntax spec: module cloning survives every allocation failure" {
     const source =
-        \\type Card = object {
+        \\type Card {
         \\  label: String = "caption"
         \\}
-        \\fn choose(tone: String = "soft") -> Object
+        \\fn choose(tone: String = "soft") -> Placement
         \\  let applied = ((value: String) |-> text(value))(tone)
         \\  let updated = Card { label = tone } with { label = applied }
         \\  return docctx().background_fill? ?? updated
@@ -1219,7 +1215,7 @@ test "syntax spec: paired functions survive every allocation failure" {
         testing.allocator,
         parseAndDeinitSource,
         .{
-            \\fn/! note(text_value: String, tone: String = "soft") -> Object
+            \\fn/! note(text_value: String, tone: String = "soft") -> Text
             \\  return text(text_value)
             \\end
             \\
@@ -1229,9 +1225,9 @@ test "syntax spec: paired functions survive every allocation failure" {
 
 test "syntax spec: qualified type names parse in annotations and type parameters" {
     const source =
-        \\import std:internal/classes as classes
+        \\import std:text as classes
         \\
-        \\fn keep(value: classes::TextStyle, items: Selection<classes::Text>) -> Object<classes::Text>
+        \\fn keep(value: classes::TextStyle, items: Selection<classes::Text>) -> Placed<classes::Text>
         \\  return value
         \\end
         \\
@@ -1246,14 +1242,14 @@ test "syntax spec: qualified type names parse in annotations and type parameters
     try testing.expectEqual(Type.Kind.selection, keep.params.items[1].ty.kind);
     try testing.expectEqualStrings("classes::Text", keep.params.items[1].ty.selectionItem().class_name.?);
     try testing.expectEqualStrings("classes::Text", source[keep.params.items[1].ty.selectionItem().class_name_span.?.start..keep.params.items[1].ty.selectionItem().class_name_span.?.end]);
-    try testing.expectEqual(Type.Kind.object, keep.result_type.kind);
-    try testing.expectEqualStrings("classes::Text", keep.result_type.class_name.?);
-    try testing.expectEqualStrings("classes::Text", source[keep.result_type.class_name_span.?.start..keep.result_type.class_name_span.?.end]);
+    try testing.expectEqual(Type.Kind.placed, keep.result_type.kind);
+    try testing.expectEqualStrings("classes::Text", keep.result_type.placedInput().?.class_name.?);
+    try testing.expectEqualStrings("classes::Text", source[keep.result_type.placedInput().?.class_name_span.?.start..keep.result_type.placedInput().?.class_name_span.?.end]);
 }
 
 test "syntax spec: qualified record literals and enum targets parse" {
     var parsed = try parse(
-        \\import std:internal/classes as classes
+        \\import std:text as classes
         \\
         \\page Values
         \\  let style = classes::TextStyle { size = 32 }
@@ -1306,11 +1302,10 @@ test "syntax spec: enum values color literals and none stay explicit in the AST"
     }
 }
 
-test "syntax spec: object field defaults are parsed as expressions" {
+test "syntax spec: type field defaults are parsed as expressions" {
     var parsed = try parse(
         \\enum Align { left center right }
-        \\type Card = object {
-        \\  roles = ["card"]
+        \\type Card {
         \\  size: Number = 1.02
         \\  offset: Number = -1.5
         \\  align: Align = Align.center
@@ -1323,7 +1318,7 @@ test "syntax spec: object field defaults are parsed as expressions" {
     );
     defer parsed.deinit();
 
-    const card = parsed.module.objects.items[0];
+    const card = parsed.module.records.items[0];
     try testing.expectEqual(@as(usize, 7), card.fields.items.len);
     try expectNumber(card.fields.items[0].default_value.?.*, 1.02);
     try testing.expect(card.fields.items[0].default_property_value == null);
@@ -2523,7 +2518,7 @@ test "syntax spec: recovering parse keeps type expression holes" {
         \\type Broken {
         \\  field:
         \\}
-        \\type Widget = object {
+        \\type Widget {
         \\  prop:
         \\}
         \\
@@ -2553,9 +2548,9 @@ test "syntax spec: recovering parse keeps type expression holes" {
     try testing.expectEqual(Type.Kind.hole, record_field.value_type.kind);
     try testing.expectEqual(@as(ast.HoleId, 3), record_field.value_type.hole_id.?);
 
-    const object_field = parsed.result.module.objects.items[0].fields.items[0];
-    try testing.expectEqual(Type.Kind.hole, object_field.value_type.kind);
-    try testing.expectEqual(@as(ast.HoleId, 4), object_field.value_type.hole_id.?);
+    const second_field = parsed.result.module.records.items[1].fields.items[0];
+    try testing.expectEqual(Type.Kind.hole, second_field.value_type.kind);
+    try testing.expectEqual(@as(ast.HoleId, 4), second_field.value_type.hole_id.?);
 }
 
 test "syntax spec: selected imports retain names and spans through cloning" {
@@ -2655,20 +2650,35 @@ test "syntax spec: ordinary type declarations preserve field defaults and spans"
     try expectParseErrorWithoutLeaks(error.ExpectedTypeAnnotation, "type Card { title }\n");
 }
 
-test "syntax spec: ordinary types coexist with legacy object declarations during migration" {
-    var parsed = try parse(
-        \\type Padding { x: Number = 12 y: Number = 8 }
-        \\type Card = object { padding: Padding = Padding {} }
-        \\enum Mode { light dark }
-    );
+test "syntax spec: legacy object declarations are rejected and recovery keeps later pages" {
+    for ([_][]const u8{
+        "type Card = object { title: String }\n",
+        "type Card = object { base = Object roles = [\"card\"] }\n",
+    }) |source_text| {
+        try expectParseErrorWithoutLeaks(error.ExpectedTypeAnnotation, source_text);
+    }
+    const recovery_source =
+        \\type Old = object { title: String }
+        \\page Later
+        \\  let value = 1
+        \\end
+    ;
+    var recovered = try parseRecovering(recovery_source);
+    defer recovered.deinit();
+    try testing.expect(recovered.result.holes.diagnostics.len != 0);
+    try testing.expectEqual(@as(usize, 0), recovered.result.module.records.items.len);
+    try testing.expectEqual(@as(usize, 1), recovered.result.module.pages.items.len);
+    try testing.expectEqualStrings("Later", recovered.result.module.pages.items[0].name);
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{recovery_source});
+}
+
+test "syntax spec: former object declaration keywords are ordinary field names" {
+    const source_text = "type Card { object: String base: Number roles: String }\n";
+    var parsed = try parse(source_text);
     defer parsed.deinit();
-    try testing.expectEqual(@as(usize, 1), parsed.module.records.items.len);
-    try testing.expectEqual(@as(usize, 1), parsed.module.objects.items.len);
-    try testing.expectEqual(@as(usize, 1), parsed.module.types.items.len);
-    try testing.expectEqualStrings("Padding", parsed.module.records.items[0].name);
-    try testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{
-        "type Padding { x: Number = 12 }\n",
-    });
+    const fields = parsed.module.records.items[0].fields.items;
+    try testing.expectEqual(@as(usize, 3), fields.len);
+    for (fields, [_][]const u8{ "object", "base", "roles" }) |field, name| try testing.expectEqualStrings(name, field.name);
 }
 
 test "syntax spec: constraint value registration releases parsed ownership" {
@@ -2680,11 +2690,11 @@ test "syntax spec: constraint value registration releases parsed ownership" {
 
 test "syntax spec: nested selection arguments retain function and optional children" {
     const source_text =
-        \\fn keep(items: Selection<Selection<(Page -> Object)?>>) -> Void
+        \\fn keep(items: Selection<Selection<(Page -> Placement)?>>) -> Void
         \\end
-        \\fn unary(items: Selection<Page> -> Selection<Object>) -> Void
+        \\fn unary(items: Selection<Page> -> Selection<Placement>) -> Void
         \\end
-        \\fn multiple(items: (Selection<Page>, Selection<Object>) -> Selection<Page>) -> Void
+        \\fn multiple(items: (Selection<Page>, Selection<Placement>) -> Selection<Page>) -> Void
         \\end
     ;
     var parsed = try parse(source_text);
@@ -2697,7 +2707,7 @@ test "syntax spec: nested selection arguments retain function and optional child
     const callback = optional.optional_child.?;
     try testing.expectEqual(Type.Kind.function, callback.kind);
     try testing.expectEqual(Type.Kind.page, callback.fn_params[0].kind);
-    try testing.expectEqual(Type.Kind.object, callback.fn_result.?.kind);
+    try testing.expectEqual(Type.Kind.placement, callback.fn_result.?.kind);
     try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source_text});
     try allocation_testing.checkAllAllocationFailures(testing.allocator, cloneAndDeinitModule, .{&parsed.module});
 }

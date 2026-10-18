@@ -2,31 +2,32 @@
 Function types and lambdas
 ================================================================================
 
-const plus_one: number -> number = (x: number) |-> x + 1
+const plus_one: Number -> Number = (x: Number) |-> x + 1
 
-fn make_label(text_value: string) -> page -> object
-  return (page_value: page)
+fn make_label(text_value: String) -> Page -> Text
+  return (page_value: Page)
     |->
-      place_on!(page_value, new(text_value, "body", "text"))
+      text(text_value)
 end
 
-fn use(callback: (page -> object) -> document, pair: (page, document) -> object, thunk: () -> number) -> void
-  foreach(pages(docctx()), (page_value: page) |-> pair(page_value, docctx()))
+fn use(callback: (Page -> Text) -> Document, pair: (Page, Document) -> Text, thunk: () -> Number) -> Void
+  let label = pair(pagectx(), docctx())
   return
 end
 
 page Lambda
-  let title = link(head "Lambda syntax", "lambda")
-  title.text_color = c"#334455"
-  docctx().footer_text = title.content ?? "footer"
-  let has_color = title.text_color?
-  let missing_color = !has_color
+  let title = text("Lambda syntax")
+  let colored = title with { style.text.color = c"#334455" }
+  let marker: Text? = none
+  let has_marker = marker?
+  let missing_marker = !has_marker
+  let label = marker ?? colored
   let sample = code """
-fn sample() -> number
+fn sample() -> Number
   return 1
 end
 """
-  let value = ((x: number) |-> x + 1)(2)
+  let value = ((x: Number) |-> x + 1)(2)
 end
 
 --------------------------------------------------------------------------------
@@ -36,15 +37,18 @@ end
     (identifier)
     (type
       (function_type
-        (primary_type)
+        (primary_type
+          (type_identifier))
         (type
-          (primary_type))))
+          (primary_type
+            (type_identifier)))))
     (lambda_expression
       (lambda_parameters
         (lambda_parameter
           (identifier)
           (type
-            (primary_type))))
+            (primary_type
+              (type_identifier)))))
       (binary_expression
         (identifier)
         (number))))
@@ -55,31 +59,28 @@ end
       (parameter
         (identifier)
         (type
-          (primary_type))))
+          (primary_type
+            (type_identifier)))))
     (type
       (function_type
-        (primary_type)
+        (primary_type
+          (type_identifier))
         (type
-          (primary_type))))
+          (primary_type
+            (type_identifier)))))
     (return_statement
       (lambda_expression
         (lambda_parameters
           (lambda_parameter
             (identifier)
             (type
-              (primary_type))))
+              (primary_type
+                (type_identifier)))))
         (call_expression
           (callable_identifier
             (bare_callable_identifier
               (identifier)))
-          (identifier)
-          (call_expression
-            (callable_identifier
-              (bare_callable_identifier
-                (identifier)))
-            (identifier)
-            (string)
-            (string))))))
+          (identifier)))))
   (function_declaration
     (bare_callable_identifier
       (identifier))
@@ -90,30 +91,38 @@ end
           (function_type
             (type
               (function_type
-                (primary_type)
+                (primary_type
+                  (type_identifier))
                 (type
-                  (primary_type))))
+                  (primary_type
+                    (type_identifier)))))
             (type
-              (primary_type)))))
+              (primary_type
+                (type_identifier))))))
       (parameter
         (identifier)
         (type
           (function_type
             (type
-              (primary_type))
+              (primary_type
+                (type_identifier)))
             (type
-              (primary_type))
+              (primary_type
+                (type_identifier)))
             (type
-              (primary_type)))))
+              (primary_type
+                (type_identifier))))))
       (parameter
         (identifier)
         (type
           (function_type
             (type
-              (primary_type))))))
+              (primary_type
+                (type_identifier)))))))
     (type
       (primary_type))
-    (expression_statement
+    (let_statement
+      (identifier)
       (call_expression
         (callable_identifier
           (bare_callable_identifier
@@ -121,26 +130,11 @@ end
         (call_expression
           (callable_identifier
             (bare_callable_identifier
-              (identifier)))
-          (call_expression
-            (callable_identifier
-              (bare_callable_identifier
-                (identifier)))))
-        (lambda_expression
-          (lambda_parameters
-            (lambda_parameter
-              (identifier)
-              (type
-                (primary_type))))
-          (call_expression
-            (callable_identifier
-              (bare_callable_identifier
-                (identifier)))
-            (identifier)
-            (call_expression
-              (callable_identifier
-                (bare_callable_identifier
-                  (identifier))))))))
+              (identifier))))
+        (call_expression
+          (callable_identifier
+            (bare_callable_identifier
+              (identifier))))))
     (return_statement))
   (page_declaration
     (identifier)
@@ -150,38 +144,36 @@ end
         (callable_identifier
           (bare_callable_identifier
             (identifier)))
-        (text_call_expression
-          (callable_identifier
-            (bare_callable_identifier
-              (identifier)))
-          (string))
         (string)))
-    (member_assignment_statement
-      (member_expression
+    (let_statement
+      (identifier)
+      (value_update_expression
         (identifier)
-        (identifier))
-      (color_string))
-    (member_assignment_statement
-      (member_expression
-        (call_expression
-          (callable_identifier
-            (bare_callable_identifier
-              (identifier))))
-        (identifier))
-      (property_default_expression
-        (member_expression
-          (identifier)
-          (identifier))
-        (string)))
+        (value_update_field
+          (value_field_path
+            (identifier)
+            (identifier)
+            (identifier))
+          (color_string))))
+    (let_statement
+      (identifier)
+      (type
+        (optional_type
+          (primary_type
+            (type_identifier))))
+      (identifier))
     (let_statement
       (identifier)
       (property_exists_expression
-        (member_expression
-          (identifier)
-          (identifier))))
+        (identifier)))
     (let_statement
       (identifier)
       (unary_expression
+        (identifier)))
+    (let_statement
+      (identifier)
+      (property_default_expression
+        (identifier)
         (identifier)))
     (let_statement
       (identifier)
@@ -199,7 +191,8 @@ end
               (lambda_parameter
                 (identifier)
                 (type
-                  (primary_type))))
+                  (primary_type
+                    (type_identifier)))))
             (binary_expression
               (identifier)
               (number))))
@@ -209,18 +202,18 @@ end
 Bang calls and paired placement functions
 ================================================================================
 
-fn/! note(text_value: string) -> object
+fn/! note(text_value: String) -> Text
   return text(text_value)
 end
 
-fn place_direct!(obj: object) -> object
-  return place!(obj)
+fn place_direct!(value: Text) -> Placed<Text>
+  return place!(value)
 end
 
 page Bang
   let card = note("draft")
   note!("placed")
-  place!(new("loose", "body", "text"))
+  place!(text("loose"))
   text! <<
 body text
 >>
@@ -235,9 +228,11 @@ end
       (parameter
         (identifier)
         (type
-          (primary_type))))
+          (primary_type
+            (type_identifier)))))
     (type
-      (primary_type))
+      (primary_type
+        (type_identifier)))
     (return_statement
       (call_expression
         (callable_identifier
@@ -251,9 +246,15 @@ end
       (parameter
         (identifier)
         (type
-          (primary_type))))
+          (primary_type
+            (type_identifier)))))
     (type
-      (primary_type))
+      (primary_type
+        (type_identifier)
+        (type_arguments
+          (type
+            (primary_type
+              (type_identifier))))))
     (return_statement
       (call_expression
         (callable_identifier
@@ -284,8 +285,6 @@ end
           (callable_identifier
             (bare_callable_identifier
               (identifier)))
-          (string)
-          (string)
           (string))))
     (block_call_statement
       (callable_identifier
@@ -309,13 +308,18 @@ end
     (identifier)
     (let_statement
       (identifier)
-      (bare_callable_identifier (identifier)))
+      (bare_callable_identifier
+        (identifier)))
     (let_statement
       (identifier)
       (qualified_callable_identifier
         (identifier)
-        (bare_callable_identifier (identifier))))
+        (bare_callable_identifier
+          (identifier))))
     (expression_statement
       (call_expression
-        (callable_identifier (bare_callable_identifier (identifier)))
-        (bare_callable_identifier (identifier))))))
+        (callable_identifier
+          (bare_callable_identifier
+            (identifier)))
+        (bare_callable_identifier
+          (identifier))))))

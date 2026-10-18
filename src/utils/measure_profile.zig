@@ -78,7 +78,7 @@ pub const AnalysisKind = enum {
     semantics_dependency_queries,
     semantics_call_graph,
     semantics_function_bodies,
-    semantics_object_declarations,
+    semantics_type_fields,
     execution_graph,
 };
 
@@ -202,7 +202,7 @@ var analysis_semantics_pages = CountTime{};
 var analysis_semantics_dependency_queries = CountTime{};
 var analysis_semantics_call_graph = CountTime{};
 var analysis_semantics_function_bodies = CountTime{};
-var analysis_semantics_object_declarations = CountTime{};
+var analysis_semantics_type_fields = CountTime{};
 var analysis_execution_graph = CountTime{};
 
 var wysiwyg_evaluate_solve = CountTime{};
@@ -449,7 +449,7 @@ pub fn printIfEnabled() void {
     printCounter("analysis semantics dependency queries", &analysis_semantics_dependency_queries);
     printCounter("analysis semantics call graph", &analysis_semantics_call_graph);
     printCounter("analysis semantics function bodies", &analysis_semantics_function_bodies);
-    printCounter("analysis semantics object declarations", &analysis_semantics_object_declarations);
+    printCounter("analysis semantics type fields", &analysis_semantics_type_fields);
     printCounter("analysis execution graph", &analysis_execution_graph);
 
     printCounter("WYSIWYG evaluate and solve", &wysiwyg_evaluate_solve);
@@ -481,7 +481,7 @@ fn analysisCounter(kind: AnalysisKind) *CountTime {
         .semantics_dependency_queries => &analysis_semantics_dependency_queries,
         .semantics_call_graph => &analysis_semantics_call_graph,
         .semantics_function_bodies => &analysis_semantics_function_bodies,
-        .semantics_object_declarations => &analysis_semantics_object_declarations,
+        .semantics_type_fields => &analysis_semantics_type_fields,
         .execution_graph => &analysis_execution_graph,
     };
 }

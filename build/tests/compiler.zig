@@ -59,10 +59,6 @@ pub fn register(suite: Suite, modules: project.ProjectModules, compiler_mod: *Mo
     }, true);
     _ = suite.add(nominal_spec_mod, .{ .name = "test-nominal-types", .description = "Run focused nominal type identity tests" });
 
-    const inheritance_spec_mod = createModule(ctx, "tests/compiler/inheritance/spec_tests.zig", &.{
-        import("compiler", compiler_mod),
-    }, true);
-    _ = suite.add(inheritance_spec_mod, .{ .name = "test-inheritance", .description = "Run focused object inheritance tests" });
     const return_facts_mod = createModule(ctx, "tests/analysis/return_facts/spec_tests.zig", &.{
         import("compiler", compiler_mod),
     }, true);

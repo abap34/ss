@@ -1,7 +1,7 @@
 [
   (parameters)
   (call_expression)
-  (object_type)
+  (type_body)
 ] @rainbow.scope
 
 [

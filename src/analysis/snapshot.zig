@@ -1253,7 +1253,6 @@ fn collectTypeDefinitions(allocator: std.mem.Allocator, state: *const core.Docum
     for (state.modules.order.items) |module_id| {
         const module = state.moduleById(module_id) orelse continue;
         for (module.syntax.records.items) |decl| try appendTypeDefinition(allocator, &out, module.*, .record, decl.name, decl.name_span);
-        for (module.syntax.objects.items) |decl| try appendTypeDefinition(allocator, &out, module.*, .object, decl.name, decl.name_span);
         for (module.syntax.types.items) |decl| try appendTypeDefinition(allocator, &out, module.*, .enum_type, decl.name, decl.name_span);
     }
     return out.toOwnedSlice(allocator);

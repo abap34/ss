@@ -14,12 +14,10 @@ pub const Transform = struct {
             try self.ty(&decl.value_type);
             try self.expr(&decl.value);
         }
-        inline for (.{ value.records.items, value.objects.items }) |decls| {
-            for (decls) |*decl| for (decl.fields.items) |*field| {
-                try self.ty(&field.value_type);
-                if (field.default_value) |default| try self.expr(default);
-            };
-        }
+        for (value.records.items) |*decl| for (decl.fields.items) |*field| {
+            try self.ty(&field.value_type);
+            if (field.default_value) |default| try self.expr(default);
+        };
         try self.statements(value.document_statements.items);
         for (value.pages.items) |*page| try self.statements(page.statements.items);
     }

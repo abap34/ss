@@ -63,7 +63,6 @@ fn symbolKind(kind: query_symbols.Kind) usize {
         .page => 5,
         .enum_type => 5,
         .record => 23,
-        .object_class => 5,
     };
 }
 

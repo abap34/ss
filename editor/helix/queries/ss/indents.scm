@@ -4,7 +4,7 @@
   (document_block)
   (if_statement)
   (for_statement)
-  (object_type)
+  (type_body)
 ] @indent
 
 [

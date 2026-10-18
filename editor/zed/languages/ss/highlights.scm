@@ -13,9 +13,6 @@
   "property"
   "type"
   "enum"
-  "object"
-  "base"
-  "roles"
   "if"
   "then"
   "else"
@@ -76,7 +73,7 @@
 (parameter name: (identifier) @variable.parameter)
 (lambda_parameter name: (identifier) @variable.parameter)
 (let_statement name: (identifier) @variable)
-(object_field name: (identifier) @property)
+(type_field name: (identifier) @property)
 (member_expression member: (identifier) @property)
 (annotation name: (identifier) @attribute)
 

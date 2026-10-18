@@ -16,7 +16,6 @@ pub fn collect(allocator: std.mem.Allocator, text: source.LineIndex, program: as
     for (program.pages.items) |decl| try appendFromSpan(allocator, &out, text, decl.span);
     for (program.document_blocks.items) |decl| try appendFromSpan(allocator, &out, text, decl.span);
     for (program.records.items) |decl| try appendFromSpan(allocator, &out, text, decl.span);
-    for (program.objects.items) |decl| try appendFromSpan(allocator, &out, text, decl.span);
 
     return out.toOwnedSlice(allocator);
 }

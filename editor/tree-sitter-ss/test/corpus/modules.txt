@@ -1,9 +1,9 @@
 ================================================================================
-Qualified object bases
+Qualified field types
 ================================================================================
 
-type Derived = object {
-  base = library::Base
+type Derived {
+  base: library::Base
 }
 
 --------------------------------------------------------------------------------
@@ -11,19 +11,20 @@ type Derived = object {
 (source_file
   (type_declaration
     (type_identifier)
-    (object_type
-      (object_member
-        (object_base
-          (qualified_type_identifier
-            (identifier)
-            (type_identifier))))))
-)
+    (type_body
+      (type_field
+        (identifier)
+        (type
+          (primary_type
+            (qualified_type_identifier
+              (identifier)
+              (type_identifier))))))))
 
 ================================================================================
-Qualified object and selection annotations
+Qualified placement and selection annotations
 ================================================================================
 
-fn keep(value: Object<library::Derived>, values: Selection<Object<library::Derived>>) -> library::Derived
+fn keep(value: Placed<library::Derived>, values: Selection<Placed<library::Derived>>) -> library::Derived
   return value
 end
 
@@ -38,9 +39,13 @@ end
         (identifier)
         (type
           (primary_type
-            (qualified_type_identifier
-              (identifier)
-              (type_identifier)))))
+            (type_identifier)
+            (type_arguments
+              (type
+                (primary_type
+                  (qualified_type_identifier
+                    (identifier)
+                    (type_identifier))))))))
       (parameter
         (identifier)
         (type
@@ -48,9 +53,13 @@ end
             (type_arguments
               (type
                 (primary_type
-                  (qualified_type_identifier
-                    (identifier)
-                    (type_identifier)))))))))
+                  (type_identifier)
+                  (type_arguments
+                    (type
+                      (primary_type
+                        (qualified_type_identifier
+                          (identifier)
+                          (type_identifier))))))))))))
     (type
       (primary_type
         (qualified_type_identifier
@@ -63,7 +72,7 @@ end
 Selected imports with explicit placement names
 ================================================================================
 
-import std:internal/objects as { body_obj, body_obj! }
+import std:text as { text, text! }
 import "library" as {
   Item,
   make, make!, ;; retained declaration names
@@ -100,11 +109,11 @@ type Padding {
   (type_declaration
     (type_identifier)
     (type_body
-      (object_field
+      (type_field
         (identifier)
         (type (primary_type (type_identifier)))
         (number))
-      (object_field
+      (type_field
         (identifier)
         (type (primary_type (type_identifier)))
         (number)))))
@@ -216,7 +225,7 @@ end
   (type_declaration
     (type_identifier)
     (type_body
-      (object_field (identifier) (type (primary_type (type_identifier))) (string))))
+      (type_field (identifier) (type (primary_type (type_identifier))) (string))))
   (function_declaration
     (bare_callable_identifier (identifier))
     (parameters (parameter (identifier) (type (primary_type (type_identifier)))))
