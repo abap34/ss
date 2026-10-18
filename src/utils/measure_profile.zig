@@ -79,7 +79,6 @@ pub const AnalysisKind = enum {
     semantics_call_graph,
     semantics_function_bodies,
     semantics_object_declarations,
-    semantics_placement_effects,
     execution_graph,
 };
 
@@ -204,7 +203,6 @@ var analysis_semantics_dependency_queries = CountTime{};
 var analysis_semantics_call_graph = CountTime{};
 var analysis_semantics_function_bodies = CountTime{};
 var analysis_semantics_object_declarations = CountTime{};
-var analysis_semantics_placement_effects = CountTime{};
 var analysis_execution_graph = CountTime{};
 
 var wysiwyg_evaluate_solve = CountTime{};
@@ -452,7 +450,6 @@ pub fn printIfEnabled() void {
     printCounter("analysis semantics call graph", &analysis_semantics_call_graph);
     printCounter("analysis semantics function bodies", &analysis_semantics_function_bodies);
     printCounter("analysis semantics object declarations", &analysis_semantics_object_declarations);
-    printCounter("analysis semantics placement effects", &analysis_semantics_placement_effects);
     printCounter("analysis execution graph", &analysis_execution_graph);
 
     printCounter("WYSIWYG evaluate and solve", &wysiwyg_evaluate_solve);
@@ -485,7 +482,6 @@ fn analysisCounter(kind: AnalysisKind) *CountTime {
         .semantics_call_graph => &analysis_semantics_call_graph,
         .semantics_function_bodies => &analysis_semantics_function_bodies,
         .semantics_object_declarations => &analysis_semantics_object_declarations,
-        .semantics_placement_effects => &analysis_semantics_placement_effects,
         .execution_graph => &analysis_execution_graph,
     };
 }

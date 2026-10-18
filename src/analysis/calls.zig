@@ -230,6 +230,14 @@ const ValueFacts = struct {
         return out;
     }
 
+    fn collectFunctions(self: ValueFacts, out: *LabelMap) anyerror!void {
+        var labels = self.labels.keyIterator();
+        while (labels.next()) |label| try out.put(label.*, {});
+        var fields = self.fields.valueIterator();
+        while (fields.next()) |field| try field.collectFunctions(out);
+        for (self.children.items) |child| try child.collectFunctions(out);
+    }
+
     fn forgetFunctions(self: *ValueFacts) void {
         self.labels.clearRetainingCapacity();
         self.unknown = true;
@@ -287,14 +295,23 @@ const Activation = struct {
     owner: ?ast.FunctionDecl,
 };
 
+const CallSummary = struct { value: ValueFacts, places_objects: bool };
+const EffectFrame = struct {
+    function: ?core.FunctionKey = null,
+    places_objects: bool = false,
+    parameter_functions: ?LabelMap = null,
+    forwarding_depth: usize = 0,
+};
+
 const Analyzer = struct {
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
     sema: SemanticEnv,
     states: std.StringHashMap(u8),
-    returns: std.StringHashMap(ValueFacts),
+    returns: std.StringHashMap(CallSummary),
+    effect_frames: std.ArrayList(EffectFrame) = .empty,
     const_visiting: ConstVisitSet,
-    const_values: std.HashMap(core.FunctionKey, ValueFacts, core.FunctionKeyContext, std.hash_map.default_max_load_percentage),
+    const_values: std.HashMap(core.FunctionKey, CallSummary, core.FunctionKeyContext, std.hash_map.default_max_load_percentage),
     lambda_exprs: LambdaMap,
     lambda_captures: LambdaCaptureMap,
     capture_keys: std.StringHashMap(Label),
@@ -318,7 +335,7 @@ const Analyzer = struct {
             .state = state,
             .sema = sema.*,
             .states = std.StringHashMap(u8).init(allocator),
-            .returns = std.StringHashMap(ValueFacts).init(allocator),
+            .returns = std.StringHashMap(CallSummary).init(allocator),
             .const_visiting = ConstVisitSet.init(allocator),
             .const_values = .init(allocator),
             .lambda_exprs = LambdaMap.init(allocator),
@@ -455,6 +472,13 @@ const Analyzer = struct {
         self.call_depth += 1;
         defer self.call_depth -= 1;
         const key = try self.activationKey(activation);
+        const frame_index = self.effect_frames.items.len;
+        const frame = if (activation.label == .function)
+            try self.functionEffectFrame(activation.label.function, &activation.env)
+        else
+            EffectFrame{};
+        try self.effect_frames.append(self.allocator, frame);
+        defer _ = self.effect_frames.pop();
         // Construction calls allocate fresh abstract objects and may register
         // display functions. Their effects cannot be skipped by a return cache.
         const memoize = !self.collecting_inputs and (!self.require_known_calls or self.checking_display);
@@ -466,7 +490,16 @@ const Analyzer = struct {
                 try self.reportRecursiveActivation(activation);
                 return error.RecursiveFunction;
             }
-            if (self.returns.get(key)) |cached| return try cached.clone(self.allocator);
+            if (self.returns.get(key)) |cached| {
+                if (cached.places_objects) {
+                    // The cached activation already checked its own body. Its
+                    // effect must still be checked in the current caller.
+                    self.effect_frames.items[frame_index].forwarding_depth += 1;
+                    defer self.effect_frames.items[frame_index].forwarding_depth -= 1;
+                    try self.recordPlacement();
+                }
+                return try cached.value.clone(self.allocator);
+            }
             return ValueFacts.init(self.allocator);
         }
 
@@ -493,7 +526,7 @@ const Analyzer = struct {
         }
         if (memoize) {
             try self.states.put(key, 2);
-            try self.returns.put(key, try result.clone(self.allocator));
+            try self.returns.put(key, .{ .value = try result.clone(self.allocator), .places_objects = self.effect_frames.items[frame_index].places_objects });
         }
         return result;
     }
@@ -652,6 +685,7 @@ const Analyzer = struct {
                     (owner != null and owner.?.type_params.items.len != 0 and owner.?.instance_id == null));
                 if (self.checking_display and !typed_group and !unresolved_group and !registry.primitiveAllowsDisplayEvaluation(primitive.op)) return self.rejectDisplayWrite();
                 const arg_labels = try self.argumentFacts(call.args.items, env, owner);
+                if (primitive.places_objects) try self.recordPlacement();
                 if (primitive.callback) |callback_spec| {
                     if (arg_labels.items.len <= callback_spec.function_arg_index) return ValueFacts.unknownValue(self.allocator);
                     const callback = arg_labels.items[callback_spec.function_arg_index];
@@ -853,6 +887,32 @@ const Analyzer = struct {
         }
     }
 
+    fn recordPlacement(self: *Analyzer) !void {
+        if (self.checking_display) return self.rejectDisplayWrite();
+        // A function value has no placement effect until it is invoked. Apply
+        // the same rule through named calls, closures, defaults and caches.
+        for (self.effect_frames.items) |*frame| {
+            frame.places_objects = true;
+            const key = frame.function orelse continue;
+            const function = self.sema.functions.get(key) orelse continue;
+            if (function.isDisplay()) return self.rejectDisplayWrite();
+            if (frame.forwarding_depth != 0) continue;
+            if (std.mem.endsWith(u8, function.name, "!")) continue;
+            try self.state.addValidationDiagnostic(.@"error", null, null, self.state.sourceOrigin(key.module_id, function.span), .{
+                .user_report = .{ .code = "PlacementEffect", .message = try std.fmt.allocPrint(self.state.allocator, "function '{s}' calls a placing operation and must end with '!'", .{function.name}) },
+            });
+            return error.DiagnosticsFailed;
+        }
+    }
+
+    fn functionEffectFrame(self: *Analyzer, key: core.FunctionKey, env: *const FunctionEnv) !EffectFrame {
+        var callbacks = LabelMap.init(self.allocator);
+        if (self.sema.functions.get(key)) |function| {
+            for (function.params.items) |param| if (env.get(param.name)) |value| try value.collectFunctions(&callbacks);
+        }
+        return .{ .function = key, .parameter_functions = callbacks };
+    }
+
     fn rejectDisplayWrite(self: *Analyzer) anyerror {
         try self.state.addValidationDiagnostic(.@"error", null, null, self.current_origin, .{
             .user_report = .{ .code = "ImpureDisplayFunction", .message = try self.state.allocator.dupe(u8, "display functions must be pure and read-only, including indirect calls") },
@@ -900,7 +960,18 @@ const Analyzer = struct {
         args: []const ValueFacts,
         owner: ?ast.FunctionDecl,
     ) anyerror!ValueFacts {
-        return switch (label) {
+        // Higher-order functions forward effects supplied by their arguments.
+        // Their callers still observe those effects, and display remains pure.
+        var forwarding_frames = std.ArrayList(usize).empty;
+        for (self.effect_frames.items, 0..) |*frame, index| if (frame.parameter_functions) |callbacks| {
+            if (!callbacks.contains(label)) continue;
+            try forwarding_frames.append(self.allocator, index);
+            frame.forwarding_depth += 1;
+        };
+        defer for (forwarding_frames.items) |index| {
+            self.effect_frames.items[index].forwarding_depth -= 1;
+        };
+        const returned = switch (label) {
             .function => |key| blk: {
                 const func = self.sema.functions.get(key) orelse break :blk ValueFacts.init(self.allocator);
                 break :blk try self.invokeNamed(label, key.module_id, func, args);
@@ -913,6 +984,8 @@ const Analyzer = struct {
                 break :blk try self.enter(.{ .label = label, .env = env, .owner = owner });
             },
         };
+        for (forwarding_frames.items) |index| try returned.collectFunctions(&self.effect_frames.items[index].parameter_functions.?);
+        return returned;
     }
 
     fn invokeNamed(
@@ -924,16 +997,32 @@ const Analyzer = struct {
     ) anyerror!ValueFacts {
         var env = FunctionEnv.init(self.allocator);
         try self.bindParams(&env, func.params.items, args);
-        var index: usize = args.len;
-        while (index < func.params.items.len) : (index += 1) {
-            const param = func.params.items[index];
-            if (param.default_value) |default_value| {
-                const previous = self.sema;
-                self.sema = self.sema.forModule(module_id);
-                {
-                    defer self.sema = previous;
-                    const labels = try self.exprFacts(default_value.*, &env, func);
-                    try env.bind(param.name, labels);
+        if (args.len < func.params.items.len) {
+            for (self.effect_frames.items) |frame| if (frame.function) |key| {
+                if (key.eql(label.function)) {
+                    try reportRecursiveFunction(self.state, module_id, func);
+                    return error.RecursiveFunction;
+                }
+            };
+            if (self.effect_frames.items.len >= max_call_analysis_depth) {
+                try self.state.addValidationDiagnostic(.@"error", null, null, self.state.sourceOrigin(module_id, func.span), .{
+                    .user_report = .{ .code = "FunctionAnalysisLimitExceeded", .message = try self.state.allocator.dupe(u8, "cannot establish termination within the function analysis depth limit") },
+                });
+                return error.FunctionAnalysisLimitExceeded;
+            }
+            try self.effect_frames.append(self.allocator, try self.functionEffectFrame(label.function, &env));
+            defer _ = self.effect_frames.pop();
+            var index: usize = args.len;
+            while (index < func.params.items.len) : (index += 1) {
+                const param = func.params.items[index];
+                if (param.default_value) |default_value| {
+                    const previous = self.sema;
+                    self.sema = self.sema.forModule(module_id);
+                    {
+                        defer self.sema = previous;
+                        const labels = try self.exprFacts(default_value.*, &env, func);
+                        try env.bind(param.name, labels);
+                    }
                 }
             }
         }
@@ -945,7 +1034,10 @@ const Analyzer = struct {
         // Check initializer purity again in displays, independently of whether
         // an ordinary construction call has already forced the constant.
         if (!self.checking_display) {
-            if (self.const_values.get(resolved.key)) |value| return value.clone(self.allocator);
+            if (self.const_values.get(resolved.key)) |summary| {
+                if (summary.places_objects) try self.recordPlacement();
+                return summary.value.clone(self.allocator);
+            }
         }
         if (self.const_visiting.contains(resolved.key)) return ValueFacts.init(self.allocator);
         try self.const_visiting.put(resolved.key, {});
@@ -956,8 +1048,11 @@ const Analyzer = struct {
         defer self.sema = previous;
 
         const env = FunctionEnv.init(self.allocator);
+        const frame_index = self.effect_frames.items.len;
+        try self.effect_frames.append(self.allocator, .{});
+        defer _ = self.effect_frames.pop();
         const value = try self.exprFacts(resolved.decl.value, &env, null);
-        if (!self.checking_display) try self.const_values.put(resolved.key, try value.clone(self.allocator));
+        if (!self.checking_display) try self.const_values.put(resolved.key, .{ .value = try value.clone(self.allocator), .places_objects = self.effect_frames.items[frame_index].places_objects });
         return value;
     }
 
