@@ -27,11 +27,11 @@ pub const OverlaySource = struct {
     source: []const u8,
 };
 
-pub const VariableObjectClassExpectation = struct {
+pub const VariableTypeExpectation = struct {
     name: []const u8,
     scope_kind: []const u8,
     scope_name: ?[]const u8 = null,
-    object_class: ?[]const u8,
+    type_label: []const u8,
 };
 
 fn analyzeAndFinalizeDocumentState(io: std.Io, allocator: std.mem.Allocator, state: *core.DocumentState) !void {
@@ -357,12 +357,12 @@ pub fn expectDumpContains(
     }
 }
 
-pub fn expectVariableObjectClasses(
+pub fn expectVariableTypes(
     io: std.Io,
     allocator: std.mem.Allocator,
     path: []const u8,
     source: []const u8,
-    expected: []const VariableObjectClassExpectation,
+    expected: []const VariableTypeExpectation,
 ) !void {
     var state = try buildFinalizedDocumentState(io, allocator, path, source);
     defer state.deinit();
@@ -378,8 +378,12 @@ pub fn expectVariableObjectClasses(
     const root = &parsed.value.object;
     const variables = utils.json.arrayFieldObject(root, "variables") orelse return error.ExpectedDumpTextMissing;
 
+    for (variables.items) |value| {
+        if (value != .object) return error.ExpectedDumpTextMissing;
+        if (value.object.contains("objectClass") or value.object.contains("objectClassModuleId")) return error.UnexpectedLegacyClassMetadata;
+    }
     for (expected) |item| {
-        if (!dumpVariableObjectClassMatches(variables, item)) return error.ExpectedDumpTextMissing;
+        if (!dumpVariableTypeMatches(variables, item)) return error.ExpectedDumpTextMissing;
     }
 }
 
@@ -410,14 +414,14 @@ pub fn expectRecordStringDefaultNotEvaluated(
     return error.ExpectedRecordStringDefaultMissing;
 }
 
-fn dumpVariableObjectClassMatches(variables: *const utils.json.ValueArray, expected: VariableObjectClassExpectation) bool {
+fn dumpVariableTypeMatches(variables: *const utils.json.ValueArray, expected: VariableTypeExpectation) bool {
     for (variables.items) |value| {
         if (value != .object) continue;
         const object = &value.object;
         if (!std.mem.eql(u8, utils.json.stringField(object, "name") orelse "", expected.name)) continue;
         if (!std.mem.eql(u8, utils.json.stringField(object, "scopeKind") orelse "", expected.scope_kind)) continue;
         if (!optionalStringEql(utils.json.stringField(object, "scopeName"), expected.scope_name)) continue;
-        if (!optionalStringEql(utils.json.stringField(object, "objectClass"), expected.object_class)) continue;
+        if (!std.mem.eql(u8, utils.json.stringField(object, "type") orelse "", expected.type_label)) continue;
         return true;
     }
     return false;

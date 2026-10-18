@@ -13,43 +13,48 @@ test "type spec: any is the explicit wildcard in acceptance checks" {
     try testing.expect(Type.accepts(Type.any, Type.number));
     try testing.expect(Type.accepts(Type.string, Type.any));
     try testing.expect(Type.accepts(Type.selection(.any), Type.selection(.page)));
-    try testing.expect(Type.accepts(Type.selection(.any), Type.selection(.object)));
-    try testing.expect(!Type.accepts(Type.selection(.page), Type.selection(.object)));
+    try testing.expect(Type.accepts(Type.selection(.any), Type.selection(.placement)));
+    try testing.expect(!Type.accepts(Type.selection(.page), Type.selection(.placement)));
 }
 
 test "type spec: erased selections cannot acquire a concrete element type" {
     const erased = Type.selection(.any);
     try testing.expect(Type.accepts(erased, Type.selection(.page)));
-    try testing.expect(Type.accepts(erased, Type.selection(.object)));
+    try testing.expect(Type.accepts(erased, Type.selection(.placement)));
     try testing.expect(!Type.accepts(Type.selection(.page), erased));
-    try testing.expect(!Type.accepts(Type.selection(.object), erased));
+    try testing.expect(!Type.accepts(Type.selection(.placement), erased));
     var erased_result = try Type.functionType(testing.allocator, &.{}, erased);
     defer erased_result.deinit(testing.allocator);
-    var object_result = try Type.functionType(testing.allocator, &.{}, Type.selection(.object));
-    defer object_result.deinit(testing.allocator);
-    try testing.expect(!Type.accepts(object_result, erased_result));
-    try testing.expect(Type.accepts(erased_result, object_result));
+    var placement_result = try Type.functionType(testing.allocator, &.{}, Type.selection(.placement));
+    defer placement_result.deinit(testing.allocator);
+    try testing.expect(!Type.accepts(placement_result, erased_result));
+    try testing.expect(Type.accepts(erased_result, placement_result));
 }
 
-test "type spec: object class names refine only when both sides specify a class" {
-    const text = Type.objectClass("Text");
-    const image = Type.objectClass("Image");
-
-    try testing.expect(Type.accepts(text, Type.objectClass("Text")));
+test "type spec: nominal values require the same declaration identity" {
+    const text = Type.recordType("Text").inModule(1);
+    const image = Type.recordType("Image").inModule(1);
+    try testing.expect(Type.accepts(text, Type.recordType("Text").inModule(1)));
     try testing.expect(!Type.accepts(text, image));
-    try testing.expect(Type.accepts(text, Type.object));
-    try testing.expect(Type.accepts(Type.object, image));
+    try testing.expect(!Type.accepts(text, text.inModule(2)));
+    try testing.expect(!Type.accepts(text, Type.placement));
+    try testing.expect(!Type.accepts(Type.placement, text));
 }
 
-test "type spec: selection item class names follow object class refinement" {
-    const text_selection = Type.selectionType(Type.objectClass("Text"));
-    const image_selection = Type.selectionType(Type.objectClass("Image"));
-    const unclassified_object_selection = Type.selection(.object);
-
-    try testing.expect(Type.accepts(text_selection, Type.selectionType(Type.objectClass("Text"))));
+test "type spec: selections retain exact inputs and permit only one way placement erasure" {
+    var text = try Type.placedOf(testing.allocator, Type.recordType("Text").inModule(1));
+    defer text.deinit(testing.allocator);
+    var image = try Type.placedOf(testing.allocator, Type.recordType("Image").inModule(1));
+    defer image.deinit(testing.allocator);
+    var text_selection = try Type.selectionOf(testing.allocator, text);
+    defer text_selection.deinit(testing.allocator);
+    var image_selection = try Type.selectionOf(testing.allocator, image);
+    defer image_selection.deinit(testing.allocator);
+    const erased = Type.selection(.placement);
+    try testing.expect(Type.accepts(text_selection, text_selection));
     try testing.expect(!Type.accepts(text_selection, image_selection));
-    try testing.expect(Type.accepts(text_selection, unclassified_object_selection));
-    try testing.expect(Type.accepts(unclassified_object_selection, image_selection));
+    try testing.expect(!Type.accepts(text_selection, erased));
+    try testing.expect(Type.accepts(erased, image_selection));
 }
 
 test "type spec: formatting exposes the source-level type constructor shape" {
@@ -61,8 +66,13 @@ test "type spec: formatting exposes the source-level type constructor shape" {
     try expectFormat(Type.none, "None");
     try expectFormat(Type.enumType("Align"), "Align");
     try expectFormat(maybe_color, "Color?");
-    try expectFormat(Type.objectClass("Text"), "Object<Text>");
-    try expectFormat(Type.selectionType(Type.objectClass("Text")), "Selection<Object<Text>>");
+    try expectFormat(Type.recordType("Text"), "Text");
+    var placed = try Type.placedOf(testing.allocator, Type.recordType("Text"));
+    defer placed.deinit(testing.allocator);
+    var selection = try Type.selectionOf(testing.allocator, placed);
+    defer selection.deinit(testing.allocator);
+    try expectFormat(placed, "Placed<Text>");
+    try expectFormat(selection, "Selection<Placed<Text>>");
 }
 
 test "type spec: optional acceptance covers none and the child type" {
@@ -92,23 +102,23 @@ test "type spec: enum and color are not plain strings statically" {
 }
 
 test "type spec: function types format as source-level arrows" {
-    var unary = try Type.functionType(testing.allocator, &.{Type.page}, Type.object);
+    var unary = try Type.functionType(testing.allocator, &.{Type.page}, Type.placement);
     defer unary.deinit(testing.allocator);
-    try expectFormat(unary, "Page -> Object");
+    try expectFormat(unary, "Page -> Placement");
 
-    var multi = try Type.functionType(testing.allocator, &.{ Type.page, Type.document }, Type.object);
+    var multi = try Type.functionType(testing.allocator, &.{ Type.page, Type.document }, Type.placement);
     defer multi.deinit(testing.allocator);
-    try expectFormat(multi, "(Page, Document) -> Object");
+    try expectFormat(multi, "(Page, Document) -> Placement");
 
     var zero = try Type.functionType(testing.allocator, &.{}, Type.number);
     defer zero.deinit(testing.allocator);
     try expectFormat(zero, "() -> Number");
 
-    var callback = try Type.functionType(testing.allocator, &.{Type.page}, Type.object);
+    var callback = try Type.functionType(testing.allocator, &.{Type.page}, Type.placement);
     defer callback.deinit(testing.allocator);
     var higher_order = try Type.functionType(testing.allocator, &.{callback}, Type.document);
     defer higher_order.deinit(testing.allocator);
-    try expectFormat(higher_order, "(Page -> Object) -> Document");
+    try expectFormat(higher_order, "(Page -> Placement) -> Document");
 }
 
 test "type spec: function acceptance checks parameters and result types" {
@@ -128,12 +138,12 @@ test "type spec: function acceptance checks parameters and result types" {
 }
 
 test "type spec: optional function types preserve their child shape" {
-    var callback = try Type.functionType(testing.allocator, &.{Type.page}, Type.objectClass("Text"));
+    var callback = try Type.functionType(testing.allocator, &.{Type.page}, Type.recordType("Text"));
     defer callback.deinit(testing.allocator);
     var maybe_callback = try Type.optional(testing.allocator, callback);
     defer maybe_callback.deinit(testing.allocator);
 
-    try expectFormat(maybe_callback, "(Page -> Object<Text>)?");
+    try expectFormat(maybe_callback, "(Page -> Text)?");
     try testing.expect(Type.accepts(maybe_callback, Type.none));
     try testing.expect(Type.accepts(maybe_callback, callback));
     try testing.expect(!Type.accepts(callback, maybe_callback));
@@ -178,7 +188,7 @@ test "type arguments preserve nested nominal identities and formatting" {
 }
 
 test "type argument ownership and source spans do not affect equality or hashing" {
-    const borrowed = Type.selectionType(Type.objectClass("Text").inModule(7));
+    const borrowed = Type.selectionType(Type.recordType("Text").inModule(7));
     var owned = try borrowed.clone(testing.allocator);
     defer owned.deinit(testing.allocator);
     owned.mutableArguments()[0].class_name_span = .{ .start = 10, .end = 14 };
@@ -297,8 +307,7 @@ test "type spec: placed inputs remain invariant while placement erasure is one w
     try testing.expect(!Type.accepts(placed, Type.placement));
     try testing.expect(!Type.accepts(placed, different));
     try testing.expect(!Type.accepts(placed, inner));
-    try testing.expect(!Type.accepts(placed, Type.object));
-    try testing.expect(!Type.accepts(Type.object, placed));
+    try testing.expect(!Type.accepts(inner, placed));
     var selection = try Type.selectionOf(testing.allocator, placed);
     defer selection.deinit(testing.allocator);
     try testing.expect(Type.accepts(Type.selection(.placement), selection));
@@ -332,5 +341,5 @@ test "type spec: groups retain child order, arity and nested nominal types" {
     try testing.expect(!Type.accepts(pair, reversed));
     try testing.expect(!Type.accepts(pair, repeated));
     try testing.expect(!Type.accepts(pair, nested));
-    try testing.expect(!Type.accepts(Type.object, pair));
+    try testing.expect(!Type.accepts(Type.placement, pair));
 }

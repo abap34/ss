@@ -355,7 +355,7 @@ fn expectDumpContains(source: []const u8, expected: []const []const u8) !void {
     try compiler_semantics.expectDumpContains(testing.io, allocator, path, source, expected);
 }
 
-fn expectVariableObjectClasses(source: []const u8, expected: []const compiler_semantics.VariableObjectClassExpectation) !void {
+fn expectVariableTypes(source: []const u8, expected: []const compiler_semantics.VariableTypeExpectation) !void {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -363,7 +363,7 @@ fn expectVariableObjectClasses(source: []const u8, expected: []const compiler_se
     const allocator = arena.allocator();
 
     const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
-    try compiler_semantics.expectVariableObjectClasses(testing.io, allocator, path, source, expected);
+    try compiler_semantics.expectVariableTypes(testing.io, allocator, path, source, expected);
 }
 
 fn expectOverlayDiagnostic(source: []const u8, overlay_source: []const u8, expected_origin: []const u8, expected_message: []const u8) !void {
@@ -513,63 +513,34 @@ test "compiler semantics: default import introduces an alias and bare names" {
     );
 }
 
-test "compiler semantics: editor variable info keeps object classes through user calls" {
-    try expectVariableObjectClasses(
-        \\type Thing = object {
-        \\  roles = ["thing"]
-        \\  size: Number = 1
-        \\}
-        \\
-        \\fn make(role: String) -> Object
-        \\  return new("x", role, "text")
-        \\end
-        \\
-        \\fn wrap() -> Object
-        \\  return make("thing")
-        \\end
-        \\
+test "compiler semantics: editor variable info preserves nominal value types through user calls" {
+    try expectVariableTypes(
+        \\type Thing { size: Number = 1 }
+        \\fn make(size: Number) -> Thing = Thing { size = size }
+        \\fn wrap() -> Thing = make(2)
         \\page ok
         \\  let t = wrap()
-        \\  t.size = 2
+        \\  text!(str(t.size))
         \\end
-        \\
     , &.{
-        .{ .name = "t", .scope_kind = "page", .scope_name = "ok", .object_class = "Thing" },
+        .{ .name = "t", .scope_kind = "page", .scope_name = "ok", .type_label = "Thing" },
     });
 }
 
-test "compiler semantics: return inference preserves facts for imprecise object and selection types" {
-    try expectVariableObjectClasses(
-        \\import std:themes/default as *
-        \\
-        \\type Card = object {
-        \\  roles = ["card"]
-        \\  size: Number = 1
-        \\}
-        \\
-        \\fn card_role() -> String
-        \\  return "card"
-        \\end
-        \\
-        \\fn make_card() -> Object
-        \\  let role_name = card_role()
-        \\  return new("direct", role_name, "text")
-        \\end
-        \\
-        \\fn cards() -> Selection<Object>
-        \\  return objs_here("card")
-        \\end
-        \\
+test "compiler semantics: typed return annotations preserve selection element types" {
+    try expectVariableTypes(
+        \\type Card { size: Number = 1 }
+        \\fn display(self: Placed<Card>) -> Text = text(str(self.value.size))
+        \\fn make_card() -> Card = Card {}
+        \\fn cards() -> Selection<Placed<Card>> = select<Card>(pagectx())
         \\page ok
         \\  let direct = make_card()
-        \\  let source = make_card()
-        \\  place_on!(pagectx(), source)
+        \\  let source = place!(make_card())
         \\  let selected = first(cards())
         \\end
-        \\
     , &.{
-        .{ .name = "direct", .scope_kind = "page", .scope_name = "ok", .object_class = "Card" },
-        .{ .name = "selected", .scope_kind = "page", .scope_name = "ok", .object_class = "Card" },
+        .{ .name = "direct", .scope_kind = "page", .scope_name = "ok", .type_label = "Card" },
+        .{ .name = "selected", .scope_kind = "page", .scope_name = "ok", .type_label = "Placed<Card>" },
     });
 }
 
@@ -590,24 +561,16 @@ test "compiler semantics: fact-complete return annotations still validate functi
     , "case.ss:bytes:", "TypeMismatch: expected Number, got String");
 }
 
-test "compiler semantics: editor variable info keeps object classes through paired placement calls" {
-    try expectVariableObjectClasses(
-        \\type Thing = object {
-        \\  roles = ["thing"]
-        \\  size: Number = 1
-        \\}
-        \\
-        \\fn/! thing() -> Object
-        \\  return new("x", "thing", "text")
-        \\end
-        \\
+test "compiler semantics: paired placement calls preserve nominal input types" {
+    try expectVariableTypes(
+        \\type Thing { size: Number = 1 }
+        \\fn display(self: Placed<Thing>) -> Text = text(str(self.value.size))
+        \\fn/! thing() -> Thing = Thing {}
         \\page ok
         \\  let t = thing!()
-        \\  t.size = 2
         \\end
-        \\
     , &.{
-        .{ .name = "t", .scope_kind = "page", .scope_name = "ok", .object_class = "Thing" },
+        .{ .name = "t", .scope_kind = "page", .scope_name = "ok", .type_label = "Placed<Thing>" },
     });
 }
 
@@ -6210,39 +6173,43 @@ test "compiler semantics: constant concatenation and argument facts resolve quer
     );
 }
 
-test "compiler semantics: return joins and selection algebra preserve only justified classes" {
-    try expectVariableObjectClasses(
-        \\type Card = object { roles = ["card"] }
-        \\fn choose(flag: Bool, value: Object) -> Object
+test "compiler semantics: return joins and selection algebra preserve justified placement types" {
+    try expectVariableTypes(
+        \\type Card {}
+        \\type Other {}
+        \\fn display(self: Placed<Card>) -> Text = text("Card")
+        \\fn display(self: Placed<Other>) -> Text = text("Other")
+        \\fn choose(flag: Bool, card: Placed<Card>, value: Placement) -> Placement
         \\  if flag
-        \\    return new("card", "card", "text")
+        \\    return card
         \\  end
         \\  return value
         \\end
-        \\fn reverse(flag: Bool, value: Object) -> Object
+        \\fn reverse(flag: Bool, card: Placed<Card>, value: Placement) -> Placement
         \\  if flag
         \\    return value
         \\  end
-        \\  return new("card", "card", "text")
+        \\  return card
         \\end
         \\page main
-        \\  let untyped = new("x", "untyped", "text")
-        \\  let chosen = choose(false, untyped)
-        \\  let reversed = reverse(true, untyped)
-        \\  let cards = select(new("card", "card", "text"), "self_object")
-        \\  let others = select(untyped, "self_object")
-        \\  let combined = selection_union(cards, others)
-        \\  let common = selection_intersection(others, cards)
-        \\  let remaining = selection_difference(others, cards)
-        \\  let kept = selection_difference(cards, others)
+        \\  let card = place!(Card {})
+        \\  let other = place!(Other {})
+        \\  let chosen = choose(false, card, other)
+        \\  let reversed = reverse(true, card, other)
+        \\  let cards = selection(card)
+        \\  let others: Selection<Placement> = selection(other)
+        \\  let combined = cards | others
+        \\  let common = others & cards
+        \\  let remaining = others - cards
+        \\  let kept = cards - others
         \\end
     , &.{
-        .{ .name = "chosen", .scope_kind = "page", .scope_name = "main", .object_class = null },
-        .{ .name = "reversed", .scope_kind = "page", .scope_name = "main", .object_class = null },
-        .{ .name = "combined", .scope_kind = "page", .scope_name = "main", .object_class = null },
-        .{ .name = "common", .scope_kind = "page", .scope_name = "main", .object_class = "Card" },
-        .{ .name = "remaining", .scope_kind = "page", .scope_name = "main", .object_class = null },
-        .{ .name = "kept", .scope_kind = "page", .scope_name = "main", .object_class = "Card" },
+        .{ .name = "chosen", .scope_kind = "page", .scope_name = "main", .type_label = "Placement" },
+        .{ .name = "reversed", .scope_kind = "page", .scope_name = "main", .type_label = "Placement" },
+        .{ .name = "combined", .scope_kind = "page", .scope_name = "main", .type_label = "Selection<Placement>" },
+        .{ .name = "common", .scope_kind = "page", .scope_name = "main", .type_label = "Selection<Placed<Card>>" },
+        .{ .name = "remaining", .scope_kind = "page", .scope_name = "main", .type_label = "Selection<Placement>" },
+        .{ .name = "kept", .scope_kind = "page", .scope_name = "main", .type_label = "Selection<Placed<Card>>" },
     });
 }
 
@@ -8602,4 +8569,24 @@ test "compiler semantics: document and page settings use the shared nominal valu
         \\  let value = docctx().layout_h_center_offset ?? 0
         \\end
     , "case.ss:bytes:", "TypeMismatch: '??' expects an optional value");
+}
+
+test "compiler semantics: variable dumps preserve generic values and placement types" {
+    try expectVariableTypes(
+        \\type Box<T> { item: T }
+        \\fn display<T>(self: Placed<Box<T>>) -> Text = text("Box")
+        \\page main
+        \\  let value = Box { item = 7 }
+        \\  let placed = place!(value)
+        \\  let input = placed.value
+        \\  let all: Placement = placed
+        \\  let selected = select<Box<Number>>(pagectx())
+        \\end
+    , &.{
+        .{ .name = "value", .scope_kind = "page", .scope_name = "main", .type_label = "Box<Number>" },
+        .{ .name = "placed", .scope_kind = "page", .scope_name = "main", .type_label = "Placed<Box<Number>>" },
+        .{ .name = "input", .scope_kind = "page", .scope_name = "main", .type_label = "Box<Number>" },
+        .{ .name = "all", .scope_kind = "page", .scope_name = "main", .type_label = "Placement" },
+        .{ .name = "selected", .scope_kind = "page", .scope_name = "main", .type_label = "Selection<Placed<Box<Number>>>" },
+    });
 }
