@@ -8748,3 +8748,31 @@ test "compiler semantics: excluded standard components are not available as impl
         try expectDiagnostic(source, "bytes:", "UnknownFunction");
     }
 }
+
+test "compiler semantics: public display type names agree with constructors and typed queries" {
+    for ([_][]const u8{ "", "import std:themes/default as *\n" }) |imports| {
+        const body =
+            \\const words: Text = text("Unused")
+            \\const program: Code = code("unused = 1", "python")
+            \\const picture: Image = image("unused.svg")
+            \\const sheet: Pdf = pdf("unused.pdf")
+            \\const symbol: Icon = icon("unused")
+            \\const formula: Math = math("unused")
+            \\const latex_body: Latex = latex("unused")
+            \\const shape: PathShape = rectangle()
+            \\page example
+            \\  let words = select<Text>(pagectx())
+            \\  let programs = select<Code>(pagectx())
+            \\  let pictures = select<Image>(pagectx())
+            \\  let sheets = select<Pdf>(pagectx())
+            \\  let symbols = select<Icon>(pagectx())
+            \\  let formulas = select<Math>(pagectx())
+            \\  let latex_bodies = select<Latex>(pagectx())
+            \\  let shapes = select<PathShape>(pagectx())
+            \\end
+        ;
+        const source = try std.fmt.allocPrint(testing.allocator, "{s}{s}", .{ imports, body });
+        defer testing.allocator.free(source);
+        try buildSource(source);
+    }
+}

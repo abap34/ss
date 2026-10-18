@@ -1,3 +1,5 @@
+import std:internal/classes
+import std:text/types as { MarkdownHeadingStyle }
 import std:theme/types
 import std:code/palettes as render
 
