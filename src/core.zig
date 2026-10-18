@@ -57,6 +57,7 @@ pub const LayoutMeasurementProvider = layout.MeasurementProvider;
 pub const Query = model.Query;
 pub const roleEq = model.roleEq;
 pub const nodeField = model.nodeField;
+pub const nodeContent = model.nodeContent;
 pub const nodeDisplayContent = model.nodeDisplayContent;
 pub const nodeDisplayContentProvenance = model.nodeDisplayContentProvenance;
 pub const DocumentState = @import("core/document_state.zig").DocumentState;

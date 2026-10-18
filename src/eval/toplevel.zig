@@ -195,11 +195,16 @@ pub const EvalContext = struct {
                     .running => return error.DisplayExpansionCycle,
                     .expanded => return error.DisplayTargetMismatch,
                 }
+                if (kind == .image) {
+                    try validateAssetPath(self.state, placement.page_id, id, placement.value.record.field("path").?.string, .image_ref, node.origin);
+                }
                 node.object_kind = switch (kind) {
                     .text => .text,
+                    .image => .asset,
                 };
                 node.payload_kind = switch (kind) {
                     .text => .text,
+                    .image => .image_ref,
                 };
                 placement.display = .{ .native = kind };
                 return &.{};
@@ -1530,7 +1535,7 @@ fn emitUserReport(
 fn validateAssetExists(state: *core.DocumentState, page_id: core.NodeId, object_id: core.NodeId, origin: core.SourceOrigin) !void {
     const node = state.getNode(object_id) orelse return error.UnknownNode;
     const diagnostic_origin = assetContentDiagnosticOrigin(node, origin);
-    if (node.object_kind == null or node.object_kind.? != .asset or node.content == null) {
+    if (node.object_kind == null or node.object_kind.? != .asset or core.nodeContent(node) == null) {
         try state.addValidationDiagnostic(.@"error", page_id, object_id, diagnostic_origin, .{
             .asset_invalid = .{
                 .reason = try state.allocator.dupe(u8, "expected an asset object with a path"),
@@ -1540,7 +1545,17 @@ fn validateAssetExists(state: *core.DocumentState, page_id: core.NodeId, object_
         return;
     }
 
-    const requested = node.content.?;
+    try validateAssetPath(state, page_id, object_id, core.nodeContent(node).?, node.payload_kind, diagnostic_origin);
+}
+
+fn validateAssetPath(
+    state: *core.DocumentState,
+    page_id: core.NodeId,
+    object_id: core.NodeId,
+    requested: []const u8,
+    payload_kind: ?core.PayloadKind,
+    origin: ?core.SourceOrigin,
+) !void {
     if (state.file_inputs) |inputs| try inputs.record(state.asset_base_dir, requested, .file);
     const resolved = try resolveAssetPath(state.allocator, state.asset_base_dir, requested);
     var resolved_owned = true;
@@ -1548,11 +1563,11 @@ fn validateAssetExists(state: *core.DocumentState, page_id: core.NodeId, object_
     if (!try fs_utils.fileExists(state.allocator, resolved)) {
         const requested_path = try state.allocator.dupe(u8, requested);
         resolved_owned = false;
-        try state.addValidationDiagnostic(.@"error", page_id, object_id, diagnostic_origin, .{
+        try state.addValidationDiagnostic(.@"error", page_id, object_id, origin, .{
             .asset_not_found = .{
                 .requested_path = requested_path,
                 .resolved_path = resolved,
-                .payload_kind = node.payload_kind,
+                .payload_kind = payload_kind,
             },
         });
         return;
@@ -1560,7 +1575,7 @@ fn validateAssetExists(state: *core.DocumentState, page_id: core.NodeId, object_
 }
 
 fn assetContentDiagnosticOrigin(node: *const core.Node, fallback: core.SourceOrigin) core.SourceOrigin {
-    const content = node.content orelse return fallback;
+    const content = core.nodeContent(node) orelse return fallback;
     return core.ContentProvenance.originForSpan(node.content_provenance.items, 0, content.len) orelse fallback;
 }
 

@@ -408,7 +408,7 @@ pub const CompositionOrder = struct {
     }
 };
 
-pub const NativeDisplayKind = enum { text };
+pub const NativeDisplayKind = enum { text, image };
 
 /// Input storage follows Value ownership: recursive storage is owned, while
 /// strings, names and function identities borrow the document's runtime inputs.
@@ -883,15 +883,19 @@ pub fn roleEq(role: ?Role, expected: []const u8) bool {
 
 pub fn nodeField(node: *const Node, key: []const u8) ?Value {
     if (node.placement) |placement| {
-        if (placement.display == .native) return switch (placement.display.native) {
-            .text => blk: {
-                const style = placement.value.record.field("style") orelse break :blk null;
-                if (style != .record) break :blk null;
-                if (std.mem.eql(u8, key, "text") or std.mem.eql(u8, key, "layout") or std.mem.eql(u8, key, "underline")) break :blk style.record.field(key);
-                if (std.mem.eql(u8, key, "markdown_headings")) break :blk style.record.field("headings");
-                break :blk null;
-            },
-        };
+        if (placement.display == .native) {
+            const style = placement.value.record.field("style") orelse return null;
+            if (style != .record) return null;
+            if (std.mem.eql(u8, key, "layout")) return style.record.field(key);
+            return switch (placement.display.native) {
+                .text => blk: {
+                    if (std.mem.eql(u8, key, "text") or std.mem.eql(u8, key, "underline")) break :blk style.record.field(key);
+                    if (std.mem.eql(u8, key, "markdown_headings")) break :blk style.record.field("headings");
+                    break :blk null;
+                },
+                .image => if (std.mem.eql(u8, key, "asset") or std.mem.eql(u8, key, "chrome")) style.record.field(key) else null,
+            };
+        }
     }
     for (node.fields.items) |field| {
         if (std.mem.eql(u8, field.key, key)) return field.value;
@@ -899,14 +903,22 @@ pub fn nodeField(node: *const Node, key: []const u8) ?Value {
     return null;
 }
 
-pub fn nodeDisplayContent(node: *const Node) []const u8 {
+pub fn nodeContent(node: *const Node) ?[]const u8 {
     if (node.placement) |placement| {
         if (placement.display == .native) return switch (placement.display.native) {
             .text => placement.value.record.field("content").?.string,
+            .image => placement.value.record.field("path").?.string,
         };
     }
+    return node.content;
+}
+
+pub fn nodeDisplayContent(node: *const Node) []const u8 {
+    if (node.placement) |placement| {
+        if (placement.display == .native) return nodeContent(node).?;
+    }
     if (node.display_content) |content| return content;
-    return node.content orelse "";
+    return nodeContent(node) orelse "";
 }
 
 pub fn nodeDisplayContentProvenance(node: *const Node) []const ContentProvenance {

@@ -1,6 +1,7 @@
 pub const Module = struct { spec: []const u8, path: []const u8, source: []const u8 };
 
 pub const modules = [_]Module{
+    .{ .spec = "std:assets/content", .path = "stdlib/assets/content.ss", .source = @embedFile("assets/content.ss") },
     .{ .spec = "std:assets/style", .path = "stdlib/assets/style.ss", .source = @embedFile("assets/style.ss") },
     .{ .spec = "std:assets/types", .path = "stdlib/assets/types.ss", .source = @embedFile("assets/types.ss") },
     .{ .spec = "std:assets", .path = "stdlib/assets.ss", .source = @embedFile("assets.ss") },
