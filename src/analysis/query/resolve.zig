@@ -360,7 +360,10 @@ pub fn fieldForType(allocator: std.mem.Allocator, budget: ?QueryBudget, snapshot
         return recordField(budget, snapshot, settingsId(snapshot) orelse return null, name);
     }
     if (ty.kind == .placed or ty.kind == .placement) {
-        const field_type = @import("../../language/placement.zig").memberType(ty, name) orelse return null;
+        const field_type = if (std.mem.eql(u8, name, "layout"))
+            groupLayoutType(budget, snapshot, ty) orelse return null
+        else
+            @import("../../language/placement.zig").memberType(ty, name) orelse return null;
         return .{ .name = name, .value_type = field_type, .type_label = try field_type.formatAlloc(allocator) };
     }
     if (ty.kind == .group) {
@@ -387,6 +390,16 @@ pub fn fieldForType(allocator: std.mem.Allocator, budget: ?QueryBudget, snapshot
 
 pub fn settingsId(snapshot: anytype) ?core.NominalId {
     return .{ .module_id = snapshot.settings_module_id orelse return null, .name = "PageSettings" };
+}
+
+pub fn groupLayoutType(budget: ?QueryBudget, snapshot: anytype, ty: ast.Type) ?ast.Type {
+    const input = ty.placedInput() orelse return null;
+    if (input.kind != .group) return null;
+    for (snapshot.modules) |module| {
+        if (expired(budget)) return null;
+        if (std.mem.eql(u8, module.spec, "std:layout/types")) return ast.Type.recordType("GroupLayout").inModule(module.id);
+    }
+    return null;
 }
 
 pub fn typeAfterPath(allocator: std.mem.Allocator, budget: ?QueryBudget, snapshot: anytype, base: ast.Type, path: []const ast.RecordPathSegment) !?ast.Type {

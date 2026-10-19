@@ -519,6 +519,34 @@ test "analysis completion: function and const annotations preserve inputs and pl
     try expectMissing(placed, "style");
 }
 
+test "analysis completion: placed groups expose their layout record" {
+    var case = try CompletionCase.init(
+        \\page main
+        \\  let row = text!("Left") |=| text!("Right")
+        \\  row.layout.gap = 24
+        \\end
+    );
+    defer case.deinit();
+    const request_source =
+        \\page main
+        \\  let row = text!("Left") |=| text!("Right")
+        \\  row.
+        \\  row.layout.
+        \\end
+    ;
+    var placed = try case.completeSourceAfter(request_source, "row.");
+    defer placed.deinit(case.allocator);
+    try expectUnique(placed);
+    try expectHas(placed, "layout");
+    try expectHas(placed, "value");
+    try expectHas(placed, "left");
+    var layout = try case.completeSourceAfter(request_source, "row.layout.");
+    defer layout.deinit(case.allocator);
+    try expectUnique(layout);
+    try expectHas(layout, "gap");
+    try expectMissing(layout, "value");
+}
+
 test "analysis completion: record update paths complete record fields" {
     var case = try CompletionCase.init(
         \\import std:text as *

@@ -64,9 +64,11 @@ pub const Store = struct {
     plans: std.ArrayList(Plan) = .empty,
     inputs: @import("placement_inputs.zig").Store,
     call_targets: std.AutoHashMap(u64, usize),
+    /// Checked calls that adopt existing placements instead of displaying inputs.
+    adoptions: std.AutoHashMap(u64, ast.Type),
 
     pub fn init(allocator: std.mem.Allocator) Store {
-        return .{ .allocator = allocator, .call_targets = .init(allocator), .inputs = .init(allocator) };
+        return .{ .allocator = allocator, .call_targets = .init(allocator), .adoptions = .init(allocator), .inputs = .init(allocator) };
     }
 
     pub fn deinit(self: *Store) void {
@@ -74,6 +76,9 @@ pub const Store = struct {
         for (self.plans.items) |*plan| plan.deinit();
         self.plans.deinit(self.allocator);
         self.call_targets.deinit();
+        var types = self.adoptions.valueIterator();
+        while (types.next()) |ty| ty.deinit(self.allocator);
+        self.adoptions.deinit();
     }
 
     pub fn find(self: *const Store, input: ast.Type) ?usize {

@@ -413,6 +413,13 @@ pub const Type = struct {
             if (received.kind == .any) return false;
             return acceptsResolved(wanted, received);
         }
+        // Erase only a group's child tuple. Other generic arguments remain invariant.
+        if (expected.kind == .group and expected.arguments.len == 0) return true;
+        if (expected.kind == .placed) {
+            const wanted = expected.placedInput() orelse return false;
+            const received = actual.placedInput() orelse return false;
+            return if (wanted.kind == .group and received.kind == .group) acceptsResolved(wanted, received) else eql(wanted, received);
+        }
         if (expected.arguments.len != actual.arguments.len) return false;
         for (expected.arguments, actual.arguments) |left, right| if (!eql(left, right)) return false;
         return true;

@@ -379,3 +379,18 @@ test "type spec: unresolved source names retain structure and cannot act as sema
     try testing.expect(Type.eql(name, unchanged));
     try testing.checkAllAllocationFailures(testing.allocator, exerciseUnresolvedNames, .{});
 }
+
+test "type spec: group tuple erasure preserves placement identity without recovering child types" {
+    const erased = Type{ .kind = .group };
+    var specific = try erased.withArguments(testing.allocator, &.{Type.recordType("Text").inModule(1)});
+    defer specific.deinit(testing.allocator);
+    var placed = try Type.placedOf(testing.allocator, specific);
+    defer placed.deinit(testing.allocator);
+    var common = try Type.placedOf(testing.allocator, erased);
+    defer common.deinit(testing.allocator);
+    try testing.expect(Type.accepts(common, placed));
+    try testing.expect(!Type.accepts(placed, common));
+    try testing.expect(Type.accepts(Type.placement, common));
+    try testing.expect(!Type.eql(specific, erased));
+    try testing.expect(!Type.accepts(Type.recordType("Box").inModule(1), common));
+}

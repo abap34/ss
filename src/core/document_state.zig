@@ -231,6 +231,8 @@ pub const DocumentGraph = struct {
     page_order: std.ArrayList(NodeId) = .empty,
     composition_cursor: ?model.CompositionOrder = null,
     contains: std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
+    /// Original registrations, including roots later adopted by groups. This
+    /// order supports typed queries; contains holds the final drawing tree.
     page_placement_roots: std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
     direct_page_ownership: std.ArrayList(PageOwnershipInfo) = .empty,
     next_id: NodeId = 1,
@@ -788,6 +790,79 @@ pub const DocumentState = struct {
         }
         self.graph.next_id += @intCast(nodes.items.len);
         return children.value_ptr.items;
+    }
+
+    /// Define one parent for existing roots. Validate and allocate everything
+    /// before publishing the node, containment, or changed parent references.
+    pub fn adoptGroup(self: *DocumentState, context_page: NodeId, ids: []const NodeId, composition: model.GroupComposition, origin: ?model.SourceOrigin) !NodeId {
+        var page_id = context_page;
+        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer seen.deinit();
+        for (ids, 0..) |id, index| {
+            const child = self.getNode(id) orelse return error.UnknownNode;
+            const placement = child.placement orelse return error.InvalidGroupInput;
+            if (child.discarded) return error.InvalidGroupInput;
+            if (index == 0) page_id = placement.page_id;
+            if (placement.page_id != page_id) return error.CrossPageGroup;
+            if (placement.parent_id != page_id) return error.DuplicatePlacementParent;
+            if ((try seen.getOrPut(id)).found_existing) return error.DuplicateGroupChild;
+        }
+        const page = self.getNode(page_id) orelse return error.InvalidGroupPage;
+        if (page.kind != .page) return error.InvalidGroupPage;
+        var group = model.GroupValue{ .ty = .{ .kind = .group }, .composition = composition };
+        defer group.deinit(self.allocator);
+        try group.children.ensureTotalCapacity(self.allocator, ids.len);
+        const types = try self.allocator.alloc(ast.Type, ids.len);
+        defer self.allocator.free(types);
+        for (ids, types) |id, *ty| {
+            const input = self.getNode(id).?.placement.?.value;
+            group.children.appendAssumeCapacity(try input.clone(self.allocator));
+            ty.* = input.presentationType().?;
+        }
+        group.ty = try group.ty.withArguments(self.allocator, types);
+        const owned_origin = if (origin) |source| try self.copyOrigin(source) else null;
+        var nodes = std.ArrayList(Node).empty;
+        defer nodes.deinit(self.allocator);
+        try self.appendPlacementNode(&nodes, page_id, page_id, .{ .group = group }, owned_origin);
+        var published = false;
+        defer if (!published) nodes.items[0].deinit(self.allocator);
+        var children = std.ArrayList(NodeId).empty;
+        errdefer children.deinit(self.allocator);
+        try children.appendSlice(self.allocator, ids);
+        var page_children = std.ArrayList(NodeId).empty;
+        errdefer page_children.deinit(self.allocator);
+        const existing_children: []const NodeId = self.childrenOf(page_id) orelse &.{};
+        try page_children.ensureTotalCapacity(self.allocator, existing_children.len + 1);
+        for (existing_children) |id| if (!seen.contains(id)) {
+            page_children.appendAssumeCapacity(id);
+        };
+        try self.graph.nodes.ensureUnusedCapacity(self.allocator, 1);
+        try self.graph.direct_page_ownership.ensureUnusedCapacity(self.allocator, 1);
+        try self.graph.contains.ensureUnusedCapacity(2);
+        const roots = try self.graph.page_placement_roots.getOrPut(page_id);
+        if (!roots.found_existing) roots.value_ptr.* = .empty;
+        errdefer if (!roots.found_existing) {
+            roots.value_ptr.deinit(self.allocator);
+            _ = self.graph.page_placement_roots.remove(page_id);
+        };
+        try roots.value_ptr.ensureUnusedCapacity(self.allocator, 1);
+
+        const id = self.graph.next_id;
+        nodes.items[0].composition_order = self.nextCompositionOrder();
+        nodes.items[0].placement.?.adopted_group = true;
+        self.graph.nodes.appendAssumeCapacity(nodes.items[0]);
+        self.graph.direct_page_ownership.appendAssumeCapacity(.{ .first = page_id, .count = 1 });
+        self.graph.next_id += 1;
+        published = true;
+        page_children.insertAssumeCapacity(self.compositionInsertionIndex(page_children.items, id), id);
+        if (self.graph.contains.getPtr(page_id)) |old| old.deinit(self.allocator);
+        self.graph.contains.putAssumeCapacity(page_id, page_children);
+        self.graph.contains.putAssumeCapacity(id, children);
+        // Registration roots define query/numbering order independently of
+        // the final containment tree used for drawing and layout.
+        roots.value_ptr.insertAssumeCapacity(self.compositionInsertionIndex(roots.value_ptr.items, id), id);
+        for (ids) |child| self.getNode(child).?.placement.?.parent_id = id;
+        return id;
     }
 
     fn appendPlacementNode(self: *DocumentState, nodes: *std.ArrayList(Node), parent_id: NodeId, page_id: NodeId, input: Value, origin: ?model.SourceOrigin) !void {
@@ -1359,6 +1434,8 @@ pub const DocumentState = struct {
         return children.items;
     }
 
+    /// Roots of independent registrations in construction order. A later
+    /// adoption does not remove the original registration from this sequence.
     pub fn placementRootsOf(self: *DocumentState, page_id: NodeId) []const NodeId {
         const roots = self.graph.page_placement_roots.get(page_id) orelse return &.{};
         return roots.items;
@@ -1451,7 +1528,7 @@ pub const DocumentState = struct {
     fn selectDescendants(self: *DocumentState, allocator: Allocator, parent_id: NodeId, provenance: []const u8) !Selection {
         var selection = Selection.init(.object, provenance);
         errdefer selection.deinit(allocator);
-        try self.appendMatchingPlacements(allocator, self.childrenOf(parent_id) orelse &.{}, null, null, &selection.ids);
+        try self.appendMatchingPlacements(allocator, self.childrenOf(parent_id) orelse &.{}, null, null, false, &selection.ids);
         return selection;
     }
 
@@ -1492,21 +1569,22 @@ pub const DocumentState = struct {
             .document => |id| {
                 if (id != self.graph.document_id) return error.InvalidSelectionScope;
                 for (self.graph.page_order.items) |page| {
-                    try self.appendMatchingPlacements(allocator, self.placementRootsOf(page), input, null, &result.ids);
+                    try self.appendMatchingPlacements(allocator, self.placementRootsOf(page), input, null, true, &result.ids);
                 }
             },
             .page => |id| {
                 const node = self.getNode(id) orelse return error.UnknownNode;
                 if (node.kind != .page) return error.InvalidSelectionScope;
-                try self.appendMatchingPlacements(allocator, self.placementRootsOf(id), input, null, &result.ids);
+                try self.appendMatchingPlacements(allocator, self.placementRootsOf(id), input, null, true, &result.ids);
             },
             .object => |id| {
                 const node = self.getNode(id) orelse return error.UnknownNode;
                 if (node.placement == null) return error.InvalidSelectionScope;
-                try self.appendMatchingPlacements(allocator, self.childrenOf(id) orelse &.{}, input, null, &result.ids);
+                try self.appendMatchingPlacements(allocator, self.childrenOf(id) orelse &.{}, input, null, false, &result.ids);
             },
             else => return error.InvalidSelectionScope,
         }
+        try self.orderSelection(allocator, &result);
         return result;
     }
 
@@ -1527,7 +1605,7 @@ pub const DocumentState = struct {
         for (self.graph.page_order.items) |page| {
             if (selection.item_tag == .page) {
                 if (wanted.contains(page)) try ordered.append(allocator, page);
-            } else try self.appendMatchingPlacements(allocator, self.placementRootsOf(page), null, &wanted, &ordered);
+            } else try self.appendMatchingPlacements(allocator, self.placementRootsOf(page), null, &wanted, true, &ordered);
         }
         if (ordered.items.len != wanted.count()) return error.InvalidSelectionScope;
         selection.ids.deinit(allocator);
@@ -1540,6 +1618,7 @@ pub const DocumentState = struct {
         roots: []const NodeId,
         input: ?ast.Type,
         wanted: ?*const std.AutoHashMap(NodeId, void),
+        construction_order: bool,
         result: *std.ArrayList(NodeId),
     ) !void {
         var pending = std.ArrayList(NodeId).empty;
@@ -1551,9 +1630,10 @@ pub const DocumentState = struct {
             const placement = node.placement orelse return error.InvalidSelectionScope;
             if (node.discarded) continue;
             const matches = if (input) |ty|
-                if (placement.value.presentationType()) |actual| ast.Type.eql(actual, ty) else false
+                if (placement.value.presentationType()) |actual| ast.Type.accepts(ty, actual) else false
             else if (wanted) |ids| ids.contains(id) else true;
             if (matches) try result.append(allocator, id);
+            if (construction_order and placement.adopted_group) continue;
             const children = self.childrenOf(id) orelse continue;
             const start = pending.items.len;
             try pending.appendSlice(allocator, children);

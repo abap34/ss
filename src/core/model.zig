@@ -405,9 +405,10 @@ pub const NativeDisplayKind = enum { text, image, pdf, code, latex, path_shape, 
 
 /// Input storage follows Value ownership: recursive storage is owned, while
 /// strings, names and function identities borrow the document's runtime inputs.
-/// Parent and page are fixed when the placement is registered, before display.
+/// Page is fixed at registration. A page root may acquire one group parent.
 pub const Placement = struct {
     value: Value,
+    adopted_group: bool = false,
     parent_id: NodeId,
     page_id: NodeId,
     display: union(enum) {

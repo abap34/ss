@@ -300,7 +300,7 @@ pub const Resource = union(ResourceKind) {
             .objects => |left| switch (other) {
                 .objects => |right| blk: {
                     if (!left.placement.intersects(right.placement)) break :blk false;
-                    if (left.input_type != null and right.input_type != null and !Type.eql(left.input_type.?, right.input_type.?)) break :blk false;
+                    if (left.input_type != null and right.input_type != null and !(Type.accepts(left.input_type.?, right.input_type.?) or Type.accepts(right.input_type.?, left.input_type.?))) break :blk false;
                     break :blk left.owner.intersects(right.owner) and left.page_scope.intersects(right.page_scope);
                 },
                 else => false,

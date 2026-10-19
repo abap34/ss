@@ -1282,7 +1282,9 @@ pub const Analyzer = struct {
         };
         const children = try allocator.alloc(ValueFacts, input.children.len);
         for (input.children, children) |child, *output| output.* = try self.importPlacementInput(child, depth + 1);
-        if (!input.unknown) result.children = children;
+        // Closed call facts do not prove that a placement has no display
+        // children. Only explicit group members describe its structure here.
+        if (!input.unknown and children.len != 0) result.children = children;
         return result;
     }
 
@@ -1302,7 +1304,8 @@ pub const Analyzer = struct {
                     if (self.sema.state) |state| {
                         var candidates = ValueFacts{};
                         for (state.displays.inputs.entries.items) |entry| {
-                            if (!ast.Type.eql(entry.input, call.type_args.items[0])) continue;
+                            const wanted = call.type_args.items[0];
+                            if (!ast.Type.accepts(wanted, entry.input) and !ast.Type.accepts(entry.input, wanted)) continue;
                             candidates = try self.joinValueFacts(candidates, try self.importPlacementInput(entry.receiver, 0));
                         }
                         result = try self.withPropertyTarget(candidates, result.property_target);
@@ -1313,8 +1316,14 @@ pub const Analyzer = struct {
                     if (registry.lookupQueryOp(name)) |query| switch (query.op) {
                         .self_placement => result = scope,
                         .children, .descendants => {
-                            result.page_scope = scope.page_scope;
-                            result.placement = if (query.op == .children) scope.placement.children() else scope.placement.descendants();
+                            if (scope.children) |children| {
+                                result = .{};
+                                for (children) |child| result = try self.joinValueFacts(result, child);
+                                if (query.op == .descendants) result.placement.depth.max = null;
+                            } else {
+                                result.page_scope = scope.page_scope;
+                                result.placement = if (query.op == .children) scope.placement.children() else scope.placement.descendants();
+                            }
                         },
                         else => {},
                     };
@@ -1330,10 +1339,15 @@ pub const Analyzer = struct {
                 const combined = if (primitive.op == .selection_difference or primitive.op == .sub) left else try self.joinValueFacts(left, right);
                 result = combined;
             },
-            .group => {
+            .group, .group_placed => {
                 const children = try self.value_storage.allocator().alloc(ValueFacts, call.args.items.len);
                 for (call.args.items, children) |arg, *child| child.* = try self.valueFacts(arg);
                 result.children = children;
+                if (self.isAdoption(call)) {
+                    result = try self.withPropertyTarget(result, PropertyTarget.freshObject());
+                    if (call.callee.call_id) |id| result.placement = .exact(id, &.{});
+                    if (children.len != 0) result.page_scope = children[0].page_scope;
+                }
             },
             .place_on => if (call.args.items.len > 1) {
                 const input = try self.valueFacts(call.args.items[1]);
@@ -2108,7 +2122,17 @@ pub const Analyzer = struct {
         if (primitiveNeedsArgFacts(descriptor.op)) {
             var arg_facts = try self.collectCallArgFacts(call);
             defer self.deinitCallArgFacts(&arg_facts);
-            if (descriptor.op == .group) return self.callArgFactsSummary(arg_facts.items);
+            if (descriptor.op == .group or descriptor.op == .group_placed) {
+                var summary = try self.callArgFactsSummary(arg_facts.items);
+                errdefer summary.deinit();
+                if (self.isAdoption(call)) {
+                    const ty = self.sema.state.?.displays.adoptions.get(call.callee.call_id.?).?;
+                    try summary.addWrite(.{ .objects = .{ .input_type = ty, .placement = .exact(call.callee.call_id.?, &.{}), .page_scope = self.variable_scope } });
+                    summary.places_objects = true;
+                    summary.writes_layout_input = true;
+                }
+                return summary;
+            }
             if (descriptor.op == .place_on) {
                 if (self.sema.state) |state| if (call.callee.call_id) |id| {
                     if (state.displays.call_targets.get(id)) |plan| return self.typedPlacementCall(id, state.displays.plans.items[plan], arg_facts.items);
@@ -2118,11 +2142,7 @@ pub const Analyzer = struct {
                 var summary = try self.callArgFactsSummary(arg_facts.items);
                 errdefer summary.deinit();
                 const scope = arg_facts.items[0].values;
-                try summary.addSelectionRead(.{ .objects = .{
-                    .input_type = call.type_args.items[0],
-                    .page_scope = scope.page_scope,
-                    .placement = if (scope.placement.call != null) scope.placement.descendants() else .{},
-                } });
+                try self.addScopedPlacementRead(&summary, scope, call.type_args.items[0], false);
                 return summary;
             }
             return try self.primitiveCallWithFacts(descriptor, arg_facts.items);
@@ -2146,6 +2166,50 @@ pub const Analyzer = struct {
             else => {},
         }
         return summary;
+    }
+
+    fn isAdoption(self: *Analyzer, call: ast.CallExpr) bool {
+        const state = self.sema.state orelse return false;
+        const id = call.callee.call_id orelse return false;
+        return state.displays.adoptions.contains(id);
+    }
+
+    /// Adoption registers the direct members with its result binding. Reads of
+    /// their displays still depend on each original registration/display tree.
+    fn addScopedPlacementRead(self: *Analyzer, summary: *AccessSummary, scope: ValueFacts, input: ?ast.Type, inclusive: bool) anyerror!void {
+        var visiting = std.AutoHashMap(u64, void).init(self.allocator);
+        defer visiting.deinit();
+        try self.addScopedPlacementReadImpl(summary, scope, input, inclusive, &visiting);
+    }
+
+    fn addScopedPlacementReadImpl(self: *Analyzer, summary: *AccessSummary, scope: ValueFacts, input: ?ast.Type, inclusive: bool, visiting: *std.AutoHashMap(u64, void)) anyerror!void {
+        if (scope.children) |children| {
+            for (children) |child| try self.addScopedPlacementReadImpl(summary, child, input, true, visiting);
+            return;
+        }
+        var region = if (scope.placement.call != null) scope.placement else resource_model.PlacementScope{};
+        if (self.sema.state) |state| if (region.call) |id| if (state.displays.adoptions.contains(id)) {
+            // Selected groups retain registration references, not recursively
+            // embedded trees. Follow those references with a cycle guard.
+            if (!visiting.contains(id)) {
+                try visiting.put(id, {});
+                defer _ = visiting.remove(id);
+                for (state.displays.inputs.entries.items) |entry| {
+                    const reference = entry.receiver.reference orelse continue;
+                    if (reference != .placement or reference.placement.call != id) continue;
+                    const registered = try self.importPlacementInput(entry.receiver, 0);
+                    if (registered.children != null) {
+                        try self.addScopedPlacementReadImpl(summary, registered, input, inclusive, visiting);
+                        return;
+                    }
+                }
+            }
+            // Unknown or cyclic origins must conservatively include possible
+            // original producers rather than a nonexistent new display tree.
+            region = .{};
+        };
+        if (inclusive) region.depth.max = null else if (region.call != null) region = region.descendants();
+        try summary.addSelectionRead(.{ .objects = .{ .input_type = input, .page_scope = scope.page_scope, .placement = region } });
     }
 
     fn typedPlacementCall(self: *Analyzer, call_id: u64, plan: core.native_display.Plan, args: []const CallArgFacts) anyerror!AccessSummary {
@@ -2235,6 +2299,7 @@ pub const Analyzer = struct {
         return switch (op) {
             .select,
             .group,
+            .group_placed,
             .place_on,
             => true,
             else => false,
@@ -2314,7 +2379,6 @@ pub const Analyzer = struct {
     }
 
     fn applySelectSummaryFromFacts(self: *Analyzer, summary: *AccessSummary, arg_facts: []const CallArgFacts) !void {
-        _ = self;
         const query_name = literalStringFromArgFacts(arg_facts, 1) orelse {
             try summary.addRead(Resource.makeObjects());
             try summary.addSelectionRead(Resource.makeObjects());
@@ -2329,7 +2393,9 @@ pub const Analyzer = struct {
             // Display-generated children are produced after registration.
             .children, .descendants => {
                 const scope: ValueFacts = if (arg_facts.len > 0) arg_facts[0].values else .{};
-                try summary.addSelectionRead(.{ .objects = .{
+                if (scope.children != null) {
+                    if (query.op == .descendants) try self.addScopedPlacementRead(summary, scope, null, false);
+                } else try summary.addSelectionRead(.{ .objects = .{
                     .page_scope = scope.page_scope,
                     .placement = if (query.op == .children) scope.placement.children() else scope.placement.descendants(),
                 } });
@@ -2374,7 +2440,7 @@ pub const Analyzer = struct {
             .primitive => |primitive| switch (primitive.op) {
                 .docctx => PropertyTarget.document(),
                 .pagectx, .new_page => PropertyTarget.page(),
-                .group => null,
+                .group, .group_placed => if (self.isAdoption(call)) PropertyTarget.freshObject() else null,
                 .place_on => PropertyTarget.freshObject(),
                 .foreach, .selection_filter, .foreach_enumerate => if (call.args.items.len > 0)
                     try self.propertyTargetExpr(call.args.items[0])

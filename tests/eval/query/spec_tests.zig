@@ -47,6 +47,84 @@ fn queryWithAllocator(allocator: std.mem.Allocator, state: *core.DocumentState, 
     try testing.expectEqualSlices(core.NodeId, state.graph.page_order.items, pages.ids.items);
 }
 
+test "typed queries: adopted subtrees keep their original display dependencies through helpers" {
+    const cases = [_]struct { expression: []const u8, expected: []const u8 }{
+        .{ .expression = "selection_count(select<Text>(root))", .expected = "2" },
+        .{ .expression = "selection_count(descendants(root))", .expected = "4" },
+        .{ .expression = "selection_count(select<Text>(first(children(root))))", .expected = "2" },
+        .{ .expression = "selection_count(children(first(children(root))))", .expected = "1" },
+        .{ .expression = "selection_count(children(first(select<Group>(root))))", .expected = "2" },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(testing.allocator,
+            \\type Badge {{ title: String }}
+            \\fn display(self: Placed<Badge>) -> Group<Text, Text>
+            \\  return text(self.value.title) // text("Detail")
+            \\end
+            \\fn wrap!<T>(item: Placed<T>) -> Placed<Group<T>> = group!(item)
+            \\fn count(root: Placement) -> Number = {s}
+            \\page main
+            \\  let badge = place!(Badge {{ title = "Title" }})
+            \\  let root = wrap!(badge)
+            \\  let report = text!(str(count(root)))
+            \\end
+        , .{case.expression});
+        defer testing.allocator.free(source);
+        var state = try document(source);
+        defer state.deinit();
+        var graph = try checkedGraph(&state);
+        defer graph.deinit();
+        try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+        const report = state.getNode(state.placementRootsOf(state.graph.page_order.items[0])[2]).?;
+        try testing.expectEqualStrings(case.expected, core.nodeDisplayContent(report));
+    }
+}
+
+test "typed queries: selected dynamic groups retain the adopted display origins" {
+    var state = try document(
+        \\type Badge { title: String }
+        \\fn display(self: Placed<Badge>) -> Group<Text, Text>
+        \\  return text(self.value.title) // text("Detail")
+        \\end
+        \\page main
+        \\  let badges = select<Badge>(pagectx())
+        \\  let root = group!(badges)
+        \\  let groups = select<Group<Badge>>(pagectx())
+        \\  let report = text!(str(selection_count(select<Text>(first(groups)))))
+        \\  let badge = place!(Badge { title = "Title" })
+        \\end
+    );
+    defer state.deinit();
+    var graph = try checkedGraph(&state);
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const report = state.getNode(state.placementRootsOf(state.graph.page_order.items[0])[1]).?;
+    try testing.expectEqualStrings("2", core.nodeDisplayContent(report));
+}
+
+test "typed queries: selected dynamic groups follow nested adoption origins" {
+    var state = try document(
+        \\type Badge { title: String }
+        \\fn display(self: Placed<Badge>) -> Group<Text, Text>
+        \\  return text(self.value.title) // text("Detail")
+        \\end
+        \\page main
+        \\  let badges = select<Badge>(pagectx())
+        \\  let inner = group!(first(badges))
+        \\  let outer = group!(selection(inner))
+        \\  let groups = select<Group<Group<Badge>>>(pagectx())
+        \\  let report = text!(str(selection_count(select<Text>(first(groups)))))
+        \\  let badge = place!(Badge { title = "Title" })
+        \\end
+    );
+    defer state.deinit();
+    var graph = try checkedGraph(&state);
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const report = state.getNode(state.placementRootsOf(state.graph.page_order.items[0])[2]).?;
+    try testing.expectEqualStrings("2", core.nodeDisplayContent(report));
+}
+
 test "typed queries: placing functions can read the children of their own groups" {
     var state = try document(
         \\import std:prelude as *

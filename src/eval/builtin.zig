@@ -321,15 +321,35 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
                 else => unreachable,
             };
         },
-        .group => blk: {
+        .group, .group_placed => blk: {
+            var values = std.ArrayList(core.Value).empty;
+            defer {
+                for (values.items) |*value| value.deinit(ctx.state.allocator);
+                values.deinit(ctx.state.allocator);
+            }
+            try values.ensureTotalCapacity(ctx.state.allocator, call.args.items.len);
+            for (call.args.items) |arg| values.appendAssumeCapacity(try ctx.evalExprValue(arg));
+            const placed = descriptor.op == .group_placed or (call.callee.composition != null and values.items.len > 0 and values.items[0] == .object);
+            if (placed) {
+                var ids = std.ArrayList(core.NodeId).empty;
+                defer ids.deinit(ctx.state.allocator);
+                for (values.items) |value| switch (value) {
+                    .object => |id| try ids.append(ctx.state.allocator, id),
+                    .selection => |selection| {
+                        if (values.items.len != 1 or selection.item_tag != .object) return error.InvalidGroupInput;
+                        try ids.appendSlice(ctx.state.allocator, selection.ids.items);
+                    },
+                    else => return error.InvalidGroupInput,
+                };
+                break :blk .{ .object = try ctx.adoptGroup(ids.items, call.callee.composition orelse .overlay) };
+            }
             var result = core.GroupValue{ .ty = .{ .kind = .group }, .composition = call.callee.composition orelse .overlay };
             errdefer result.deinit(ctx.state.allocator);
             try result.children.ensureTotalCapacity(ctx.state.allocator, call.args.items.len);
             const types = try ctx.state.allocator.alloc(ast.Type, call.args.items.len);
             defer ctx.state.allocator.free(types);
-            for (call.args.items, types) |arg, *ty| {
-                const child = try ctx.evalExprValue(arg);
-                result.children.appendAssumeCapacity(child);
+            for (values.items, types) |child, *ty| {
+                result.children.appendAssumeCapacity(try child.clone(ctx.state.allocator));
                 ty.* = child.presentationType() orelse return error.InvalidType;
             }
             result.ty = try result.ty.withArguments(ctx.state.allocator, types);

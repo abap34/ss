@@ -259,6 +259,61 @@ test "document state spec: placement registration preserves ownership and graph 
     try allocation_testing.checkAllAllocationFailures(testing.allocator, exercisePlacementRegistration, .{});
 }
 
+fn exerciseGroupAdoption(allocator: std.mem.Allocator) !void {
+    var state = try initEmptyDocumentStateWithAllocator(allocator);
+    defer state.deinit();
+    const page = try state.addPage("Page");
+    var input = try placementInput(allocator);
+    defer input.deinit(allocator);
+    const a = try state.registerPlacement(page, input, null);
+    const b = try state.registerPlacement(page, input, null);
+    state.graph.composition_cursor = .{ .source_order = 10 };
+    const next_id = state.graph.next_id;
+    const ownership_count = state.graph.direct_page_ownership.items.len;
+    const g = state.adoptGroup(page, &.{ b, a }, .horizontal, .{ .path = "group.ss" }) catch |err| {
+        try testing.expectEqual(next_id, state.graph.next_id);
+        try testing.expectEqual(ownership_count, state.graph.direct_page_ownership.items.len);
+        try testing.expectEqualSlices(core.NodeId, &.{ a, b }, state.childrenOf(page).?);
+        try testing.expectEqualSlices(core.NodeId, &.{ a, b }, state.placementRootsOf(page));
+        try testing.expectEqual(page, state.getNode(a).?.placement.?.parent_id);
+        try testing.expectEqual(page, state.getNode(b).?.placement.?.parent_id);
+        try testing.expectEqual(@as(usize, 0), state.graph.composition_cursor.?.sequence);
+        return err;
+    };
+    try testing.expectEqual(next_id, g);
+    try testing.expectEqualSlices(core.NodeId, &.{ b, a }, state.childrenOf(g).?);
+    try testing.expectEqualSlices(core.NodeId, &.{g}, state.childrenOf(page).?);
+    try testing.expectEqualSlices(core.NodeId, &.{ a, b, g }, state.placementRootsOf(page));
+    try testing.expectEqual(g, state.getNode(a).?.placement.?.parent_id);
+    try testing.expectEqual(g, state.getNode(b).?.placement.?.parent_id);
+    try testing.expectEqual(page, state.getNode(a).?.placement.?.page_id);
+}
+
+test "document state spec: group adoption publishes structure atomically on allocation failure" {
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, exerciseGroupAdoption, .{});
+}
+
+test "document state spec: group adoption rejects aliases, existing parents and cross-page children" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page = try state.addPage("Page");
+    const other = try state.addPage("Other");
+    var input = try placementInput(testing.allocator);
+    defer input.deinit(testing.allocator);
+    const a = try state.registerPlacement(page, input, null);
+    const b = try state.registerPlacement(other, input, null);
+    const next_id = state.graph.next_id;
+    try testing.expectError(error.DuplicateGroupChild, state.adoptGroup(page, &.{ a, a }, .overlay, null));
+    try testing.expectError(error.CrossPageGroup, state.adoptGroup(page, &.{ a, b }, .overlay, null));
+    try testing.expectEqual(next_id, state.graph.next_id);
+    const group = try state.adoptGroup(page, &.{a}, .overlay, null);
+    try testing.expectError(error.DuplicatePlacementParent, state.adoptGroup(page, &.{a}, .overlay, null));
+    const outer = try state.adoptGroup(page, &.{group}, .overlay, null);
+    try testing.expectEqual(outer, state.getNode(group).?.placement.?.parent_id);
+    const empty = try state.adoptGroup(page, &.{}, .overlay, null);
+    try testing.expectEqual(@as(usize, 0), state.childrenOf(empty).?.len);
+}
+
 test "document state spec: containment is idempotent for the same parent-child pair" {
     var state = try initEmptyDocumentState();
     defer state.deinit();

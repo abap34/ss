@@ -344,6 +344,10 @@ fn appendProperties(builder: *CandidateBuilder, snapshot: anytype, target: Prope
         },
         .placement => |ty| {
             const placement = @import("../../language/placement.zig");
+            if (resolve_query.groupLayoutType(builder.budget, snapshot, ty)) |layout_type| {
+                const detail = try layout_type.formatAlloc(builder.scratch.allocator());
+                try builder.add(.{ .label = "layout", .kind = .property, .detail = try builder.retainDetail(detail) });
+            }
             for (placement.input_members) |name| {
                 const field_type = placement.memberType(ty, name) orelse continue;
                 const detail = try field_type.formatAlloc(builder.scratch.allocator());

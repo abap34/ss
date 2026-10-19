@@ -431,8 +431,10 @@ const Analyzer = struct {
     }
 
     fn selectedInput(self: *Analyzer, input: ast.Type) !ValueFacts {
-        for (self.typed_inputs.items) |entry| if (ast.Type.eql(entry.input, input)) return entry.receiver.clone(self.allocator);
-        return ValueFacts.init(self.allocator);
+        var result = ValueFacts.init(self.allocator);
+        errdefer result.deinit();
+        for (self.typed_inputs.items) |entry| if (ast.Type.accepts(input, entry.input) or ast.Type.accepts(entry.input, input)) try result.unionWith(entry.receiver);
+        return result;
     }
 
     fn checkRoots(self: *Analyzer) !void {
@@ -682,7 +684,7 @@ const Analyzer = struct {
             .primitive => |primitive| {
                 if (self.checking_display and !registry.primitiveAllowsDisplayEvaluation(primitive.op)) return self.rejectDisplayWrite();
                 const arg_labels = try self.argumentFacts(call.args.items, env, owner);
-                if (primitive.places_objects) try self.recordPlacement();
+                if (primitive.places_objects or (primitive.op == .group and call.callee.call_id != null and self.state.displays.adoptions.contains(call.callee.call_id.?))) try self.recordPlacement();
                 if (primitive.callback) |callback_spec| {
                     if (arg_labels.items.len <= callback_spec.function_arg_index) return ValueFacts.unknownValue(self.allocator);
                     const callback = arg_labels.items[callback_spec.function_arg_index];
@@ -718,6 +720,46 @@ const Analyzer = struct {
     }
 
     fn primitiveFacts(self: *Analyzer, primitive: registry.PrimitiveDescriptor, call: ast.CallExpr, args: []const ValueFacts) !ValueFacts {
+        if (primitive.op == .group_placed or (primitive.op == .group and call.callee.call_id != null and self.state.displays.adoptions.contains(call.callee.call_id.?))) {
+            var receiver = ValueFacts.init(self.allocator);
+            errdefer receiver.deinit();
+            if (call.callee.call_id) |id| receiver.reference = .{ .placement = .{ .call = id, .path = &.{} } };
+            var input = ValueFacts.init(self.allocator);
+            var owns_input = true;
+            defer if (owns_input) input.deinit();
+            const group_type = if (call.callee.call_id) |id| self.state.displays.adoptions.get(id) else null;
+            if (group_type != null and group_type.?.arguments.len == 0) {
+                // A dynamic selection does not define a child tuple. Expanding
+                // its membership here would recursively embed a group's own
+                // collection facts before the execution graph can reject it.
+                input.unknown = true;
+                try receiver.children.ensureTotalCapacity(self.allocator, args.len);
+                for (args) |arg| {
+                    // Retain the original registration, without recursively
+                    // embedding the selected group's own child/input facts.
+                    var child = ValueFacts.init(self.allocator);
+                    child.reference = arg.reference;
+                    child.unknown_reference = arg.unknown_reference;
+                    child.unknown = arg.unknown;
+                    receiver.children.appendAssumeCapacity(child);
+                }
+            } else {
+                try receiver.children.ensureTotalCapacity(self.allocator, args.len);
+                try input.children.ensureTotalCapacity(self.allocator, args.len);
+                for (args) |arg| {
+                    receiver.children.appendAssumeCapacity(try arg.clone(self.allocator));
+                    input.children.appendAssumeCapacity(try arg.getField("value", self.allocator));
+                }
+            }
+            try receiver.putField("value", input);
+            owns_input = false;
+            if (args.len != 0) try receiver.putField("page", try args[0].getField("page", self.allocator));
+            var document = ValueFacts.init(self.allocator);
+            document.reference = .document;
+            try receiver.putField("document", document);
+            if (self.collecting_inputs) if (call.callee.call_id) |id| if (self.state.displays.adoptions.get(id)) |ty| try self.rememberInput(ty, receiver);
+            return receiver;
+        }
         if (primitive.op == .group) {
             var value = ValueFacts.init(self.allocator);
             errdefer value.deinit();

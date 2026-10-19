@@ -15,3 +15,8 @@ type LayoutStyle {
   wrap: WrapMode = WrapMode.on
   fit: FitPolicy = FitPolicy.warn
 }
+
+;; Per-placement composition inputs, independent of immutable child values.
+type GroupLayout {
+  gap: Number = 32
+}

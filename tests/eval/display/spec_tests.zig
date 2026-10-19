@@ -1598,7 +1598,7 @@ test "typed compositions: operators preserve inputs, nested structure and immuta
     try testing.expectEqual(.equal_vertical, state.getNode(roots[7]).?.placement.?.value.group.composition);
 }
 
-test "typed compositions: invalid updates and placed operands fail before evaluation" {
+test "typed compositions: invalid updates and mixed placement operands fail before evaluation" {
     for ([_][]const u8{
         \\import std:text as t
         \\page first
@@ -1622,7 +1622,7 @@ test "typed compositions: invalid updates and placed operands fail before evalua
         \\import std:text as t
         \\page first
         \\  let a = place!(t::Text { content = "A" })
-        \\  let invalid = a || a
+        \\  let invalid = a || t::Text { content = "B" }
         \\end
         ,
     }) |source| {
