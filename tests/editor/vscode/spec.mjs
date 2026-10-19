@@ -22,6 +22,7 @@ await testCompositionOperatorSyntax();
 await testPairedFunctionKeywordSyntax();
 await testValueUpdateKeywordSyntax();
 await testTypeDeclarationSyntax();
+await testZedDeclarationIndentation();
 await testRemovedDeclarationKeywords();
 await testBlockStringSyntax();
 
@@ -55,6 +56,19 @@ async function testRemovedDeclarationKeywords() {
   for (const pattern of grammar.repository.declarations.patterns) {
     assert(new RegExp(pattern.match).exec("extend Card") === null, "removed extensions must not highlight as declarations");
   }
+}
+
+async function testZedDeclarationIndentation() {
+  const config = await readFile(path.join(root, "editor/zed/languages/ss/config.toml"), "utf8");
+  const pattern = config.match(/^increase_indent_pattern = (".*")$/m)?.[1];
+  const begin = new RegExp(JSON.parse(pattern));
+  for (const source of ["type Card {", "type Box<T> { ;; fields", "enum Align {"]) {
+    assert(begin.test(source), `declaration must increase indentation: ${source}`);
+  }
+  for (const source of ["type Card { title: String }", "type Card = object {", "type Card = protocol {"]) {
+    assert(!begin.test(source), `completed or removed declaration increased indentation: ${source}`);
+  }
+  assert(config.includes('valid_after = ["type", "enum"]'), "type and enum closing braces must decrease indentation");
 }
 
 async function testPairedFunctionKeywordSyntax() {

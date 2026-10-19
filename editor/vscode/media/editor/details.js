@@ -186,7 +186,7 @@ function heading(object, actions) {
   const eyebrow = element("small");
   eyebrow.textContent = "Selected object";
   const name = element("strong");
-  name.textContent = object.role || object.name || `Object ${object.id}`;
+  name.textContent = object.name || `Object ${object.id}`;
   title.append(eyebrow, name);
   container.append(title);
   const actionsContainer = element("div", "sheet-heading-actions");

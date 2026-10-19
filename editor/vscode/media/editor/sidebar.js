@@ -206,7 +206,6 @@ function sameSidebarModel(view, previous, current) {
       item.page_id,
       item.kind,
       item.label,
-      item.role,
     ],
   ) && sameItems(
     previous.editing,
