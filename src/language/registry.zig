@@ -48,6 +48,7 @@ pub const PrimitiveCall = enum {
     selection_empty,
     selection_count,
     group,
+    group_placed,
     new_page,
     place_on,
     constraints,
@@ -64,6 +65,7 @@ pub fn primitiveAllowsDisplayEvaluation(op: PrimitiveCall) bool {
     return switch (op) {
         .new_page,
         .place_on,
+        .group_placed,
         .constrain_on,
         .report_error,
         .report_warning,
@@ -235,6 +237,7 @@ const primitive_descriptors = [_]PrimitiveDescriptor{
     .{ .op = .selection_empty, .name = "selection_empty", .min_arity = 1, .max_arity = 1, .arg_names = &.{"selection"}, .arg_types = &.{Type.selection(.any)}, .result_type = Type.boolean, .summary = "Return whether a Selection has no members" },
     .{ .op = .selection_count, .name = "selection_count", .min_arity = 1, .max_arity = 1, .arg_names = &.{"selection"}, .arg_types = &.{Type.selection(.any)}, .result_type = Type.number, .summary = "Return the number of members in a Selection" },
     .{ .op = .group, .name = "group", .min_arity = 1, .max_arity = 255, .arg_names = &.{"child"}, .arg_types = &.{Type.any}, .result_type = .{ .kind = .group }, .summary = "Combine unplaced presentation values, preserving each child type and position" },
+    .{ .op = .group_placed, .name = "group!", .min_arity = 0, .max_arity = 255, .arg_names = &.{"child"}, .arg_types = &.{Type.any}, .result_type = Type.placement, .places_objects = true, .summary = "Group existing same-page roots without copying their identities or constraints" },
     .{ .op = .new_page, .name = "new_page", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "document", "title" }, .arg_types = &.{ Type.document, Type.string }, .result_type = Type.page, .summary = "Create a page in the scheduled document graph" },
     .{ .op = .place_on, .name = "place_on!", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "page", "value" }, .arg_types = &.{ Type.page, Type.any }, .result_type = Type.placement, .result_policy = .placement, .result_arg_index = 1, .places_objects = true, .summary = "Place an immutable presentation value on a page" },
     .{ .op = .constraints, .name = "constraints", .min_arity = 0, .max_arity = 255, .arg_names = &.{"constraint_set"}, .arg_types = &.{Type.constraints}, .result_type = Type.constraints, .summary = "Bundle a ConstraintSet" },

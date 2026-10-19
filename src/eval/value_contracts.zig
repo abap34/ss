@@ -96,7 +96,8 @@ pub fn valueConformsToType(state: anytype, value: core.Value, expected: ast.Type
         };
     }
     if (expected.kind == .group) {
-        if (value != .group or !ast.Type.eql(value.group.ty, expected)) return false;
+        if (value != .group or !ast.Type.accepts(expected, value.group.ty)) return false;
+        if (expected.arguments.len == 0) return true;
         if (value.group.children.items.len != expected.arguments.len) return false;
         for (value.group.children.items, expected.arguments) |child, ty| {
             if (!valueConformsToType(state, child, ty)) return false;

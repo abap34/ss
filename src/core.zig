@@ -25,6 +25,7 @@ pub const Axis = model.Axis;
 pub const AxisState = model.AxisState;
 pub const Node = model.Node;
 pub const placement_inputs = @import("core/placement_inputs.zig");
+pub const group_composition = @import("core/group_composition.zig");
 pub const native_display = @import("core/native_display.zig");
 pub const ContentProvenance = model.ContentProvenance;
 pub const ValueTag = model.ValueTag;

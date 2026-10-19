@@ -505,6 +505,9 @@ fn inferMemberInfoFromTargetInfo(
         return error.InvalidType;
     }
     if (target_info.ty.kind == .placed or target_info.ty.kind == .placement) {
+        if (isPlacedGroup(target_info.ty) and std.mem.eql(u8, member_name, "layout")) {
+            if (sema.state) |owner| if (core.group_composition.layoutType(owner)) |ty| return infoFromType(ty);
+        }
         const field_type = @import("../language/placement.zig").memberType(target_info.ty, member_name) orelse {
             try addUserReportAtSpan(state, origin, member_span, "UnknownField", "type '{s}' has no field '{s}'", .{ target_info.ty.label(), member_name });
             return error.InvalidType;
@@ -1007,18 +1010,41 @@ fn inferPrimitiveCallInfo(
         if ((descriptor.op == .add or descriptor.op == .sub) and left == .anchor and right == .number) return infoFromType(Type.anchor);
         if (descriptor.op == .add and left == .number and right == .anchor) return infoFromType(Type.anchor);
     }
-    if (descriptor.op == .group) {
-        const children = try allocator.alloc(Type, argument_infos.len);
+    if (descriptor.op == .group or descriptor.op == .group_placed) {
+        const selection = argument_infos.len == 1 and argument_infos[0].ty.kind == .selection;
+        const placed = descriptor.op == .group_placed or (call.callee.composition != null and argument_infos.len > 0 and
+            (argument_infos[0].ty.kind == .placed or argument_infos[0].ty.kind == .placement));
+        const children = try allocator.alloc(Type, if (selection) 0 else argument_infos.len);
         defer allocator.free(children);
-        for (argument_infos, children, 0..) |info, *child, index| {
+        var erased = selection;
+        for (argument_infos, 0..) |info, index| {
             if (info.hole != null) return info;
-            if (info.ty.kind != .record and info.ty.kind != .group) {
-                try addUserReport(state, callArgumentOrigin(call, index, origin), "InvalidGroupInput", "group requires unplaced presentation values", .{});
-                return error.InvalidType;
+            const ty = if (selection) info.ty.selectionItem() else info.ty;
+            if (placed) {
+                if (ty.kind != .placed and ty.kind != .placement) {
+                    try addUserReport(state, callArgumentOrigin(call, index, origin), "InvalidGroupInput", "placed composition requires placement references; place each input first", .{});
+                    return error.InvalidType;
+                }
+                if (ty.kind == .placement) erased = true;
+                if (!selection) children[index] = ty.placedInput() orelse Type.any;
+            } else {
+                if (selection or (ty.kind != .record and ty.kind != .group)) {
+                    try addUserReport(state, callArgumentOrigin(call, index, origin), "InvalidGroupInput", "group requires unplaced presentation values; use group! for existing placements", .{});
+                    return error.InvalidType;
+                }
+                children[index] = ty;
             }
-            child.* = info.ty;
         }
-        return infoFromType(try (Type{ .kind = .group }).withArguments(allocator, children));
+        const group_type = try (Type{ .kind = .group }).withArguments(allocator, if (erased) &.{} else children);
+        if (!placed) return infoFromType(group_type);
+        if (state) |owner| if (options.validate_contracts) if (call.callee.call_id) |id| {
+            if (!owner.displays.adoptions.contains(id)) {
+                var owned = try group_type.clone(owner.allocator);
+                errdefer owned.deinit(owner.allocator);
+                try owner.displays.adoptions.put(id, owned);
+            }
+        };
+        return infoFromType(try Type.placedOf(allocator, group_type));
     }
     for (argument_infos, 0..) |actual, index| {
         if (isPrimitiveFunctionArgument(descriptor, index)) continue;
@@ -1031,6 +1057,10 @@ fn inferPrimitiveCallInfo(
         if (input.hole != null) return input;
         if (input.ty.kind != .record and input.ty.kind != .group) {
             try addUserReport(state, origin, "InvalidPlacementInput", "placement requires an unplaced presentation value", .{});
+            return error.InvalidType;
+        }
+        if (input.ty.kind == .group and input.ty.arguments.len == 0) {
+            try addUserReport(state, origin, "UnknownGroupShape", "placing a Group value requires its child types; retain a concrete Group<A, B, ...> input type", .{});
             return error.InvalidType;
         }
         if (state) |owner| {
@@ -1559,6 +1589,11 @@ fn memberPathPrefixInfo(
     return current_info;
 }
 
+fn isPlacedGroup(ty: Type) bool {
+    const input = ty.placedInput() orelse return false;
+    return input.kind == .group;
+}
+
 fn validateMemberTargetPropertySetPath(
     allocator: std.mem.Allocator,
     state: ?*core.DocumentState,
@@ -1568,6 +1603,16 @@ fn validateMemberTargetPropertySetPath(
     value_info: TypeInfo,
     origin: core.SourceOrigin,
 ) !void {
+    if (isPlacedGroup(object_info.ty) and path.len > 0 and std.mem.eql(u8, path[0].name, "layout")) {
+        if (path.len == 2 and std.mem.eql(u8, path[1].name, "gap")) {
+            try ensureType(state, allocator, value_info, Type.number, origin, .UnmatchedArgumentType);
+            return;
+        }
+        if (path.len == 1) if (sema.state) |owner| if (core.group_composition.layoutType(owner)) |ty| {
+            try ensureType(state, allocator, value_info, ty, origin, .UnmatchedArgumentType);
+            return;
+        };
+    }
     var current_info = object_info;
     for (path, 0..) |segment, index| {
         if (current_info.hole != null) return;

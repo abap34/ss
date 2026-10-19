@@ -1,5 +1,7 @@
 const std = @import("std");
 const model = @import("model");
+const Type = @import("language_type").Type;
+const fields = @import("fields.zig");
 
 /// Collect adjacency and optional equal cuts before update normalization.
 /// Layout consumes only the constraints surviving update normalization.
@@ -143,7 +145,8 @@ pub fn settings(node: *const model.Node) Settings {
     const placement = node.placement orelse return .{};
     if (placement.value != .group) return .{};
     const value = placement.value.group;
-    return .{ .mode = value.composition, .gap = value.gap, .align_y = value.composition.isHorizontal() };
+    const gap = fields.readExplicit(node, "layout", &.{"gap"}, .number) orelse value.gap;
+    return .{ .mode = value.composition, .gap = gap, .align_y = value.composition.isHorizontal() };
 }
 
 fn collectAlignment(state: anytype, node: *const model.Node, config: Settings, constraints: *std.ArrayList(model.Constraint)) !void {
@@ -168,4 +171,21 @@ fn collectAlignment(state: anytype, node: *const model.Node, config: Settings, c
         }
         previous = child_id;
     }
+}
+
+/// The public layout snapshot is an ordinary stdlib record. Only its access
+/// through a placed group carries the single-definition property capability.
+pub fn layoutType(state: anytype) ?Type {
+    for (state.modules.entries.items) |module| {
+        if (module.kind == .library and std.mem.eql(u8, module.spec, "std:layout/types")) return Type.recordType("GroupLayout").inModule(module.id);
+    }
+    return null;
+}
+
+pub fn layoutValue(state: anytype, node: *const model.Node) !model.Value {
+    if (model.nodeField(node, "layout")) |value| return value.clone(state.allocator);
+    var record = model.RecordValue.init(layoutType(state) orelse return error.UnknownType);
+    errdefer record.deinit(state.allocator);
+    try record.fields.append(state.allocator, .{ .name = "gap", .value = .{ .number = settings(node).gap } });
+    return .{ .record = record };
 }

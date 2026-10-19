@@ -306,7 +306,7 @@ let a = text!("Already placed")
 let b = text!("Also placed")
 place!(a ${operator} b)
 end
-`, "InvalidGroupInput");
+`, "InvalidPlacementInput");
   }
 
   await expectFailure("negative-split-gap", `import std:text as { Text }
