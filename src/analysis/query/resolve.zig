@@ -198,7 +198,7 @@ pub fn typeForExpr(allocator: std.mem.Allocator, budget: ?QueryBudget, snapshot:
 }
 
 fn typeForPrimitiveCall(allocator: std.mem.Allocator, budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, offset: usize, call: ast.CallExpr) anyerror!?ast.Type {
-    const descriptor = registry.lookupPrimitiveCall(call.callee.name) orelse return null;
+    const descriptor = (if (call.callee.is_operator) registry.lookupSyntaxCall(call.callee.name) else registry.lookupPrimitiveCall(call.callee.name)) orelse return null;
     if (descriptor.op == .group and call.args.items.len != 0) {
         const inputs = try allocator.alloc(ast.Type, call.args.items.len);
         defer allocator.free(inputs);

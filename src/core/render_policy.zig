@@ -309,7 +309,7 @@ const FALLBACK_TEXT_COLOR = Color{ .r = 0.08, .g = 0.08, .b = 0.08 };
 const FALLBACK_LINK_COLOR = Color{ .r = 0.1, .g = 0.25, .b = 0.75 };
 
 pub fn resolve(state: anytype, node: *const Node) ResolvedRender {
-    const kind = resolveKind(state, node);
+    const kind = resolveKind(node);
     return .{
         .kind = kind,
         .text = resolveText(state, node, kind),
@@ -329,7 +329,7 @@ pub fn resolvePageBackground(state: anytype, page: *const Node) ?Color {
     return parseColorProperty(state, document, "background_fill");
 }
 
-pub fn resolveKind(state: anytype, node: *const Node) RenderKind {
+pub fn resolveKind(node: *const Node) RenderKind {
     if (node.placement) |placement| switch (placement.display) {
         .expanded, .group => return .chrome_only,
         .native => |kind| return switch (kind) {
@@ -342,12 +342,18 @@ pub fn resolveKind(state: anytype, node: *const Node) RenderKind {
         },
         .pending, .running => {},
     };
-    if (parseRenderKindProperty(state, node)) |kind| return kind;
-    return .text;
+    if (node.object_kind == .group) return .chrome_only;
+    return switch (node.payload_kind orelse .text) {
+        .text => .text,
+        .code => .code,
+        .latex => .latex,
+        .image_ref => .raster_asset,
+        .pdf_ref => .vector_asset,
+    };
 }
 
 pub fn resolveTextForNode(state: anytype, node: *const Node) ?TextPaint {
-    return resolveText(state, node, resolveKind(state, node));
+    return resolveText(state, node, resolveKind(node));
 }
 
 pub fn resolveTextMetrics(state: anytype, node: *const Node) TextMetrics {
@@ -919,15 +925,6 @@ fn explicitRecordFloatProperty(node: *const Node, record_key: []const u8, path: 
         .number => |number| @floatCast(number),
         else => null,
     };
-}
-
-fn parseRenderKindProperty(state: anytype, node: *const Node) ?RenderKind {
-    const value = fields.read(state.allocator, state, node, "render_kind", &.{}, .text) orelse return null;
-    return parseRenderKind(value);
-}
-
-fn parseRenderKind(value: []const u8) ?RenderKind {
-    return std.meta.stringToEnum(RenderKind, value);
 }
 
 fn parseHorizontalAlign(value: []const u8) ?HorizontalAlign {

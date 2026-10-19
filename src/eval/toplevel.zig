@@ -440,8 +440,6 @@ fn unknownNameCode(kind: []const u8) []const u8 {
     if (std.mem.eql(u8, kind, "identifier")) return "UnknownIdentifier";
     if (std.mem.eql(u8, kind, "type")) return "UnknownType";
     if (std.mem.eql(u8, kind, "anchor")) return "UnknownAnchor";
-    if (std.mem.eql(u8, kind, "role")) return "UnknownRole";
-    if (std.mem.eql(u8, kind, "payload kind")) return "UnknownPayloadKind";
     return "UnknownName";
 }
 
@@ -494,8 +492,6 @@ fn lowerErrorMessage(err: anyerror) ?[]const u8 {
         error.ExpectedObject => "expected an object argument",
         error.NoCurrentPage => "this operation is only valid inside a page block",
         error.UnknownAnchor => "unknown anchor",
-        error.UnknownRole => "unknown role",
-        error.UnknownPayloadKind => "unknown payload kind",
         error.PageCannotBeConstraintTarget => "page anchors cannot be constraint targets",
         error.UnsupportedDocumentEvaluationPrimitive => "this operation is not valid during document evaluation",
         error.FunctionDidNotReturnValue => "function did not return a value",

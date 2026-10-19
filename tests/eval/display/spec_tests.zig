@@ -375,7 +375,7 @@ test "native text display: a user display reaches Markdown preparation through i
     try testing.expect(prepared.markdown_doc.?.blocks.items.len >= 2);
     try testing.expectEqualStrings("# Overview\n\n**Typed** text", prepared.content);
     try testing.expectEqual(core.ObjectKind.group, state.getNode(parent).?.object_kind.?);
-    try testing.expectEqual(core.render_policy.RenderKind.chrome_only, core.render_policy.resolveKind(&state, state.getNode(parent).?));
+    try testing.expectEqual(core.render_policy.RenderKind.chrome_only, core.render_policy.resolveKind(state.getNode(parent).?));
     var pages = try core.prepared.prepare(testing.allocator, &state);
     defer pages.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 1), pages.pages.len);
@@ -1568,7 +1568,7 @@ test "typed compositions: operators preserve inputs, nested structure and immuta
         \\  place!(original)
         \\  place!(updated)
         \\  place!(updated)
-        \\  place!(t::Text { content = concat(str(original.content.gap), concat("/", str(updated.content.gap))) })
+        \\  place!(t::Text { content = str(original.content.gap) ++ "/" ++ str(updated.content.gap) })
         \\  place!(a |=| b |=| a)
         \\  place!((a |=| b) |=| a)
         \\  place!((a // b) with { gap = 12 })

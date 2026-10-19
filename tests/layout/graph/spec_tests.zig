@@ -167,10 +167,6 @@ fn setLayoutCenterOffset(state: *core.DocumentState, node_id: model.NodeId, valu
     try setStringField(state, node_id, "layout_v_center_offset", value);
 }
 
-fn setRenderKind(state: *core.DocumentState, node_id: model.NodeId, case_name: []const u8) !void {
-    try setEnumField(state, node_id, "render_kind", "RenderKind", case_name);
-}
-
 fn setLayoutWrap(state: *core.DocumentState, node_id: model.NodeId, case_name: []const u8) !void {
     try setRecordEnumField(state, node_id, "layout", "wrap", "WrapMode", case_name);
 }
@@ -2856,6 +2852,27 @@ test "layout metrics use the markdown block gap after a heading" {
     try expectFloat(12, relaxed_height - compact_height);
 }
 
+test "render policy: native payloads determine rendering kinds without properties" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page = try state.addPage("Page");
+    const cases = [_]struct { payload: model.PayloadKind, kind: core.render_policy.RenderKind }{
+        .{ .payload = .text, .kind = .text },
+        .{ .payload = .code, .kind = .code },
+        .{ .payload = .latex, .kind = .latex },
+        .{ .payload = .image_ref, .kind = .raster_asset },
+        .{ .payload = .pdf_ref, .kind = .vector_asset },
+    };
+    for (cases) |case| {
+        const id = try state.makeObject(page, "Content", .asset, case.payload, "Example");
+        const node = state.getNode(id).?;
+        try testing.expectEqual(@as(usize, 0), node.fields.items.len);
+        try testing.expectEqual(case.kind, core.render_policy.resolveKind(node));
+    }
+    const group_id = try state.makeGroupWithOrigin(page, true, &.{}, null);
+    try testing.expectEqual(core.render_policy.RenderKind.chrome_only, core.render_policy.resolveKind(state.getNode(group_id).?));
+}
+
 test "render policy: math alignment is read from each content style" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
@@ -2871,7 +2888,6 @@ test "render policy: math alignment is read from each content style" {
     try testing.expectEqual(core.render_policy.HorizontalAlign.center, resolved_invalid.text.?.math_align);
 
     const latex_object = try state.makeObject(page, "latex", .asset, .latex, "$x^2$");
-    try setRenderKind(&state, latex_object, "latex");
     try setRecordPathValue(&state, latex_object, "latex", &.{"align"}, .{ .enum_case = .{ .enum_name = "Align", .case_name = "right" } });
     const resolved_latex = core.render_policy.resolve(&state, state.getNode(latex_object).?);
     try testing.expectEqual(core.render_policy.HorizontalAlign.right, resolved_latex.latex.?.horizontal_align);

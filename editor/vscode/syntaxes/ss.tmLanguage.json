@@ -121,23 +121,6 @@
             "2": { "name": "entity.name.type.ss" }
           },
           "match": "\\b(enum|type)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(?=[<{])"
-        },
-        {
-          "captures": {
-            "1": { "name": "keyword.control.ss" },
-            "2": { "name": "entity.name.type.class.ss" },
-            "3": { "name": "keyword.operator.assignment.ss" },
-            "4": { "name": "storage.type.ss" }
-          },
-          "match": "\\b(type)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(=)\\s*(object)\\b"
-        },
-        {
-          "captures": {
-            "1": { "name": "keyword.control.ss" },
-            "2": { "name": "entity.name.type.ss" },
-            "3": { "name": "keyword.operator.assignment.ss" }
-          },
-          "match": "\\b(type)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(=)"
         }
       ]
     },

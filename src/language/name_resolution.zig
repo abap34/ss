@@ -30,7 +30,7 @@ pub fn resolveValue(
 ) !ValueResolution(Local, Constant, Function) {
     if (callee.name_hole != null) return .unknown;
     if (callee.is_operator) {
-        const primitive = @import("registry.zig").lookupPrimitiveCall(callee.name) orelse return .unknown;
+        const primitive = @import("registry.zig").lookupSyntaxCall(callee.name) orelse return .unknown;
         return .{ .primitive = primitive };
     }
     if (!callee.isQualified()) {

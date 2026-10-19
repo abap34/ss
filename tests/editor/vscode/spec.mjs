@@ -55,6 +55,9 @@ async function testRemovedDeclarationKeywords() {
   assert(JSON.stringify("Placed<Text> Placement".match(builtinType)) === '["Placed","Placement"]', "placement types must highlight without classifying user types as built-ins");
   for (const pattern of grammar.repository.declarations.patterns) {
     assert(new RegExp(pattern.match).exec("extend Card") === null, "removed extensions must not highlight as declarations");
+    for (const source of ["type Card = object {", "type Card = record {", "type Card = enum {", "type Card = protocol {"]) {
+      assert(new RegExp(pattern.match).exec(source) === null, `removed declaration must not highlight: ${source}`);
+    }
   }
 }
 

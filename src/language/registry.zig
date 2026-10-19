@@ -198,22 +198,9 @@ const primitive_descriptors = [_]PrimitiveDescriptor{
     .{ .op = .select, .name = "select", .min_arity = 1, .max_arity = 255, .arg_names = &.{ "scope", "query_name" }, .arg_types = &.{ Type.any, Type.string }, .type_parameter_count = 1, .result_type = Type.selection(.any), .result_policy = .select_query, .summary = "Select typed placements within a document, page, or placement subtree" },
     .{ .op = .anchor, .name = "anchor", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "placement", "anchor_name" }, .arg_types = &.{ Type.placement, Type.string }, .result_type = Type.anchor, .summary = "Return a placement anchor" },
     .{ .op = .page_anchor, .name = "page_anchor", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "page", "anchor_name" }, .arg_types = &.{ Type.page, Type.string }, .result_type = Type.anchor, .summary = "Return a page anchor" },
-    .{ .op = .num_eq, .name = "num_eq", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.boolean, .summary = "Return whether left is equal to right" },
-    .{ .op = .num_ne, .name = "num_ne", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.boolean, .summary = "Return whether left is unequal to right" },
-    .{ .op = .num_lt, .name = "num_lt", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.boolean, .summary = "Return whether left is less than right" },
-    .{ .op = .num_le, .name = "num_le", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.boolean, .summary = "Return whether left is less than or equal to right" },
-    .{ .op = .num_gt, .name = "num_gt", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.boolean, .summary = "Return whether left is greater than right" },
-    .{ .op = .num_ge, .name = "num_ge", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.boolean, .summary = "Return whether left is greater than or equal to right" },
-    .{ .op = .logical_not, .name = "not", .min_arity = 1, .max_arity = 1, .arg_names = &.{"value"}, .arg_types = &.{Type.boolean}, .result_type = Type.boolean, .summary = "Negate a boolean value" },
-    .{ .op = .neg, .name = "neg", .min_arity = 1, .max_arity = 1, .arg_names = &.{"value"}, .arg_types = &.{Type.number}, .result_type = Type.number, .summary = "Negate a number" },
-    .{ .op = .add, .name = "add", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.number, .summary = "Add two numbers" },
-    .{ .op = .sub, .name = "sub", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.number, .summary = "Subtract two numbers" },
-    .{ .op = .mul, .name = "mul", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.number, .summary = "Multiply two numbers" },
-    .{ .op = .div, .name = "div", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.number, .summary = "Divide two numbers" },
     .{ .op = .min, .name = "min", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.number, .summary = "Return the smaller number" },
     .{ .op = .max, .name = "max", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.number, .summary = "Return the larger number" },
     .{ .op = .str, .name = "str", .min_arity = 1, .max_arity = 1, .arg_names = &.{"value"}, .arg_types = &.{Type.number}, .result_type = Type.string, .summary = "Convert a number to string" },
-    .{ .op = .concat, .name = "concat", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.string, Type.string }, .result_type = Type.string, .summary = "Concatenate two strings" },
     .{ .op = .replace, .name = "replace", .min_arity = 3, .max_arity = 3, .arg_names = &.{ "text", "old", "new" }, .arg_types = &.{ Type.string, Type.string, Type.string }, .result_type = Type.string, .summary = "Replace all string occurrences" },
     .{ .op = .str_contains, .name = "str_contains", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "text", "needle" }, .arg_types = &.{ Type.string, Type.string }, .result_type = Type.boolean, .summary = "Return whether a string contains another string" },
     .{ .op = .str_before, .name = "str_before", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "text", "needle" }, .arg_types = &.{ Type.string, Type.string }, .result_type = Type.string, .summary = "Return the text before the first occurrence of a string" },
@@ -225,9 +212,6 @@ const primitive_descriptors = [_]PrimitiveDescriptor{
     .{ .op = .fold, .name = "fold", .min_arity = 3, .max_arity = 255, .arg_names = &.{ "selection", "initial", "callback" }, .arg_types = &.{ Type.selection(.any), Type.any, Type.function, Type.any }, .result_type = null, .result_policy = .argument_type, .result_arg_index = 1, .callback = .{ .function_arg_index = 2, .supplied_arg_count = 2 }, .summary = "Fold a finite Selection snapshot while preserving the initial accumulator type" },
     .{ .op = .join, .name = "join", .min_arity = 3, .max_arity = 255, .arg_names = &.{ "selection", "separator", "callback" }, .arg_types = &.{ Type.selection(.any), Type.string, Type.function, Type.any }, .result_type = Type.string, .callback = .{ .function_arg_index = 2, .supplied_arg_count = 1, .expected_result_type = Type.string }, .summary = "Map a finite Selection snapshot to strings and join them" },
     .{ .op = .first, .name = "first", .min_arity = 1, .max_arity = 1, .arg_names = &.{"selection"}, .arg_types = &.{Type.selection(.any)}, .result_type = null, .result_policy = .first_selection_item, .summary = "Get the first element of a Selection" },
-    .{ .op = .selection_union, .name = "selection_union", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.selection(.any), Type.selection(.any) }, .result_type = Type.selection(.any), .result_policy = .selection_algebra, .summary = "Return the union of two Selections" },
-    .{ .op = .selection_intersection, .name = "selection_intersection", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.selection(.any), Type.selection(.any) }, .result_type = Type.selection(.any), .result_policy = .selection_algebra, .summary = "Return the intersection of two Selections" },
-    .{ .op = .selection_difference, .name = "selection_difference", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.selection(.any), Type.selection(.any) }, .result_type = Type.selection(.any), .result_policy = .selection_algebra, .summary = "Return the left Selection without members from the right Selection" },
     .{ .op = .page_index, .name = "page_index", .min_arity = 1, .max_arity = 1, .arg_names = &.{"page"}, .arg_types = &.{Type.page}, .result_type = Type.number, .summary = "Return a page's one-based document index" },
     .{ .op = .page_count, .name = "page_count", .min_arity = 1, .max_arity = 1, .arg_names = &.{"document"}, .arg_types = &.{Type.document}, .result_type = Type.number, .summary = "Return the number of pages in a document" },
     .{ .op = .frame_x, .name = "frame_x", .min_arity = 1, .max_arity = 1, .arg_names = &.{"placement"}, .arg_types = &.{Type.placement}, .result_type = Type.number, .summary = "Return the solved x coordinate for a placement" },
@@ -241,10 +225,30 @@ const primitive_descriptors = [_]PrimitiveDescriptor{
     .{ .op = .new_page, .name = "new_page", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "document", "title" }, .arg_types = &.{ Type.document, Type.string }, .result_type = Type.page, .summary = "Create a page in the scheduled document graph" },
     .{ .op = .place_on, .name = "place_on!", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "page", "value" }, .arg_types = &.{ Type.page, Type.any }, .result_type = Type.placement, .result_policy = .placement, .result_arg_index = 1, .places_objects = true, .summary = "Place an immutable presentation value on a page" },
     .{ .op = .constraints, .name = "constraints", .min_arity = 0, .max_arity = 255, .arg_names = &.{"constraint_set"}, .arg_types = &.{Type.constraints}, .result_type = Type.constraints, .summary = "Bundle a ConstraintSet" },
-    .{ .op = .constrain_on, .name = "constrain_on!", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "page", "constraints" }, .arg_types = &.{ Type.page, Type.constraints }, .result_type = .{ .kind = .void }, .summary = "Register constraints on a page" },
     .{ .op = .report_error, .name = "report_error", .min_arity = 1, .max_arity = 1, .arg_names = &.{"message"}, .arg_types = &.{Type.string}, .result_type = Type.string, .summary = "Report error diagnostics from user-defined checks" },
     .{ .op = .report_warning, .name = "report_warning", .min_arity = 1, .max_arity = 1, .arg_names = &.{"message"}, .arg_types = &.{Type.string}, .result_type = Type.string, .summary = "Report warning diagnostics from user-defined checks" },
     .{ .op = .path, .name = "path", .min_arity = 1, .max_arity = 255, .arg_names = &.{"command"}, .arg_types = &.{Type.recordType("PathCommand")}, .type_module = "std:graphics/types", .result_type = Type.path, .summary = "Build an immutable vector path from path commands" },
+};
+
+// These operations are reached only through elaborated syntax, never value names.
+const syntax_descriptors = [_]PrimitiveDescriptor{
+    .{ .op = .num_eq, .name = "num_eq", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.boolean, .summary = "Return whether left is equal to right" },
+    .{ .op = .num_ne, .name = "num_ne", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.boolean, .summary = "Return whether left is unequal to right" },
+    .{ .op = .num_lt, .name = "num_lt", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.boolean, .summary = "Return whether left is less than right" },
+    .{ .op = .num_le, .name = "num_le", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.boolean, .summary = "Return whether left is less than or equal to right" },
+    .{ .op = .num_gt, .name = "num_gt", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.boolean, .summary = "Return whether left is greater than right" },
+    .{ .op = .num_ge, .name = "num_ge", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.boolean, .summary = "Return whether left is greater than or equal to right" },
+    .{ .op = .logical_not, .name = "not", .min_arity = 1, .max_arity = 1, .arg_names = &.{"value"}, .arg_types = &.{Type.boolean}, .result_type = Type.boolean, .summary = "Negate a boolean value" },
+    .{ .op = .neg, .name = "neg", .min_arity = 1, .max_arity = 1, .arg_names = &.{"value"}, .arg_types = &.{Type.number}, .result_type = Type.number, .summary = "Negate a number" },
+    .{ .op = .add, .name = "add", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.number, .summary = "Add two numbers" },
+    .{ .op = .sub, .name = "sub", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.number, .summary = "Subtract two numbers" },
+    .{ .op = .mul, .name = "mul", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.number, .summary = "Multiply two numbers" },
+    .{ .op = .div, .name = "div", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.number, .summary = "Divide two numbers" },
+    .{ .op = .concat, .name = "concat", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.string, Type.string }, .result_type = Type.string, .summary = "Concatenate two strings" },
+    .{ .op = .selection_union, .name = "selection_union", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.selection(.any), Type.selection(.any) }, .result_type = Type.selection(.any), .result_policy = .selection_algebra, .summary = "Return the union of two Selections" },
+    .{ .op = .selection_intersection, .name = "selection_intersection", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.selection(.any), Type.selection(.any) }, .result_type = Type.selection(.any), .result_policy = .selection_algebra, .summary = "Return the intersection of two Selections" },
+    .{ .op = .selection_difference, .name = "selection_difference", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.selection(.any), Type.selection(.any) }, .result_type = Type.selection(.any), .result_policy = .selection_algebra, .summary = "Return the left Selection without members from the right Selection" },
+    .{ .op = .constrain_on, .name = "constrain_on!", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "page", "constraints" }, .arg_types = &.{ Type.page, Type.constraints }, .result_type = .{ .kind = .void }, .summary = "Register constraints on a page" },
 };
 
 const query_descriptors = [_]QueryDescriptor{
@@ -256,7 +260,7 @@ const query_descriptors = [_]QueryDescriptor{
 };
 
 comptime {
-    validateDescriptors(PrimitiveCall, &primitive_descriptors);
+    validateDescriptors(PrimitiveCall, &(primitive_descriptors ++ syntax_descriptors));
     validateDescriptors(QueryOp, &query_descriptors);
 }
 
@@ -292,6 +296,13 @@ pub fn lookupPrimitiveCall(name: []const u8) ?PrimitiveDescriptor {
         if (std.mem.eql(u8, name, descriptor.name)) return descriptor;
     }
     return null;
+}
+
+pub fn lookupSyntaxCall(name: []const u8) ?PrimitiveDescriptor {
+    inline for (syntax_descriptors) |descriptor| {
+        if (std.mem.eql(u8, name, descriptor.name)) return descriptor;
+    }
+    return lookupPrimitiveCall(name);
 }
 
 pub fn lookupQueryOp(name: []const u8) ?QueryDescriptor {

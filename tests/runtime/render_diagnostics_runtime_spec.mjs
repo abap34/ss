@@ -124,10 +124,10 @@ end
       PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`,
     });
     const output = `${result.stdout}\n${result.stderr}`;
-    assert(result.code !== 0, "render should fail when latex_engine is not a runnable executable");
+    assert(result.code !== 0, "render should fail when the configured LaTeX engine is not runnable");
     assert(output.includes("RenderFailed:"), `invalid executable did not produce a source diagnostic:\n${output}`);
     assert(output.includes("is not runnable on this platform"), `invalid executable omitted the concrete cause:\n${output}`);
-    assert(output.includes("install a compatible executable or select another latex_engine"), `invalid executable omitted corrective guidance:\n${output}`);
+    assert(output.includes("install a compatible executable or select another engine through LatexConfig.engine"), `invalid executable omitted corrective guidance:\n${output}`);
   } finally {
     await rm(project, { recursive: true, force: true });
   }

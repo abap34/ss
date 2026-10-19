@@ -262,6 +262,11 @@ pub const SemanticEnv = struct {
     }
 
     pub fn callCalleeParamName(self: *const SemanticEnv, callee: ast.CallableName, index: usize) ?[]const u8 {
+        if (callee.is_operator) {
+            const descriptor = registry.lookupSyntaxCall(callee.name) orelse return null;
+            if (descriptor.arg_names.len == 0) return null;
+            return descriptor.arg_names[@min(index, descriptor.arg_names.len - 1)];
+        }
         if (self.resolvedFunction(callee)) |resolved| {
             if (index < resolved.decl.params.items.len) return resolved.decl.params.items[index].name;
             return null;

@@ -75,7 +75,6 @@ test "code measurement includes empty logical lines and keeps its ink offset" {
     defer state_layout.deinit();
     const page_id = try state.addPage("code-geometry");
     const object_id = try state.makeObject(page_id, "code", .source, .code, "j\n\nj");
-    try state.setNodeFieldValue(object_id, "render_kind", .{ .string = "code" });
     const object = state.getNode(object_id).?;
     (try state_layout.frame(object_id)).* = .{ .width = 240, .height = 108 };
     var prepared = try core.prepared.prepare(testing.allocator, &state);
@@ -485,8 +484,7 @@ test "render compiler shares highlight work across objects and compilations" {
     defer state_layout.deinit();
     const page_id = try state.addPage("highlight");
     for (0..2) |index| {
-        const object_id = try state.makeObject(page_id, "code", .text, .text, "def hello():\n  return 1\n");
-        try state.setNodeFieldValue(object_id, "render_kind", .{ .string = "code" });
+        const object_id = try state.makeObject(page_id, "code", .source, .code, "def hello():\n  return 1\n");
         try state.setNodeFieldValue(object_id, "language", .{ .string = "python" });
         (try state_layout.frame(object_id)).* = .{ .x = 40, .y = 60 + @as(f32, @floatFromInt(index)) * 160, .width = 400, .height = 120 };
     }
@@ -524,7 +522,6 @@ test "measurement cache observes changed highlight query contents" {
     defer state_layout.deinit();
     const page_id = try state.addPage("measurement-highlight");
     const object_id = try state.makeObject(page_id, "code", .source, .code, "T-T");
-    try state.setNodeFieldValue(object_id, "render_kind", .{ .string = "code" });
     try state.setNodeFieldValue(object_id, "language", .{ .string = "python" });
     const object = state.getNode(object_id) orelse return error.MissingTestObject;
     (try state_layout.frame(object_id)).* = .{ .x = 40, .y = 60, .width = 400, .height = 120 };
@@ -677,7 +674,6 @@ test "render compiler rejects unavailable PDF pages" {
     defer state_layout.deinit();
     const page_id = try state.addPage("pdf-page");
     const object_id = try state.makeObject(page_id, "pdf", .asset, .pdf_ref, pdf_path);
-    try state.setNodeFieldValue(object_id, "render_kind", .{ .string = "vector_asset" });
     (try state_layout.frame(object_id)).* = .{ .x = 40, .y = 60, .width = 240, .height = 120, .x_set = true, .y_set = true };
 
     var prepared = try core.prepared.prepare(testing.allocator, &state);

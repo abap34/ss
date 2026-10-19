@@ -509,7 +509,9 @@ fn inferMemberInfoFromTargetInfo(
             if (sema.state) |owner| if (core.group_composition.layoutType(owner)) |ty| return infoFromType(ty);
         }
         const field_type = @import("../language/placement.zig").memberType(target_info.ty, member_name) orelse {
-            try addUserReportAtSpan(state, origin, member_span, "UnknownField", "type '{s}' has no field '{s}'", .{ target_info.ty.label(), member_name });
+            const label = try typeLabelAlloc(allocator, target_info.ty);
+            defer allocator.free(label);
+            try addUserReportAtSpan(state, origin, member_span, "UnknownField", "type '{s}' has no field '{s}'", .{ label, member_name });
             return error.InvalidType;
         };
         return infoFromType(field_type);
@@ -809,7 +811,9 @@ pub fn prepareDisplay(
     if (input.kind == .group) return .group;
     if (core.native_display.kindForType(state, input)) |kind| {
         core.native_display.validateType(state, input, kind) catch |err| {
-            try addUserReport(state, origin, "InvalidNativeDisplay", "native display type '{s}' does not satisfy its rendering contract", .{input.label()});
+            const label = try typeLabelAlloc(allocator, input);
+            defer allocator.free(label);
+            try addUserReport(state, origin, "InvalidNativeDisplay", "native display type '{s}' does not satisfy its rendering contract", .{label});
             return err;
         };
         return .{ .native = kind };
@@ -832,7 +836,9 @@ fn prepareDisplayFunction(
         return error.InvalidType;
     }
     const definition = sema.displayForType(input) orelse {
-        try addUserReport(state, origin, "MissingDisplay", "type '{s}' has no display declaration", .{input.label()});
+        const label = try typeLabelAlloc(allocator, input);
+        defer allocator.free(label);
+        try addUserReport(state, origin, "MissingDisplay", "type '{s}' has no display declaration", .{label});
         return error.InvalidType;
     };
     var receiver = try Type.placedOf(allocator, input);
@@ -1635,7 +1641,7 @@ fn validateMemberTargetPropertySetPath(
     if (current_info.hole != null) return;
     const actual_label = try typeInfoLabelAlloc(allocator, current_info);
     defer allocator.free(actual_label);
-    try addUserReportAtSpan(state, origin, path[path.len - 1].span, "InvalidProperty", "property target must be Document, Page, Object, or Selection<Object>; got {s}", .{actual_label});
+    try addUserReportAtSpan(state, origin, path[path.len - 1].span, "InvalidProperty", "assignment target must be a writable Document or Page property; got {s}", .{actual_label});
     return error.InvalidType;
 }
 

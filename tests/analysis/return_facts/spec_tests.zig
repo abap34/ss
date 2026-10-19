@@ -167,7 +167,7 @@ test "primitive argument inference grows linearly with nesting" {
         defer arena.deinit();
         const allocator = arena.allocator();
         var expression: []const u8 = "\"x\"";
-        for (0..depth) |_| expression = try std.fmt.allocPrint(allocator, "concat({s}, \"x\")", .{expression});
+        for (0..depth) |_| expression = try std.fmt.allocPrint(allocator, "({s} ++ \"x\")", .{expression});
         const source = try std.fmt.allocPrint(allocator, "document\nlet value = {s}\nend\n", .{expression});
         var analysis = try Analysis.init(allocator, source);
         defer analysis.deinit();

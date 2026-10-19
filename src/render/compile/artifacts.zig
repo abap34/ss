@@ -613,11 +613,11 @@ fn commandSpawnFailureMessage(allocator: Allocator, argv: []const []const u8, er
     if (err == error.FileNotFound and argv.len != 0) {
         try out.appendSlice(allocator, "executable '");
         try out.appendSlice(allocator, argv[0]);
-        try out.appendSlice(allocator, "' was not found in PATH; install it or select an available latex_engine; command:");
+        try out.appendSlice(allocator, "' was not found in PATH; install it or select an available engine through LatexConfig.engine; command:");
     } else if (err == error.InvalidExe and argv.len != 0) {
         try out.appendSlice(allocator, "executable '");
         try out.appendSlice(allocator, argv[0]);
-        try out.appendSlice(allocator, "' is not runnable on this platform; install a compatible executable or select another latex_engine; command:");
+        try out.appendSlice(allocator, "' is not runnable on this platform; install a compatible executable or select another engine through LatexConfig.engine; command:");
     } else if (err == error.Timeout) {
         const prefix = try std.fmt.allocPrint(
             allocator,

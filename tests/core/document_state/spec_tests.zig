@@ -797,11 +797,7 @@ test "document state spec: prepared pages preserve explicit LaTeX body dependenc
     defer state.deinit();
 
     const page = try state.addPage("Page");
-    const latex_object = try state.makeObject(page, "latex", .asset, .latex, "\\begin{center}$x+y$\\end{center}");
-    try state.setNodeFieldValue(latex_object, "render_kind", .{ .enum_case = .{
-        .enum_name = "RenderKind",
-        .case_name = "latex",
-    } });
+    _ = try state.makeObject(page, "latex", .asset, .latex, "\\begin{center}$x+y$\\end{center}");
 
     var pages = try core.prepared.prepare(testing.allocator, &state);
     defer pages.deinit(testing.allocator);

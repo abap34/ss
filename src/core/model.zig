@@ -119,7 +119,6 @@ pub const PayloadKind = enum {
     text,
     code,
     latex,
-    figure_text,
     image_ref,
     pdf_ref,
 };

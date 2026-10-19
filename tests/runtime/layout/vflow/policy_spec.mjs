@@ -193,7 +193,7 @@ ${stackSource("Inherited Title", "Inherited Subtitle")}
 end
 
 page page_centered
-vflow(LayoutPolicy.center, sub(0, 80))
+vflow(LayoutPolicy.center, -80)
 ${stackSource("Page Centered Title", "Page Centered Subtitle")}
 end
 

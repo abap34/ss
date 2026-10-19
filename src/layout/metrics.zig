@@ -120,7 +120,6 @@ fn intrinsicWidthWithCache(state: *Workspace, node: *const Node, cache: ?*Measur
         .image_ref, .pdf_ref => {
             return @min(maxWidthForStyle(layout_style), Defaults.default_asset_width) * assetScale(state, node) + chrome_width;
         },
-        .figure_text => return maxWidthForStyle(layout_style) + chrome_width,
         .latex => return maxWidthForStyle(layout_style) + chrome_width,
         else => {},
     }
@@ -148,7 +147,7 @@ fn intrinsicWidthWithCache(state: *Workspace, node: *const Node, cache: ?*Measur
 
     if (max_width <= 0) {
         const fonts = textFaces(text_style);
-        const plain_font = plainTextFaceForNode(state, node, fonts);
+        const plain_font = plainTextFaceForNode(node, fonts);
         var lines = source.lineIterator(content);
         while (lines.next()) |line_view| {
             const line = line_view.text(content);
@@ -188,7 +187,6 @@ fn intrinsicHeightWithCache(state: *Workspace, node: *const Node, frame: model.F
     }
     return switch (node.payload_kind orelse .text) {
         .image_ref, .pdf_ref => Defaults.max_figure_height * assetScale(state, node) + chrome_height,
-        .figure_text => Defaults.max_figure_height + chrome_height,
         .latex => blk: {
             const content = model.nodeDisplayContent(node);
             const lines = @max(source.lineCount(content), 1);
@@ -311,7 +309,7 @@ fn markdownListItemHeight(state: *Workspace, node: *const Node, cache: ?*Measure
 
 fn markdownListMarkerWidth(state: *Workspace, node: *const Node, cache: ?*MeasurementCache, style: TextPaint, kind: markdown.BlockKind, depth: usize, ordinal: usize) f32 {
     const fonts = textFaces(style);
-    const font = plainTextFaceForNode(state, node, fonts);
+    const font = plainTextFaceForNode(node, fonts);
     return switch (kind) {
         .ordered_list => blk: {
             var buffer: [32]u8 = undefined;
@@ -528,7 +526,7 @@ fn markdownQuoteTextStyle(base: TextPaint) TextPaint {
 
 fn wrappedLineCount(state: *Workspace, node: *const Node, cache: ?*MeasurementCache, style: TextPaint, text: []const u8, max_width: f32) usize {
     const fonts = textFaces(style);
-    const plain_font = plainTextFaceForNode(state, node, fonts);
+    const plain_font = plainTextFaceForNode(node, fonts);
     var total: usize = 0;
     var lines = source.lineIterator(text);
     while (lines.next()) |line_view| {
@@ -544,11 +542,8 @@ fn wrappedLineCount(state: *Workspace, node: *const Node, cache: ?*MeasurementCa
     return total;
 }
 
-fn plainTextFaceForNode(state: *Workspace, node: *const Node, faces: font_model.TextFaces) font_model.Face {
+fn plainTextFaceForNode(node: *const Node, faces: font_model.TextFaces) font_model.Face {
     if ((node.payload_kind orelse .text) == .code) return faces.code;
-    if (fields.read(state.allocator, state.source, node, "render_kind", &.{}, .text)) |kind| {
-        if (std.mem.eql(u8, kind, "code")) return faces.code;
-    }
     return faces.normal;
 }
 

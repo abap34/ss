@@ -573,7 +573,9 @@ fn resolveAnchorPathInfo(
         if (info.hole != null) return info;
         if (info.ty.kind == .placed or info.ty.kind == .placement) {
             const field_type = @import("../language/placement.zig").memberType(info.ty, field_name) orelse {
-                try addUserReport(state, origin, "UnknownField", "type '{s}' has no field '{s}'", .{ info.ty.label(), field_name });
+                const label = try semantic_types.typeLabelAlloc(state.inferenceAllocator(), info.ty);
+                defer state.inferenceAllocator().free(label);
+                try addUserReport(state, origin, "UnknownField", "type '{s}' has no field '{s}'", .{ label, field_name });
                 return error.InvalidType;
             };
             info = infoFromType(field_type);

@@ -1021,8 +1021,6 @@ pub fn isExpectedCliError(err: anyerror) bool {
         error.ExpectedNumberArgument,
         error.ExpectedAnchor,
         error.ExpectedObject,
-        error.UnknownRole,
-        error.UnknownPayloadKind,
         error.PageCannotBeConstraintTarget,
         error.UnsupportedDocumentEvaluationPrimitive,
         error.FunctionDidNotReturnValue,

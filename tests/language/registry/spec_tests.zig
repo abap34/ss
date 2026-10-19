@@ -50,7 +50,7 @@ test "language registry spec: semantic contracts live on primitive descriptors" 
         try testing.expect(Type.eql(Type.number, registry.primitiveResultType(frame).?));
     }
 
-    const logical_not = registry.lookupPrimitiveCall("not").?;
+    const logical_not = registry.lookupSyntaxCall("not").?;
     try testing.expect(Type.eql(Type.boolean, registry.primitiveArgType(logical_not, 0).?));
     try testing.expect(Type.eql(Type.boolean, registry.primitiveResultType(logical_not).?));
 }
@@ -93,4 +93,20 @@ test "language registry spec: legacy object primitives are unavailable" {
     const place = registry.lookupPrimitiveCall("place_on!").?;
     try testing.expectEqual(registry.PrimitiveResultPolicy.placement, place.result_policy);
     try testing.expect(Type.eql(Type.placement, registry.primitiveResultType(place).?));
+}
+
+test "language registry spec: syntax operations are not callable value bindings" {
+    for ([_][]const u8{
+        "add",                    "sub",                  "mul",           "div",    "neg",    "concat", "not",
+        "num_eq",                 "num_ne",               "num_lt",        "num_le", "num_gt", "num_ge", "selection_union",
+        "selection_intersection", "selection_difference", "constrain_on!",
+    }) |name| {
+        try testing.expect(registry.lookupPrimitiveCall(name) == null);
+        try testing.expect(registry.lookupSyntaxCall(name) != null);
+        for (registry.primitiveDescriptors()) |descriptor| {
+            try testing.expect(!std.mem.eql(u8, name, descriptor.name));
+        }
+    }
+    try testing.expectEqual(registry.PrimitiveCall.group, registry.lookupSyntaxCall("group").?.op);
+    try testing.expectEqual(registry.PrimitiveCall.pagectx, registry.lookupSyntaxCall("pagectx").?.op);
 }

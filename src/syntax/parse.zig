@@ -1634,16 +1634,14 @@ const Parser = struct {
             self.pos += 1;
             var arg = try self.parseUnaryExpr();
             errdefer arg.deinit(self.allocator);
-            var call = try self.makeCall1("not", arg);
-            call.callee.is_operator = true;
+            const call = try self.makeCall1("not", arg);
             return .{ .call = call };
         }
         if (!self.eof() and self.source[self.pos] == '-') {
             self.pos += 1;
             var arg = try self.parseUnaryExpr();
             errdefer arg.deinit(self.allocator);
-            var call = try self.makeCall1("neg", arg);
-            call.callee.is_operator = true;
+            const call = try self.makeCall1("neg", arg);
             return .{ .call = call };
         }
         return self.parsePostfixExpr();
@@ -2064,8 +2062,7 @@ const Parser = struct {
     }
 
     fn makeBinaryCall(self: *Parser, name: []const u8, left: Expr, right: Expr) !Expr {
-        var call = try self.makeCall2(name, left, right);
-        call.callee.is_operator = true;
+        const call = try self.makeCall2(name, left, right);
         return .{ .call = call };
     }
 
@@ -2341,7 +2338,7 @@ const Parser = struct {
     }
 
     fn makeSyntheticCallableName(self: *Parser, name: []const u8) !ast.CallableName {
-        return ast.CallableName.bare(try self.allocator.dupe(u8, name));
+        return .{ .name = try self.allocator.dupe(u8, name), .is_operator = true };
     }
 
     fn parseConstraintValue(self: *Parser) !Expr {

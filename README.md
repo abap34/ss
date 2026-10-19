@@ -62,7 +62,7 @@ A page number helper can be written in ss and uses that
 document-wide view of the deck like this:
 
 ```ss
-import std:themes/default as *
+import std:prelude as *
 
 fn add_pageno!() -> Void
   foreach(
@@ -85,27 +85,23 @@ end
 ```
 
 ss-compiler analyzes dependencies across the whole program.
-This enables ss to infer that `pagenos!()` depends on the page list,
+This enables ss to infer that `add_pageno!()` depends on the page list,
 so the function is evaluated only after the pages become available.
 
-You can check it via `;; ^dep?`:
+Place `;; ^dep?` after a statement to inspect its dependencies:
 
+```ss
+page sample
+let content = "hello!"
+let t = text!(content)
+;; ^dep?
+end
 ```
-24 | let content = "hello!"
-25 | let t = text!(content)
-26 | ;; ^dep?
-   |    ▔▔▔▔▔ DependencyQuery:
-                read Variable(page:sample, content)
-                read Property(Doc, code_theme_fill)
-                read Property(Doc, code_theme_stroke)
-                write Objects(body)
-                write Property(Body, text)
-                write Property(Body, layout)
-                write Property(Body, code)
-                write Variable(page:sample, t)
-                flag writes_layout_input
-                flag places_objects
-```
+
+The placement reads the `content` binding, creates a new placement, and defines
+`t`. Queries of the page or placement collections wait for the execution units
+that produce those collections. Evaluation follows these dependencies; page
+order and component order follow the document's authored structure.
 
 That means document-wide behavior such as adding a table of contents or page numbers can be defined in ss itself, not
 bolted on from outside the language. Yes, this is directed at you (and me), the
@@ -167,19 +163,25 @@ asset_base_dir = "."
 Create `slide.ss`:
 
 ```ss
-import std:themes/default as *
+import std:prelude as *
+
+fn add_pageno!(target: Page) -> Void
+  let number = place_on!(target, pageno())
+  target ~ number.right == target.right - 24
+  target ~ number.bottom == target.bottom + 20
+end
 
 document
 vflow_doc(LayoutPolicy.center)
-pagenos!()
+foreach(pages(docctx()), add_pageno!)
 end
 
 page title
-h1! "Hello, ss!"
+heading!("Hello, ss!", 1)
 end
 
 page body
-let title = head! "Why ss?"
+let title = heading!("Why ss?", 1)
 let body = text! <<
 - Components are ordinary definitions.
 - Layout can be constrained when needed.

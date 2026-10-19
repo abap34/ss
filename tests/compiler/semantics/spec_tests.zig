@@ -484,7 +484,7 @@ test "compiler semantics: imported function return inference diagnostics keep ca
         \\
     ,
         \\fn bad() -> String
-        \\  return add(1)
+        \\  return min(1)
         \\end
         \\
     , "lib/bad.ss:bytes:", "InvalidArity: expected 2, got 1");
@@ -1002,7 +1002,7 @@ test "compiler semantics: branch-local let bindings do not escape their branch" 
         \\  if true
         \\    let branch_value = 1
         \\  end
-        \\  let y = concat(x, "b")
+        \\  let y = x ++ "b"
         \\end
         \\
     );
@@ -1015,7 +1015,7 @@ test "compiler semantics: string search primitives evaluate" {
         \\page strings
         \\  let source = "abc target xyz"
         \\  text!(str_before(source, "target") ++ "|" ++ str_after(source, "target"))
-        \\  if not(str_contains(source, "target"))
+        \\  if !str_contains(source, "target")
         \\    report_error("missing")
         \\  end
         \\end
@@ -5001,6 +5001,67 @@ test "compiler semantics: legacy object APIs are unavailable" {
     }
 }
 
+test "compiler semantics: syntax operations cannot be called or captured by name" {
+    for ([_][]const u8{
+        "add",                    "sub",                  "mul",           "div",    "neg",    "concat", "not",
+        "num_eq",                 "num_ne",               "num_lt",        "num_le", "num_gt", "num_ge", "selection_union",
+        "selection_intersection", "selection_difference", "constrain_on!",
+    }) |name| {
+        const source = try std.fmt.allocPrint(testing.allocator, "page main\n{s}()\nend\n", .{name});
+        defer testing.allocator.free(source);
+        const diagnostic = try std.fmt.allocPrint(testing.allocator, "UnknownFunction: unknown function: {s}", .{name});
+        defer testing.allocator.free(diagnostic);
+        try expectDiagnostic(source, "bytes:", diagnostic);
+        const capture = try std.fmt.allocPrint(testing.allocator, "page main\nlet callback = {s}\nend\n", .{name});
+        defer testing.allocator.free(capture);
+        try expectDiagnostic(capture, "bytes:", "UnknownIdentifier");
+    }
+}
+
+test "compiler semantics: operators do not resolve ordinary functions with internal names" {
+    try expectObjectContent(
+        \\fn add(a: Number, b: Number) -> Number = 99
+        \\fn concat(a: String, b: String) -> String = "custom"
+        \\fn num_eq(a: Number, b: Number) -> Bool = false
+        \\fn not(value: Bool) -> Bool = value
+        \\fn neg(value: Number) -> Number = 99
+        \\page main
+        \\  if !(1 + 2 * 3 == 7)
+        \\    report_error("operator resolved a user function")
+        \\  end
+        \\  text!(str(-2 - (-3)) ++ ":" ++ str(8 / 2) ++ ":" ++ concat("a", "b"))
+        \\end
+    , "1:4:custom");
+    try buildSource(
+        \\fn pagectx() -> Number = 0
+        \\fn constrain_on!(target: Page, rules: Constraints) -> Void
+        \\  report_error("constraint syntax resolved a user function")
+        \\end
+        \\page main
+        \\  let a = text!("A")
+        \\  let b = text!("B")
+        \\  let rules = a.left == b.left + 20
+        \\  ~ rules
+        \\  a.page ~ a.top == b.top - 10
+        \\end
+    );
+}
+
+test "compiler semantics: missing displays name concrete user types" {
+    try expectDiagnostic(
+        \\type Card { content: String }
+        \\page main
+        \\  place!(Card { content = "Example" })
+        \\end
+    , "bytes:", "MissingDisplay: type 'Card' has no display declaration");
+    try expectDiagnostic(
+        \\type Card<T> { content: T }
+        \\page main
+        \\  place!(Card<Number> { content = 1 })
+        \\end
+    , "bytes:", "MissingDisplay: type 'Card<Number>' has no display declaration");
+}
+
 test "compiler semantics: role queries are unavailable" {
     for ([_][]const u8{ "page_objects_by_role", "document_objects_by_role" }) |name| {
         const source = try std.fmt.allocPrint(testing.allocator, "page bad\n  let items = select({s}, \"{s}\", \"body\")\nend\n", .{ if (std.mem.startsWith(u8, name, "page_")) "pagectx()" else "docctx()", name });
@@ -5292,24 +5353,24 @@ test "compiler semantics: Object requires an ordinary user type declaration" {
 
 test "compiler semantics: numeric comparisons evaluate both outcomes" {
     const failures = [_][]const u8{
-        "not(1==1)",
+        "!(1==1)",
         "1==2",
         "2==1",
         "1!=1",
-        "not(1!=2)",
-        "not(2!=1)",
+        "!(1!=2)",
+        "!(2!=1)",
         "1<1",
-        "not(1<2)",
+        "!(1<2)",
         "2<1",
-        "not(1<=1)",
-        "not(1<=2)",
+        "!(1<=1)",
+        "!(1<=2)",
         "2<=1",
         "1>1",
         "1>2",
-        "not(2>1)",
-        "not(1>=1)",
+        "!(2>1)",
+        "!(1>=1)",
         "1>=2",
-        "not(2>=1)",
+        "!(2>=1)",
     };
     for (failures) |condition| {
         const source = try std.fmt.allocPrint(
@@ -5660,7 +5721,7 @@ test "compiler semantics: static string construction has a finite size limit" {
     defer source.deinit(testing.allocator);
     try source.appendSlice(testing.allocator, "page main\n  let s0 = \"x\"\n");
     for (1..18) |index| {
-        const line = try std.fmt.allocPrint(testing.allocator, "  let s{d} = concat(s{d}, s{d})\n", .{ index, index - 1, index - 1 });
+        const line = try std.fmt.allocPrint(testing.allocator, "  let s{d} = s{d} ++ s{d}\n", .{ index, index - 1, index - 1 });
         defer testing.allocator.free(line);
         try source.appendSlice(testing.allocator, line);
     }
@@ -6625,8 +6686,8 @@ test "compiler semantics: erased selections cannot be property assignment target
 }
 
 test "compiler semantics: selection algebra cannot recover erased element types" {
-    for ([_][]const u8{ "selection_union", "selection_intersection", "selection_difference" }) |operation| {
-        const source = try std.fmt.allocPrint(testing.allocator, "fn invalid(left: Selection, right: Selection<Page>) -> Selection\n  return {s}(left, right)\nend\npage main\nend\n", .{operation});
+    for ([_][]const u8{ "|", "&", "-" }) |operation| {
+        const source = try std.fmt.allocPrint(testing.allocator, "fn invalid(left: Selection, right: Selection<Page>) -> Selection\n  return left {s} right\nend\npage main\nend\n", .{operation});
         defer testing.allocator.free(source);
         try expectDiagnostic(source, "case.ss:bytes:", "UnknownSelectionItemType");
     }

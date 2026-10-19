@@ -251,6 +251,11 @@ test "analysis completion: dot module and normal positions keep candidate kinds 
         try expectHas(result, "text!");
         try expectHas(result, "String");
         try expectMissing(result, "Object");
+        for ([_][]const u8{
+            "add",                    "sub",                  "mul",           "div",    "neg",    "concat", "not",
+            "num_eq",                 "num_ne",               "num_lt",        "num_le", "num_gt", "num_ge", "selection_union",
+            "selection_intersection", "selection_difference", "constrain_on!",
+        }) |name| try expectMissing(result, name);
         try expectHas(result, "Placed");
         try expectHas(result, "Placement");
         try expectHas(result, "Selection");
@@ -1007,7 +1012,7 @@ const ParseCancellation = struct {
 };
 
 test "analysis queries: fallback parsing checks cancellation inside a document" {
-    const source = "page title\n" ++ (std.mem.asBytes(&@as([100]["  let value = add(1, 2)\n".len]u8, @splat("  let value = add(1, 2)\n".*)))) ++ "end\n";
+    const source = "page title\n" ++ (std.mem.asBytes(&@as([100]["  let value = 1 + 2\n".len]u8, @splat("  let value = 1 + 2\n".*)))) ++ "end\n";
     var cancellation = ParseCancellation{ .limit = 20 };
     const budget = query_types.QueryBudget.start(.{
         .budget_ms = 1000,
@@ -1052,7 +1057,7 @@ test "analysis queries: parser cancellation releases partial expressions and dec
     const source =
         \\fn scale(value: Number, transform: (Number) -> Number) -> Number
         \\  if true
-        \\    return transform(add(value, 1))
+        \\    return transform(value + 1)
         \\  else
         \\    return 0
         \\  end
@@ -1076,7 +1081,7 @@ test "analysis queries: parser cancellation releases partial expressions and dec
 }
 
 test "analysis queries: retained syntax traversal stops before reaching a distant target" {
-    const source = (std.mem.asBytes(&@as([100]["fn repeated(value: Number) -> Number\n  return add(value, 1)\nend\n".len]u8, @splat("fn repeated(value: Number) -> Number\n  return add(value, 1)\nend\n".*)))) ++
+    const source = (std.mem.asBytes(&@as([100]["fn repeated(value: Number) -> Number\n  return value + 1\nend\n".len]u8, @splat("fn repeated(value: Number) -> Number\n  return value + 1\nend\n".*)))) ++
         "page title\n  let target = 1\nend\n";
     var parsed = try compiler.syntax.parseRecoveringWithSourceName(testing.allocator, source, "traversal.ss");
     defer parsed.deinit(testing.allocator);
