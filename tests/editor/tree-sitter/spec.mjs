@@ -6,8 +6,10 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const exec = promisify(execFile);
-const grammar = fileURLToPath(new URL("../../../editor/tree-sitter-ss/", import.meta.url));
-const output = path.resolve(grammar, "../../.ss-cache/tests/editor/tree-sitter");
+const sourceGrammar = fileURLToPath(new URL("../../../editor/tree-sitter-ss/", import.meta.url));
+const grammar = path.resolve(process.argv[2] ?? sourceGrammar);
+const cli = path.join(sourceGrammar, "node_modules/.bin/tree-sitter");
+const output = path.resolve(sourceGrammar, "../../.ss-cache/tests/editor/tree-sitter");
 await mkdir(output, { recursive: true });
 const directory = await mkdtemp(path.join(output, "run-"));
 const cases = [
@@ -78,7 +80,7 @@ const typeQuery = path.join(directory, "types.scm");
 await writeFile(typeQuery, "(type_identifier) @name\n");
 
 async function captures(query, file, capture) {
-  const { stdout } = await exec(path.join(grammar, "node_modules/.bin/tree-sitter"), ["query", query, file], {
+  const { stdout } = await exec(cli, ["query", path.resolve(sourceGrammar, query), file], {
     cwd: grammar, timeout: 30000, killSignal: "SIGKILL", maxBuffer: 1024 * 1024,
   });
   const names = [];
@@ -95,7 +97,7 @@ for (const { name, source, valid, node, typeNames } of cases) {
   let result;
   let status = 0;
   try {
-    result = await exec(path.join(grammar, "node_modules/.bin/tree-sitter"), ["parse", file], {
+    result = await exec(cli, ["parse", file], {
       cwd: grammar, timeout: 30000, killSignal: "SIGKILL", maxBuffer: 1024 * 1024,
     });
   } catch (error) {
