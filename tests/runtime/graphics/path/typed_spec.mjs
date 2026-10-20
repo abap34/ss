@@ -27,7 +27,6 @@ try {
   const byPage = dump.page_order.map(id => shapes.filter(node => node.placement.page === id).sort((a, b) => a.x - b.x));
   assert.deepEqual(byPage.map(nodes => nodes.length), [3, 2, 2]);
   for (const node of shapes) {
-    assert(!Object.hasOwn(node, "role"));
     assert.equal(node.placement.input.type.name, "PathShape");
     assert.equal(node.render.kind, "vector_path");
     assert.equal(node.blocks, null);

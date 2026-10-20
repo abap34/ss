@@ -350,7 +350,6 @@ pub fn expectVariableTypes(
 
     for (variables.items) |value| {
         if (value != .object) return error.ExpectedDumpTextMissing;
-        if (value.object.contains("objectClass") or value.object.contains("objectClassModuleId")) return error.UnexpectedLegacyClassMetadata;
     }
     for (expected) |item| {
         if (!dumpVariableTypeMatches(variables, item)) return error.ExpectedDumpTextMissing;

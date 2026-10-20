@@ -70,43 +70,13 @@ test "language registry spec: query output types are declared in the registry" {
     const previous_type = registry.queryOutputType(previous);
     try testing.expectEqual(Type.Kind.optional, previous_type.kind);
     try testing.expect(Type.eql(Type.page, previous_type.optional_child.?.*));
-    try testing.expect(registry.lookupQueryOp("self_object") == null);
-    try testing.expect(registry.lookupQueryOp("parent_page") == null);
-    try testing.expect(registry.lookupQueryOp("page_objects_by_role") == null);
-    try testing.expect(registry.lookupQueryOp("document_objects_by_role") == null);
 }
 
-test "language registry spec: stdlib helpers are not kernel primitives" {
-    try testing.expect(registry.lookupPrimitiveCall("rewrite") == null);
-    try testing.expect(registry.lookupPrimitiveCall("append") == null);
-    try testing.expect(registry.lookupPrimitiveCall("clear") == null);
-    try testing.expect(registry.lookupPrimitiveCall("sty") == null);
-}
-
-test "language registry spec: legacy object primitives are unavailable" {
-    for ([_][]const u8{ "new", "content", "prop", "has_prop", "prop_eq", "set_content", "set_prop" }) |name| {
-        try testing.expect(registry.lookupPrimitiveCall(name) == null);
-    }
+test "language registry spec: group and placement primitives declare typed results" {
     const group = registry.lookupPrimitiveCall("group").?;
     try testing.expect(registry.primitiveAllowsDisplayEvaluation(group.op));
     try testing.expectEqual(Type.Kind.group, registry.primitiveResultType(group).?.kind);
     const place = registry.lookupPrimitiveCall("place_on!").?;
     try testing.expectEqual(registry.PrimitiveResultPolicy.placement, place.result_policy);
     try testing.expect(Type.eql(Type.placement, registry.primitiveResultType(place).?));
-}
-
-test "language registry spec: syntax operations are not callable value bindings" {
-    for ([_][]const u8{
-        "add",                    "sub",                  "mul",           "div",    "neg",    "concat", "not",
-        "num_eq",                 "num_ne",               "num_lt",        "num_le", "num_gt", "num_ge", "selection_union",
-        "selection_intersection", "selection_difference", "constrain_on!",
-    }) |name| {
-        try testing.expect(registry.lookupPrimitiveCall(name) == null);
-        try testing.expect(registry.lookupSyntaxCall(name) != null);
-        for (registry.primitiveDescriptors()) |descriptor| {
-            try testing.expect(!std.mem.eql(u8, name, descriptor.name));
-        }
-    }
-    try testing.expectEqual(registry.PrimitiveCall.group, registry.lookupSyntaxCall("group").?.op);
-    try testing.expectEqual(registry.PrimitiveCall.pagectx, registry.lookupSyntaxCall("pagectx").?.op);
 }

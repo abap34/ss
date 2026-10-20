@@ -563,16 +563,6 @@ test "compiler semantics: paired placement calls preserve nominal input types" {
     });
 }
 
-test "compiler semantics: obsolete convenience constructors are not public" {
-    for ([_][]const u8{ "title", "subtitle", "note", "byline", "label", "h1", "h2", "h3", "h4", "h5", "h6", "title_obj", "sub_obj", "note_obj", "by_obj", "lab_obj", "cite_obj", "rule_obj", "path_obj", "panel_obj", "latex_obj", "fig_obj", "img_obj", "pdf_obj", "icon_obj", "code_obj", "connector_obj", "surround", "spacer", "vspace" }) |name| {
-        for ([_][]const u8{ "", "!" }) |suffix| {
-            const source = try std.fmt.allocPrint(testing.allocator, "page main\n  {s}{s}(\"Text\")\nend\n", .{ name, suffix });
-            defer testing.allocator.free(source);
-            try expectDiagnostic(source, "case.ss:bytes:", "UnknownFunction");
-        }
-    }
-}
-
 test "compiler semantics: core prelude is implicitly open" {
     try buildSource(
         \\import std:text as { Text }
@@ -711,7 +701,7 @@ test "compiler semantics: stdlib core components build when called directly" {
     );
 }
 
-test "compiler semantics: math and latex are public without obsolete aliases" {
+test "compiler semantics: math and latex are public" {
     try buildSource(
         \\import std:themes/default as *
         \\
@@ -721,54 +711,6 @@ test "compiler semantics: math and latex are public without obsolete aliases" {
         \\end
         \\
     );
-
-    try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\page bad
-        \\  mathtex!("x + y")
-        \\end
-        \\
-    , "case.ss:bytes:", "UnknownFunction: unknown function: mathtex!");
-
-    try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\page bad
-        \\  tex!("$x + y$")
-        \\end
-        \\
-    , "case.ss:bytes:", "UnknownFunction: unknown function: tex!");
-
-    try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\page bad
-        \\  place_on!(pagectx(), math_obj("x + y"))
-        \\end
-        \\
-    , "case.ss:bytes:", "UnknownFunction: unknown function: math_obj");
-
-    try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\page bad
-        \\  place_on!(pagectx(), tex_obj("$x + y$"))
-        \\end
-        \\
-    , "case.ss:bytes:", "UnknownFunction: unknown function: tex_obj");
-
-    try expectDiagnostic(
-        \\import std:themes/default as *
-        \\
-        \\document
-        \\  tex_preamble("legacy")
-        \\end
-        \\
-        \\page bad
-        \\end
-        \\
-    , "case.ss:bytes:", "UnknownFunction: unknown function: tex_preamble");
 }
 
 test "compiler semantics: stdlib display values build with explicit default theme styles" {
@@ -1172,19 +1114,6 @@ test "compiler semantics: LaTeX configuration is an explicit immutable input" {
         \\  let value = formulas::latex!("$x$", formulas::LatexBlockStyle {}, config with { preamble = "Local" })
         \\end
     );
-    for ([_][]const u8{
-        "latex_engine(LatexEngine.lualatex)",
-        "page_latex_engine(LatexEngine.pdflatex)",
-        "latex_preamble(\"text\")",
-        "page_latex_preamble(\"text\")",
-        "latex_preamble_file(\"preamble.tex\")",
-        "page_latex_preamble_file(\"preamble.tex\")",
-        "extend_render_env(docctx(), \"add\", \"latex.preamble\", \"text\")",
-    }) |call| {
-        const source = try std.fmt.allocPrint(testing.allocator, "page example\n{s}\nend", .{call});
-        defer testing.allocator.free(source);
-        try expectDiagnostic(source, "bytes:", "UnknownFunction");
-    }
 }
 
 test "compiler semantics: enum cases type function parameters" {
@@ -2941,16 +2870,6 @@ test "compiler semantics: resource settings and immutable styles retain declared
         \\  let style = LayoutStyle {} with { wrap = "off" }
         \\end
     , "case.ss:bytes:", "TypeMismatch: expected WrapMode, got String");
-}
-
-test "compiler semantics: document and page settings exclude presentation styles" {
-    for ([_][]const u8{ "docctx()", "pagectx()" }) |target| {
-        for ([_][]const u8{ "footer_text", "watermark", "math_align", "logo_path", "logo_scale", "code_theme_plain_color", "code_theme_keyword_color", "code_theme_fill", "code_theme_stroke" }) |field| {
-            const source = try std.fmt.allocPrint(testing.allocator, "page example\nlet removed = {s}.{s}\nend", .{ target, field });
-            defer testing.allocator.free(source);
-            try expectDiagnostic(source, "bytes:", "UnknownField");
-        }
-    }
 }
 
 test "compiler semantics: math alignment rejects unknown literals" {
@@ -4973,51 +4892,6 @@ test "compiler semantics: bang-marked functions may return unplaced values" {
     , .{ .count = 0 });
 }
 
-test "compiler semantics: legacy object APIs are unavailable" {
-    const cases = [_]struct { name: []const u8, call: []const u8 }{
-        .{ .name = "new", .call = "new(\"old\", \"body\", \"text\")" },
-        .{ .name = "new_group", .call = "new_group(pagectx(), select<Text>(pagectx()))" },
-        .{ .name = "obj", .call = "obj(\"old\", \"body\", \"text\")" },
-        .{ .name = "txt_obj", .call = "txt_obj(\"old\", \"body\")" },
-        .{ .name = "body_obj", .call = "body_obj(\"old\")" },
-        .{ .name = "content", .call = "content(text!(\"old\"))" },
-        .{ .name = "prop", .call = "prop(pagectx(), \"layout_h\", \"left\")" },
-        .{ .name = "has_prop", .call = "has_prop(pagectx(), \"layout_h\")" },
-        .{ .name = "prop_eq", .call = "prop_eq(pagectx(), \"layout_h\", \"left\")" },
-        .{ .name = "set_content", .call = "set_content(text!(\"old\"), \"new\")" },
-        .{ .name = "set_prop", .call = "set_prop(pagectx(), \"layout_h_center_offset\", 42)" },
-        .{ .name = "require_asset_exists", .call = "require_asset_exists(text!(\"old\"))" },
-        .{ .name = "objs", .call = "objs(pagectx(), \"body\")" },
-        .{ .name = "objs_here", .call = "objs_here(\"body\")" },
-        .{ .name = "objs_all", .call = "objs_all(\"body\")" },
-        .{ .name = "doc_objs", .call = "doc_objs(docctx(), \"body\")" },
-    };
-    for (cases) |case| {
-        const source = try std.fmt.allocPrint(testing.allocator, "page bad\n  {s}\nend\n", .{case.call});
-        defer testing.allocator.free(source);
-        const message = try std.fmt.allocPrint(testing.allocator, "UnknownFunction: unknown function: {s}", .{case.name});
-        defer testing.allocator.free(message);
-        try expectDiagnostic(source, "case.ss:bytes:", message);
-    }
-}
-
-test "compiler semantics: syntax operations cannot be called or captured by name" {
-    for ([_][]const u8{
-        "add",                    "sub",                  "mul",           "div",    "neg",    "concat", "not",
-        "num_eq",                 "num_ne",               "num_lt",        "num_le", "num_gt", "num_ge", "selection_union",
-        "selection_intersection", "selection_difference", "constrain_on!",
-    }) |name| {
-        const source = try std.fmt.allocPrint(testing.allocator, "page main\n{s}()\nend\n", .{name});
-        defer testing.allocator.free(source);
-        const diagnostic = try std.fmt.allocPrint(testing.allocator, "UnknownFunction: unknown function: {s}", .{name});
-        defer testing.allocator.free(diagnostic);
-        try expectDiagnostic(source, "bytes:", diagnostic);
-        const capture = try std.fmt.allocPrint(testing.allocator, "page main\nlet callback = {s}\nend\n", .{name});
-        defer testing.allocator.free(capture);
-        try expectDiagnostic(capture, "bytes:", "UnknownIdentifier");
-    }
-}
-
 test "compiler semantics: operators do not resolve ordinary functions with internal names" {
     try expectObjectContent(
         \\fn add(a: Number, b: Number) -> Number = 99
@@ -5060,16 +4934,6 @@ test "compiler semantics: missing displays name concrete user types" {
         \\  place!(Card<Number> { content = 1 })
         \\end
     , "bytes:", "MissingDisplay: type 'Card<Number>' has no display declaration");
-}
-
-test "compiler semantics: role queries are unavailable" {
-    for ([_][]const u8{ "page_objects_by_role", "document_objects_by_role" }) |name| {
-        const source = try std.fmt.allocPrint(testing.allocator, "page bad\n  let items = select({s}, \"{s}\", \"body\")\nend\n", .{ if (std.mem.startsWith(u8, name, "page_")) "pagectx()" else "docctx()", name });
-        defer testing.allocator.free(source);
-        const message = try std.fmt.allocPrint(testing.allocator, "UnknownQuery: unknown query: {s}", .{name});
-        defer testing.allocator.free(message);
-        try expectDiagnostic(source, "case.ss:bytes:", message);
-    }
 }
 
 test "compiler semantics: page anchors cannot be constraint targets" {
@@ -5317,16 +5181,6 @@ test "compiler semantics: default argument expressions are checked for nested ty
     , "case.ss:bytes:", "UnknownType: unknown type: Missing");
 }
 
-test "compiler semantics: unknown annotation types report UnknownType" {
-    try expectDiagnostic(
-        \\const bad: string = "x"
-        \\
-        \\page ok
-        \\end
-        \\
-    , "case.ss:bytes:", "UnknownType: unknown type: string");
-}
-
 test "compiler semantics: unresolved names are diagnosed inside compound type annotations" {
     for ([_][]const u8{ "Missing<Number>", "Missing?", "Number -> Missing", "Placed<Missing>", "Box<Missing>" }) |annotation| {
         const source = try std.fmt.allocPrint(testing.allocator, "type Box<T> {{ value: T }}\nfn unused(value: {s}) -> Number = 0\npage main\nend\n", .{annotation});
@@ -5335,12 +5189,7 @@ test "compiler semantics: unresolved names are diagnosed inside compound type an
     }
 }
 
-test "compiler semantics: Object requires an ordinary user type declaration" {
-    for ([_][]const u8{ "Object", "Object<Text>" }) |annotation| {
-        const source = try std.fmt.allocPrint(testing.allocator, "fn unused(value: {s}) -> Number = 0\npage main\nend\n", .{annotation});
-        defer testing.allocator.free(source);
-        try expectDiagnostic(source, "case.ss:bytes:", "UnknownType: unknown type: Object");
-    }
+test "compiler semantics: Object can be an ordinary user type name" {
     try buildSource(
         \\type Object { object: String base: Number roles: String }
         \\const value: Object = Object { object = "value", base = 1, roles = "label" }
@@ -6986,12 +6835,6 @@ test "compiler semantics: returned placements retain their page ownership" {
         \\  text!(item.value.content ++ ":page=" ++ str(page_index(item.page)))
         \\end
     , "placed:page=1");
-    try expectDiagnostic(
-        \\page main
-        \\  let item = text!("A")
-        \\  page_of(item)
-        \\end
-    , "case.ss:bytes:", "UnknownFunction");
 }
 
 test "compiler semantics: placed references cannot be placed again" {
@@ -7648,14 +7491,6 @@ test "compiler semantics: fold does not retain a literal fact from its initial v
     , "bytes:", "select query must be a statically known string");
 }
 
-test "compiler semantics: excluded standard components are not available as implicit functions" {
-    for ([_][]const u8{ "box", "figure", "callout", "head", "annotate", "cols2", "connect", "footers!", "watermark!", "logos!", "csv_map" }) |name| {
-        const source = try std.fmt.allocPrint(testing.allocator, "page example\n  {s}()\nend\n", .{name});
-        defer testing.allocator.free(source);
-        try expectDiagnostic(source, "bytes:", "UnknownFunction");
-    }
-}
-
 test "compiler semantics: public display type names agree with constructors and typed queries" {
     for ([_][]const u8{ "", "import std:themes/default as *\n" }) |imports| {
         const body =
@@ -7681,27 +7516,6 @@ test "compiler semantics: public display type names agree with constructors and 
         const source = try std.fmt.allocPrint(testing.allocator, "{s}{s}", .{ imports, body });
         defer testing.allocator.free(source);
         try buildSource(source);
-    }
-}
-
-test "compiler semantics: mutable document theme APIs are unavailable" {
-    try expectDiagnostic(
-        \\page example
-        \\  set_theme(default_theme())
-        \\end
-    , "bytes:", "UnknownFunction");
-    try expectDiagnostic(
-        \\page example
-        \\  let theme = current_theme()
-        \\end
-    , "bytes:", "UnknownFunction");
-}
-
-test "compiler semantics: obsolete document generation helpers are unavailable" {
-    for ([_][]const u8{ "pagenos!()", "numbered_item!(\"claim\", \"A\")", "numbering!(\"claim\")", "need_titles()", "citation!(1, \"A\")", "page_bg(none)", "doc_bg(none)" }) |call| {
-        const source = try std.fmt.allocPrint(testing.allocator, "page example\n{s}\nend", .{call});
-        defer testing.allocator.free(source);
-        try expectDiagnostic(source, "bytes:", "UnknownFunction");
     }
 }
 

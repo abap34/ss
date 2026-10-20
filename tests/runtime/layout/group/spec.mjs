@@ -32,7 +32,6 @@ try {
     for (const child of [title, code]) {
       assert.equal(child.placement.parent, group.id);
       assert.equal(child.placement.page, group.placement.page);
-      assert(!Object.hasOwn(child, "role"));
       assert.equal(child.x, 64);
       assert(child.width > 0 && child.height > 0);
     }

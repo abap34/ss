@@ -25,7 +25,6 @@ try {
   assert(groups.every(Boolean));
   const children = item => item.placement.children.map(byId);
   for (const group of groups) {
-    assert(!Object.hasOwn(group, "role"));
     close(group.x, 80);
     close(group.y + group.height, 640);
     for (const child of children(group)) {

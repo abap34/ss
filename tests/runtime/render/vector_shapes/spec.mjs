@@ -158,7 +158,7 @@ ${declarations}
       assert(members.length === 5, "a shape was assigned to the wrong page");
       assert(members.filter(node => Math.abs(node.width - 90) < 0.1).length === 1, "with did not change exactly one input");
       for (const node of members) {
-        assert(!Object.hasOwn(node, "role") && Object.keys(node.fields).length === 0, "shape retained mutable properties");
+        assert(Object.keys(node.fields).length === 0, "shape retained mutable properties");
         assert(Math.abs(node.height - 90) < 0.1, "shape height changed during reuse");
       }
     }

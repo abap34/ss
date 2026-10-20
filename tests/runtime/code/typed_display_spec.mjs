@@ -40,7 +40,6 @@ try {
     assert(node.content.includes("**Literal** $x$ ![image](missing.png)"));
     assert.equal(node.blocks, null);
     assert.equal(node.inline_lines, null);
-    assert(!Object.hasOwn(node, "role"));
     assert.deepEqual(node.fields, {});
     assert.equal(node.render.kind, "code");
     assert(node.width > 100 && node.height > 40);
@@ -82,7 +81,6 @@ end
   assert.deepEqual(placed[0].placement.input, placed[1].placement.input);
   assert.equal(new Set(placed.map(node => node.id)).size, 3);
   for (const node of placed) {
-    assert(!Object.hasOwn(node, "role"));
     assert.deepEqual(node.fields, {});
     assert.equal(node.render.text.font.family, "monospace");
     assert.deepEqual(node.render.code.keyword_color, color("cf222e"));

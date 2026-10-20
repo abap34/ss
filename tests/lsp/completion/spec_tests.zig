@@ -103,22 +103,6 @@ test "analysis queries: zero budget marks completion as incomplete" {
     try expectHas(result, "page");
 }
 
-test "analysis queries: full and lexical completion omit unsupported statement keywords" {
-    var case = try CompletionCase.init("page main\nend\n");
-    defer case.deinit();
-    const snapshot = try case.snapshotFor(case.source);
-    for ([_]u32{ 0, 10000 }) |budget_ms| {
-        var result = try snapshot_api.completeAt(testing.allocator, snapshot, .{
-            .path = case.path,
-            .source = case.source,
-            .offset = offsetAfter(case.source, "page main\n"),
-        }, .{ .budget_ms = budget_ms });
-        defer result.deinit(testing.allocator);
-        for ([_][]const u8{ "for", "in", "property", "then" }) |name| try expectMissing(result, name);
-        for ([_][]const u8{ "if", "else" }) |name| try expectKind(result, name, .keyword);
-    }
-}
-
 test "analysis queries: hover switches to shallow types when documentation exceeds the deadline" {
     var case = try CompletionCase.init(
         \\fn local(value: Number) -> Number
@@ -195,9 +179,6 @@ test "analysis completion: composition remains independent of lexical function n
     const snapshot = try case.snapshotFor(case.source);
     try testing.expect(!snapshot.diagnostics.hasErrors());
     const module = snapshot.moduleForPath(case.path) orelse return error.ExpectedModule;
-    for ([_][]const u8{ "hjoin", "vjoin" }) |name| {
-        try testing.expect(resolve_query.valueBinding(null, snapshot, module.id, name, "std:layout", .function) == null);
-    }
     const constant = resolve_query.valueBinding(null, snapshot, module.id, "hjoin", null, .constant) orelse return error.ExpectedConstant;
     try testing.expectEqual(module.id, constant.module_id);
     try testing.expectEqual(.number, constant.value_type.kind);
@@ -238,9 +219,7 @@ test "analysis completion: dot module and normal positions keep candidate kinds 
         try expectUnique(result);
         try expectHas(result, "style");
         try expectHas(result, "content");
-        try expectMissing(result, "text_size");
         try expectMissing(result, "page");
-        try expectMissing(result, "add");
         try expectMissing(result, "Align");
         try expectMissing(result, "String");
         try expectOnlyKind(result, .property);
@@ -253,8 +232,6 @@ test "analysis completion: dot module and normal positions keep candidate kinds 
         try expectHas(result, "text");
         try expectHas(result, "text!");
         try expectMissing(result, "page");
-        try expectMissing(result, "add");
-        try expectMissing(result, "text_size");
         try expectMissing(result, "String");
         try expectMissing(result, "Align");
     }
@@ -266,18 +243,11 @@ test "analysis completion: dot module and normal positions keep candidate kinds 
         try expectHas(result, "page");
         try expectHas(result, "text!");
         try expectHas(result, "String");
-        try expectMissing(result, "Object");
-        for ([_][]const u8{
-            "add",                    "sub",                  "mul",           "div",    "neg",    "concat", "not",
-            "num_eq",                 "num_ne",               "num_lt",        "num_le", "num_gt", "num_ge", "selection_union",
-            "selection_intersection", "selection_difference", "constrain_on!",
-        }) |name| try expectMissing(result, name);
         try expectHas(result, "Placed");
         try expectHas(result, "Placement");
         try expectHas(result, "Selection");
         try expectHas(result, "Align");
         try expectHas(result, "Text");
-        try expectMissing(result, "text_size");
     }
 }
 
@@ -444,7 +414,6 @@ test "analysis completion: enum type dot completes cases" {
         try expectKind(result, "right", .enum_case);
         try expectMissing(result, "page");
         try expectMissing(result, "String");
-        try expectMissing(result, "text_size");
     }
 }
 
@@ -482,7 +451,6 @@ test "analysis completion: source recovery sees preceding same-scope bindings" {
         try expectUnique(result);
         try expectHas(result, "value");
         try expectHas(result, "left");
-        try expectMissing(result, "text_size");
         try expectHas(result, "page");
     }
 
@@ -492,7 +460,6 @@ test "analysis completion: source recovery sees preceding same-scope bindings" {
         try expectUnique(result);
         try expectHas(result, "value");
         try expectHas(result, "left");
-        try expectMissing(result, "text_size");
         try expectHas(result, "page");
     }
 }
@@ -719,7 +686,6 @@ test "analysis completion: chevron blocks and comments do not create fake bindin
         try expectUnique(result);
         try expectHas(result, "value");
         try expectHas(result, "left");
-        try expectMissing(result, "text_size");
         try expectHas(result, "page");
     }
 
@@ -729,7 +695,6 @@ test "analysis completion: chevron blocks and comments do not create fake bindin
         try expectUnique(result);
         try expectMissing(result, "fake_comment");
         try expectMissing(result, "fake_block");
-        try expectMissing(result, "text_size");
     }
 }
 

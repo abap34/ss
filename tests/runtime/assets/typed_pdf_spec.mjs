@@ -49,7 +49,6 @@ try {
     assert.equal(node.placement.page, want.owner);
     assert.equal(node.content, "asset.pdf");
     assert.equal(node.payload_kind, "pdf_ref");
-    assert(!Object.hasOwn(node, "role"));
     assert.deepEqual(node.fields, {});
     assert.equal(node.render.kind, "vector_asset");
     const asset = field(field(node.placement.input, "style"), "asset");

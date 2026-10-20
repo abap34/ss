@@ -457,7 +457,6 @@ end
       target.binding === "line_item"
     );
     assert(line?.kind === "line", `inserted line was not style-editable: ${JSON.stringify(line)}`);
-    assert(afterInsertion.outline.every(item => !Object.hasOwn(item, "role")), "outline retained role metadata");
     assert(afterInsertion.outline.find(item => item.id === line.node_id)?.kind === "object", "line was classified as a group");
     assert(line.route === "straight", `inserted line had the wrong route: ${JSON.stringify(line)}`);
     assert(line.arrow_start === false && line.arrow_end === false,

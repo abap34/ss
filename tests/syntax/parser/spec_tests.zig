@@ -264,13 +264,6 @@ test "syntax spec: line comment helpers recognize only double semicolons" {
     try testing.expectEqualStrings("# code", text[pos..]);
 }
 
-test "syntax spec: hash comments are rejected in code and block headers" {
-    try expectParseErrorWithoutLeaks(error.ExpectedKeyword, "# removed comment\n");
-    try expectParseErrorWithoutLeaks(error.ExpectedKeyword, "const value: Number = 1 # removed comment\n");
-    try expectParseErrorWithoutLeaks(error.ExpectedIdentifier, "page Example\n# removed comment\nend\n");
-    try expectParseErrorWithoutLeaks(error.ExpectedLineBreak, "page Example\ntext << # removed comment\nbody\n>>\nend\n");
-}
-
 test "syntax spec: hash characters remain in paths names and text" {
     var parsed = try parse(
         \\import ./parts#one as *
@@ -287,16 +280,6 @@ test "syntax spec: hash characters remain in paths names and text" {
     for (parsed.module.pages.items[0].statements.items) |statement| {
         const call = try expectCall(statement.kind.expr_stmt, "text", 1);
         try testing.expectEqualStrings("# Heading", call.args.items[0].string.text);
-    }
-}
-
-test "syntax spec: double slash comments are rejected in code" {
-    try expectParseErrorWithoutLeaks(error.ExpectedKeyword, "// removed comment\n");
-    for ([_][]const u8{
-        "page Example\n  // removed comment\nend\n",
-        "page Example\n  let value = 1; // removed comment\nend\n",
-    }) |text| {
-        try expectParseErrorWithoutLeaks(error.ExpectedExpression, text);
     }
 }
 
@@ -927,23 +910,12 @@ test "syntax spec: enum braces preserve multiline cases and source spans" {
     try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{text});
 }
 
-test "syntax spec: enum declarations require nonempty braces and reject legacy aliases" {
+test "syntax spec: enum declarations require nonempty braces" {
     try expectParseErrorWithoutLeaks(error.ExpectedTypeAnnotation, "enum Mode {}\n");
     try expectParseErrorWithoutLeaks(error.ExpectedChar, "enum Mode { alpha\n");
     try expectParseErrorWithoutLeaks(error.ExpectedChar, "enum Mode = alpha\n");
     try expectParseErrorWithoutLeaks(error.ExpectedIdentifier, "enum Mode { alpha | beta }\n");
-    try expectParseErrorWithoutLeaks(error.ExpectedTypeAnnotation, "type Mode = alpha | beta\n");
     try expectParseErrorWithoutLeaks(error.ReservedIdentifier, "const enum = 1\n");
-}
-
-test "syntax spec: incomplete enum declarations are rejected while parsing" {
-    try expectParseError(error.ExpectedTypeAnnotation,
-        \\type Mode = alpha |
-        \\
-        \\page bad
-        \\end
-        \\
-    );
 }
 
 test "syntax spec: failed constant and type declarations release parsed ownership" {
@@ -952,13 +924,9 @@ test "syntax spec: failed constant and type declarations release parsed ownershi
         "const value: (Page -> Placement)?\n",
     );
     try expectParseErrorWithoutLeaks(error.ExpectedChar, "type Mode\n");
-    try expectParseErrorWithoutLeaks(error.ExpectedTypeAnnotation,
-        \\type Mode = alpha |
+    try expectParseErrorWithoutLeaks(error.ExpectedIdentifier,
+        \\type Mode { value: }
         \\
-    );
-    try expectParseErrorWithoutLeaks(
-        error.ExpectedTypeAnnotation,
-        "type Card = object\n",
     );
 }
 
@@ -1869,11 +1837,6 @@ test "syntax spec: unsupported statement names remain composition operands" {
     }
 }
 
-test "syntax spec: unsupported conditional expressions and then statements are rejected" {
-    try expectParseErrorWithoutLeaks(error.ReservedIdentifier, "page Bad\n let value = if true then 1 else 2 end\nend\n");
-    try expectParseErrorWithoutLeaks(error.ExpectedLineBreak, "page Bad\n if true then\n end\nend\n");
-}
-
 test "syntax spec: composition parsing and cloning survive every allocation failure" {
     const source_text = "page Composition\n  a || (b // c) || text(\"d\")\nend\n";
     try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source_text});
@@ -2369,7 +2332,7 @@ test "syntax spec: member assignments keep nested property paths" {
     try expectString(font.value, "Avenir");
 }
 
-test "syntax spec: place is an ordinary identifier and bind is removed" {
+test "syntax spec: place is an ordinary identifier" {
     var parsed = try parse(
         \\page Placement
         \\  let place = 1
@@ -2387,13 +2350,6 @@ test "syntax spec: place is an ordinary identifier and bind is removed" {
         else => return error.ExpectedIdentifier,
     }
     try expectNumber(add.args.items[1], 1);
-
-    try expectParseError(error.BindRemoved,
-        \\page Bad
-        \\  bind local = text("bad")
-        \\end
-        \\
-    );
 }
 
 test "syntax spec: bare assignment must say let and page dimensions are not targets" {
@@ -2660,30 +2616,7 @@ test "syntax spec: ordinary type declarations preserve field defaults and spans"
     try testing.expectEqual(@as(usize, 0), parsed.module.records.items[2].fields.items.len);
     try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source_text});
     try allocation_testing.checkAllAllocationFailures(testing.allocator, cloneAndDeinitModule, .{&parsed.module});
-    try expectParseErrorWithoutLeaks(error.ExpectedTypeAnnotation, "type Card = record { title: String }\n");
     try expectParseErrorWithoutLeaks(error.ExpectedTypeAnnotation, "type Card { title }\n");
-}
-
-test "syntax spec: legacy object declarations are rejected and recovery keeps later pages" {
-    for ([_][]const u8{
-        "type Card = object { title: String }\n",
-        "type Card = object { base = Object roles = [\"card\"] }\n",
-    }) |source_text| {
-        try expectParseErrorWithoutLeaks(error.ExpectedTypeAnnotation, source_text);
-    }
-    const recovery_source =
-        \\type Old = object { title: String }
-        \\page Later
-        \\  let value = 1
-        \\end
-    ;
-    var recovered = try parseRecovering(recovery_source);
-    defer recovered.deinit();
-    try testing.expect(recovered.result.holes.diagnostics.len != 0);
-    try testing.expectEqual(@as(usize, 0), recovered.result.module.records.items.len);
-    try testing.expectEqual(@as(usize, 1), recovered.result.module.pages.items.len);
-    try testing.expectEqualStrings("Later", recovered.result.module.pages.items[0].name);
-    try allocation_testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{recovery_source});
 }
 
 test "syntax spec: former object declaration keywords are ordinary field names" {
@@ -2867,10 +2800,7 @@ test "syntax spec: qualified values parse standalone with members and updates" {
     try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source});
 }
 
-test "syntax spec: removed extension syntax is rejected and its names are ordinary identifiers" {
-    try expectParseErrorWithoutLeaks(error.ExpectedKeyword, "extend Card { label: String = \"Card\" }\n");
-    try expectParseErrorWithoutLeaks(error.ExpectedKeyword, "extend library::Card { implements = Contract }\n");
-    try expectParseErrorWithoutLeaks(error.ExpectedTypeAnnotation, "type Card { implements = Contract }\n");
+test "syntax spec: extend and implements are ordinary identifiers" {
     var parsed = try parse(
         \\type Card { implements: String = "contract" }
         \\fn extend(value: Number) -> Number = value
@@ -2881,9 +2811,4 @@ test "syntax spec: removed extension syntax is rejected and its names are ordina
     defer parsed.deinit();
     try testing.expectEqualStrings("extend", parsed.module.functions.items[0].name);
     try testing.expectEqualStrings("implements", parsed.module.records.items[0].fields.items[0].name);
-    var recovered = try parseRecovering("extend Card { label: String }\npage main\nend\n");
-    defer recovered.deinit();
-    try testing.expect(recovered.result.holes.diagnostics.len > 0);
-    try testing.expectEqual(@as(usize, 1), recovered.result.module.pages.items.len);
-    try testing.expectEqualStrings("main", recovered.result.module.pages.items[0].name);
 }

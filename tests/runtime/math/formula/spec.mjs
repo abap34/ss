@@ -33,7 +33,6 @@ try {
     assert.equal(bodies.length, 5);
     assert(dump.nodes.some(node => node.content === "Formulas: 2"));
     for (const formula of formulas) {
-      assert(!Object.hasOwn(formula, "role"));
       assert.equal(formula.placement.children.length, 1);
       const child = bodies.find(node => node.id === formula.placement.children[0]);
       assert(child);

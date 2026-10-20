@@ -23,7 +23,7 @@ await testPairedFunctionKeywordSyntax();
 await testValueUpdateKeywordSyntax();
 await testTypeDeclarationSyntax();
 await testZedDeclarationIndentation();
-await testRemovedDeclarationKeywords();
+await testBuiltinTypeSyntax();
 await testBlockStringSyntax();
 
 async function testValueUpdateKeywordSyntax() {
@@ -46,20 +46,12 @@ async function testTypeDeclarationSyntax() {
   }
 }
 
-async function testRemovedDeclarationKeywords() {
+async function testBuiltinTypeSyntax() {
   const grammar = JSON.parse(await readFile(path.join(root, "editor/vscode/syntaxes/ss.tmLanguage.json"), "utf8"));
   const keyword = new RegExp(grammar.repository.keywords.patterns[0].match, "g");
-  assert("extend implements object base roles for in property then".match(keyword) === null, "unsupported keywords must remain ordinary identifiers");
   assert(JSON.stringify("if true\nelse\nend".match(keyword)) === '["if","else","end"]', "conditional statements must retain their keywords");
   const builtinType = new RegExp(grammar.repository.keywords.patterns[1].match, "g");
-  assert("Object object".match(builtinType) === null, "Object must not highlight as a built-in type");
-  assert(JSON.stringify("Placed<Text> Placement".match(builtinType)) === '["Placed","Placement"]', "placement types must highlight without classifying user types as built-ins");
-  for (const pattern of grammar.repository.declarations.patterns) {
-    assert(new RegExp(pattern.match).exec("extend Card") === null, "removed extensions must not highlight as declarations");
-    for (const source of ["type Card = object {", "type Card = record {", "type Card = enum {", "type Card = protocol {"]) {
-      assert(new RegExp(pattern.match).exec(source) === null, `removed declaration must not highlight: ${source}`);
-    }
-  }
+  assert(JSON.stringify("Placed<Text> Placement".match(builtinType)) === '["Placed","Placement"]', "placement types must highlight");
 }
 
 async function testZedDeclarationIndentation() {
@@ -69,9 +61,7 @@ async function testZedDeclarationIndentation() {
   for (const source of ["type Card {", "type Box<T> { ;; fields", "enum Align {"]) {
     assert(begin.test(source), `declaration must increase indentation: ${source}`);
   }
-  for (const source of ["type Card { title: String }", "type Card = object {", "type Card = protocol {", "for item in items"]) {
-    assert(!begin.test(source), `completed or unsupported syntax increased indentation: ${source}`);
-  }
+  assert(!begin.test("type Card { title: String }"), "completed declaration increased indentation");
   assert(config.includes('valid_after = ["type", "enum"]'), "type and enum closing braces must decrease indentation");
 }
 

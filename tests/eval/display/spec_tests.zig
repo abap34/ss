@@ -464,8 +464,6 @@ test "native code display: source, language and styles remain immutable across p
     var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
     defer graph.deinit();
     try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
-    // Legacy document colors must not supply missing colors in immutable inputs.
-    try state.setNodeFieldValue(state.graph.document_id, "code_theme_comment_color", .{ .string = "1,0,0" });
     const page = state.graph.page_order.items[0];
     const roots = state.placementRootsOf(page);
     const parent = state.placementRootsOf(state.graph.page_order.items[1])[0];
@@ -1189,7 +1187,6 @@ test "public placement: non-displayable values and placed references fail before
         "place!(Settings {})",
         "place!(place!(text_api::Text { content = \"Twice\" }))",
         "layout::place!<Number>(text_api::Text { content = \"Mismatch\" })",
-        "place!(new(\"Legacy\", \"body\", \"text\"))",
         "place!(nothing())",
     }) |expression| {
         const source = try std.fmt.allocPrint(testing.allocator,

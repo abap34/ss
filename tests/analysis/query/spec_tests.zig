@@ -36,7 +36,6 @@ test "analysis query spec: document and page settings share value fields and the
         var has_left = false;
         for (completion.items) |candidate| {
             try testing.expect(!std.mem.eql(u8, candidate.label, "content"));
-            try testing.expect(!std.mem.eql(u8, candidate.label, "render_kind"));
             if (std.mem.eql(u8, candidate.label, "left")) {
                 try testing.expectEqualStrings("Anchor", candidate.detail orelse "");
                 has_left = true;

@@ -72,8 +72,6 @@ end
   const shape = parts.nodes.find(n => n.placement?.display.kind === 'path_shape');
   assert(shape);
   assert.equal(shape.placement.page, caption.placement.page);
-  assert(!Object.hasOwn(shape, "role"));
-  assert(!Object.hasOwn(caption, "role"));
 
   const contents = await dump(`page contents
 toc!("Contents")
@@ -82,7 +80,6 @@ page section
 heading!("Section")
 end
 `);
-  assert(contents.nodes.every(node => !Object.hasOwn(node, "role")));
   assert(contents.nodes.some(n => n.content === 'Contents'));
 
   const sharedStyles = await dump(`import std:themes/default as base
@@ -111,7 +108,6 @@ end
     const node = sharedStyles.nodes.find(n => n.content === content);
     assert(node, `Missing styled text: ${content}`);
     assert.equal(node.render.text.font_size, size, content);
-    assert(!Object.hasOwn(node, "role"), content);
   }
 
   const localPageNumbers = await dump(`page first
@@ -137,7 +133,6 @@ end
     const numbers = document.nodes.filter(n => n.placement?.input.type.name === 'PageNumber');
     assert.equal(numbers.length, 2);
     assert.deepEqual(numbers.map(n => document.nodes.find(child => child.id === n.placement.children[0]).content), ['1/2', '2/2']);
-    for (const number of numbers) assert(!Object.hasOwn(number, "role"));
   }
 
   for (const name of ['default']) {

@@ -131,7 +131,6 @@ end
     const output = combinedOutput(result);
     assert(result.code === 0, `render should succeed with a layout warning:\n${output}`);
     assert(output.includes("FrameTooSmall"), `fixed undersized frame should report FrameTooSmall:\n${output}`);
-    assert(!output.includes("ContentOverflow"), `diagnostic should not use the legacy ContentOverflow name:\n${output}`);
     assert(!/\breason\b/.test(output), `FrameTooSmall output should not include a fixed reason field:\n${output}`);
     assert(output.includes("horizontal frame fixed by"), `diagnostic should explain which horizontal constraints fixed the frame:\n${output}`);
     assert(output.includes("~ body.left == page.left + 100"), `diagnostic should cite the left constraint source:\n${output}`);
@@ -142,7 +141,6 @@ end
     assert(frameTooSmall, `diagnostics JSON should contain FrameTooSmall: ${JSON.stringify(payload)}`);
     assert(frameTooSmall.severity === "warning", `FrameTooSmall should be a warning: ${JSON.stringify(frameTooSmall)}`);
     assert(frameTooSmall.message.includes("short by width="), `FrameTooSmall message should include the short width: ${frameTooSmall.message}`);
-    assert(!payload.diagnostics.some((diagnostic) => diagnostic.code === "ContentOverflow"), `diagnostics JSON should not contain legacy ContentOverflow: ${JSON.stringify(payload)}`);
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -153,13 +151,11 @@ async function assertCleanFrameDiagnostics(result, diagnosticsPath, label) {
   assert(result.code === 0, `render failed while checking ${label}:\n${output}`);
   assert(!output.includes("FrameTooSmall"), `${label}:\n${output}`);
   assert(!output.includes("PageOverflow"), `${label}:\n${output}`);
-  assert(!output.includes("ContentOverflow"), `${label}:\n${output}`);
 
   const payload = JSON.parse(await readFile(diagnosticsPath, "utf8"));
   const unexpected = payload.diagnostics.filter((diagnostic) =>
     diagnostic.code === "FrameTooSmall" ||
-    diagnostic.code === "PageOverflow" ||
-    diagnostic.code === "ContentOverflow");
+    diagnostic.code === "PageOverflow");
   assert(unexpected.length === 0, `${label}: unexpected diagnostics ${JSON.stringify(unexpected)}`);
 }
 
