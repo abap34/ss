@@ -1,5 +1,5 @@
 (selected_imports (bare_callable_identifier) @local.definition)
-(function_declaration name: [(identifier) (callable_identifier)] @local.definition.function)
+(function_declaration name: [(identifier) (bare_callable_identifier)] @local.definition.function)
 (parameter name: (identifier) @local.definition.parameter)
 (lambda_parameter name: (identifier) @local.definition.parameter)
 (let_statement name: (identifier) @local.definition.var)

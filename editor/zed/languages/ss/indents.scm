@@ -11,9 +11,6 @@
   (if_statement
     "if" @start.if
     "end" @end)
-  (for_statement
-    "for" @start.for
-    "end" @end)
   (type_body
     "{" @start.type
     "}" @end)
@@ -25,7 +22,6 @@
     "}" @end)
   (parameters)
   (lambda_parameters)
-  (list_expression)
   (parenthesized_expression)
   (call_expression)
 ] @indent

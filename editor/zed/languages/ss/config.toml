@@ -14,9 +14,9 @@ brackets = [
 collapsed_placeholder = "..."
 tab_size = 2
 
-increase_indent_pattern = "^\\s*(document|page\\b.*|fn(?:/!?|!?)\\b.*|if\\b.*|for\\b.*|(?:type|enum)\\b[^{}=]*\\{)\\s*(?:;;.*)?$"
+increase_indent_pattern = "^\\s*(document|page\\b.*|fn(?:/!?|!?)\\b.*|if\\b.*|(?:type|enum)\\b[^{}=]*\\{)\\s*(?:;;.*)?$"
 decrease_indent_patterns = [
     { pattern = "^\\s*else\\b.*", valid_after = ["if"] },
-    { pattern = "^\\s*end\\b.*", valid_after = ["document", "page", "fn", "if", "for"] },
+    { pattern = "^\\s*end\\b.*", valid_after = ["document", "page", "fn", "if"] },
     { pattern = "^\\s*}\\s*(?:;;.*)?$", valid_after = ["type", "enum"] },
 ]

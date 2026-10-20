@@ -1,5 +1,5 @@
 ================================================================================
-Document block, control flow, and properties
+Document block, conditional statements, and member assignment
 ================================================================================
 
 document
@@ -8,13 +8,10 @@ end
 
 page "Control"
   let title = text("Control")
-  let items = list("a", "b")
-  for item, index in items
-    if index then
-      property title "data-kind" item
-    else
-      record_event(title, "fallback", c"#fff")
-    end
+  if true
+    title.style.text.size = 24
+  else
+    record_event(title, "fallback", c"#fff")
   end
 end
 
@@ -36,29 +33,22 @@ end
           (bare_callable_identifier
             (identifier)))
         (string)))
-    (let_statement
-      name: (identifier)
-      value: (call_expression
-        function: (callable_identifier
-          (bare_callable_identifier
-            (identifier)))
-        (string)
-        (string)))
-    (for_statement
-      item: (identifier)
-      index: (identifier)
-      source: (identifier)
-      (if_statement
-        condition: (identifier)
-        (property_statement
-          target: (identifier)
-          key: (string)
-          value: (identifier))
-        (expression_statement
-          (call_expression
-            function: (callable_identifier
-              (bare_callable_identifier
-                (identifier)))
-            (identifier)
-            (string)
-            (color_string)))))))
+    (if_statement
+      condition: (boolean)
+      (member_assignment_statement
+        target: (member_expression
+          object: (member_expression
+            object: (member_expression
+              object: (identifier)
+              member: (identifier))
+            member: (identifier))
+          member: (identifier))
+        value: (number))
+      (expression_statement
+        (call_expression
+          function: (callable_identifier
+            (bare_callable_identifier
+              (identifier)))
+          (identifier)
+          (string)
+          (color_string))))))

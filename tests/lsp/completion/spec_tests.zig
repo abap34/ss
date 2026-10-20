@@ -103,6 +103,22 @@ test "analysis queries: zero budget marks completion as incomplete" {
     try expectHas(result, "page");
 }
 
+test "analysis queries: full and lexical completion omit unsupported statement keywords" {
+    var case = try CompletionCase.init("page main\nend\n");
+    defer case.deinit();
+    const snapshot = try case.snapshotFor(case.source);
+    for ([_]u32{ 0, 10000 }) |budget_ms| {
+        var result = try snapshot_api.completeAt(testing.allocator, snapshot, .{
+            .path = case.path,
+            .source = case.source,
+            .offset = offsetAfter(case.source, "page main\n"),
+        }, .{ .budget_ms = budget_ms });
+        defer result.deinit(testing.allocator);
+        for ([_][]const u8{ "for", "in", "property", "then" }) |name| try expectMissing(result, name);
+        for ([_][]const u8{ "if", "else" }) |name| try expectKind(result, name, .keyword);
+    }
+}
+
 test "analysis queries: hover switches to shallow types when documentation exceeds the deadline" {
     var case = try CompletionCase.init(
         \\fn local(value: Number) -> Number

@@ -1854,8 +1854,24 @@ test "syntax spec: missing composition operands preserve conditional and constra
     for ([_][]const u8{
         "page Bad\n a ||\n if true\n end\nend\n",
         "page Bad\n a ||\n ~ a.left == page.left\nend\n",
-        "page Bad\n a ||\n for\nend\n",
+        "page Bad\n a ||\n return\nend\n",
     }) |invalid| try expectParseErrorWithoutLeaks(error.ExpectedExpression, invalid);
+}
+
+test "syntax spec: unsupported statement names remain composition operands" {
+    var parsed = try parse("page Names\n a ||\n for\n b //\n in\n c ||\n property\n d //\n then\nend\n");
+    defer parsed.deinit();
+    const statements = parsed.module.pages.items[0].statements.items;
+    try testing.expectEqual(@as(usize, 4), statements.len);
+    for (statements, [_][]const u8{ "for", "in", "property", "then" }, [_]ast.GroupComposition{ .horizontal, .vertical, .horizontal, .vertical }) |statement, name, mode| {
+        const composition = try expectComposition(statement.kind.expr_stmt, mode);
+        try expectIdent(composition.args.items[1], name);
+    }
+}
+
+test "syntax spec: unsupported conditional expressions and then statements are rejected" {
+    try expectParseErrorWithoutLeaks(error.ReservedIdentifier, "page Bad\n let value = if true then 1 else 2 end\nend\n");
+    try expectParseErrorWithoutLeaks(error.ExpectedLineBreak, "page Bad\n if true then\n end\nend\n");
 }
 
 test "syntax spec: composition parsing and cloning survive every allocation failure" {

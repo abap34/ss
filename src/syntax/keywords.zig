@@ -17,11 +17,7 @@ const keywords = [_][]const u8{
     "type",
     "enum",
     "if",
-    "then",
     "else",
-    "for",
-    "in",
-    "property",
 };
 
 pub fn contains(text: []const u8) bool {

@@ -248,6 +248,22 @@ test "syntax scanner: paired function declarations use one keyword token" {
     });
 }
 
+test "syntax scanner: unsupported statement names are ordinary identifiers" {
+    const text = "let for = 1\nlet in = 2\nfn property() -> Number\nreturn for\nend\nlet then = 3";
+    const tokens = try scanner.semanticTokens(testing.allocator, text);
+    defer testing.allocator.free(tokens);
+    var names: usize = 0;
+    for (tokens) |token| {
+        const word = text[token.token.span.start..token.token.span.end];
+        if (std.mem.eql(u8, word, "for") or std.mem.eql(u8, word, "in") or std.mem.eql(u8, word, "property") or std.mem.eql(u8, word, "then")) {
+            try testing.expect(token.kind != .keyword);
+            names += 1;
+        }
+    }
+    // Bare references do not receive a semantic token; declarations still do.
+    try testing.expectEqual(@as(usize, 4), names);
+}
+
 fn expectTokens(text: []const u8, expected: []const ExpectedToken) !void {
     var iter = scanner.tokens(text);
     for (expected) |item| {

@@ -50,6 +50,7 @@ end
         (identifier)
         (type
           (primary_type
+            (type_identifier)
             (type_arguments
               (type
                 (primary_type

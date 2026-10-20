@@ -102,15 +102,7 @@
           "named": true
         },
         {
-          "type": "if_expression",
-          "named": true
-        },
-        {
           "type": "lambda_expression",
-          "named": true
-        },
-        {
-          "type": "list_expression",
           "named": true
         },
         {
@@ -220,15 +212,7 @@
           "named": true
         },
         {
-          "type": "if_expression",
-          "named": true
-        },
-        {
           "type": "lambda_expression",
-          "named": true
-        },
-        {
-          "type": "list_expression",
           "named": true
         },
         {
@@ -377,15 +361,7 @@
           "named": true
         },
         {
-          "type": "if_expression",
-          "named": true
-        },
-        {
           "type": "lambda_expression",
-          "named": true
-        },
-        {
-          "type": "list_expression",
           "named": true
         },
         {
@@ -503,15 +479,7 @@
             "named": true
           },
           {
-            "type": "if_expression",
-            "named": true
-          },
-          {
             "type": "lambda_expression",
-            "named": true
-          },
-          {
-            "type": "list_expression",
             "named": true
           },
           {
@@ -623,15 +591,7 @@
             "named": true
           },
           {
-            "type": "if_expression",
-            "named": true
-          },
-          {
             "type": "lambda_expression",
-            "named": true
-          },
-          {
-            "type": "list_expression",
             "named": true
           },
           {
@@ -747,15 +707,7 @@
             "named": true
           },
           {
-            "type": "if_expression",
-            "named": true
-          },
-          {
             "type": "lambda_expression",
-            "named": true
-          },
-          {
-            "type": "list_expression",
             "named": true
           },
           {
@@ -851,15 +803,7 @@
             "named": true
           },
           {
-            "type": "if_expression",
-            "named": true
-          },
-          {
             "type": "lambda_expression",
-            "named": true
-          },
-          {
-            "type": "list_expression",
             "named": true
           },
           {
@@ -949,15 +893,7 @@
             "named": true
           },
           {
-            "type": "if_expression",
-            "named": true
-          },
-          {
             "type": "lambda_expression",
-            "named": true
-          },
-          {
-            "type": "list_expression",
             "named": true
           },
           {
@@ -1053,15 +989,7 @@
             "named": true
           },
           {
-            "type": "if_expression",
-            "named": true
-          },
-          {
             "type": "lambda_expression",
-            "named": true
-          },
-          {
-            "type": "list_expression",
             "named": true
           },
           {
@@ -1151,10 +1079,6 @@
           "named": true
         },
         {
-          "type": "for_statement",
-          "named": true
-        },
-        {
           "type": "if_statement",
           "named": true
         },
@@ -1168,10 +1092,6 @@
         },
         {
           "type": "member_assignment_statement",
-          "named": true
-        },
-        {
-          "type": "property_statement",
           "named": true
         },
         {
@@ -1248,15 +1168,7 @@
           "named": true
         },
         {
-          "type": "if_expression",
-          "named": true
-        },
-        {
           "type": "lambda_expression",
-          "named": true
-        },
-        {
-          "type": "list_expression",
           "named": true
         },
         {
@@ -1305,180 +1217,6 @@
         },
         {
           "type": "value_update_expression",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
-    "type": "for_statement",
-    "named": true,
-    "fields": {
-      "index": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "identifier",
-            "named": true
-          }
-        ]
-      },
-      "item": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "identifier",
-            "named": true
-          }
-        ]
-      },
-      "source": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "bare_callable_identifier",
-            "named": true
-          },
-          {
-            "type": "binary_expression",
-            "named": true
-          },
-          {
-            "type": "block_text",
-            "named": true
-          },
-          {
-            "type": "boolean",
-            "named": true
-          },
-          {
-            "type": "call_expression",
-            "named": true
-          },
-          {
-            "type": "color_string",
-            "named": true
-          },
-          {
-            "type": "composition_expression",
-            "named": true
-          },
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "if_expression",
-            "named": true
-          },
-          {
-            "type": "lambda_expression",
-            "named": true
-          },
-          {
-            "type": "list_expression",
-            "named": true
-          },
-          {
-            "type": "member_expression",
-            "named": true
-          },
-          {
-            "type": "number",
-            "named": true
-          },
-          {
-            "type": "parenthesized_expression",
-            "named": true
-          },
-          {
-            "type": "property_default_expression",
-            "named": true
-          },
-          {
-            "type": "property_exists_expression",
-            "named": true
-          },
-          {
-            "type": "qualified_callable_identifier",
-            "named": true
-          },
-          {
-            "type": "qualified_identifier",
-            "named": true
-          },
-          {
-            "type": "string",
-            "named": true
-          },
-          {
-            "type": "text_call_expression",
-            "named": true
-          },
-          {
-            "type": "unary_expression",
-            "named": true
-          },
-          {
-            "type": "value_construction",
-            "named": true
-          },
-          {
-            "type": "value_update_expression",
-            "named": true
-          }
-        ]
-      }
-    },
-    "children": {
-      "multiple": true,
-      "required": false,
-      "types": [
-        {
-          "type": "block_call_statement",
-          "named": true
-        },
-        {
-          "type": "constrain_statement",
-          "named": true
-        },
-        {
-          "type": "constraint_update_statement",
-          "named": true
-        },
-        {
-          "type": "expression_statement",
-          "named": true
-        },
-        {
-          "type": "for_statement",
-          "named": true
-        },
-        {
-          "type": "if_statement",
-          "named": true
-        },
-        {
-          "type": "let_statement",
-          "named": true
-        },
-        {
-          "type": "line_call_statement",
-          "named": true
-        },
-        {
-          "type": "member_assignment_statement",
-          "named": true
-        },
-        {
-          "type": "property_statement",
-          "named": true
-        },
-        {
-          "type": "return_statement",
           "named": true
         }
       ]
@@ -1538,10 +1276,6 @@
           "named": true
         },
         {
-          "type": "for_statement",
-          "named": true
-        },
-        {
           "type": "if_statement",
           "named": true
         },
@@ -1559,10 +1293,6 @@
         },
         {
           "type": "parameters",
-          "named": true
-        },
-        {
-          "type": "property_statement",
           "named": true
         },
         {
@@ -1617,306 +1347,6 @@
     }
   },
   {
-    "type": "if_expression",
-    "named": true,
-    "fields": {
-      "condition": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "bare_callable_identifier",
-            "named": true
-          },
-          {
-            "type": "binary_expression",
-            "named": true
-          },
-          {
-            "type": "block_text",
-            "named": true
-          },
-          {
-            "type": "boolean",
-            "named": true
-          },
-          {
-            "type": "call_expression",
-            "named": true
-          },
-          {
-            "type": "color_string",
-            "named": true
-          },
-          {
-            "type": "composition_expression",
-            "named": true
-          },
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "if_expression",
-            "named": true
-          },
-          {
-            "type": "lambda_expression",
-            "named": true
-          },
-          {
-            "type": "list_expression",
-            "named": true
-          },
-          {
-            "type": "member_expression",
-            "named": true
-          },
-          {
-            "type": "number",
-            "named": true
-          },
-          {
-            "type": "parenthesized_expression",
-            "named": true
-          },
-          {
-            "type": "property_default_expression",
-            "named": true
-          },
-          {
-            "type": "property_exists_expression",
-            "named": true
-          },
-          {
-            "type": "qualified_callable_identifier",
-            "named": true
-          },
-          {
-            "type": "qualified_identifier",
-            "named": true
-          },
-          {
-            "type": "string",
-            "named": true
-          },
-          {
-            "type": "text_call_expression",
-            "named": true
-          },
-          {
-            "type": "unary_expression",
-            "named": true
-          },
-          {
-            "type": "value_construction",
-            "named": true
-          },
-          {
-            "type": "value_update_expression",
-            "named": true
-          }
-        ]
-      },
-      "else": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "bare_callable_identifier",
-            "named": true
-          },
-          {
-            "type": "binary_expression",
-            "named": true
-          },
-          {
-            "type": "block_text",
-            "named": true
-          },
-          {
-            "type": "boolean",
-            "named": true
-          },
-          {
-            "type": "call_expression",
-            "named": true
-          },
-          {
-            "type": "color_string",
-            "named": true
-          },
-          {
-            "type": "composition_expression",
-            "named": true
-          },
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "if_expression",
-            "named": true
-          },
-          {
-            "type": "lambda_expression",
-            "named": true
-          },
-          {
-            "type": "list_expression",
-            "named": true
-          },
-          {
-            "type": "member_expression",
-            "named": true
-          },
-          {
-            "type": "number",
-            "named": true
-          },
-          {
-            "type": "parenthesized_expression",
-            "named": true
-          },
-          {
-            "type": "property_default_expression",
-            "named": true
-          },
-          {
-            "type": "property_exists_expression",
-            "named": true
-          },
-          {
-            "type": "qualified_callable_identifier",
-            "named": true
-          },
-          {
-            "type": "qualified_identifier",
-            "named": true
-          },
-          {
-            "type": "string",
-            "named": true
-          },
-          {
-            "type": "text_call_expression",
-            "named": true
-          },
-          {
-            "type": "unary_expression",
-            "named": true
-          },
-          {
-            "type": "value_construction",
-            "named": true
-          },
-          {
-            "type": "value_update_expression",
-            "named": true
-          }
-        ]
-      },
-      "then": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "bare_callable_identifier",
-            "named": true
-          },
-          {
-            "type": "binary_expression",
-            "named": true
-          },
-          {
-            "type": "block_text",
-            "named": true
-          },
-          {
-            "type": "boolean",
-            "named": true
-          },
-          {
-            "type": "call_expression",
-            "named": true
-          },
-          {
-            "type": "color_string",
-            "named": true
-          },
-          {
-            "type": "composition_expression",
-            "named": true
-          },
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "if_expression",
-            "named": true
-          },
-          {
-            "type": "lambda_expression",
-            "named": true
-          },
-          {
-            "type": "list_expression",
-            "named": true
-          },
-          {
-            "type": "member_expression",
-            "named": true
-          },
-          {
-            "type": "number",
-            "named": true
-          },
-          {
-            "type": "parenthesized_expression",
-            "named": true
-          },
-          {
-            "type": "property_default_expression",
-            "named": true
-          },
-          {
-            "type": "property_exists_expression",
-            "named": true
-          },
-          {
-            "type": "qualified_callable_identifier",
-            "named": true
-          },
-          {
-            "type": "qualified_identifier",
-            "named": true
-          },
-          {
-            "type": "string",
-            "named": true
-          },
-          {
-            "type": "text_call_expression",
-            "named": true
-          },
-          {
-            "type": "unary_expression",
-            "named": true
-          },
-          {
-            "type": "value_construction",
-            "named": true
-          },
-          {
-            "type": "value_update_expression",
-            "named": true
-          }
-        ]
-      }
-    }
-  },
-  {
     "type": "if_statement",
     "named": true,
     "fields": {
@@ -1957,15 +1387,7 @@
             "named": true
           },
           {
-            "type": "if_expression",
-            "named": true
-          },
-          {
             "type": "lambda_expression",
-            "named": true
-          },
-          {
-            "type": "list_expression",
             "named": true
           },
           {
@@ -2040,10 +1462,6 @@
           "named": true
         },
         {
-          "type": "for_statement",
-          "named": true
-        },
-        {
           "type": "if_statement",
           "named": true
         },
@@ -2057,10 +1475,6 @@
         },
         {
           "type": "member_assignment_statement",
-          "named": true
-        },
-        {
-          "type": "property_statement",
           "named": true
         },
         {
@@ -2159,15 +1573,7 @@
             "named": true
           },
           {
-            "type": "if_expression",
-            "named": true
-          },
-          {
             "type": "lambda_expression",
-            "named": true
-          },
-          {
-            "type": "list_expression",
             "named": true
           },
           {
@@ -2334,15 +1740,7 @@
             "named": true
           },
           {
-            "type": "if_expression",
-            "named": true
-          },
-          {
             "type": "lambda_expression",
-            "named": true
-          },
-          {
-            "type": "list_expression",
             "named": true
           },
           {
@@ -2424,109 +1822,6 @@
     }
   },
   {
-    "type": "list_expression",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": true,
-      "required": false,
-      "types": [
-        {
-          "type": "bare_callable_identifier",
-          "named": true
-        },
-        {
-          "type": "binary_expression",
-          "named": true
-        },
-        {
-          "type": "block_text",
-          "named": true
-        },
-        {
-          "type": "boolean",
-          "named": true
-        },
-        {
-          "type": "call_expression",
-          "named": true
-        },
-        {
-          "type": "color_string",
-          "named": true
-        },
-        {
-          "type": "composition_expression",
-          "named": true
-        },
-        {
-          "type": "identifier",
-          "named": true
-        },
-        {
-          "type": "if_expression",
-          "named": true
-        },
-        {
-          "type": "lambda_expression",
-          "named": true
-        },
-        {
-          "type": "list_expression",
-          "named": true
-        },
-        {
-          "type": "member_expression",
-          "named": true
-        },
-        {
-          "type": "number",
-          "named": true
-        },
-        {
-          "type": "parenthesized_expression",
-          "named": true
-        },
-        {
-          "type": "property_default_expression",
-          "named": true
-        },
-        {
-          "type": "property_exists_expression",
-          "named": true
-        },
-        {
-          "type": "qualified_callable_identifier",
-          "named": true
-        },
-        {
-          "type": "qualified_identifier",
-          "named": true
-        },
-        {
-          "type": "string",
-          "named": true
-        },
-        {
-          "type": "text_call_expression",
-          "named": true
-        },
-        {
-          "type": "unary_expression",
-          "named": true
-        },
-        {
-          "type": "value_construction",
-          "named": true
-        },
-        {
-          "type": "value_update_expression",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
     "type": "member_assignment_statement",
     "named": true,
     "fields": {
@@ -2577,15 +1872,7 @@
             "named": true
           },
           {
-            "type": "if_expression",
-            "named": true
-          },
-          {
             "type": "lambda_expression",
-            "named": true
-          },
-          {
-            "type": "list_expression",
             "named": true
           },
           {
@@ -2745,10 +2032,6 @@
           "named": true
         },
         {
-          "type": "for_statement",
-          "named": true
-        },
-        {
           "type": "if_statement",
           "named": true
         },
@@ -2762,10 +2045,6 @@
         },
         {
           "type": "member_assignment_statement",
-          "named": true
-        },
-        {
-          "type": "property_statement",
           "named": true
         },
         {
@@ -2837,15 +2116,7 @@
           "named": true
         },
         {
-          "type": "if_expression",
-          "named": true
-        },
-        {
           "type": "lambda_expression",
-          "named": true
-        },
-        {
-          "type": "list_expression",
           "named": true
         },
         {
@@ -2955,15 +2226,7 @@
           "named": true
         },
         {
-          "type": "if_expression",
-          "named": true
-        },
-        {
           "type": "lambda_expression",
-          "named": true
-        },
-        {
-          "type": "list_expression",
           "named": true
         },
         {
@@ -3023,7 +2286,7 @@
     "fields": {},
     "children": {
       "multiple": true,
-      "required": false,
+      "required": true,
       "types": [
         {
           "type": "qualified_type_identifier",
@@ -3085,15 +2348,7 @@
             "named": true
           },
           {
-            "type": "if_expression",
-            "named": true
-          },
-          {
             "type": "lambda_expression",
-            "named": true
-          },
-          {
-            "type": "list_expression",
             "named": true
           },
           {
@@ -3200,130 +2455,6 @@
           },
           {
             "type": "qualified_identifier",
-            "named": true
-          }
-        ]
-      }
-    }
-  },
-  {
-    "type": "property_statement",
-    "named": true,
-    "fields": {
-      "key": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "string",
-            "named": true
-          }
-        ]
-      },
-      "target": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "identifier",
-            "named": true
-          }
-        ]
-      },
-      "value": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "bare_callable_identifier",
-            "named": true
-          },
-          {
-            "type": "binary_expression",
-            "named": true
-          },
-          {
-            "type": "block_text",
-            "named": true
-          },
-          {
-            "type": "boolean",
-            "named": true
-          },
-          {
-            "type": "call_expression",
-            "named": true
-          },
-          {
-            "type": "color_string",
-            "named": true
-          },
-          {
-            "type": "composition_expression",
-            "named": true
-          },
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "if_expression",
-            "named": true
-          },
-          {
-            "type": "lambda_expression",
-            "named": true
-          },
-          {
-            "type": "list_expression",
-            "named": true
-          },
-          {
-            "type": "member_expression",
-            "named": true
-          },
-          {
-            "type": "number",
-            "named": true
-          },
-          {
-            "type": "parenthesized_expression",
-            "named": true
-          },
-          {
-            "type": "property_default_expression",
-            "named": true
-          },
-          {
-            "type": "property_exists_expression",
-            "named": true
-          },
-          {
-            "type": "qualified_callable_identifier",
-            "named": true
-          },
-          {
-            "type": "qualified_identifier",
-            "named": true
-          },
-          {
-            "type": "string",
-            "named": true
-          },
-          {
-            "type": "text_call_expression",
-            "named": true
-          },
-          {
-            "type": "unary_expression",
-            "named": true
-          },
-          {
-            "type": "value_construction",
-            "named": true
-          },
-          {
-            "type": "value_update_expression",
             "named": true
           }
         ]
@@ -3449,15 +2580,7 @@
             "named": true
           },
           {
-            "type": "if_expression",
-            "named": true
-          },
-          {
             "type": "lambda_expression",
-            "named": true
-          },
-          {
-            "type": "list_expression",
             "named": true
           },
           {
@@ -3742,15 +2865,7 @@
           "named": true
         },
         {
-          "type": "if_expression",
-          "named": true
-        },
-        {
           "type": "lambda_expression",
-          "named": true
-        },
-        {
-          "type": "list_expression",
           "named": true
         },
         {
@@ -3876,15 +2991,7 @@
           "named": true
         },
         {
-          "type": "if_expression",
-          "named": true
-        },
-        {
           "type": "lambda_expression",
-          "named": true
-        },
-        {
-          "type": "list_expression",
           "named": true
         },
         {
@@ -4023,15 +3130,7 @@
             "named": true
           },
           {
-            "type": "if_expression",
-            "named": true
-          },
-          {
             "type": "lambda_expression",
-            "named": true
-          },
-          {
-            "type": "list_expression",
             "named": true
           },
           {
@@ -4202,15 +3301,7 @@
             "named": true
           },
           {
-            "type": "if_expression",
-            "named": true
-          },
-          {
             "type": "lambda_expression",
-            "named": true
-          },
-          {
-            "type": "list_expression",
             "named": true
           },
           {
@@ -4374,40 +3465,12 @@
     "named": false
   },
   {
-    "type": "Selection",
-    "named": false
-  },
-  {
-    "type": "Void",
-    "named": false
-  },
-  {
-    "type": "[",
-    "named": false
-  },
-  {
-    "type": "]",
-    "named": false
-  },
-  {
-    "type": "anchor",
-    "named": false
-  },
-  {
     "type": "as",
     "named": false
   },
   {
     "type": "block_text",
     "named": true
-  },
-  {
-    "type": "bool",
-    "named": false
-  },
-  {
-    "type": "boolean",
-    "named": false
   },
   {
     "type": "color_string",
@@ -4420,10 +3483,6 @@
   },
   {
     "type": "const",
-    "named": false
-  },
-  {
-    "type": "constraints",
     "named": false
   },
   {
@@ -4455,10 +3514,6 @@
     "named": false
   },
   {
-    "type": "for",
-    "named": false
-  },
-  {
     "type": "identifier",
     "named": true
   },
@@ -4475,10 +3530,6 @@
     "named": true
   },
   {
-    "type": "in",
-    "named": false
-  },
-  {
     "type": "let",
     "named": false
   },
@@ -4487,23 +3538,11 @@
     "named": true
   },
   {
-    "type": "metadata",
-    "named": false
-  },
-  {
     "type": "number",
     "named": true
   },
   {
-    "type": "number",
-    "named": false
-  },
-  {
     "type": "page",
-    "named": false
-  },
-  {
-    "type": "property",
     "named": false
   },
   {
@@ -4511,20 +3550,8 @@
     "named": false
   },
   {
-    "type": "selection",
-    "named": false
-  },
-  {
-    "type": "string",
-    "named": false
-  },
-  {
     "type": "string",
     "named": true
-  },
-  {
-    "type": "then",
-    "named": false
   },
   {
     "type": "true",
@@ -4537,10 +3564,6 @@
   {
     "type": "type_identifier",
     "named": true
-  },
-  {
-    "type": "void",
-    "named": false
   },
   {
     "type": "with",

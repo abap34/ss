@@ -120,7 +120,8 @@ end
               (primary_type
                 (type_identifier)))))))
     (type
-      (primary_type))
+      (primary_type
+        (type_identifier)))
     (let_statement
       (identifier)
       (call_expression

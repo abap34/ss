@@ -3,7 +3,6 @@
   (page_declaration)
   (document_block)
   (if_statement)
-  (for_statement)
   (type_body)
 ] @indent
 

@@ -26,8 +26,9 @@ module.exports = grammar({
   conflicts: $ => [
     [$.source_file],
     [$.qualified_identifier, $.bare_callable_identifier],
+    [$.bare_callable_identifier, $.qualified_type_identifier],
+    [$.qualified_identifier, $.bare_callable_identifier, $.qualified_type_identifier],
     [$._bang_bare_callable, $.bare_callable_identifier],
-    [$._bang_qualified_callable, $.qualified_callable_identifier],
     [$.bare_callable_identifier, $._type_name],
     [$._expression, $.bare_callable_identifier, $._type_name],
     [$._expression, $.bare_callable_identifier],
@@ -93,14 +94,14 @@ module.exports = grammar({
 
     type_declaration: $ => seq(
       "type",
-      field("name", $.type_identifier),
+      field("name", alias($.identifier, $.type_identifier)),
       optional($.type_parameters),
       $.type_body,
     ),
 
     enum_declaration: $ => seq(
       "enum",
-      field("name", $.type_identifier),
+      field("name", alias($.identifier, $.type_identifier)),
       "{",
       repeat($._terminator),
       repeat1(seq(field("case", $.identifier), repeat($._terminator))),
@@ -135,9 +136,7 @@ module.exports = grammar({
       $.constrain_statement,
       $.constraint_update_statement,
       $.member_assignment_statement,
-      $.property_statement,
       $.if_statement,
-      $.for_statement,
       $.block_call_statement,
       $.expression_statement,
       $.line_call_statement,
@@ -153,27 +152,13 @@ module.exports = grammar({
       $._terminator,
     ),
     member_assignment_statement: $ => seq(field("target", $.member_expression), "=", field("value", $._expression), $._terminator),
-    property_statement: $ => seq("property", field("target", $.identifier), field("key", $.string), field("value", $._expression), $._terminator),
 
     if_statement: $ => seq(
       "if",
       field("condition", $._expression),
-      optional("then"),
       $._terminator,
       repeat($._statement),
       optional(seq("else", $._terminator, repeat($._statement))),
-      "end",
-      optional($._terminator),
-    ),
-
-    for_statement: $ => seq(
-      "for",
-      field("item", $.identifier),
-      optional(seq(",", field("index", $.identifier))),
-      "in",
-      field("source", $._expression),
-      $._terminator,
-      repeat($._statement),
       "end",
       optional($._terminator),
     ),
@@ -211,8 +196,6 @@ module.exports = grammar({
       $.value_construction,
       $.value_update_expression,
       $.member_expression,
-      $.if_expression,
-      $.list_expression,
       $.identifier,
       $.qualified_identifier,
       alias($._bang_bare_callable, $.bare_callable_identifier),
@@ -293,7 +276,6 @@ module.exports = grammar({
       field("property", choice($.identifier, $.qualified_identifier, $.member_expression, $.call_expression, $.parenthesized_expression)),
       "?",
     )),
-    if_expression: $ => seq("if", field("condition", $._expression), "then", field("then", $._expression), "else", field("else", $._expression), "end"),
     parenthesized_expression: $ => seq("(", repeat($._terminator), $._expression, repeat($._terminator), ")"),
     lambda_expression: $ => seq(
       field("parameters", $.lambda_parameters),
@@ -304,7 +286,6 @@ module.exports = grammar({
     ),
     lambda_parameters: $ => seq("(", optional(commaSepNewline($, $.lambda_parameter)), ")"),
     lambda_parameter: $ => seq(field("name", $.identifier), ":", field("type", $.type)),
-    list_expression: $ => seq("[", optional(commaSepNewline($, $._expression)), "]"),
 
     annotation: $ => seq("@", field("name", $.identifier), optional(seq("(", optional(commaSepNewline($, $.annotation_arg)), ")"))),
     annotation_arg: $ => choice(
@@ -319,18 +300,6 @@ module.exports = grammar({
     )),
 
     primary_type: $ => choice(
-      "document",
-      "page",
-      seq(choice("selection", "Selection"), optional($.type_arguments)),
-      "anchor",
-      "string",
-      "number",
-      "metadata",
-      "bool",
-      "boolean",
-      "constraints",
-      "void",
-      "Void",
       seq("(", $.type, ")"),
       seq($._type_name, optional($.type_arguments)),
     ),
@@ -342,8 +311,7 @@ module.exports = grammar({
     qualified_callable_identifier: $ => prec(1, seq(field("module", $.identifier), "::", field("name", $.bare_callable_identifier))),
     import_spec: _ => /[A-Za-z0-9_./:-]+/,
     _type_name: $ => choice(alias($.identifier, $.type_identifier), $.qualified_type_identifier),
-    qualified_type_identifier: $ => seq(field("module", $.identifier), "::", field("name", $.type_identifier)),
-    type_identifier: _ => /[A-Z][A-Za-z0-9_]*/,
+    qualified_type_identifier: $ => seq(field("module", $.identifier), "::", field("name", alias($.identifier, $.type_identifier))),
     string: _ => token(choice(
       seq('"""', repeat(choice(/[^"]+/, /"[^"]/, /""[^"]/)), '"""'),
       seq('"', repeat(/[^"]/), '"'),
@@ -360,10 +328,6 @@ module.exports = grammar({
     _terminator: _ => /\n+/,
   },
 });
-
-function commaSep(rule) {
-  return seq(rule, repeat(seq(",", rule)), optional(","));
-}
 
 function commaSepNewline($, rule) {
   return seq(

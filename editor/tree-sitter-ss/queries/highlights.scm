@@ -10,14 +10,10 @@
   "with"
   "return"
   "end"
-  "property"
   "type"
   "enum"
   "if"
-  "then"
   "else"
-  "for"
-  "in"
 ] @keyword
 
 [
