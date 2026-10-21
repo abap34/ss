@@ -8,6 +8,8 @@ export class ServerProcess {
   private child?: ChildProcess;
   private generation = 0;
 
+  constructor(private readonly log: (message: string) => void = () => {}) {}
+
   async start(command: string, cwd?: string): Promise<{ process: ChildProcess; detached: boolean }> {
     const generation = ++this.generation;
     await this.stopChild();
@@ -18,6 +20,9 @@ export class ServerProcess {
       detached: process.platform !== "win32",
     });
     this.child = child;
+    child.once("exit", (code, signal) => {
+      this.log(`[server] process ${child.pid} exited: ${signal ? `signal ${signal}` : `code ${code}`}`);
+    });
     await new Promise<void>((resolve, reject) => {
       child.once("error", reject);
       child.once("spawn", resolve);
@@ -33,8 +38,10 @@ export class ServerProcess {
 
   private async stopChild(): Promise<void> {
     const child = this.child;
-    if (!child?.pid) {
-      this.child = undefined;
+    // An exited PID no longer identifies an owned process group. In particular,
+    // macOS can report EPERM for a group that disappeared after a server crash.
+    if (!child?.pid || child.exitCode !== null || child.signalCode !== null) {
+      if (this.child === child) this.child = undefined;
       return;
     }
     // The process group also includes TeX and other resource subprocesses.

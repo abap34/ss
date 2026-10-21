@@ -131,7 +131,7 @@ async function stopLanguageClient(): Promise<void> {
 
 function createLanguageClient(output: vscode.OutputChannel): LanguageClient {
   const command = vscode.workspace.getConfiguration("ss").get<string>("cli.path", "ss");
-  const serverProcess = new ServerProcess();
+  const serverProcess = new ServerProcess((message) => output.appendLine(message));
   const serverOptions: ServerOptions = () => serverProcess.start(
     command,
     vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,

@@ -139,6 +139,7 @@ await deactivate();
 assert.equal(mock.provider(), undefined);
 assert(clients.every((client) => client.disposed));
 await testUnresponsiveProcessTermination();
+await testRestartAfterProcessExit();
 delete globalThis.__ssRestartMock;
 console.log("WYSIWYG restart: shutdown timeout, repeated clicks, startup failure and retry passed");
 
@@ -193,5 +194,53 @@ async function waitFor(predicate) {
   while (!predicate()) {
     assert(Date.now() < deadline, "restart did not reach the expected state");
     await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+async function testRestartAfterProcessExit() {
+  if (process.platform === "win32") return;
+  const scratch = path.join(root, ".ss-cache/editor-restart-test");
+  const directory = await mkdtemp(path.join(scratch, "exited-"));
+  const executable = path.join(directory, "server");
+  const exits = [];
+  const manager = new ServerProcess(message => exits.push(message));
+  const kill = process.kill;
+  try {
+    await writeFile(executable, "#!/usr/bin/env node\nprocess.exit(7);\n");
+    await chmod(executable, 0o755);
+    const crashed = await manager.start(executable);
+    await waitFor(() => crashed.process.exitCode === 7);
+    process.kill = (pid, signal) => {
+      assert.notEqual(pid, -crashed.process.pid, "restart signaled an exited process group");
+      return kill(pid, signal);
+    };
+    await writeFile(executable, "#!/usr/bin/env node\nsetInterval(() => {}, 1000);\n");
+    const recovered = await manager.start(executable);
+    assert.notEqual(recovered.process.pid, crashed.process.pid);
+    assert(exits.some(message => message.includes("code 7")), "server exit was not logged");
+
+    // A real permission failure on a live process must still be reported, and
+    // ownership retained so a later stop can retry instead of leaking it.
+    process.kill = (pid, signal) => {
+      if (pid === -recovered.process.pid) throw Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+      return kill(pid, signal);
+    };
+    await assert.rejects(manager.stop(), error => error.code === "EPERM");
+    process.kill = kill;
+    await manager.stop();
+    assert.equal(recovered.process.signalCode, "SIGKILL");
+    const signaled = await manager.start(executable);
+    signaled.process.kill("SIGKILL");
+    await waitFor(() => signaled.process.signalCode === "SIGKILL");
+    process.kill = (pid, signal) => {
+      assert.notEqual(pid, -signaled.process.pid, "restart signaled a terminated process group");
+      return kill(pid, signal);
+    };
+    await manager.start(executable);
+    await manager.stop();
+  } finally {
+    process.kill = kill;
+    await manager.stop();
+    await rm(directory, { recursive: true, force: true });
   }
 }
