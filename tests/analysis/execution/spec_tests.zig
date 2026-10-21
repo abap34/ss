@@ -3,6 +3,7 @@ const compiler = @import("compiler");
 const core = compiler.core;
 const Type = compiler.language.Type;
 const testing = std.testing;
+const allocation_testing = @import("allocation_testing");
 
 fn document(source: []const u8) !core.DocumentState {
     const allocator = testing.allocator;
@@ -13,6 +14,67 @@ fn document(source: []const u8) !core.DocumentState {
     var modules = try compiler.analysis.loadModuleIndex(allocator, testing.io, ".", syntax, .{});
     defer modules.deinit();
     return compiler.analysis.buildDocumentState(allocator, "execution.ss", ".", &text, &syntax, &modules);
+}
+
+const CancelFunctionAnalysis = struct {
+    analyzer: *compiler.analysis.dependencies.Analyzer,
+    triggered: bool = false,
+
+    fn canceled(context: *const anyopaque) bool {
+        const self: *CancelFunctionAnalysis = @ptrCast(@alignCast(@constCast(context)));
+        self.triggered = self.triggered or self.analyzer.value_bindings.contains("argument");
+        return self.triggered;
+    }
+};
+
+test "canceled function dependency analysis releases argument summaries once" {
+    var state = try document(
+        \\fn increment(argument: Number) -> Number
+        \\  return argument + 1
+        \\end
+        \\document
+        \\  let seed = 1
+        \\  let result = increment(seed)
+        \\end
+    );
+    defer state.deinit();
+    const sema = compiler.semantic_env.SemanticEnv.init(&state, state.declaration_index, &state.functions);
+    var analyzer = compiler.analysis.dependencies.Analyzer.init(testing.allocator, &sema);
+    defer analyzer.deinit();
+    var cancellation = CancelFunctionAnalysis{ .analyzer = &analyzer };
+    state.runtime.analysis_cancellation = .{ .context = &cancellation, .is_canceled = CancelFunctionAnalysis.canceled };
+    defer state.runtime.analysis_cancellation = null;
+    try testing.expectError(error.Canceled, analyzer.documentStatements(state.projectSyntax().document_statements.items));
+    try testing.expect(cancellation.triggered);
+    state.runtime.analysis_cancellation = null;
+    var recovered = try analyzer.documentStatements(state.projectSyntax().document_statements.items);
+    defer recovered.deinit();
+    try testing.expect(recovered.reads.items.len > 0);
+}
+
+fn analyzeFunctionDependencies(allocator: std.mem.Allocator, state: *core.DocumentState) !void {
+    const sema = compiler.semantic_env.SemanticEnv.init(state, state.declaration_index, &state.functions);
+    var analyzer = compiler.analysis.dependencies.Analyzer.init(allocator, &sema);
+    defer analyzer.deinit();
+    var summary = try analyzer.documentStatements(state.projectSyntax().document_statements.items);
+    defer summary.deinit();
+}
+
+test "function dependency summaries have one owner on allocation failure" {
+    var state = try document(
+        \\fn increment(argument: Number) -> Number
+        \\  return argument + 1
+        \\end
+        \\fn twice(argument: Number) -> Number
+        \\  return increment(increment(argument))
+        \\end
+        \\document
+        \\  let seed = 1
+        \\  let result = twice(seed)
+        \\end
+    );
+    defer state.deinit();
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, analyzeFunctionDependencies, .{&state});
 }
 
 test "diagnostic analysis leaves pages untouched while evaluation registers ordered pages and origins" {

@@ -1447,7 +1447,7 @@ pub const Analyzer = struct {
         errdefer summary.deinit();
         for (value.candidates) |candidate| {
             var body = switch (candidate) {
-                .named => |named| try self.functionCall(named.key, named.module_id, named.decl, args, AccessSummary.init(self.allocator)),
+                .named => |named| try self.functionCall(named.key, named.module_id, named.decl, args),
                 .closure => |closure| blk: {
                     var facts = self.pushFreshValueFacts();
                     defer facts.restore();
@@ -1569,7 +1569,10 @@ pub const Analyzer = struct {
                 defer self.deinitCallArgFacts(&arg_facts);
                 var summary = try self.callArgFactsSummary(arg_facts.items);
                 errdefer summary.deinit();
-                break :blk try self.functionCall(resolved.key, resolved.module_id, resolved.decl, arg_facts.items, summary);
+                var invoked = try self.functionCall(resolved.key, resolved.module_id, resolved.decl, arg_facts.items);
+                defer invoked.deinit();
+                try summary.merge(invoked);
+                break :blk summary;
             },
             .primitive => |primitive| try self.primitiveCall(call, primitive),
             .unknown => try self.callArgs(call),
@@ -1715,10 +1718,7 @@ pub const Analyzer = struct {
         module_id: core.SourceModuleId,
         func: ast.FunctionDecl,
         arg_facts: []const CallArgFacts,
-        initial_summary: AccessSummary,
     ) anyerror!AccessSummary {
-        var summary = initial_summary;
-        errdefer summary.deinit();
         if (self.effect_analysis_depth >= max_effect_analysis_depth) return error.FunctionAnalysisLimitExceeded;
         self.effect_analysis_depth += 1;
         defer self.effect_analysis_depth -= 1;
@@ -1735,10 +1735,7 @@ pub const Analyzer = struct {
         defer if (shared_key) |owned| self.allocator.free(owned);
         for ([_]?[]const u8{ shared_key, cache_key }) |maybe_key| if (maybe_key) |owned| {
             if (try self.run_cache.?.cachedSummary(owned, self.allocator)) |cached_body| {
-                var body = cached_body;
-                defer body.deinit();
-                try summary.merge(body);
-                return summary;
+                return cached_body;
             }
         };
 
@@ -1757,15 +1754,14 @@ pub const Analyzer = struct {
         self.sema = self.sema.forModule(module_id);
         defer self.sema = previous;
         var body = try self.bindValueParams(func.params.items, arg_facts);
-        defer body.deinit();
+        errdefer body.deinit();
         var statements = try self.analyzeStatements(func.statements.items, .local);
         defer statements.deinit();
         try body.merge(statements);
         // Pure value helpers and page-independent effects can be shared across
         // pages; only concrete membership scopes require the caller-page key.
         if (cache_key) |owned| try self.run_cache.?.putSummary(if (body.hasConcreteMembershipScope()) owned else shared_key.?, body);
-        try summary.merge(body);
-        return summary;
+        return body;
     }
 
     fn constValue(self: *Analyzer, resolved: semantic_env.ResolvedConst) anyerror!AccessSummary {
