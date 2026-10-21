@@ -16,15 +16,6 @@ pub fn arity(func: ast.FunctionDecl) Arity {
     };
 }
 
-pub fn requireArity(actual: usize, func: ast.FunctionDecl) !void {
-    const range = arity(func);
-    if (actual < range.min or actual > range.max) return error.InvalidArity;
-}
-
-pub fn functionRefFor(allocator: std.mem.Allocator, func: ast.FunctionDecl) !core.FunctionRef {
-    return contracts.functionRefFor(allocator, func);
-}
-
 pub fn functionRefForInModule(allocator: std.mem.Allocator, module_id: core.SourceModuleId, func: ast.FunctionDecl) !core.FunctionRef {
     return contracts.functionRefForInModule(allocator, module_id, func);
 }

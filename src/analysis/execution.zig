@@ -200,15 +200,6 @@ pub const ExecutionGraph = struct {
     }
 };
 
-pub fn validateDependencies(
-    allocator: std.mem.Allocator,
-    state: *core.DocumentState,
-    declaration_index: *const declarations.DeclarationIndex,
-) !void {
-    var graph = try ExecutionGraph.build(allocator, state, declaration_index, .{ .page_id_mode = .synthetic });
-    defer graph.deinit();
-}
-
 const GraphBuilder = struct {
     allocator: std.mem.Allocator,
     state: *core.DocumentState,

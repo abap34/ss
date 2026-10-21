@@ -30,7 +30,7 @@ end
     );
 
     const diagnosticsPath = path.join(project, "diagnostics.json");
-    const result = await render(project, "wrapped-ok.pdf", "wrapped-ok", diagnosticsPath);
+    const result = await render(project, "wrapped-ok.pdf", diagnosticsPath);
     assertCleanFrameDiagnostics(result, diagnosticsPath, "wrapped text should not be compared against its unwrapped natural width");
   } finally {
     await rm(project, { recursive: true, force: true });
@@ -70,7 +70,7 @@ end
     );
 
     const diagnosticsPath = path.join(project, "diagnostics.json");
-    const result = await render(project, "table-ok.pdf", "table-ok", diagnosticsPath);
+    const result = await render(project, "table-ok.pdf", diagnosticsPath);
     assertCleanFrameDiagnostics(result, diagnosticsPath, "markdown table borders and ink overhang should not create false frame warnings");
   } finally {
     await rm(project, { recursive: true, force: true });
@@ -100,7 +100,7 @@ end
     );
 
     const diagnosticsPath = path.join(project, "diagnostics.json");
-    const result = await render(project, "chrome-ok.pdf", "chrome-ok", diagnosticsPath);
+    const result = await render(project, "chrome-ok.pdf", diagnosticsPath);
     assertCleanFrameDiagnostics(result, diagnosticsPath, "chrome stroke should be drawn inside the fixed frame");
   } finally {
     await rm(project, { recursive: true, force: true });
@@ -127,7 +127,7 @@ end
     );
 
     const diagnosticsPath = path.join(project, "diagnostics.json");
-    const result = await render(project, "too-small.pdf", "too-small", diagnosticsPath);
+    const result = await render(project, "too-small.pdf", diagnosticsPath);
     const output = combinedOutput(result);
     assert(result.code === 0, `render should succeed with a layout warning:\n${output}`);
     assert(output.includes("FrameTooSmall"), `fixed undersized frame should report FrameTooSmall:\n${output}`);
@@ -159,7 +159,7 @@ async function assertCleanFrameDiagnostics(result, diagnosticsPath, label) {
   assert(unexpected.length === 0, `${label}: unexpected diagnostics ${JSON.stringify(unexpected)}`);
 }
 
-async function render(project, outputName, cacheId, diagnosticsPath) {
+async function render(project, outputName, diagnosticsPath) {
   return await spawnCollect(ssBin, [
     "render",
     "slide.ss",

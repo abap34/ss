@@ -296,28 +296,12 @@ fn utf8Unit(bytes: []const u8, index: usize) Utf8Unit {
     return .{ .end = end, .width = if (codepoint > 0xffff) 2 else 1 };
 }
 
-pub fn spanView(source: []const u8, span: ByteSpan) SpanView {
-    return .{
-        .span = span,
-        .trimmed = trimInlineSpaceSpan(source, span),
-    };
-}
-
 pub fn trimInlineSpaceSpan(source: []const u8, span: ByteSpan) ByteSpan {
     var first = @min(span.start, source.len);
     const end = @min(span.end, source.len);
     while (first < end and isInlineSpace(source[first])) first += 1;
     var last = end;
     while (last > first and isInlineSpace(source[last - 1])) last -= 1;
-    return .{ .start = first, .end = last };
-}
-
-pub fn trimWhitespaceSpan(source: []const u8, span: ByteSpan) ByteSpan {
-    var first = @min(span.start, source.len);
-    const end = @min(span.end, source.len);
-    while (first < end and std.ascii.isWhitespace(source[first])) first += 1;
-    var last = end;
-    while (last > first and std.ascii.isWhitespace(source[last - 1])) last -= 1;
     return .{ .start = first, .end = last };
 }
 
@@ -345,17 +329,6 @@ pub fn codeBytes(source: []const u8, start: usize, end: usize) CodeByteIterator 
         .index = @min(start, source.len),
         .end = @min(end, source.len),
     };
-}
-
-pub fn wordSpanAt(source: []const u8, offset: usize, comptime isWordByte: fn (u8) bool) ?ByteSpan {
-    const pos = @min(offset, source.len);
-    const line = lineSpanAt(source, pos);
-    var start = pos;
-    while (start > line.start and isWordByte(source[start - 1])) start -= 1;
-    var end = pos;
-    while (end < line.end and isWordByte(source[end])) end += 1;
-    if (end <= start) return null;
-    return .{ .start = start, .end = end };
 }
 
 pub fn isIdentifierStart(ch: u8) bool {

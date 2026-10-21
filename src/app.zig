@@ -1,5 +1,4 @@
 const std = @import("std");
-const core = @import("core");
 const utils = @import("utils");
 
 const commands = @import("app/commands.zig");
@@ -19,10 +18,6 @@ const Progress = utils.progress.Progress;
 
 pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, request: SourceRequest, progress: ?*Progress) !@import("app/pipeline.zig").BuiltDocument {
     return try commands.buildFile(io, allocator, request, progress);
-}
-
-pub fn buildTypedFile(io: std.Io, allocator: std.mem.Allocator, request: SourceRequest, progress: ?*Progress) !core.DocumentState {
-    return try commands.buildTypedFile(io, allocator, request, progress);
 }
 
 pub fn checkFile(io: std.Io, allocator: std.mem.Allocator, request: SourceRequest, progress: ?*Progress) !void {

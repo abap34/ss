@@ -252,12 +252,6 @@ pub fn appendRange(allocator: std.mem.Allocator, out: *std.ArrayList(u8), range:
     try out.appendSlice(allocator, "}}");
 }
 
-pub fn locationJson(allocator: std.mem.Allocator, uri: []const u8, sl: usize, sc: usize, el: usize, ec: usize) ![]u8 {
-    var out = std.ArrayList(u8).empty;
-    try appendLocationObject(allocator, &out, uri, sl, sc, el, ec);
-    return out.toOwnedSlice(allocator);
-}
-
 pub fn appendLocationObject(allocator: std.mem.Allocator, out: *std.ArrayList(u8), uri: []const u8, sl: usize, sc: usize, el: usize, ec: usize) !void {
     try out.appendSlice(allocator, "{\"uri\":");
     try appendJsonString(allocator, out, uri);
@@ -270,12 +264,4 @@ pub fn appendLocationObject(allocator: std.mem.Allocator, out: *std.ArrayList(u8
     try out.appendSlice(allocator, ",\"character\":");
     try appendInt(allocator, out, ec);
     try out.appendSlice(allocator, "}}}");
-}
-
-pub fn samePath(allocator: std.mem.Allocator, left: []const u8, right: []const u8) bool {
-    const a = project.absolutePath(allocator, left) catch return false;
-    defer allocator.free(a);
-    const b = project.absolutePath(allocator, right) catch return false;
-    defer allocator.free(b);
-    return std.mem.eql(u8, a, b);
 }

@@ -12,7 +12,6 @@ const axis_propagation = @import("propagation.zig");
 const metrics = @import("metrics.zig");
 const style_defaults = @import("style.zig");
 const layout_trace = @import("trace.zig");
-const utils = @import("utils");
 
 const NodeId = model.NodeId;
 const AxisState = model.AxisState;

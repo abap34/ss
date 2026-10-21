@@ -579,10 +579,6 @@ fn parsePlainLines(allocator: Allocator, layout: *TextLayout, content: []const u
     }
 }
 
-fn parseInlineLine(allocator: Allocator, line_text: []const u8) !Line {
-    return parseInlineLineAt(allocator, line_text, 0);
-}
-
 fn parseInlineLineAt(allocator: Allocator, line_text: []const u8, source_offset: usize) !Line {
     var line = Line{};
     errdefer line.deinit(allocator);

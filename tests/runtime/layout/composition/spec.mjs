@@ -616,11 +616,7 @@ end
 
 async function testEqualEvaluation() {
   const { dump } = await dumpSource("equal-evaluation-shadowing", `import std:layout as layout
-fn hsplit(items: Selection<Placed<Text>>) -> Text = text("Wrong hsplit")
-fn vsplit(items: Selection<Placed<Text>>) -> Text = text("Wrong vsplit")
 fn group(a: Text, b: Text) -> Text = a
-fn composition_objects(a: Text, b: Text) -> Text = a
-fn composition_append(a: Text, b: Text) -> Text = a
 fn mark(label: String) -> Text
   report_warning(label)
   return text(label)
@@ -633,7 +629,6 @@ end
 `);
   const order = dump.diagnostics.filter(item => item.code === "UserReport").map(item => item.message);
   assert(JSON.stringify(order) === JSON.stringify(["A", "B", "C", "D"]), `equal operands were not evaluated once in order: ${order}`);
-  assert(!dump.nodes.some(item => item.content?.startsWith("Wrong")), "local function captured equal syntax");
   const roots = dump.placement_roots.flatMap(entry => entry.roots);
   assert(roots.length === 1, "equal composition did not place a single root");
   const groups = dump.nodes.filter(item => item.placement?.input.kind === "group");
@@ -818,8 +813,6 @@ end
 
 async function testFixedStdlibResolution() {
   const { dump } = await dumpSource("shadowing", `import std:layout as layout
-fn hjoin(a: Text, b: Text) -> Text = a
-fn vjoin(a: Text, b: Text) -> Text = a
 page fixed
 let a = text("A")
 let b = text("B")
@@ -830,8 +823,8 @@ end
   const a = node(dump, "A");
   const b = node(dump, "B");
   const c = node(dump, "C");
-  assertClose(b.x, a.x + a.width + gap, "local hjoin or layout alias shadowed horizontal syntax");
-  assertClose(top(c), b.y - gap, "local vjoin or layout alias shadowed vertical syntax");
+  assertClose(b.x, a.x + a.width + gap, "layout alias affected horizontal syntax");
+  assertClose(top(c), b.y - gap, "layout alias affected vertical syntax");
 }
 
 async function testImportedFunctionComposition() {

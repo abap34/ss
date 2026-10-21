@@ -187,11 +187,6 @@ pub const Array = struct {
         try float(self.allocator, self.sink, value, fmt);
     }
 
-    pub fn boolItem(self: *Array, value: bool) !void {
-        try self.comma();
-        try writeBytes(self.sink, if (value) "true" else "false");
-    }
-
     pub fn nullItem(self: *Array) !void {
         try self.comma();
         try writeBytes(self.sink, "null");
@@ -240,10 +235,6 @@ pub fn appendFloat(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), val
 
 pub fn appendFloat4(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), value: anytype) !void {
     try appendFloat(allocator, buffer, value, "{d:.4}");
-}
-
-pub fn appendNull(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8)) !void {
-    try writeBytes(bufferSink(allocator, buffer), "null");
 }
 
 pub fn fieldValue(object: *const ObjectMap, key: []const u8) ?*const Value {

@@ -35,12 +35,6 @@ pub fn ValueEnv(comptime Value: type) type {
             try self.values.put(name, value);
         }
 
-        pub fn bindLet(self: *Self, name: []const u8, value: Value) !bool {
-            if (isDiscardBindingName(name)) return false;
-            try self.bind(name, value);
-            return true;
-        }
-
         pub fn lookup(self: *const Self, name: []const u8) ?Value {
             return self.values.get(name);
         }
@@ -89,12 +83,6 @@ pub const NameEnv = struct {
         try self.put(name);
     }
 
-    pub fn bindLet(self: *NameEnv, name: []const u8) !bool {
-        if (isDiscardBindingName(name)) return false;
-        try self.put(name);
-        return true;
-    }
-
     pub fn contains(self: *const NameEnv, name: []const u8) bool {
         return self.values.contains(name);
     }
@@ -140,12 +128,6 @@ pub fn CloneEnv(
             const entry = try self.values.getOrPut(name);
             if (entry.found_existing) deinitValue(entry.value_ptr);
             entry.value_ptr.* = owned;
-        }
-
-        pub fn bindLet(self: *Self, name: []const u8, value: Value) !bool {
-            if (isDiscardBindingName(name)) return false;
-            try self.bind(name, value);
-            return true;
         }
 
         pub fn lookup(self: *const Self, name: []const u8) ?Value {

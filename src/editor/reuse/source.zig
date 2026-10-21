@@ -1,6 +1,5 @@
 const std = @import("std");
 const core = @import("core");
-const utils = @import("utils");
 const AnalysisSnapshot = @import("../../analysis/snapshot.zig").AnalysisSnapshot;
 const generated_edit = @import("../edit/generated.zig");
 

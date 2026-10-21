@@ -2,8 +2,6 @@ const std = @import("std");
 const ast = @import("ast");
 const QueryBudget = @import("types.zig").QueryBudget;
 
-const language_names = @import("../../language/names.zig");
-
 pub const SourceNameKind = enum {
     import_spec,
     import_alias,

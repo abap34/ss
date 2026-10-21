@@ -23,33 +23,6 @@ pub fn runtimeKind(value: core.Value) core.ValueTag {
     };
 }
 
-pub fn ensureValueType(
-    state: anytype,
-    page_id: ?core.NodeId,
-    value: core.Value,
-    expected: core.ValueTag,
-    origin: core.SourceOrigin,
-) !void {
-    return ensureValueTypeWithCode(state, page_id, value, expected, origin, .UnmatchedArgumentType);
-}
-
-pub fn ensureValueTypeWithCode(
-    state: anytype,
-    page_id: ?core.NodeId,
-    value: core.Value,
-    expected: core.ValueTag,
-    origin: core.SourceOrigin,
-    code: core.TypeMismatchCode,
-) !void {
-    const actual = runtimeKind(value);
-    if (actual != expected) {
-        try state.addValidationDiagnostic(.@"error", page_id, null, origin, .{
-            .type_mismatch = .{ .code = code, .expected = expected, .actual = actual },
-        });
-        return error.InvalidValueTag;
-    }
-}
-
 pub fn ensureValueConformsToType(
     state: anytype,
     page_id: ?core.NodeId,

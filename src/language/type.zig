@@ -107,16 +107,8 @@ pub const Type = struct {
         return .{ .kind = .enum_type, .enum_name = name };
     }
 
-    pub fn enumTypeAt(name: []const u8, span: SourceSpan) Type {
-        return .{ .kind = .enum_type, .enum_name = name, .enum_name_span = span };
-    }
-
     pub fn recordType(name: []const u8) Type {
         return .{ .kind = .record, .class_name = name };
-    }
-
-    pub fn recordTypeAt(name: []const u8, span: SourceSpan) Type {
-        return .{ .kind = .record, .class_name = name, .class_name_span = span };
     }
 
     pub fn inModule(self: Type, module_id: u32) Type {

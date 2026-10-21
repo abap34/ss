@@ -54,22 +54,6 @@ pub fn advanceWidth(allocator: std.mem.Allocator, text: []const u8, font: font_m
     ));
 }
 
-pub fn visualWidth(allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, font_size: f32) !f32 {
-    if (text.len == 0) return 0;
-    const family_z = try allocator.dupeSentinel(u8, font.family, 0);
-    defer allocator.free(family_z);
-    const text_z = try allocator.dupeSentinel(u8, text, 0);
-    defer allocator.free(text_z);
-    return @floatCast(c.ss_text_measure_text_visual_width(
-        text_z.ptr,
-        family_z.ptr,
-        @intCast(font.weight),
-        font_model.styleCode(font.style),
-        font_model.stretchCode(font.stretch),
-        font_size,
-    ));
-}
-
 pub fn layout(
     allocator: std.mem.Allocator,
     text: []const u8,

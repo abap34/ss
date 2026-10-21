@@ -17,11 +17,9 @@ pub const snapshot = @import("analysis/snapshot.zig");
 pub const syntax_hole = @import("syntax/hole.zig");
 pub const types = @import("analysis/types.zig");
 
-pub const VariableInfo = types.TypeInfo;
 pub const ModuleIndex = module_index.Index;
 pub const BuildDocumentStateOptions = pipeline.BuildDocumentStateOptions;
 pub const AnalysisMode = pipeline.AnalysisMode;
-pub const LoadModuleIndexOptions = module_index.LoadOptions;
 pub const ExecutionUnit = execution.ExecutionUnit;
 pub const DependencyEdge = execution.DependencyEdge;
 pub const ExecutionGraph = execution.ExecutionGraph;

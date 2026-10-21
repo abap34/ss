@@ -802,22 +802,6 @@ fn evalMemberValue(
     return try value.value.clone(state.allocator);
 }
 
-fn evalMemberPathPrefix(
-    state: *core.DocumentState,
-    functions: *const core.FunctionMap,
-    base: core.Value,
-    path: []const ast.RecordPathSegment,
-) !core.Value {
-    var current = try base.clone(state.allocator);
-    errdefer current.deinit(state.allocator);
-    for (path) |segment| {
-        const next = try evalMemberValue(state, functions, current, segment.name);
-        current.deinit(state.allocator);
-        current = next;
-    }
-    return current;
-}
-
 fn evalRecord(
     evaluation: *EvalContext,
     page_id: core.NodeId,
@@ -1216,10 +1200,6 @@ const BuiltinContext = struct {
         return try evalCallStringArg(self.evaluation, self.page_id, self.scope, self.env, self.current_origin, call, index);
     }
 
-    pub fn evalPropertyStringArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror![]const u8 {
-        return try resolveValuePropertyString(self.state.allocator, try self.evalExprValue(call.args.items[index]));
-    }
-
     pub fn evalNumberArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!f32 {
         return try evalCallNumberArg(self.evaluation, self.page_id, self.scope, self.env, self.current_origin, call, index);
     }
@@ -1557,10 +1537,6 @@ fn bindUserFunctionValueArgs(
 
 fn resolveValueString(value: core.Value) ![]const u8 {
     return eval_value.string(value);
-}
-
-pub fn resolveValuePropertyString(allocator: std.mem.Allocator, value: core.Value) ![]const u8 {
-    return eval_value.propertyString(allocator, value);
 }
 
 fn resolveValueNumber(value: core.Value) !f32 {

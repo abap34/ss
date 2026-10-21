@@ -10,7 +10,6 @@ const json = utils.json;
 const Anchor = model.Anchor;
 const Constraint = model.Constraint;
 const ConstraintSource = model.ConstraintSource;
-const Node = model.Node;
 const NodeId = model.NodeId;
 const NodeIndex = std.AutoHashMap(NodeId, usize);
 

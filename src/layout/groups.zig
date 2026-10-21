@@ -1,5 +1,3 @@
-const std = @import("std");
-const fields = @import("../core/fields.zig");
 const Workspace = @import("workspace.zig").Workspace;
 const model = @import("model");
 const graph = @import("graph.zig");
@@ -8,7 +6,6 @@ const metrics = @import("metrics.zig");
 const fallback = @import("fallback.zig");
 
 const NodeId = model.NodeId;
-const Node = model.Node;
 const AxisState = model.AxisState;
 const Anchor = model.Anchor;
 const Constraint = model.Constraint;
@@ -36,10 +33,6 @@ fn propagateWidthCapToSubtree(state: *Workspace, node_id: NodeId, max_right: f32
             try propagateWidthCapToSubtree(state, child_id, max_right, measurement_cache);
         }
     }
-}
-
-pub fn propagateTargetedWidths(state: *Workspace, workspace: *const graph.AxisWorkspace) !void {
-    try propagateTargetedWidthsWithCache(state, workspace, null);
 }
 
 pub fn propagateTargetedWidthsCached(state: *Workspace, workspace: *const graph.AxisWorkspace, measurement_cache: *metrics.MeasurementCache) !void {

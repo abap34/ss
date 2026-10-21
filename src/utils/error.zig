@@ -68,10 +68,6 @@ pub const SourceReport = struct {
     context_lines: usize = 2,
 };
 
-pub fn spanFromOrigin(origin: ?model.SourceOrigin) ?source.ByteSpan {
-    return if (origin) |value| value.span else null;
-}
-
 pub fn writeOriginField(object: *json.Object, key: []const u8, origin: ?model.SourceOrigin) !void {
     const value = origin orelse return object.nullField(key);
     var child = try object.objectField(key);
@@ -112,22 +108,6 @@ pub fn print(report: SourceReport) void {
     }
 }
 
-pub fn printNote(message: []const u8) void {
-    if (!shouldPrint(.note)) return;
-    std.debug.print("  note: {s}\n", .{message});
-}
-
-pub fn printLabeledOrigin(text: []const u8, label: []const u8, origin: ?model.SourceOrigin) void {
-    if (!shouldPrint(.note)) return;
-    const span = spanFromOrigin(origin) orelse return;
-    const loc = source.locationAt(text, span.start);
-    printDim();
-    std.debug.print("  {s} from {d}:{d}", .{ label, loc.line, loc.column });
-    printReset();
-    std.debug.print("\n", .{});
-    printExcerpt(text, null, span, .note, label, 0);
-}
-
 fn sourceForLocatedOrigin(
     default_path: []const u8,
     default_source: []const u8,
@@ -153,45 +133,6 @@ fn sourceForLocatedOrigin(
         .source = default_source,
         .line_index = if (state.moduleByPathOrSpec(default_path)) |module| module.line_index else null,
     };
-}
-
-fn printLocatedOrigin(
-    default_path: []const u8,
-    default_source: []const u8,
-    state: anytype,
-    severity: Severity,
-    message: []const u8,
-    origin: model.SourceOrigin,
-) void {
-    const located = origin.location() orelse return;
-    const resolved = sourceForLocatedOrigin(default_path, default_source, state, located);
-    print(.{
-        .path = resolved.path,
-        .source = resolved.source,
-        .line_index = resolved.line_index,
-        .severity = severity,
-        .message = message,
-        .span = located.span,
-    });
-}
-
-fn printLabeledLocatedOrigin(
-    default_path: []const u8,
-    default_source: []const u8,
-    state: anytype,
-    label: []const u8,
-    origin: ?model.SourceOrigin,
-) void {
-    if (!shouldPrint(.note)) return;
-    const origin_text = origin orelse return;
-    const located = origin_text.location() orelse return;
-    const resolved = sourceForLocatedOrigin(default_path, default_source, state, located);
-    const loc = indexedLocation(resolved.source, resolved.line_index, located.span.start);
-    printDim();
-    std.debug.print("  {s} from {s}:{d}:{d}", .{ label, resolved.path, loc.line, loc.column });
-    printReset();
-    std.debug.print("\n", .{});
-    printExcerpt(resolved.source, resolved.line_index, located.span, .note, label, 0);
 }
 
 pub fn printParseError(path: []const u8, text: []const u8, err: anyerror, diagnostic: anytype) void {
@@ -257,20 +198,12 @@ fn printDiagnostics(path: []const u8, text: []const u8, state: anytype, diagnost
     }
 }
 
-fn printContextDiagnosticDetails(state: anytype, diagnostic: anytype) void {
-    printContextDiagnosticDetailsWithSource("", "", state, diagnostic, null);
-}
-
 fn printContextDiagnosticDetailsWithSource(default_path: []const u8, default_source: []const u8, state: anytype, diagnostic: anytype, layouts: anytype) void {
     switch (diagnostic.data) {
         .page_overflow => |data| printPageOverflowBox(state, diagnostic, data, layouts),
         .content_overflow => |data| printContentOverflowBox(default_path, default_source, state, diagnostic, data, layouts),
         else => {},
     }
-}
-
-pub fn irRenderDiagnosticsJson(allocator: std.mem.Allocator, default_path: []const u8, default_source: []const u8, state: anytype) ![]u8 {
-    return irDiagnosticsJson(allocator, default_path, default_source, state, null, .{ .phase = "render" });
 }
 
 pub const DiagnosticsJsonOptions = struct {

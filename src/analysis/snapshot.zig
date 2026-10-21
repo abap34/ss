@@ -1025,10 +1025,6 @@ pub fn sourceForPath(snapshot: *const AnalysisSnapshot, path: []const u8) ?[]con
     return module.source;
 }
 
-pub fn diagnosticsForPath(snapshot: *const AnalysisSnapshot, path: []const u8) []const diagnostics.Diagnostic {
-    return snapshot.diagnostics.itemsForPath(path);
-}
-
 fn cloneDefinitions(allocator: std.mem.Allocator, definitions: []const core.Definition) ![]core.Definition {
     var out = std.ArrayList(core.Definition).empty;
     errdefer {

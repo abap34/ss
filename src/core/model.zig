@@ -109,7 +109,6 @@ pub const NodeKind = enum {
 
 pub const PayloadKind = enum {
     text,
-    code,
     latex,
     image_ref,
     pdf_ref,
@@ -687,16 +686,6 @@ pub const Value = union(ValueTag) {
             else => null,
         };
     }
-
-    pub fn firstId(self: Value) ?NodeId {
-        return switch (self) {
-            .document => |id| id,
-            .page => |id| id,
-            .object => |id| id,
-            .selection => |selection| selection.first(),
-            .none, .anchor, .function, .string, .enum_case, .record, .group, .path, .number, .boolean, .constraints, .void => null,
-        };
-    }
 };
 
 pub const TextStyle = struct {
@@ -922,9 +911,6 @@ pub fn nodeContent(node: *const Node) ?[]const u8 {
 }
 
 pub fn nodeDisplayContent(node: *const Node) []const u8 {
-    if (node.placement) |placement| {
-        if (placement.display == .native) return nodeContent(node).?;
-    }
     return nodeContent(node) orelse "";
 }
 

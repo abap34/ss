@@ -764,11 +764,11 @@ test "syntax spec: bang-marked functions are ordinary references" {
 
 test "syntax spec: qualified callables parse in normal and text block calls" {
     var parsed = try parse(
-        \\import std:themes/default
+        \\import std:text as body
         \\
         \\page Calls
-        \\  default::h2("body")
-        \\  default::h2! <<
+        \\  body::text("body")
+        \\  body::text! <<
         \\block body
         \\>>
         \\end
@@ -776,13 +776,13 @@ test "syntax spec: qualified callables parse in normal and text block calls" {
     );
     defer parsed.deinit();
 
-    const normal_call = try expectCall(parsed.module.pages.items[0].statements.items[0].kind.expr_stmt, "h2", 1);
+    const normal_call = try expectCall(parsed.module.pages.items[0].statements.items[0].kind.expr_stmt, "text", 1);
     try testing.expect(normal_call.callee.isQualified());
-    try testing.expectEqualStrings("default", normal_call.callee.qualifier.?);
+    try testing.expectEqualStrings("body", normal_call.callee.qualifier.?);
 
-    const block_call = try expectCall(parsed.module.pages.items[0].statements.items[1].kind.expr_stmt, "h2!", 1);
+    const block_call = try expectCall(parsed.module.pages.items[0].statements.items[1].kind.expr_stmt, "text!", 1);
     try testing.expect(block_call.callee.isQualified());
-    try testing.expectEqualStrings("default", block_call.callee.qualifier.?);
+    try testing.expectEqualStrings("body", block_call.callee.qualifier.?);
 }
 
 test "syntax spec: incomplete function type is not accepted as a surface type" {
@@ -2247,23 +2247,23 @@ test "syntax spec: constraint updates accept optional replacement relations" {
 test "syntax spec: member expressions stay in the AST" {
     var parsed = try parse(
         \\page Members
-        \\  let target = text("hello")
-        \\  target.content = target.content ++ "!"
+        \\  let target = pagectx()
+        \\  target.layout_h_center_offset = target.layout_h_center_offset + 1
         \\  docctx().layout_h_center_offset = 42
-        \\  let color = target.text_color ?? "black"
-        \\  let has_color = target.text_color?
+        \\  let color = target.background_fill ?? c"#000000"
+        \\  let has_color = target.background_fill?
         \\end
         \\
     );
     defer parsed.deinit();
 
     const statements = parsed.module.pages.items[0].statements.items;
-    const content_set = statements[1].kind.property_set;
-    try expectIdent(content_set.target, "target");
-    try expectPath(content_set.path.items, &.{"content"});
-    const concat = try expectCall(content_set.value, "concat", 2);
-    _ = try expectMember(concat.args.items[0], "content");
-    try expectString(concat.args.items[1], "!");
+    const offset_set = statements[1].kind.property_set;
+    try expectIdent(offset_set.target, "target");
+    try expectPath(offset_set.path.items, &.{"layout_h_center_offset"});
+    const add = try expectCall(offset_set.value, "add", 2);
+    _ = try expectMember(add.args.items[0], "layout_h_center_offset");
+    try expectNumber(add.args.items[1], 1);
 
     const doc_prop = statements[2].kind.property_set;
     _ = try expectCall(doc_prop.target, "docctx", 0);
@@ -2272,24 +2272,25 @@ test "syntax spec: member expressions stay in the AST" {
 
     switch (statements[3].kind.let_binding.expr) {
         .coalesce => |coalesce| {
-            _ = try expectMember(coalesce.target.*, "text_color");
-            try expectString(coalesce.fallback.*, "black");
+            _ = try expectMember(coalesce.target.*, "background_fill");
+            try expectColor(coalesce.fallback.*, "0,0,0");
         },
         else => return error.ExpectedCoalesceExpr,
     }
 
     switch (statements[4].kind.let_binding.expr) {
-        .optional_check => |optional_check| _ = try expectMember(optional_check.target.*, "text_color"),
+        .optional_check => |optional_check| _ = try expectMember(optional_check.target.*, "background_fill"),
         else => return error.ExpectedOptionalCheckExpr,
     }
 }
 
 test "syntax spec: chained member assignment targets the enclosing expression" {
     var parsed = try parse(
+        \\type PageRef { page: Page }
         \\page Members
-        \\  let pipe = make_pipe()
-        \\  pipe.middle.text_color = c"#ff0000"
-        \\  pipe.middle.content = pipe.middle.content ++ "!"
+        \\  let target = PageRef { page = pagectx() }
+        \\  target.page.background_fill = c"#ff0000"
+        \\  target.page.layout_h_center_offset = target.page.layout_h_center_offset + 1
         \\end
         \\
     );
@@ -2297,17 +2298,17 @@ test "syntax spec: chained member assignment targets the enclosing expression" {
 
     const statements = parsed.module.pages.items[0].statements.items;
     const color_set = statements[1].kind.property_set;
-    try expectIdent(color_set.target, "pipe");
-    try expectPath(color_set.path.items, &.{ "middle", "text_color" });
+    try expectIdent(color_set.target, "target");
+    try expectPath(color_set.path.items, &.{ "page", "background_fill" });
     try expectColor(color_set.value, "1,0,0");
 
-    const content_set = statements[2].kind.property_set;
-    try expectIdent(content_set.target, "pipe");
-    try expectPath(content_set.path.items, &.{ "middle", "content" });
-    const concat = try expectCall(content_set.value, "concat", 2);
-    const read_content = try expectMember(concat.args.items[0], "content");
-    _ = try expectMember(read_content.target.*, "middle");
-    try expectString(concat.args.items[1], "!");
+    const offset_set = statements[2].kind.property_set;
+    try expectIdent(offset_set.target, "target");
+    try expectPath(offset_set.path.items, &.{ "page", "layout_h_center_offset" });
+    const add = try expectCall(offset_set.value, "add", 2);
+    const read_offset = try expectMember(add.args.items[0], "layout_h_center_offset");
+    _ = try expectMember(read_offset.target.*, "page");
+    try expectNumber(add.args.items[1], 1);
 }
 
 test "syntax spec: member assignments keep nested property paths" {

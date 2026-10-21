@@ -147,7 +147,7 @@ fn intrinsicWidthWithCache(state: *Workspace, node: *const Node, cache: ?*Measur
 
     if (max_width <= 0) {
         const fonts = textFaces(text_style);
-        const plain_font = plainTextFaceForNode(node, fonts);
+        const plain_font = fonts.normal;
         var lines = source.lineIterator(content);
         while (lines.next()) |line_view| {
             const line = line_view.text(content);
@@ -208,7 +208,7 @@ fn intrinsicHeightWithCache(state: *Workspace, node: *const Node, frame: model.F
                 break :blk markdownBlocksHeight(state, node, cache, text_style, doc.blocks.items, width, 0) + chrome_height;
             }
             const lines = if (shouldWrapNode(state, node))
-                wrappedLineCount(state, node, cache, text_style, content, width)
+                wrappedLineCount(state, cache, text_style, content, width)
             else
                 source.lineCount(content);
             break :blk @as(f32, @floatFromInt(lines)) * text_style.line_height + chrome_height;
@@ -218,7 +218,7 @@ fn intrinsicHeightWithCache(state: *Workspace, node: *const Node, frame: model.F
 
 fn measuredPlainTextHeight(state: *Workspace, node: *const Node, cache: ?*MeasurementCache, style: TextPaint, content: []const u8, width: f32) f32 {
     const lines = if (shouldWrapNode(state, node))
-        wrappedLineCount(state, node, cache, style, content, width)
+        wrappedLineCount(state, cache, style, content, width)
     else
         source.lineCount(content);
     return @as(f32, @floatFromInt(lines)) * style.line_height;
@@ -291,7 +291,7 @@ fn markdownListHeight(state: *Workspace, node: *const Node, cache: ?*Measurement
 
 fn markdownListItemHeight(state: *Workspace, node: *const Node, cache: ?*MeasurementCache, style: TextPaint, kind: markdown.BlockKind, item: *const markdown.ListItem, max_width: f32, list_depth: usize, ordinal: usize) f32 {
     const marker_gap = @max(@as(f32, 8.0), style.font_size * 0.35);
-    const marker_width = markdownListMarkerWidth(state, node, cache, style, kind, list_depth, ordinal);
+    const marker_width = markdownListMarkerWidth(state, cache, style, kind, list_depth, ordinal);
     const content_width = @max(@as(f32, 1.0), max_width - marker_width - marker_gap);
     if (item.blocks.items.len == 0) return style.line_height;
 
@@ -307,9 +307,9 @@ fn markdownListItemHeight(state: *Workspace, node: *const Node, cache: ?*Measure
     return total;
 }
 
-fn markdownListMarkerWidth(state: *Workspace, node: *const Node, cache: ?*MeasurementCache, style: TextPaint, kind: markdown.BlockKind, depth: usize, ordinal: usize) f32 {
+fn markdownListMarkerWidth(state: *Workspace, cache: ?*MeasurementCache, style: TextPaint, kind: markdown.BlockKind, depth: usize, ordinal: usize) f32 {
     const fonts = textFaces(style);
-    const font = plainTextFaceForNode(node, fonts);
+    const font = fonts.normal;
     return switch (kind) {
         .ordered_list => blk: {
             var buffer: [32]u8 = undefined;
@@ -507,8 +507,6 @@ pub fn shouldWrapNode(state: *Workspace, node: *const Node) bool {
     return style_defaults.shouldWrapNode(state.source, node);
 }
 
-const recordFloatProperty = fields.recordFloatProperty;
-
 const positiveRecordFloatProperty = fields.positiveRecordFloatProperty;
 
 const nonNegativeRecordFloatProperty = fields.nonNegativeRecordFloatProperty;
@@ -524,9 +522,9 @@ fn markdownQuoteTextStyle(base: TextPaint) TextPaint {
     return result;
 }
 
-fn wrappedLineCount(state: *Workspace, node: *const Node, cache: ?*MeasurementCache, style: TextPaint, text: []const u8, max_width: f32) usize {
+fn wrappedLineCount(state: *Workspace, cache: ?*MeasurementCache, style: TextPaint, text: []const u8, max_width: f32) usize {
     const fonts = textFaces(style);
-    const plain_font = plainTextFaceForNode(node, fonts);
+    const plain_font = fonts.normal;
     var total: usize = 0;
     var lines = source.lineIterator(text);
     while (lines.next()) |line_view| {
@@ -540,11 +538,6 @@ fn wrappedLineCount(state: *Workspace, node: *const Node, cache: ?*MeasurementCa
         total += measuredWrappedTextLineCount(cache, state.allocator, trimmed, plain_font, style, max_width, textEmojiSpacing(style));
     }
     return total;
-}
-
-fn plainTextFaceForNode(node: *const Node, faces: font_model.TextFaces) font_model.Face {
-    if ((model.nodePayloadKind(node) orelse .text) == .code) return faces.code;
-    return faces.normal;
 }
 
 fn markdownRunSliceVisualLineCount(state: *Workspace, cache: ?*MeasurementCache, style: TextPaint, runs: []const markdown.Run, max_width: f32) usize {

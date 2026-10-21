@@ -522,10 +522,8 @@ fn resolveAsset(state: anytype, node: *const Node, kind: RenderKind) ?AssetPaint
 }
 
 fn isPdfInput(node: *const Node) bool {
-    if (node.placement) |placement| {
-        if (placement.display == .native) return placement.display.native == .pdf;
-    }
-    return std.ascii.eqlIgnoreCase(std.fs.path.extension(model.nodeContent(node) orelse ""), ".pdf");
+    const placement = node.placement orelse return false;
+    return placement.display == .native and placement.display.native == .pdf;
 }
 
 fn resolvedPdfPage(state: anytype, node: *const Node) usize {
@@ -907,36 +905,8 @@ fn parseRecordHorizontalAlign(state: anytype, node: *const Node, key: []const u8
     return parseHorizontalAlign(value);
 }
 
-fn explicitPositiveRecordFloatProperty(node: *const Node, record_key: []const u8, path: []const []const u8) ?f32 {
-    const value = explicitRecordFloatProperty(node, record_key, path) orelse return null;
-    return if (value > 0) value else null;
-}
-
-fn explicitRecordFloatProperty(node: *const Node, record_key: []const u8, path: []const []const u8) ?f32 {
-    const value = explicitPathValue(node, record_key, path) orelse return null;
-    return switch (value) {
-        .number => |number| @floatCast(number),
-        else => null,
-    };
-}
-
 fn parseHorizontalAlign(value: []const u8) ?HorizontalAlign {
     return std.meta.stringToEnum(HorizontalAlign, value);
-}
-
-fn parseFloatProperty(state: anytype, node: *const Node, key: []const u8) ?f32 {
-    return fields.read(state.allocator, state, node, key, &.{}, .number);
-}
-
-fn nonNegativeFloatProperty(state: anytype, node: *const Node, key: []const u8) ?f32 {
-    const value = parseFloatProperty(state, node, key) orelse return null;
-    return if (value >= 0) value else null;
-}
-
-fn parseIntProperty(state: anytype, node: *const Node, key: []const u8) ?u32 {
-    const raw = fields.read(state.allocator, state, node, key, &.{}, .number) orelse return null;
-    if (!std.math.isFinite(raw) or raw < 0) return null;
-    return @intFromFloat(@round(raw));
 }
 
 fn parseColorProperty(state: anytype, node: *const Node, key: []const u8) ?Color {
@@ -949,11 +919,6 @@ fn parseColor(value: []const u8) ?Color {
     return .{ .r = rgb.r, .g = rgb.g, .b = rgb.b };
 }
 
-fn parseDashProperty(state: anytype, node: *const Node, key: []const u8) ?Dash {
-    const value = fields.read(state.allocator, state, node, key, &.{}, .text) orelse return null;
-    return parseDash(value);
-}
-
 fn parseDash(value: []const u8) ?Dash {
     var parts = std.mem.splitScalar(u8, value, ',');
     const on_text = parts.next() orelse return null;
@@ -964,21 +929,4 @@ fn parseDash(value: []const u8) ?Dash {
     if (!std.math.isFinite(on) or !std.math.isFinite(off)) return null;
     if (on <= 0 or off <= 0) return null;
     return .{ .on = on, .off = off };
-}
-
-fn explicitPathValue(node: *const Node, key: []const u8, path: []const []const u8) ?model.Value {
-    var value = model.nodeField(node, key) orelse return null;
-    for (path, 0..) |name, index| {
-        if (value != .record) return null;
-        var found = false;
-        for (value.record.fields.items) |field| {
-            if (!std.mem.eql(u8, field.name, name)) continue;
-            if (index + 1 == path.len and !field.explicit) return null;
-            value = field.value;
-            found = true;
-            break;
-        }
-        if (!found) return null;
-    }
-    return value;
 }

@@ -81,15 +81,6 @@ pub fn resolve(
     };
 }
 
-pub fn resolveUnqualified(
-    comptime Target: type,
-    resolver: anytype,
-    module_id: core.SourceModuleId,
-    name: []const u8,
-) Resolution(Target) {
-    return resolve(Target, resolver, module_id, .{ .name = name });
-}
-
 pub fn parse(text: []const u8) TypeName {
     const delimiter = std.mem.indexOf(u8, text, "::") orelse return .{ .name = text };
     return .{

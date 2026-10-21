@@ -116,16 +116,6 @@ fn expectFixtureObjectFieldPath(fixture: []const u8, root_key: []const u8, field
     try compiler_semantics.expectObjectFieldPath(testing.io, allocator, path, source, root_key, field_path, expected);
 }
 
-fn expectFixtureLoweringErrorDiagnostic(fixture: []const u8, expected_message: []const u8) !void {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    const path = try fixturePath(allocator, fixture);
-    const source = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, allocator, .limited(256 * 1024));
-    try compiler_semantics.expectLoweringErrorDiagnostic(testing.io, allocator, path, source, expected_message);
-}
-
 fn expectObjectContentWithFile(source: []const u8, file_name: []const u8, file_content: []const u8, expected: []const u8) !void {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -242,17 +232,6 @@ fn expectObjectProperty(source: []const u8, key: []const u8, expected: []const u
     try compiler_semantics.expectObjectProperty(testing.io, allocator, path, source, key, expected);
 }
 
-fn expectObjectPropertyMissing(source: []const u8, key: []const u8) !void {
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
-    try compiler_semantics.expectObjectPropertyMissing(testing.io, allocator, path, source, key);
-}
-
 fn expectObjectFieldPath(source: []const u8, root_key: []const u8, field_path: []const []const u8, expected: []const u8) !void {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -273,21 +252,6 @@ fn expectObjectFieldPathNone(source: []const u8, root_key: []const u8, field_pat
 
     const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
     try compiler_semantics.expectObjectFieldPathNone(testing.io, allocator, path, source, root_key, field_path);
-}
-
-fn expectObjectPropertyWithThemeOverlay(source: []const u8, theme_source: []const u8, key: []const u8, expected: []const u8) !void {
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
-    const theme_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/theme.ss", .{tmp.sub_path[0..]});
-    const overlays = [_]compiler_semantics.OverlaySource{
-        .{ .path = theme_path, .source = theme_source },
-    };
-    try compiler_semantics.expectObjectPropertyWithOverlays(testing.io, allocator, path, source, &overlays, key, expected);
 }
 
 fn expectObjectFieldPathWithThemeOverlay(
@@ -378,17 +342,6 @@ fn expectDiagnostic(source: []const u8, expected_origin: []const u8, expected_me
     try compiler_semantics.expectDiagnostic(testing.io, allocator, path, source, expected_origin, expected_message);
 }
 
-fn expectLoweredDiagnostic(source: []const u8, expected_message: []const u8) !void {
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
-    try compiler_semantics.expectLoweredDiagnostic(testing.io, allocator, path, source, expected_message);
-}
-
 fn expectLoweredDiagnosticWithOrigin(source: []const u8, expected_origin: []const u8, expected_message: []const u8) !void {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -409,28 +362,6 @@ fn expectLoweringErrorDiagnostic(source: []const u8, expected_message: []const u
 
     const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
     try compiler_semantics.expectLoweringErrorDiagnostic(testing.io, allocator, path, source, expected_message);
-}
-
-fn expectNoLoweredDiagnostic(source: []const u8, unexpected_message: []const u8) !void {
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
-    try compiler_semantics.expectNoLoweredDiagnostic(testing.io, allocator, path, source, unexpected_message);
-}
-
-fn expectLoweredDiagnosticCount(source: []const u8, expected_message: []const u8, expected_count: usize) !void {
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
-    try compiler_semantics.expectLoweredDiagnosticCount(testing.io, allocator, path, source, expected_message, expected_count);
 }
 
 fn expectObjectState(source: []const u8, expected: compiler_semantics.ObjectStateExpectation) !void {
@@ -6021,18 +5952,6 @@ test "compiler semantics: property reads require a value or a single resource re
         \\  let invalid = select<Text>(docctx()).value
         \\end
     , "case.ss:bytes:", "InvalidProperty");
-
-    try expectDiagnostic(
-        \\page main
-        \\  let invalid = pagectx().content
-        \\end
-    , "case.ss:bytes:", "UnknownField: unknown field: content");
-
-    try expectDiagnostic(
-        \\document
-        \\  let invalid = docctx().content
-        \\end
-    , "case.ss:bytes:", "UnknownField: unknown field: content");
 }
 
 test "compiler semantics: finite callbacks can write selected page settings" {

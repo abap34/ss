@@ -2,7 +2,6 @@ const std = @import("std");
 const core = @import("core");
 const utils = @import("utils");
 
-const json = utils.json;
 const render_emitter = @import("render_emitter");
 const c = @import("pdf_ffi").c;
 const render_ir = @import("render");
@@ -23,7 +22,6 @@ const displayMathSource = inline_layout.displayMathSource;
 const displayMathBlockSize = inline_layout.displayMathBlockSize;
 const spanDecoration = inline_layout.spanDecoration;
 const lineContainsDisplayMath = inline_layout.lineContainsDisplayMath;
-const LatexAsset = artifacts.LatexAsset;
 const hashString = fingerprint.hashString;
 const cache_versions = @import("cache_versions.zig");
 const measurement_store = @import("render_measurements");
@@ -50,8 +48,6 @@ const Line = core.markdown.Line;
 const Block = core.markdown.Block;
 const Run = core.markdown.Run;
 const LatexEngine = core.latex_config.LatexEngine;
-
-const ContentRange = render_text.ContentRange;
 
 const NativePdfError = error{
     ImageDecodeFailed,

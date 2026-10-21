@@ -6,7 +6,6 @@ const context_query = @import("context.zig");
 const import_query = @import("imports.zig");
 const resolve_query = @import("resolve.zig");
 const types = @import("types.zig");
-const utils = @import("utils");
 const fallback = @import("fallback.zig");
 
 pub fn at(

@@ -125,7 +125,6 @@ pub const ModuleGraph = struct {
     }
 };
 
-pub const LoadDiagnostic = @import("diagnostic").Diagnostic;
 pub const LoadDiagnostics = @import("diagnostic").Bag;
 
 pub const LoadOptions = struct {
@@ -771,15 +770,4 @@ fn readModuleFile(
     path: []const u8,
 ) ![]u8 {
     return utils.fs.readFileAllocLimited(io, allocator, path, .limited(max_module_bytes));
-}
-
-fn tryReadModuleFile(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    path: []const u8,
-) !?[]u8 {
-    return readModuleFile(allocator, io, path) catch |err| switch (err) {
-        error.FileNotFound => null,
-        else => err,
-    };
 }

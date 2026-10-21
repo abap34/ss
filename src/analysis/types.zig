@@ -118,14 +118,6 @@ pub fn concatStringLiterals(allocator: std.mem.Allocator, left: ?[]const u8, rig
     return try std.fmt.allocPrint(allocator, "{s}{s}", .{ a, b });
 }
 
-pub fn resolveStringLiteral(env: *const TypeEnv, expr: ast.Expr) ?[]const u8 {
-    return switch (expr) {
-        .string => |literal| literal.text,
-        .ident => |ident| if (env.get(ident.name)) |info| info.string_literal else null,
-        else => null,
-    };
-}
-
 pub fn isPropertyReadTarget(info: TypeInfo) bool {
     return switch (info.ty.kind) {
         .document, .page => true,

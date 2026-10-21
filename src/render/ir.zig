@@ -22,8 +22,6 @@ pub const TextCluster = text_ir.Cluster;
 pub const TextDirection = text_ir.Direction;
 pub const Glyph = text_ir.Glyph;
 pub const FontInstanceId = fonts.Id;
-pub const FontVariation = fonts.Variation;
-pub const FontFeature = fonts.Feature;
 pub const MathConstants = fonts.MathConstants;
 pub const FontInstance = fonts.Instance;
 pub const FontCatalog = fonts.Catalog;
@@ -48,7 +46,6 @@ pub const PdfPageMetadata = resources.PdfPageMetadata;
 pub const PdfBox = resources.PdfBox;
 pub const SemanticId = semantics.Id;
 pub const SemanticRole = semantics.Role;
-pub const SemanticLinkKind = semantics.LinkKind;
 pub const SemanticNode = semantics.Node;
 pub const SemanticTree = semantics.Tree;
 

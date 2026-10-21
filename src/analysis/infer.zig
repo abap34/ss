@@ -7,7 +7,6 @@ const semantic_env = @import("../language/env.zig");
 const registry = @import("../language/registry.zig");
 const contracts = @import("contracts.zig");
 const semantic_types = @import("types.zig");
-const utils = @import("utils");
 const return_facts = @import("return_facts.zig");
 
 const Type = ast.Type;
@@ -1572,23 +1571,6 @@ fn validatePropertySetPath(
         try addUserReportAtSpan(state, origin, first.span, "UnknownField", "unknown field: {s}", .{first.name});
         return error.InvalidType;
     }
-}
-
-fn memberPathPrefixInfo(
-    allocator: std.mem.Allocator,
-    state: ?*core.DocumentState,
-    sema: *const SemanticEnv,
-    initial_info: TypeInfo,
-    path_prefix: []const ast.RecordPathSegment,
-    origin: core.SourceOrigin,
-) !TypeInfo {
-    var current_info = initial_info;
-    for (path_prefix) |segment| {
-        if (segment.name_hole != null) return infoFromHole(segment.name_hole.?);
-        if (current_info.hole != null) return current_info;
-        current_info = try inferMemberInfoFromTargetInfo(allocator, state, sema, current_info, segment.name, segment.span, origin);
-    }
-    return current_info;
 }
 
 fn isPlacedGroup(ty: Type) bool {

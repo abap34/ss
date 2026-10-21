@@ -5,7 +5,6 @@ import { pathToFileURL } from "node:url";
 import {
   assert,
   assertCompletionHas,
-  assertCompletionMissing,
   assertUniqueCompletionLabels,
   functionDefinitionLocation,
   isDefinitionLocation,
@@ -45,7 +44,6 @@ await withLspClient({ cwd: root }, async (client) => {
   assertUniqueCompletionLabels(completion, "global completion");
   assertCompletionHas(completion, "page", "global completion");
   assertCompletionHas(completion, "module_label!", "global completion");
-  assertCompletionMissing(completion, ["place", "text_size"], "global completion");
 
   const hover = await client.request("textDocument/hover", {
     textDocument: { uri },

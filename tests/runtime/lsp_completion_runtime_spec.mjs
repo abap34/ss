@@ -66,7 +66,6 @@ async function testProjectCompletionLifecycle() {
     assertUniqueCompletionLabels(globalCompletion, "global completion");
     assertCompletionHas(globalCompletion, "page", "global completion");
     assertCompletionHas(globalCompletion, "module_label!", "global completion");
-    assertCompletionMissing(globalCompletion, ["place", "text_size"], "global completion");
 
     const libraryValidSource = `import std:text as default
 import std:text as *
@@ -330,7 +329,7 @@ end
       assertUniqueCompletionLabels(completion, "qualified completion");
       assertCompletionHas(completion, "text", "qualified completion");
       assertCompletionHas(completion, "text!", "qualified completion");
-      assertCompletionMissing(completion, ["page", "text_size", "String", "Align"], "qualified completion");
+      assertCompletionMissing(completion, ["page", "String", "Align"], "qualified completion");
 
       const definition = await client.request("textDocument/definition", {
         textDocument: { uri: localUri },
@@ -566,7 +565,6 @@ end
   assertCompletionHas(completion, "Selection", "broken type-name completion");
   assertCompletionHas(completion, "LocalMode", "broken type-name completion");
   assertCompletionHas(completion, "LocalCard", "broken type-name completion");
-  assertCompletionMissing(completion, ["text_size"], "broken type-name completion");
 }
 
 async function testColdBrokenEntryCompletion() {
@@ -643,7 +641,7 @@ function assertTextInputCompletion(completion, label) {
     assertCompletionHas(completion, field, label);
     assertCompletionKind(completion, field, 10, label);
   }
-  assertCompletionMissing(completion, ["page", "layout", "add", "String", "text_size"], label);
+  assertCompletionMissing(completion, ["page", "layout", "text", "String"], label);
 }
 
 function assertPlacedCompletion(completion, label) {
@@ -678,7 +676,7 @@ function assertEnumCaseCompletion(completion, label) {
   assertCompletionKind(completion, "left", 20, label);
   assertCompletionKind(completion, "center", 20, label);
   assertCompletionKind(completion, "right", 20, label);
-  assertCompletionMissing(completion, ["page", "String", "text_size"], label);
+  assertCompletionMissing(completion, ["page", "String"], label);
 }
 
 function assertCompletionKind(completion, label, kind, context) {

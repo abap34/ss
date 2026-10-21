@@ -223,13 +223,6 @@ pub const SemanticEnv = struct {
         return ty.kind == .enum_type;
     }
 
-    pub fn resolveTypeName(self: *const SemanticEnv, module_id: core.SourceModuleId, name: []const u8) ?ast.Type {
-        return switch (type_resolution.resolveUnqualified(void, TypeResolver{ .env = self }, module_id, name)) {
-            .found => |binding| binding.ty,
-            else => null,
-        };
-    }
-
     pub fn resolveTypeNameInContext(self: *const SemanticEnv, module_id: core.SourceModuleId, name: []const u8) ?ast.Type {
         if (module_id == self.module_id) for (self.type_parameters, 0..) |parameter, index| {
             if (std.mem.eql(u8, parameter.name, name)) return ast.Type.parameter(.{
@@ -247,32 +240,6 @@ pub const SemanticEnv = struct {
     fn declarationIndex(self: *const SemanticEnv) ?*const declarations.DeclarationIndex {
         if (self.declarations) |index| return index;
         return if (self.state) |state| state.declaration_index else null;
-    }
-
-    pub fn callParamName(self: *const SemanticEnv, call_name: []const u8, index: usize) ?[]const u8 {
-        if (self.function(call_name)) |func| {
-            if (index < func.params.items.len) return func.params.items[index].name;
-            return null;
-        }
-        if (self.primitive(call_name)) |descriptor| {
-            if (descriptor.arg_names.len == 0) return null;
-            return if (index < descriptor.arg_names.len) descriptor.arg_names[index] else descriptor.arg_names[descriptor.arg_names.len - 1];
-        }
-        return null;
-    }
-
-    pub fn callCalleeParamName(self: *const SemanticEnv, callee: ast.CallableName, index: usize) ?[]const u8 {
-        if (callee.is_operator) {
-            const descriptor = registry.lookupSyntaxCall(callee.name) orelse return null;
-            if (descriptor.arg_names.len == 0) return null;
-            return descriptor.arg_names[@min(index, descriptor.arg_names.len - 1)];
-        }
-        if (self.resolvedFunction(callee)) |resolved| {
-            if (index < resolved.decl.params.items.len) return resolved.decl.params.items[index].name;
-            return null;
-        }
-        if (!callee.isQualified()) return self.callParamName(callee.name, index);
-        return null;
     }
 
     fn resolveAliasInModule(self: *const SemanticEnv, module_id: core.SourceModuleId, alias: []const u8) ?core.SourceModuleId {

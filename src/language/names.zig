@@ -14,10 +14,6 @@ pub fn hasBangSuffix(text: []const u8) bool {
     return text.len > 0 and text[text.len - 1] == '!';
 }
 
-pub fn isCallableNameChar(byte: u8) bool {
-    return std.ascii.isAlphanumeric(byte) or byte == '_' or byte == '!';
-}
-
 pub fn isKeyword(text: []const u8) bool {
     return scanner.isKeyword(text);
 }

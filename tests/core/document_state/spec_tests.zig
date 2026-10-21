@@ -959,12 +959,6 @@ fn addValidationUserReport(state: *core.DocumentState, origin: core.SourceOrigin
     });
 }
 
-fn expectNoDiagnosticCode(state: *core.DocumentState, code: []const u8) !void {
-    for (state.diagnostics.entries.items) |diagnostic| {
-        if (diagnostic.data == .user_report) try testing.expect(!std.mem.eql(u8, diagnostic.data.user_report.code, code));
-    }
-}
-
 fn expectDiagnosticCode(state: *core.DocumentState, code: []const u8) !void {
     for (state.diagnostics.entries.items) |diagnostic| {
         switch (diagnostic.data) {

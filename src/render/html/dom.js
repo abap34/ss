@@ -27,13 +27,6 @@ export function setRect(node, rect) {
   });
 }
 
-export function color(value) {
-  if (!Array.isArray(value)) return "transparent";
-  return `rgb(${Math.round(value[0] * 255)} ${Math.round(value[1] * 255)} ${
-    Math.round(value[2] * 255)
-  })`;
-}
-
 export function svgPoint(svg, event) {
   const rect = svg.getBoundingClientRect();
   const viewBox = svg.viewBox.baseVal;

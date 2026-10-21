@@ -2,10 +2,6 @@ const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
 
-pub fn functionRefFor(allocator: std.mem.Allocator, func: ast.FunctionDecl) !core.FunctionRef {
-    return functionRefForInModule(allocator, 0, func);
-}
-
 pub fn functionRefForInModule(allocator: std.mem.Allocator, module_id: core.SourceModuleId, func: ast.FunctionDecl) !core.FunctionRef {
     _ = allocator;
     return .{

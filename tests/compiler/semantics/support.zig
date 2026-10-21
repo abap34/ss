@@ -154,18 +154,6 @@ pub fn expectObjectProperty(io: std.Io, allocator: std.mem.Allocator, path: []co
     return error.ExpectedObjectPropertyMissing;
 }
 
-pub fn expectObjectPropertyMissing(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8, key: []const u8) !void {
-    var state = try buildFinalizedDocumentState(io, allocator, path, source);
-    defer state.deinit();
-
-    for (state.graph.nodes.items) |node| {
-        if (node.kind != .object) continue;
-        for (node.fields.items) |field| {
-            if (std.mem.eql(u8, field.key, key)) return error.ExpectedObjectPropertyAbsent;
-        }
-    }
-}
-
 pub fn expectObjectFieldPath(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -232,33 +220,6 @@ pub fn expectObjectFieldPathWithOverlays(
         const actual = try core.value_text.propertyString(allocator, value_at_path);
         defer if (core.value_text.propertyStringNeedsFree(value_at_path)) allocator.free(actual);
         if (std.mem.eql(u8, actual, expected)) return;
-    }
-    return error.ExpectedObjectPropertyMissing;
-}
-
-pub fn expectObjectPropertyWithOverlays(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    path: []const u8,
-    source: []const u8,
-    overlays: []const OverlaySource,
-    key: []const u8,
-    expected: []const u8,
-) !void {
-    var state = try buildFinalizedDocumentStateWithOverlays(io, allocator, path, source, overlays);
-    defer state.deinit();
-
-    for (state.graph.nodes.items) |node| {
-        if (node.kind != .object) continue;
-        for (node.fields.items) |field| {
-            if (!std.mem.eql(u8, field.key, key)) continue;
-            const value = core.value_text.propertyString(allocator, field.value) catch |err| switch (err) {
-                error.ExpectedStringArgument => continue,
-                else => return err,
-            };
-            defer if (core.value_text.propertyStringNeedsFree(field.value)) allocator.free(value);
-            if (std.mem.eql(u8, value, expected)) return;
-        }
     }
     return error.ExpectedObjectPropertyMissing;
 }
@@ -450,44 +411,6 @@ pub fn expectOverlayDiagnostic(
     return error.ExpectedDiagnosticMissing;
 }
 
-pub fn expectDiagnosticWithOverlays(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    path: []const u8,
-    source: []const u8,
-    overlays: []const OverlaySource,
-    expected_origin: []const u8,
-    expected_message: []const u8,
-) !void {
-    const asset_base_dir = std.fs.path.dirname(path) orelse ".";
-    var overlay = module_loader.SourceOverlay.init(allocator);
-    defer overlay.deinit();
-    for (overlays) |item| {
-        try overlay.put(item.path, item.source);
-    }
-
-    var source_buf = try allocator.dupe(u8, source);
-    var program = try syntax.parseWithSourceName(allocator, source_buf, path);
-    var index = try analysis.loadModuleIndex(allocator, io, asset_base_dir, program, .{ .overlay = &overlay });
-    defer index.deinit();
-
-    var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{});
-    defer state.deinit();
-
-    analysis.analyzeDocumentState(allocator, &state) catch {};
-
-    for (state.diagnostics.entries.items) |diagnostic| {
-        const origin = diagnostic.origin orelse continue;
-        const origin_text = try std.fmt.allocPrint(allocator, "{f}", .{origin});
-        defer allocator.free(origin_text);
-        if (std.mem.indexOf(u8, origin_text, expected_origin) == null) continue;
-        const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
-        defer allocator.free(message);
-        if (std.mem.indexOf(u8, message, expected_message) != null) return;
-    }
-    return error.ExpectedDiagnosticMissing;
-}
-
 pub fn buildFinalizedDocumentState(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8) !core.DocumentState {
     const asset_base_dir = std.fs.path.dirname(path) orelse ".";
     var source_buf = try allocator.dupe(u8, source);
@@ -606,30 +529,6 @@ pub fn expectLoweringErrorDiagnostic(
     return error.ExpectedDiagnosticMissing;
 }
 
-pub fn expectLoweredDiagnostic(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    path: []const u8,
-    source: []const u8,
-    expected_message: []const u8,
-) !void {
-    var state = try buildFinalizedDocumentState(io, allocator, path, source);
-    defer state.deinit();
-    var layouts = try lowering.solveDocument(&state, null, .{});
-    defer layouts.deinit(allocator);
-    var diagnostics = std.ArrayList(core.Diagnostic).empty;
-    defer diagnostics.deinit(allocator);
-    try diagnostics.appendSlice(allocator, state.diagnostics.entries.items);
-    for (layouts.pages) |page| try diagnostics.appendSlice(allocator, page.diagnostics);
-
-    for (diagnostics.items) |diagnostic| {
-        const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
-        defer allocator.free(message);
-        if (std.mem.indexOf(u8, message, expected_message) != null) return;
-    }
-    return error.ExpectedDiagnosticMissing;
-}
-
 pub fn expectLoweredDiagnosticWithOrigin(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -657,57 +556,6 @@ pub fn expectLoweredDiagnosticWithOrigin(
         if (std.mem.indexOf(u8, message, expected_message) != null) return;
     }
     return error.ExpectedDiagnosticMissing;
-}
-
-pub fn expectNoLoweredDiagnostic(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    path: []const u8,
-    source: []const u8,
-    unexpected_message: []const u8,
-) !void {
-    var state = try buildFinalizedDocumentState(io, allocator, path, source);
-    defer state.deinit();
-    var layouts = try lowering.solveDocument(&state, null, .{});
-    defer layouts.deinit(allocator);
-    var diagnostics = std.ArrayList(core.Diagnostic).empty;
-    defer diagnostics.deinit(allocator);
-    try diagnostics.appendSlice(allocator, state.diagnostics.entries.items);
-    for (layouts.pages) |page| try diagnostics.appendSlice(allocator, page.diagnostics);
-
-    for (diagnostics.items) |diagnostic| {
-        const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
-        defer allocator.free(message);
-        if (std.mem.indexOf(u8, message, unexpected_message) != null) {
-            return error.UnexpectedDiagnosticPresent;
-        }
-    }
-}
-
-pub fn expectLoweredDiagnosticCount(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    path: []const u8,
-    source: []const u8,
-    expected_message: []const u8,
-    expected_count: usize,
-) !void {
-    var state = try buildFinalizedDocumentState(io, allocator, path, source);
-    defer state.deinit();
-    var layouts = try lowering.solveDocument(&state, null, .{});
-    defer layouts.deinit(allocator);
-    var diagnostics = std.ArrayList(core.Diagnostic).empty;
-    defer diagnostics.deinit(allocator);
-    try diagnostics.appendSlice(allocator, state.diagnostics.entries.items);
-    for (layouts.pages) |page| try diagnostics.appendSlice(allocator, page.diagnostics);
-
-    var count: usize = 0;
-    for (diagnostics.items) |diagnostic| {
-        const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
-        defer allocator.free(message);
-        if (std.mem.indexOf(u8, message, expected_message) != null) count += 1;
-    }
-    try std.testing.expectEqual(expected_count, count);
 }
 
 pub fn expectObjectState(

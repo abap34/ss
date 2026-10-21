@@ -418,8 +418,6 @@ function ensureFrame(map, state) {
     frame = {
       id: state.id,
       name: state.name || String(state.id),
-      role: state.role || "",
-      kind: state.kind || "",
       x: null,
       y: null,
       width: null,
@@ -430,8 +428,6 @@ function ensureFrame(map, state) {
     map.set(state.id, frame);
   }
   frame.name = state.name || frame.name;
-  frame.role = state.role || frame.role;
-  frame.kind = state.kind || frame.kind;
   return frame;
 }
 
@@ -516,10 +512,6 @@ function drawLabel(ctx, rect, text) {
 function frameCenter(page, frame) {
   const rect = canvasPoint(page, frame);
   return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-}
-
-function endpointAxis(anchor) {
-  return anchor === "left" || anchor === "right" || anchor === "center_x" ? "horizontal" : "vertical";
 }
 
 function pageAnchorValue(page, endpoint) {

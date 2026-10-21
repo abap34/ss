@@ -35,10 +35,6 @@ const VisualFrame = struct {
     height: f32,
 };
 
-pub fn collectPageDiagnostics(state: *Workspace, page_id: NodeId, child_ids: []const NodeId) !void {
-    try collectPageDiagnosticsWithCache(state, page_id, child_ids, null);
-}
-
 pub fn collectPageDiagnosticsCached(state: *Workspace, page_id: NodeId, child_ids: []const NodeId, measurement_cache: *metrics.MeasurementCache) !void {
     try collectPageDiagnosticsWithCache(state, page_id, child_ids, measurement_cache);
 }

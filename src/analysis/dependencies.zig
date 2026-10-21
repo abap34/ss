@@ -165,10 +165,6 @@ pub const AccessSummaryFormatOptions = struct {
     pages_scope_displays: []const ScopeDisplay = &.{},
 };
 
-pub fn formatAccessSummary(allocator: std.mem.Allocator, summary: AccessSummary) ![]u8 {
-    return formatAccessSummaryWithOptions(allocator, summary, .{});
-}
-
 pub fn formatAccessSummaryWithOptions(
     allocator: std.mem.Allocator,
     summary: AccessSummary,
@@ -381,12 +377,6 @@ fn appendObjectIdentity(
     try appendScope(allocator, out, identity.scope, options.variable_scope_displays);
     try out.append(allocator, '.');
     try out.appendSlice(allocator, identity.name);
-}
-
-fn mergeOptionalNames(left: ?[]const u8, right: ?[]const u8) ?[]const u8 {
-    if (left == null or right == null) return null;
-    if (std.mem.eql(u8, left.?, right.?)) return left;
-    return null;
 }
 
 fn appendUnique(allocator: std.mem.Allocator, list: *std.ArrayList(Resource), resource: Resource) !void {
@@ -655,10 +645,6 @@ pub const Analyzer = struct {
 
     pub fn page(self: *Analyzer, page_decl: ast.PageDecl) anyerror!AccessSummary {
         return try self.analyzeStatements(page_decl.statements.items, .scheduled);
-    }
-
-    pub fn functionBody(self: *Analyzer, func: ast.FunctionDecl) anyerror!AccessSummary {
-        return try self.withFunctionLocals(func, AccessSummary.init(self.allocator));
     }
 
     pub fn statement(self: *Analyzer, stmt: ast.Statement) anyerror!AccessSummary {
@@ -1813,18 +1799,6 @@ pub const Analyzer = struct {
         return summary;
     }
 
-    fn withFunctionLocals(self: *Analyzer, func: ast.FunctionDecl, initial_summary: AccessSummary) !AccessSummary {
-        var summary = initial_summary;
-        errdefer summary.deinit();
-        var state = try self.pushLocalFacts();
-        defer state.restore();
-        try self.bindLocalParams(func.params.items);
-        var body = try self.analyzeStatements(func.statements.items, .local);
-        defer body.deinit();
-        try summary.merge(body);
-        return summary;
-    }
-
     const PropertyMemberRead = struct {
         base: ast.Expr,
         target: PropertyTarget,
@@ -2953,8 +2927,4 @@ fn ownString(self: *Analyzer, value: []const u8) ![]const u8 {
     errdefer self.allocator.free(value);
     try self.owned_strings.append(self.allocator, value);
     return value;
-}
-
-pub fn callableNamePlacesObjects(name: []const u8) bool {
-    return std.mem.endsWith(u8, name, "!");
 }

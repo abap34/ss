@@ -12,9 +12,7 @@ const infer = @import("infer.zig");
 const analysis_index = @import("index.zig");
 const execution = @import("execution.zig");
 const semantics = @import("semantics.zig");
-const syntax = @import("../syntax/parse.zig");
 const syntax_hole = @import("../syntax/hole.zig");
-const type_defs = @import("../language/type_defs.zig");
 const utils = @import("utils");
 const SemanticEnv = semantic_env.SemanticEnv;
 

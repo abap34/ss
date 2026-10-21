@@ -17,7 +17,6 @@ const Selection = model.Selection;
 const SelectionItemTag = model.SelectionItemTag;
 const ValueTag = model.ValueTag;
 const Value = model.Value;
-const FunctionRef = model.FunctionRef;
 const Query = model.Query;
 
 const Diagnostic = model.Diagnostic;

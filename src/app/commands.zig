@@ -40,10 +40,6 @@ pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, request: types.Source
     return try pipeline.buildFile(io, allocator, request, progress);
 }
 
-pub fn buildTypedFile(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, progress: ?*Progress) !core.DocumentState {
-    return try pipeline.buildTypedFile(io, allocator, request, progress);
-}
-
 pub fn checkFile(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, progress: ?*Progress) !void {
     var state = try buildFile(io, allocator, request, progress);
     defer state.deinit();

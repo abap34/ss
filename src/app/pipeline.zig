@@ -64,12 +64,6 @@ pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, request: types.Source
     return .{ .state = analyzed.takeState(), .layouts = layouts };
 }
 
-pub fn buildTypedFile(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, progress: ?*Progress) !core.DocumentState {
-    var analyzed = try analyzeFile(io, allocator, request, progress, .diagnostics_only);
-    errdefer analyzed.deinit();
-    return analyzed.takeState();
-}
-
 pub fn analyzeFile(
     io: std.Io,
     allocator: std.mem.Allocator,

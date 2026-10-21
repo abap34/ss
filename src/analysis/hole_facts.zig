@@ -3,7 +3,6 @@ const ast = @import("ast");
 const core = @import("core");
 
 const declarations = @import("../language/declarations.zig");
-const registry = @import("../language/registry.zig");
 const semantic_env = @import("../language/env.zig");
 const syntax_hole = @import("../syntax/hole.zig");
 

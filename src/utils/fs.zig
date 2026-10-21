@@ -226,12 +226,6 @@ pub fn readImageDimensions(allocator: std.mem.Allocator, path: []const u8) !Imag
     return error.UnsupportedImageFormat;
 }
 
-pub fn readPdfDimensions(allocator: std.mem.Allocator, path: []const u8) !ImageDimensions {
-    var buf: [HEADER_BUF_SIZE]u8 = undefined;
-    const bytes = try readHeaderBytes(allocator, path, &buf, error.InvalidPdfAsset);
-    return parsePdfDimensions(bytes) orelse error.UnsupportedPdfFormat;
-}
-
 fn parsePngDimensions(bytes: []const u8) ?ImageDimensions {
     if (bytes.len < 24) return null;
     const signature = [_]u8{ 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n' };
@@ -360,33 +354,6 @@ fn parseSvgViewBox(value: []const u8) ?ImageDimensions {
     _ = std.fmt.parseFloat(f32, parts.next() orelse return null) catch return null;
     const width = std.fmt.parseFloat(f32, parts.next() orelse return null) catch return null;
     const height = std.fmt.parseFloat(f32, parts.next() orelse return null) catch return null;
-    if (width <= 0 or height <= 0) return null;
-    return .{ .width = width, .height = height };
-}
-
-fn parsePdfDimensions(bytes: []const u8) ?ImageDimensions {
-    const needle = "/MediaBox";
-    const start = std.mem.indexOf(u8, bytes, needle) orelse return null;
-    var i = start + needle.len;
-    while (i < bytes.len and std.ascii.isWhitespace(bytes[i])) : (i += 1) {}
-    if (i >= bytes.len or bytes[i] != '[') return null;
-    i += 1;
-
-    var values: [4]f32 = undefined;
-    var count: usize = 0;
-    while (count < values.len and i < bytes.len) {
-        while (i < bytes.len and (std.ascii.isWhitespace(bytes[i]) or bytes[i] == '[')) : (i += 1) {}
-        if (i >= bytes.len or bytes[i] == ']') break;
-        const token_start = i;
-        while (i < bytes.len and !std.ascii.isWhitespace(bytes[i]) and bytes[i] != ']') : (i += 1) {}
-        if (token_start == i) break;
-        values[count] = std.fmt.parseFloat(f32, bytes[token_start..i]) catch return null;
-        count += 1;
-    }
-    if (count != 4) return null;
-
-    const width = @abs(values[2] - values[0]);
-    const height = @abs(values[3] - values[1]);
     if (width <= 0 or height <= 0) return null;
     return .{ .width = width, .height = height };
 }

@@ -210,12 +210,6 @@ fn writeFieldsField(allocator: std.mem.Allocator, object: *json.Object, fields: 
     try array.end();
 }
 
-fn writeStringArrayField(object: *json.Object, name: []const u8, values: []const []const u8) !void {
-    var array = try object.arrayField(name);
-    for (values) |value| try array.stringItem(value);
-    try array.end();
-}
-
 fn writeEnumCasesField(object: *json.Object, name: []const u8, values: anytype) !void {
     var array = try object.arrayField(name);
     for (values) |value| try array.stringItem(value.name);

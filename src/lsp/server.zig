@@ -38,7 +38,6 @@ const DiagnosticSet = lsp_diagnostics.DiagnosticSet;
 const respond = protocol.respond;
 const respondError = protocol.respondError;
 const sendNotification = protocol.sendNotification;
-const appendJsonValue = protocol.appendJsonValue;
 const appendJsonString = protocol.appendJsonString;
 const stringField = protocol.stringField;
 const intField = protocol.intField;

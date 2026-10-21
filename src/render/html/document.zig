@@ -106,21 +106,6 @@ pub const Runtime = struct {
     start_presentation: bool = false,
 };
 
-pub fn generate(
-    allocator: std.mem.Allocator,
-    ir: *const render.Ir,
-    assets: resources.References,
-    style_sheet_url: []const u8,
-    runtime: Runtime,
-) ![]u8 {
-    var allocating = std.Io.Writer.Allocating.init(allocator);
-    defer allocating.deinit();
-    try write(allocator, &allocating.writer, ir, assets, style_sheet_url, runtime);
-    var out = allocating.toArrayList();
-    defer out.deinit(allocator);
-    return try out.toOwnedSlice(allocator);
-}
-
 pub fn write(
     allocator: std.mem.Allocator,
     out: *std.Io.Writer,

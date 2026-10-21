@@ -7,7 +7,6 @@ const Axis = model.Axis;
 const Constraint = model.Constraint;
 const ConstraintSource = model.ConstraintSource;
 const Diagnostic = model.Diagnostic;
-const DiagnosticPhase = model.DiagnosticPhase;
 const ConstraintFailure = model.ConstraintFailure;
 const ConstraintFailureKind = model.ConstraintFailureKind;
 const ConstraintFailureReason = model.ConstraintFailureReason;
@@ -102,19 +101,6 @@ pub const DocumentDiagnostics = struct {
     pub fn clearDiagnostics(self: *DocumentDiagnostics, allocator: Allocator) void {
         for (self.entries.items) |*diagnostic| diagnostic.deinit(allocator);
         self.entries.clearRetainingCapacity();
-    }
-
-    pub fn clearDiagnosticsForPhase(self: *DocumentDiagnostics, allocator: Allocator, phase: DiagnosticPhase) void {
-        var write_index: usize = 0;
-        for (self.entries.items) |*diagnostic| {
-            if (diagnostic.phase == phase) {
-                diagnostic.deinit(allocator);
-                continue;
-            }
-            self.entries.items[write_index] = diagnostic.*;
-            write_index += 1;
-        }
-        self.entries.items.len = write_index;
     }
 
     pub fn addDiagnostic(self: *DocumentDiagnostics, allocator: Allocator, diagnostic: Diagnostic) !void {

@@ -5,7 +5,6 @@ const utils = @import("utils");
 const partition = @import("partition.zig");
 
 const NodeId = model.NodeId;
-const Node = model.Node;
 const Axis = model.Axis;
 const AxisState = model.AxisState;
 const Anchor = model.Anchor;
@@ -103,14 +102,6 @@ pub const PropagationTrace = struct {
             try copied.appendOwnedLineWithSource(allocator, copied_line, copied_source);
         }
         return copied;
-    }
-
-    pub fn appendLine(self: *PropagationTrace, allocator: std.mem.Allocator, line: []const u8) !void {
-        const copied = try allocator.dupe(u8, line);
-        errdefer allocator.free(copied);
-        try self.lines.append(allocator, copied);
-        errdefer _ = self.lines.pop();
-        try self.line_sources.append(allocator, null);
     }
 
     pub fn appendOwnedLine(self: *PropagationTrace, allocator: std.mem.Allocator, line: []const u8) !void {

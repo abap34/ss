@@ -159,17 +159,17 @@ test "analysis queries: definition fallback still honors cancellation" {
     }
 }
 
-test "analysis completion: composition remains independent of lexical function names" {
+test "analysis completion: composition members coexist with lexical bindings" {
     var case = try CompletionCase.init(
         \\import std:layout as layout
-        \\const hjoin: Number = 9
-        \\fn vjoin(a: Text, b: Text) -> Number
+        \\const spacing: Number = 9
+        \\fn measure(a: Text, b: Text) -> Number
         \\  return 1
         \\end
         \\page main
         \\  let a = text("A")
         \\  let b = text("B")
-        \\  let hjoin = (left: Text, right: Text) |-> 1
+        \\  let spacing = (left: Text, right: Text) |-> 1
         \\  let combined = a || b
         \\  let label = (a || b).gap
         \\end
@@ -179,16 +179,16 @@ test "analysis completion: composition remains independent of lexical function n
     const snapshot = try case.snapshotFor(case.source);
     try testing.expect(!snapshot.diagnostics.hasErrors());
     const module = snapshot.moduleForPath(case.path) orelse return error.ExpectedModule;
-    const constant = resolve_query.valueBinding(null, snapshot, module.id, "hjoin", null, .constant) orelse return error.ExpectedConstant;
+    const constant = resolve_query.valueBinding(null, snapshot, module.id, "spacing", null, .constant) orelse return error.ExpectedConstant;
     try testing.expectEqual(module.id, constant.module_id);
     try testing.expectEqual(.number, constant.value_type.kind);
-    const explicit_function = resolve_query.valueBinding(null, snapshot, module.id, "vjoin", null, .function) orelse return error.ExpectedFunction;
+    const explicit_function = resolve_query.valueBinding(null, snapshot, module.id, "measure", null, .function) orelse return error.ExpectedFunction;
     try testing.expectEqual(module.id, explicit_function.module_id);
     try testing.expectEqual(.number, explicit_function.value_type.kind);
-    try testing.expect(resolve_query.valueBinding(null, snapshot, module.id, "hjoin", "layout", .function) == null);
-    try testing.expect(resolve_query.valueBinding(null, snapshot, module.id, "hjoin", "std:missing", .function) == null);
+    try testing.expect(resolve_query.valueBinding(null, snapshot, module.id, "spacing", "layout", .function) == null);
+    try testing.expect(resolve_query.valueBinding(null, snapshot, module.id, "spacing", "std:missing", .function) == null);
     const expired_budget = query_types.QueryBudget.start(.{ .budget_ms = 0 });
-    try testing.expect(resolve_query.valueBinding(expired_budget, snapshot, module.id, "hjoin", "std:layout", .function) == null);
+    try testing.expect(resolve_query.valueBinding(expired_budget, snapshot, module.id, "spacing", "std:layout", .function) == null);
 
     var result = try snapshot_api.completeAt(case.allocator, snapshot, .{
         .path = case.path,
@@ -267,7 +267,6 @@ test "analysis completion: normal position follows import visibility" {
     try expectUnique(result);
     try expectHas(result, "page");
     try expectMissing(result, "link");
-    try expectMissing(result, "text_size");
 }
 
 test "analysis completion: visible function prefers imported module definitions over re-exported names" {
@@ -375,7 +374,6 @@ test "analysis completion: normal positions include builtin and source type name
     try testing.expect(type_resolution.isBuiltinTypeName("Selection"));
     try expectHas(result, "SourceOnly");
     try expectHas(result, "SourceCard");
-    try expectMissing(result, "text_size");
 }
 
 test "analysis completion: enum type dot completes cases" {

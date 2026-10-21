@@ -674,12 +674,6 @@ const Parser = struct {
         return expr;
     }
 
-    fn peekKeyword(self: *Parser, keyword: []const u8) !bool {
-        const saved = self.pos;
-        defer self.pos = saved;
-        return try self.consumeKeyword(keyword);
-    }
-
     fn parseTypeAnnotation(self: *Parser) anyerror!ast.Type {
         if (try self.parseTypeHoleAtBoundary()) |ty| return ty;
         var ty = try self.parseFunctionTypeAnnotation();
@@ -830,10 +824,6 @@ const Parser = struct {
         const class_name = self.source[name.span.start..name.span.end];
         self.allocator.free(name.text);
         return try self.parseNamedTypeArguments(ast.Type.unresolvedNameAt(class_name, name.span));
-    }
-
-    fn parseQualifiedTypeName(self: *Parser) anyerror![]const u8 {
-        return (try self.parseQualifiedTypeNameWithSpan()).text;
     }
 
     fn parseQualifiedTypeNameWithSpan(self: *Parser) anyerror!ParsedName {
@@ -2325,18 +2315,6 @@ const Parser = struct {
         return .{ .callee = callee, .args = args };
     }
 
-    fn makeCall3(self: *Parser, name: []const u8, arg0: Expr, arg1: Expr, arg2: Expr) !ast.CallExpr {
-        var callee = try self.makeSyntheticCallableName(name);
-        errdefer callee.deinit(self.allocator);
-        var args = std.ArrayList(Expr).empty;
-        errdefer args.deinit(self.allocator);
-        try args.ensureTotalCapacity(self.allocator, 3);
-        args.appendAssumeCapacity(arg0);
-        args.appendAssumeCapacity(arg1);
-        args.appendAssumeCapacity(arg2);
-        return .{ .callee = callee, .args = args };
-    }
-
     fn makeSyntheticCallableName(self: *Parser, name: []const u8) !ast.CallableName {
         return .{ .name = try self.allocator.dupe(u8, name), .is_operator = true };
     }
@@ -2478,20 +2456,6 @@ const Parser = struct {
         return .{ .call = try self.makeCall1("neg", expr) };
     }
 
-    fn parseTextArg(self: *Parser) ![]const u8 {
-        source.skipInlineSpaces(self.source, &self.pos);
-        if (source.startsWithAt(self.source, self.pos, "<<")) return self.parseChevronBlockString();
-        if (!self.eof() and (self.source[self.pos] == '"' or source.startsWithAt(self.source, self.pos, "\"\"\""))) {
-            return self.parseString();
-        }
-        return self.parseLineText();
-    }
-
-    fn parseLineText(self: *Parser) ![]const u8 {
-        const literal = try self.parseLineTextLiteral();
-        return literal.text;
-    }
-
     fn parseLineTextLiteral(self: *Parser) !ast.StringLiteral {
         source.skipInlineSpaces(self.source, &self.pos);
         const start = self.pos;
@@ -2503,11 +2467,6 @@ const Parser = struct {
             .text = try self.allocator.dupe(u8, raw),
             .source_span = .{ .start = start, .end = start + raw.len },
         };
-    }
-
-    fn parseChevronBlockString(self: *Parser) ![]const u8 {
-        const literal = try self.parseChevronBlockStringLiteral();
-        return literal.text;
     }
 
     fn parseChevronBlockStringLiteral(self: *Parser) !ast.StringLiteral {
@@ -2558,16 +2517,6 @@ const Parser = struct {
         if (start == self.pos) return self.fail(error.ExpectedNumber);
         const token = self.source[start..self.pos];
         return std.fmt.parseFloat(f32, token);
-    }
-
-    fn parseSignedNumber(self: *Parser) !f32 {
-        source.skipTriviaFrom(self.source, &self.pos);
-        var sign: f32 = 1;
-        if (!self.eof() and self.source[self.pos] == '-') {
-            sign = -1;
-            self.pos += 1;
-        }
-        return sign * try self.parseNumber();
     }
 
     fn startsNumberLiteral(self: *Parser) bool {
@@ -2650,10 +2599,6 @@ const Parser = struct {
 
     fn parseIdentifierWithSpan(self: *Parser) !ParsedName {
         return self.parseNameWithSpan(.identifier);
-    }
-
-    fn parseCallableDeclName(self: *Parser) ![]const u8 {
-        return (try self.parseCallableDeclNameWithSpan()).text;
     }
 
     fn parseCallableDeclNameWithSpan(self: *Parser) !ParsedName {
@@ -2873,21 +2818,6 @@ const Parser = struct {
         return probe < self.source.len and self.source[probe] == '.';
     }
 
-    fn peekPropertyAssignment(self: *Parser) bool {
-        var probe = self.pos;
-        source.skipTriviaFrom(self.source, &probe);
-        if (!scanner.scanIdentifier(self.source, &probe)) return false;
-        while (probe < self.source.len and source.isInlineSpace(self.source[probe])) probe += 1;
-        if (probe >= self.source.len or self.source[probe] != '.') return false;
-        probe += 1;
-        while (probe < self.source.len and source.isInlineSpace(self.source[probe])) probe += 1;
-        if (!scanner.scanIdentifier(self.source, &probe)) return false;
-        source.skipTriviaFrom(self.source, &probe);
-        if (probe >= self.source.len or self.source[probe] != '=') return false;
-        if (probe + 1 < self.source.len and self.source[probe + 1] == '=') return false;
-        return true;
-    }
-
     fn peekSimpleAssignment(self: *Parser) bool {
         var probe = self.pos;
         source.skipTriviaFrom(self.source, &probe);
@@ -3003,11 +2933,6 @@ fn statementReturns(stmt: Statement) bool {
     };
 }
 
-fn normalizeBlockString(raw: []const u8) []const u8 {
-    const bounds = normalizedBlockStringBounds(raw);
-    return raw[bounds.start..bounds.end];
-}
-
 fn normalizedBlockStringBounds(raw: []const u8) ast.Span {
     var start: usize = 0;
     var end: usize = raw.len;
@@ -3020,10 +2945,4 @@ fn trimRightSpaces(raw: []const u8) []const u8 {
     var end = raw.len;
     while (end > 0 and source.isInlineSpace(raw[end - 1])) end -= 1;
     return raw[0..end];
-}
-
-fn trimLeftSpaces(raw: []const u8) []const u8 {
-    var start: usize = 0;
-    while (start < raw.len and source.isInlineSpace(raw[start])) start += 1;
-    return raw[start..];
 }
