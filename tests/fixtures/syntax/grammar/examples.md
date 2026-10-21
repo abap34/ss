@@ -2,6 +2,17 @@
 
 These parser fixtures remain available without the local design notes.
 
+Quoted strings preserve backslashes and literal line feeds. Block text uses
+`<<` and `>>`. The `std:text` constant `NEWLINE` contains exactly one line feed
+and is also available through `std:prelude`.
+
+<!-- syntax: accept module -->
+```ss
+import std:text as { NEWLINE }
+const formula: String = "$L \to L$"
+const lines: String = "First" ++ NEWLINE ++ "Second"
+```
+
 <!-- syntax: accept expression -->
 ```ss
 style.marker?.nested?.width ?? 0

@@ -19,6 +19,7 @@ import std:text as {
   TextSemantics,
   SemanticRole,
   default_text_style,
+  NEWLINE,
   text,
   text!,
 }

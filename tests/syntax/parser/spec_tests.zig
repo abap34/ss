@@ -1943,6 +1943,17 @@ test "syntax spec: quoted strings keep backslashes literally" {
     try expectString(statements[3].kind.let_binding.expr, "a\nb");
 }
 
+test "syntax spec: quoted line feed constants retain their exact contents and source spans" {
+    const source_text = "const NEWLINE: String = \"\n\"\npage Text\n let body = \"A\" ++ NEWLINE ++ \"B\"\nend\n";
+    var parsed = try parse(source_text);
+    defer parsed.deinit();
+    const literal = parsed.module.constants.items[0].value.string;
+    try testing.expectEqualStrings("\n", literal.text);
+    try expectSpanText(source_text, literal.source_span.?, "\n");
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source_text});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, cloneAndDeinitModule, .{&parsed.module});
+}
+
 test "syntax spec: call sugar is explicit about text-bearing and zero-argument calls" {
     var parsed = try parse(
         \\page Text

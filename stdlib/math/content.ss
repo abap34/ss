@@ -1,5 +1,6 @@
 import std:math/style as { LatexBlockStyle }
 import std:math/types as { LatexConfig }
+import std:text as { NEWLINE }
 
 type Latex {
   source: String
@@ -16,8 +17,7 @@ type Math {
 fn display(self: Placed<Math>) -> Latex
   return Latex {
     ;; A newline protects the closing delimiter from trailing TeX comments.
-    source = "$\displaystyle " ++ self.value.source ++ "
-$"
+    source = "$\displaystyle " ++ self.value.source ++ NEWLINE ++ "$"
     style = self.value.style
     config = self.value.config
   }

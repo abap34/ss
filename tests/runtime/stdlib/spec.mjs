@@ -15,6 +15,20 @@ async function dump(source) {
   return JSON.parse(await readFile(path.join(project, 'dump.json'), 'utf8'));
 }
 try {
+  const lines = await dump(`import std:text as text_api
+page first
+text!("A" ++ NEWLINE ++ "B", default_text_style with { text.parse = TextParseMode.plain })
+text!("C" ++ text_api::NEWLINE ++ "D", default_text_style with { text.parse = TextParseMode.plain })
+text!(join(pages(docctx()), NEWLINE, (p: Page) |-> str(page_index(p))), default_text_style with { text.parse = TextParseMode.plain })
+text!("A\\nB", default_text_style with { text.parse = TextParseMode.plain })
+end
+page second
+end
+`);
+  for (const content of ['A\nB', 'C\nD', '1\n2', 'A\\nB']) {
+    assert(lines.nodes.some(n => n.content === content), `Missing literal string content: ${JSON.stringify(content)}`);
+  }
+
   const literal = await dump(`page text
 text!("**Literal**", default_theme().body with { text.parse = TextParseMode.plain })
 text!("**Formatted**")

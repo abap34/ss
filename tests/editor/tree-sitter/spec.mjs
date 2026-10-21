@@ -14,6 +14,10 @@ await mkdir(output, { recursive: true });
 const directory = await mkdtemp(path.join(output, "run-"));
 const cases = [
   {
+    name: "literal-line-feed-constant",
+    source: 'const NEWLINE: String = "\n"\npage Lines\n  let content = "First" ++ NEWLINE ++ "Second"\nend\n',
+  },
+  {
     name: "ordinary-identifiers",
     source: "fn property(value: Number) -> Number\n  return value\nend\npage Names\n  let for = 1\n  let in = property(for)\n  let then = in\nend\n",
   },
