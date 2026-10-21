@@ -78,6 +78,18 @@ export function reconcileSidebarSnapshot(root, state, previousSnapshot) {
   return true;
 }
 
+export function syncSidebarLocks(root, state, objectLocks) {
+  const labels = new Map((state.snapshot?.outline || []).map((item) =>
+    [item.id, item.label]
+  ));
+  for (const row of root.querySelectorAll(".outline-row[data-outline-id]")) {
+    const button = row.querySelector(".outline-lock");
+    if (!button) continue;
+    const id = Number(row.dataset.outlineId);
+    updateOutlineLockButton(button, labels.get(id), objectLocks.isLocked(id));
+  }
+}
+
 function activityButton(state, view, label, toggleSidebar) {
   const button = element("button", state.sidebar === view ? "is-active" : "");
   button.type = "button";
@@ -99,14 +111,15 @@ function pagesPanel(state, actions) {
     row.type = "button";
     row.dataset.pageId = String(page.id);
     const thumb = element("span", "page-thumbnail");
+    thumb.style.aspectRatio = `${page.width} / ${page.height}`;
     thumb.append(renderPage(state.snapshot, page.id, true));
     const label = element("span", "page-entry-label");
     const number = element("strong");
     number.textContent = String(page.index);
     const name = element("small");
     name.textContent = page.name || `Page ${page.index}`;
-    label.append(number, name);
-    row.append(thumb, label);
+    label.append(thumb, name);
+    row.append(number, label);
     row.addEventListener("click", () => actions.selectPage(page.id));
     list.append(row);
   }
@@ -174,18 +187,19 @@ function outlineRow(state, actions, item, children, depth, seen) {
 }
 
 function outlineLockButton(item, objectLocks) {
-  const locked = objectLocks.isLocked(item.id);
-  const button = element(
-    "button",
-    `outline-lock${locked ? " is-locked" : ""}`,
-  );
+  const button = element("button", "outline-lock");
   button.type = "button";
-  button.title = locked ? `Unlock ${item.label}` : `Lock ${item.label}`;
-  button.setAttribute("aria-label", button.title);
-  button.setAttribute("aria-pressed", String(locked));
+  updateOutlineLockButton(button, item.label, objectLocks.isLocked(item.id));
   button.append(element("span", "object-lock-icon"));
   button.addEventListener("click", () => objectLocks.toggle(item.id));
   return button;
+}
+
+function updateOutlineLockButton(button, label, locked) {
+  button.classList.toggle("is-locked", locked);
+  button.title = `${locked ? "Unlock" : "Lock"} ${label}`;
+  button.setAttribute("aria-label", button.title);
+  button.setAttribute("aria-pressed", String(locked));
 }
 
 function sameSidebarModel(view, previous, current) {

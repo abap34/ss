@@ -537,6 +537,13 @@ fn outlineJson(allocator: std.mem.Allocator, state: *core.DocumentState) ![]u8 {
     var items = try json.Array.beginBuffer(allocator, &buffer);
     var seen = std.AutoHashMap(core.NodeId, void).init(allocator);
     defer seen.deinit();
+    var bindings = std.AutoHashMap(core.NodeId, []const u8).init(allocator);
+    defer bindings.deinit();
+    for (state.source_map.objects.items) |source| {
+        if (source.binding_base != null or source.path.len == 0) continue;
+        const entry = try bindings.getOrPut(source.node_id);
+        if (!entry.found_existing) entry.value_ptr.* = source.path;
+    }
     for (state.graph.page_order.items) |page_id| {
         const page = state.getNode(page_id) orelse continue;
         var page_item = try items.objectItem();
@@ -548,7 +555,7 @@ fn outlineJson(allocator: std.mem.Allocator, state: *core.DocumentState) ![]u8 {
         try page_item.end();
         try seen.put(page.id, {});
         if (state.childrenOf(page_id)) |children| {
-            for (children) |child_id| try appendOutlineNode(&items, state, &seen, page_id, page_id, child_id);
+            for (children) |child_id| try appendOutlineNode(&items, state, &seen, &bindings, page_id, page_id, child_id);
         }
     }
     try items.end();
@@ -559,6 +566,7 @@ fn appendOutlineNode(
     items: *json.Array,
     state: *core.DocumentState,
     seen: *std.AutoHashMap(core.NodeId, void),
+    bindings: *const std.AutoHashMap(core.NodeId, []const u8),
     page_id: core.NodeId,
     parent_id: core.NodeId,
     node_id: core.NodeId,
@@ -572,11 +580,50 @@ fn appendOutlineNode(
     try item.intField("parent_id", parent_id);
     try item.intField("page_id", page_id);
     try item.stringField("kind", if (core.layout.graph.isGroupNode(node)) "group" else "object");
-    try item.stringField("label", node.name);
+    const label = if (bindings.get(node_id)) |binding|
+        try items.allocator.dupe(u8, binding)
+    else
+        try outlineLabel(items.allocator, node);
+    defer items.allocator.free(label);
+    try item.stringField("label", label);
     try item.end();
     if (state.childrenOf(node_id)) |children| {
-        for (children) |child_id| try appendOutlineNode(items, state, seen, page_id, node_id, child_id);
+        for (children) |child_id| try appendOutlineNode(items, state, seen, bindings, page_id, node_id, child_id);
     }
+}
+
+fn outlineLabel(allocator: std.mem.Allocator, node: *const core.Node) ![]u8 {
+    const placement = node.placement orelse return allocator.dupe(u8, node.name);
+    const ty = placement.value.presentationType() orelse return allocator.dupe(u8, node.name);
+    const type_name = ty.class_name orelse ty.label();
+    if (placement.display != .native or placement.display.native != .text) return allocator.dupe(u8, type_name);
+    const content = core.nodeContent(node) orelse return allocator.dupe(u8, type_name);
+    const view = std.unicode.Utf8View.init(content) catch return allocator.dupe(u8, type_name);
+    var iterator = view.iterator();
+    var excerpt = std.ArrayList(u8).empty;
+    defer excerpt.deinit(allocator);
+    var count: usize = 0;
+    var pending_space = false;
+    const max_codepoints = 40;
+    while (iterator.nextCodepointSlice()) |codepoint| {
+        if (codepoint.len == 1 and std.ascii.isWhitespace(codepoint[0])) {
+            pending_space = count > 0;
+            continue;
+        }
+        if (count + @intFromBool(pending_space) >= max_codepoints) {
+            try excerpt.appendSlice(allocator, "…");
+            break;
+        }
+        if (pending_space) {
+            try excerpt.append(allocator, ' ');
+            count += 1;
+            pending_space = false;
+        }
+        try excerpt.appendSlice(allocator, codepoint);
+        count += 1;
+    }
+    if (excerpt.items.len == 0) return allocator.dupe(u8, type_name);
+    return std.fmt.allocPrint(allocator, "{s} · {s}", .{ type_name, excerpt.items });
 }
 
 fn editingJson(allocator: std.mem.Allocator, editing: []const EditingTarget) ![]u8 {

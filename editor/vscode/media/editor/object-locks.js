@@ -39,7 +39,7 @@ export class ObjectLockController {
     else this.lockedKeys.add(key);
     this.persisted = this.serialized();
     this.actions.persist(this.persisted);
-    this.actions.render();
+    this.actions.changed(nodeId);
     return true;
   }
 

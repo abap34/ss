@@ -1,5 +1,5 @@
 import { element } from "./dom.js";
-import { renderObjectSheet, sourceButton } from "./details.js";
+import { renderObjectSheet, sourceButton, syncObjectSheetLocks } from "./details.js";
 import {
   iconCatalogPolicy,
   shouldLoadMoreIcons,
@@ -12,6 +12,8 @@ import { toolIcon } from "./tool-icons.js";
 const rulerSize = 26;
 const rulerInterval = 100;
 const minimumRulerTickSpacing = 50;
+const minimumPageCaptionWidth = 640;
+const minimumPageCaptionHeight = 360;
 const viewportMarginRatio = 0.04;
 const wheelDeltaModeLine = 1;
 const wheelDeltaModePage = 2;
@@ -39,6 +41,7 @@ export class WorkspaceView {
     this.iconGalleryKey = null;
     this.iconGalleryScrollTop = 0;
     this.pan = null;
+    this.sheetPositionFrame = null;
     this.handlePinch = this.handlePinch.bind(this);
     this.beginPan = this.beginPan.bind(this);
     this.updatePan = this.updatePan.bind(this);
@@ -46,6 +49,7 @@ export class WorkspaceView {
     this.interaction = new InteractionController(state, {
       ...actions,
       relativeAdjustmentChanged: () => this.syncRelativeAdjustment(),
+      selectionGeometryChanged: () => this.scheduleObjectSheetPosition(),
     });
   }
 
@@ -56,6 +60,7 @@ export class WorkspaceView {
     main.append(this.toolbar());
     const viewport = element("div", "viewport");
     viewport.classList.toggle("viewport--pan", this.state.pointerMode === "pan");
+    viewport.addEventListener("scroll", () => this.scheduleObjectSheetPosition(), { passive: true });
     viewport.addEventListener("wheel", this.handlePinch, { passive: false });
     viewport.addEventListener("pointerdown", this.beginPan, true);
     viewport.addEventListener("click", (event) => {
@@ -82,6 +87,7 @@ export class WorkspaceView {
     this.root = main;
     this.viewport = viewport;
     this.syncRelativeAdjustment();
+    this.scheduleObjectSheetPosition();
     if (this.state.iconPickerOpen) {
       requestAnimationFrame(() => {
         const search = this.root?.querySelector(".icon-picker-search");
@@ -154,17 +160,18 @@ export class WorkspaceView {
 
   objectSheet() {
     const selected = this.selectedObject();
-    if (!selected) return null;
+    if (!selected) {
+      this.state.objectSheetSelection = null;
+      this.state.objectSheetSections = {};
+      return null;
+    }
     return renderObjectSheet(this.state, selected, {
-      close: () => {
-        this.state.selectedObjectId = null;
-        this.actions.render();
-      },
       revealSource: this.actions.revealSource,
       shape: this.actions.shape,
       translation: this.actions.translation,
       componentWidth: this.actions.componentWidth,
       objectLocks: this.actions.objectLocks,
+      detailsChanged: () => this.syncRelativeAdjustment(),
     });
   }
 
@@ -193,14 +200,109 @@ export class WorkspaceView {
       const toast = this.root.querySelector(":scope > .toast");
       this.root.insertBefore(next, toast);
     }
+    this.scheduleObjectSheetPosition();
+  }
+
+  syncObjectLocks(nodeId) {
+    if (!this.root?.isConnected || this.isPointerOperationActive()) return false;
+    const target = this.actions.objectLocks.target(nodeId);
+    const page = this.state.snapshot?.layout.pages.find((item) =>
+      item.id === target?.page_id
+    );
+    const surface = page && this.viewport?.querySelector(
+      `.page-shell[data-page-id="${page.id}"] > .page-surface`,
+    );
+    const preview = surface?.querySelector(":scope > .preview");
+    const layer = surface?.querySelector(":scope > .interaction-layer");
+    if (!preview || !layer) return false;
+    layer.replaceWith(this.interaction.renderLayer(page, preview));
+    const sheet = this.root.querySelector(":scope > .object-sheet");
+    if (sheet) syncObjectSheetLocks(sheet, this.actions.objectLocks);
+    this.positionObjectSheet();
+    this.syncRelativeAdjustment();
+    return true;
+  }
+
+  scheduleObjectSheetPosition() {
+    if (this.sheetPositionFrame != null) return;
+    this.sheetPositionFrame = requestAnimationFrame(() => {
+      this.sheetPositionFrame = null;
+      this.positionObjectSheet();
+    });
+  }
+
+  positionObjectSheet() {
+    const sheet = this.root?.querySelector(":scope > .object-sheet");
+    const object = this.selectedObject();
+    if (!sheet || !object || !this.root.isConnected) return;
+    const surface = this.viewport?.querySelector(
+      `.page-shell[data-page-id="${object.page_id}"] > .page-surface`,
+    );
+    if (!surface) return;
+    const page = this.state.snapshot.layout.pages.find((item) => item.id === object.page_id);
+    const line = this.interaction.lineEndpointDrag;
+    const lineFrame = line && {
+      x: Math.min(line.start.x, line.end.x),
+      y: Math.min(line.start.y, line.end.y),
+      width: Math.abs(line.end.x - line.start.x),
+      height: Math.abs(line.end.y - line.start.y),
+    };
+    const frame = this.interaction.shapeResizeDrag?.bounds ||
+      this.interaction.componentWidthInteraction.drag?.bounds || lineFrame ||
+      this.actions.shape.pendingBounds(object.id)?.bounds ||
+      this.interaction.frameByNode(page, object.id);
+    const root = this.root.getBoundingClientRect();
+    const view = this.viewport.getBoundingClientRect();
+    const rect = surface.getBoundingClientRect();
+    const scale = rect.width / page.width;
+    const left = rect.left + frame.x * scale - root.left;
+    const top = rect.top + frame.y * scale - root.top;
+    const right = left + frame.width * scale;
+    const bottom = top + frame.height * scale;
+    const inset = 8;
+    const minY = view.top - root.top + inset;
+    const maxY = view.bottom - root.top - inset;
+    const visible = right >= inset && left <= root.width - inset &&
+      bottom >= minY && top <= maxY;
+    sheet.style.visibility = visible ? "visible" : "hidden";
+    if (!visible) return;
+    const bar = sheet.querySelector(".sheet-heading");
+    const x = Math.max(inset, Math.min(root.width - bar.offsetWidth - inset,
+      (left + right - bar.offsetWidth) / 2));
+    const above = top - bar.offsetHeight - inset;
+    const y = Math.max(minY, Math.min(maxY - bar.offsetHeight,
+      above >= minY ? above : bottom + inset));
+    sheet.style.left = `${x}px`;
+    sheet.style.top = `${y}px`;
+    sheet.style.setProperty("--sheet-panel-max-width", `${root.width - 2 * inset}px`);
+    sheet.style.setProperty("--sheet-panel-max-height", `${maxY - minY}px`);
+    const panel = sheet.querySelector(".sheet-panel:not([hidden])");
+    if (!panel) return;
+    const panelX = Math.max(inset, Math.min(root.width - panel.offsetWidth - inset,
+      x + (bar.offsetWidth - panel.offsetWidth) / 2));
+    const panelAbove = Math.min(top, y) - panel.offsetHeight - inset;
+    const panelBelow = Math.max(bottom, y + bar.offsetHeight) + inset;
+    const panelY = panelAbove >= minY ? panelAbove :
+      Math.min(maxY - panel.offsetHeight, panelBelow);
+    panel.style.left = `${panelX - x}px`;
+    panel.style.top = `${panelY - y}px`;
   }
 
   syncRelativeAdjustment() {
     if (!this.root) return;
+    this.scheduleObjectSheetPosition();
     this.root.classList.toggle(
       "is-adjusting-relative",
       this.interaction.isRelativeAdjustmentActive(),
     );
+    const object = this.selectedObject();
+    const page = this.state.snapshot?.layout.pages.find((candidate) =>
+      candidate.id === object?.page_id
+    );
+    const layer = page && this.viewport?.querySelector(
+      `.page-shell[data-page-id="${page.id}"] .interaction-layer`,
+    );
+    if (layer) this.interaction.refreshConstraints(layer, page, object.id);
     if (this.interaction.drag &&
         Number(this.root.querySelector(":scope > .object-sheet")
           ?.dataset.objectId) !== this.state.selectedObjectId) {
@@ -884,8 +986,14 @@ export class WorkspaceView {
       shell.style.setProperty("--page-width", `${width * scale}px`);
       shell.style.setProperty("--page-height", `${height * scale}px`);
       shell.style.setProperty("--preview-scale", String(scale));
+      const showCaption = width * scale >= minimumPageCaptionWidth &&
+        height * scale >= minimumPageCaptionHeight;
+      shell.querySelector(":scope > .page-caption").hidden = !showCaption;
+      shell.style.setProperty("--page-gap-before",
+        !showRulers && !showCaption ? "20px" : "52px");
     }
     this.updateZoomControls(scale);
+    this.scheduleObjectSheetPosition();
     return scale;
   }
 

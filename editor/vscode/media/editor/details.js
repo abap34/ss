@@ -1,8 +1,14 @@
-import { element, setAttributes, svgElement } from "./dom.js";
+import { element } from "./dom.js";
 import { formatNumber, previewFrame } from "./geometry.js";
+import { toolIcon } from "./tool-icons.js";
 import { strokeStyleSelect } from "./shape-style.js";
 
 export function renderObjectSheet(state, object, actions) {
+  const selectionKey = `${state.snapshot.entry_path}:${object.id}`;
+  if (state.objectSheetSelection !== selectionKey) {
+    state.objectSheetSelection = selectionKey;
+    state.objectSheetSections = {};
+  }
   const page = state.snapshot.layout.pages.find((candidate) =>
     candidate.id === object.page_id
   );
@@ -12,41 +18,108 @@ export function renderObjectSheet(state, object, actions) {
   const shapeTarget = actions.shape?.styleTarget(object.id);
   const locked = actions.objectLocks?.isLocked(object.id) || false;
   const minimumWidth = actions.componentWidth?.minimum(object.id);
-  const sheet = element(
-    "section",
-    `object-sheet${shapeTarget ? " object-sheet--shape" : ""}`,
-  );
+  const sheet = element("section", "object-sheet");
   sheet.dataset.objectId = String(object.id);
-  sheet.setAttribute("aria-label", "Object details");
-  sheet.append(
-    closeButton(actions.close),
-    heading(object, actions),
-    bounds(frame, !shapeTarget && minimumWidth != null
-      ? {
-        disabled: locked,
-        minimum: minimumWidth,
-        maximum: Math.max(
-          minimumWidth,
-          page.width - frame.x,
-        ),
-        change: (width) => actions.componentWidth.submit({
-          nodeId: object.id,
-          pageId: object.page_id,
-          fromBounds: frame,
-          toBounds: { ...frame, width },
-        }),
-      }
-      : null),
-    relations(state, object),
-  );
+  sheet.setAttribute("aria-label", `Actions for ${object.name || `Object ${object.id}`}`);
+  const widthEdit = !shapeTarget && minimumWidth != null
+    ? {
+      disabled: locked,
+      minimum: minimumWidth,
+      maximum: Math.max(
+        minimumWidth,
+        page.width - frame.x,
+      ),
+      change: (width) => actions.componentWidth.submit({
+        nodeId: object.id,
+        pageId: object.page_id,
+        fromBounds: frame,
+        toBounds: { ...frame, width },
+      }),
+    }
+    : null;
+  const sections = [
+    detailSection(
+      state, object, "bounds", "Position & size",
+      bounds(frame, widthEdit), actions.detailsChanged,
+    ),
+    detailSection(
+      state, object, "constraints", "Constraints",
+      relations(state, object), actions.detailsChanged,
+    ),
+  ];
   if (shapeTarget) {
-    sheet.append(shapeStyleEditor(shapeTarget, actions.shape, locked));
+    sections.push(detailSection(
+      state, object, "style", "Style",
+      shapeStyleEditor(shapeTarget, actions.shape, locked), actions.detailsChanged,
+    ));
   }
+  sheet.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    const open = sections.find(({ panel }) => !panel.hidden);
+    if (!open) return;
+    event.preventDefault();
+    event.stopPropagation();
+    open.button.click();
+    open.button.focus();
+  });
+  sheet.append(
+    heading(object, actions, sections.map((section) => section.button)),
+    ...sections.map((section) => section.panel),
+  );
   return sheet;
 }
 
+export function syncObjectSheetLocks(sheet, objectLocks) {
+  const locked = objectLocks.isLocked(Number(sheet.dataset.objectId));
+  const button = sheet.querySelector(".object-lock-button");
+  if (button) updateObjectLockButton(button, locked);
+  for (const control of sheet.querySelectorAll("[data-lock-editable]")) {
+    control.disabled = locked || control.dataset.lockEditable !== "true";
+  }
+  const notice = sheet.querySelector(".shape-style-locked");
+  if (notice) notice.hidden = !locked;
+}
+
+function detailSection(state, object, key, label, content, changed) {
+  const sections = state.objectSheetSections ??= {};
+  const panel = element("div", "sheet-panel");
+  panel.id = `object-${object.id}-${key}`;
+  panel.hidden = !sections[key];
+  const header = element("div", "sheet-panel-heading");
+  const title = element("strong");
+  title.textContent = label;
+  header.append(title);
+  panel.append(header, content);
+  const button = iconButton(label, toolIcon(key), "sheet-toggle");
+  button.setAttribute("aria-controls", panel.id);
+  button.setAttribute("aria-expanded", String(!panel.hidden));
+  const setOpen = (open) => {
+    sections[key] = open;
+    panel.hidden = !open;
+    button.setAttribute("aria-expanded", String(open));
+  };
+  const close = iconButton("Close details", toolIcon("close"), "close-button");
+  close.addEventListener("click", () => {
+    setOpen(false);
+    button.focus();
+    changed?.();
+  });
+  header.append(close);
+  button.addEventListener("click", () => {
+    const open = panel.hidden;
+    const sheet = button.closest(".object-sheet");
+    for (const other of sheet.querySelectorAll('.sheet-toggle[aria-expanded="true"]')) {
+      if (other !== button) other.click();
+    }
+    setOpen(open);
+    changed?.();
+  });
+  return { button, panel };
+}
+
 function shapeStyleEditor(target, shape, locked) {
-  const disabled = !shape.canEdit(target) || locked;
+  const editable = shape.canEdit(target);
+  const disabled = !editable || locked;
   const line = target.kind === "line";
   const container = element("div", "shape-style-editor");
   const title = element("h2");
@@ -125,14 +198,14 @@ function shapeStyleEditor(target, shape, locked) {
     );
   }
   controls.append(...fields);
-  for (const input of controls.querySelectorAll("input")) {
-    input.disabled = disabled;
+  for (const control of controls.querySelectorAll("input, select")) {
+    control.dataset.lockEditable = String(editable);
+    control.disabled = disabled;
   }
-  if (locked) {
-    const notice = element("small", "shape-style-locked");
-    notice.textContent = "Unlock the object to edit its style.";
-    container.append(notice);
-  }
+  const notice = element("small", "shape-style-locked");
+  notice.textContent = "Unlock the object to edit its style.";
+  notice.hidden = !locked;
+  container.append(notice);
   container.append(controls);
   return container;
 }
@@ -180,50 +253,47 @@ function styleNumber(label, value, min, max, step, change) {
   return control;
 }
 
-function heading(object, actions) {
+function heading(object, actions, buttons) {
   const container = element("div", "sheet-heading");
-  const title = element("div");
-  const eyebrow = element("small");
-  eyebrow.textContent = "Selected object";
-  const name = element("strong");
-  name.textContent = object.name || `Object ${object.id}`;
-  title.append(eyebrow, name);
-  container.append(title);
-  const actionsContainer = element("div", "sheet-heading-actions");
-  if (actions.objectLocks?.canLock(object.id)) {
-    actionsContainer.append(objectLockButton(object, actions.objectLocks));
-  }
+  container.setAttribute("role", "toolbar");
+  container.setAttribute("aria-label", `Actions for ${object.name || `Object ${object.id}`}`);
   if (object.location?.path) {
-    actionsContainer.append(sourceButton(object, actions.revealSource));
+    const source = iconButton("Open in Editor", toolIcon("source"), "sheet-source-button");
+    source.addEventListener("click", () => actions.revealSource(object));
+    container.append(source);
   }
-  if (actionsContainer.childElementCount > 0) container.append(actionsContainer);
+  if (actions.objectLocks?.canLock(object.id)) {
+    container.append(objectLockButton(object, actions.objectLocks));
+  }
+  // Constraints precede dimensions, matching the layout editing workflow.
+  container.append(buttons[1], buttons[0], ...buttons.slice(2));
   return container;
 }
 
-function objectLockButton(object, objectLocks) {
-  const locked = objectLocks.isLocked(object.id);
-  const button = element(
-    "button",
-    `object-lock-button${locked ? " is-locked" : ""}`,
-  );
+function iconButton(label, icon, className) {
+  const button = element("button", `sheet-action ${className}`);
   button.type = "button";
-  button.setAttribute("aria-pressed", String(locked));
-  button.setAttribute("aria-label", locked ? "Unlock object" : "Lock object");
-  button.append(element("span", "object-lock-icon"));
-  const label = element("span");
-  label.textContent = locked ? "Unlock" : "Lock";
-  button.append(label);
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.append(icon);
+  return button;
+}
+
+function objectLockButton(object, objectLocks) {
+  const button = element("button", "sheet-action object-lock-button");
+  button.type = "button";
+  updateObjectLockButton(button, objectLocks.isLocked(object.id));
   button.addEventListener("click", () => objectLocks.toggle(object.id));
   return button;
 }
 
-function closeButton(closeDetails) {
-  const close = element("button", "close-button");
-  close.type = "button";
-  close.textContent = "×";
-  close.setAttribute("aria-label", "Close details");
-  close.addEventListener("click", closeDetails);
-  return close;
+function updateObjectLockButton(button, locked) {
+  if (button.getAttribute("aria-pressed") === String(locked)) return;
+  button.title = locked ? "Unlock object" : "Lock object";
+  button.setAttribute("aria-label", button.title);
+  button.setAttribute("aria-pressed", String(locked));
+  button.classList.toggle("is-locked", locked);
+  button.replaceChildren(toolIcon(locked ? "lock" : "unlock"));
 }
 
 function bounds(frame, widthEdit) {
@@ -255,6 +325,7 @@ function editableBound(label, value, minimum, maximum, edit) {
   input.min = String(minimum);
   input.max = String(maximum);
   input.step = "1";
+  input.dataset.lockEditable = "true";
   input.disabled = edit.disabled;
   input.setAttribute("aria-label", "Component width");
   input.addEventListener("change", () => {
@@ -368,21 +439,8 @@ export function sourceButton(object, revealSource) {
 }
 
 function editorIcon() {
-  const icon = svgElement("svg", "source-icon");
-  setAttributes(icon, {
-    viewBox: "0 0 16 16",
-    fill: "none",
-    "aria-hidden": "true",
-  });
-  const path = svgElement("path");
-  setAttributes(path, {
-    d: "M5.25 3.75 2.5 8l2.75 4.25M10.75 3.75 13.5 8l-2.75 4.25M9.25 2.5l-2.5 11",
-    stroke: "currentColor",
-    "stroke-width": "1.35",
-    "stroke-linecap": "round",
-    "stroke-linejoin": "round",
-  });
-  icon.append(path);
+  const icon = toolIcon("source");
+  icon.classList.add("source-icon");
   return icon;
 }
 

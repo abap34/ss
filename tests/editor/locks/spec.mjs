@@ -4,10 +4,10 @@ import { ObjectLockController } from "../../../editor/vscode/media/editor/object
 
 const state = { snapshot: snapshot(50, 51) };
 let persisted = null;
-let renders = 0;
+const changes = [];
 const locks = new ObjectLockController(state, {
   persist: (value) => persisted = structuredClone(value),
-  render: () => renders += 1,
+  changed: (nodeId) => changes.push(nodeId),
 });
 
 locks.reconcile(state.snapshot);
@@ -17,9 +17,11 @@ assert.equal(locks.canLock(60), false);
 assert.equal(locks.toggle(51), true);
 assert.equal(locks.isLocked(50), true);
 assert.equal(locks.isLocked(51), true);
-assert.equal(renders, 1);
+assert.deepEqual(changes, [51]);
 assert.equal(persisted.entryPath, "/workspace/slide.ss");
 assert.equal(persisted.keys.length, 1);
+assert.equal(locks.toggle(60), false);
+assert.deepEqual(changes, [51], "an uneditable object triggered a lock update");
 
 state.snapshot = snapshot(150, 151);
 locks.reconcile(state.snapshot);
@@ -31,7 +33,7 @@ assert.equal(
 
 const restored = new ObjectLockController(state, {
   persist: () => {},
-  render: () => {},
+  changed: () => {},
 }, persisted);
 restored.reconcile(state.snapshot);
 assert.equal(restored.isLocked(151), true, "a restored webview lost its locks");

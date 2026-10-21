@@ -45,6 +45,7 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
         .{ .path = "tests/runtime/editor/empty/spec.mjs" },
         .{ .path = "tests/runtime/editor/icons/spec.mjs" },
         .{ .path = "tests/runtime/editor/names/spec.mjs" },
+        .{ .path = "tests/runtime/editor/outline/spec.mjs", .name = "test-editor-outline", .description = "Check source names, input types, and text excerpts in editor outlines" },
         .{ .path = "tests/runtime/editor/relations/spec.mjs" },
         .{ .path = "tests/runtime/editor/shapes/spec.mjs" },
         .{ .path = "tests/runtime/editor/spec.mjs" },

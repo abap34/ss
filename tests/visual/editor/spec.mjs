@@ -12,6 +12,7 @@ import { exerciseTranslationLifecycle } from "./translation.mjs";
 import { exerciseRelativeAdjustment } from "./relative-adjustment.mjs";
 import { exerciseObjectDrag } from "./drag.mjs";
 import { exerciseSnapping } from "./snapping.mjs";
+import { exerciseObjectDetails } from "./details.mjs";
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const source = path.join(repository, "editor/vscode/media/editor");
@@ -62,6 +63,11 @@ await writeFile(path.join(output, "asset.pdf"), pdfAsset());
 await writeFile(path.join(output, "index.html"), testDocument(), "utf8");
 
 await withBrowser(output, async (browser, baseUrl) => {
+  await exerciseObjectDetails(browser, baseUrl, editorSnapshot(), output);
+  if (process.argv.includes("--details-only")) {
+    console.log("WYSIWYG compact object details checks passed.");
+    return;
+  }
   if (!process.argv.includes("--drag-only") && !process.argv.includes("--relative-adjustment-only")) {
     await exerciseSnapping(browser, baseUrl, editorSnapshot(), output);
   }
@@ -770,6 +776,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     );
 
     await page.locator('.page-shell[data-page-id="11"] .object-hit[data-object-id="101"]').click();
+    await page.getByRole("button", { name: "Style", exact: true }).click();
     await page.waitForSelector(".shape-style-editor");
     const resizeHandles = page.locator(
       '.page-shell[data-page-id="11"] .object-hit[data-object-id="101"] .shape-resize-handle',
@@ -874,7 +881,8 @@ await withBrowser(output, async (browser, baseUrl) => {
       "locking a shape left its style controls enabled",
     );
     await page.getByRole("button", { name: "Unlock object" }).click();
-    await page.locator(".close-button").click();
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
 
     const existingLineHit = page.locator(
       '.page-shell[data-page-id="11"] .object-hit[data-object-id="102"] .object-hit-line',
@@ -886,7 +894,6 @@ await withBrowser(output, async (browser, baseUrl) => {
       "line hit target was not widened independently of its visible stroke",
     );
     await existingLineHit.click();
-    await page.waitForSelector(".shape-style-editor");
     const lineHandles = page.locator(
       '.page-shell[data-page-id="11"] .object-hit[data-object-id="102"] .line-endpoint-handle',
     );
@@ -956,6 +963,7 @@ await withBrowser(output, async (browser, baseUrl) => {
       "false",
       "pending line geometry disabled further edits to the same line",
     );
+    await openSelectionStyle(page);
     assert.equal(await page.locator(".shape-style-editor h2").textContent(), "Line style");
     assert.equal(
       await page.locator('.shape-style-editor input[aria-label="Fill color"]').count(),
@@ -1040,7 +1048,8 @@ await withBrowser(output, async (browser, baseUrl) => {
     assert.equal(await messageCount(page, "editLineGeometry"), geometryMessageCount,
       "a locked line accepted an endpoint edit");
     await page.getByRole("button", { name: "Unlock object" }).click();
-    await page.locator(".close-button").click();
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
     await page.keyboard.press("l");
     const rememberedLineStyle = page.locator(
       ".toolbar > .shape-style-controls--line",
@@ -1224,30 +1233,9 @@ await withBrowser(output, async (browser, baseUrl) => {
 
     await page.locator('.page-shell[data-page-id="22"] .object-hit[data-object-id="201"]').click();
     await page.waitForSelector(".object-sheet");
-    assert.equal(
-      await page.locator(".sheet-heading strong").textContent(),
-      "label",
-      "an object without a source edit target could not be selected",
-    );
-    assert.equal(
-      await page.locator(".close-button").evaluate((button) =>
-        button.parentElement?.classList.contains("object-sheet")
-      ),
-      true,
-      "details close button remained part of the title section",
-    );
-    const closePlacement = await page.locator(".object-sheet").evaluate((sheet) => {
-      const button = sheet.querySelector(":scope > .close-button");
-      const sheetRect = sheet.getBoundingClientRect();
-      const buttonRect = button.getBoundingClientRect();
-      return {
-        top: buttonRect.top - sheetRect.top,
-        right: sheetRect.right - buttonRect.right,
-      };
-    });
-    assert(closePlacement.top <= 10 && closePlacement.right <= 10,
-      "details close button was not placed at the modal's top-right corner");
-    await page.locator(".close-button").click();
+    assert.equal(await page.locator(".object-sheet").getAttribute("data-object-id"), "201",
+      "an object without a source edit target could not be selected");
+    await page.keyboard.press("Escape");
 
     await page.locator('.page-shell[data-page-id="22"] .object-hit[data-object-id="202"]').click();
     await page.waitForSelector(".object-sheet");
@@ -1256,6 +1244,7 @@ await withBrowser(output, async (browser, baseUrl) => {
       "retained",
       "object selection recreated an unrelated PDF canvas",
     );
+    await page.getByRole("button", { name: "Constraints", exact: true }).click();
     assert.equal(await page.locator(".relation-row").count(), 3, "object details omitted explicit or fallback constraints");
     assert.equal(await page.locator(".relation-row--fallback").count(), 1, "fallback constraint was not marked");
     assert.equal(await page.locator(".relation-icon--absolute").count(), 2, "absolute constraints did not use their icon");
@@ -1265,7 +1254,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     assert.equal(await page.locator('.page-shell[data-page-id="22"] .constraint').count(), 3,
       "selected-page constraints were not drawn");
 
-    await page.locator(".object-sheet .source-button").click();
+    await page.locator(".object-sheet").getByRole("button", { name: "Open in Editor" }).click();
     const reveal = await lastMessage(page, "revealSource");
     assert.deepEqual(reveal, {
       type: "revealSource",
@@ -1330,7 +1319,8 @@ await withBrowser(output, async (browser, baseUrl) => {
     await page.locator('.page-shell[data-page-id="11"] .ss-pdf > canvas').evaluate((canvas) => {
       canvas.dataset.identity = "retained-after-update";
     });
-    await page.locator(".close-button").click();
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
     assert.equal(await page.locator(".object-sheet").count(), 0, "details sheet did not close");
     await page.locator(".activity-theme").click();
     assert.equal(await page.locator("html").getAttribute("data-theme"), "light");
@@ -1344,6 +1334,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     await page.locator(
       '.page-shell[data-page-id="11"] .object-hit[data-object-id="101"]',
     ).click();
+    await openSelectionStyle(page);
     const failingStyleControl = page.locator(
       ".shape-style-editor .shape-stroke-style-select select",
     );
@@ -1384,7 +1375,8 @@ await withBrowser(output, async (browser, baseUrl) => {
         "slide.ss:12:4 [ExpectedExpression] expected an expression after '='",
       "a generic edit failure replaced the actual build diagnostic",
     );
-    await page.locator(".close-button").click();
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
     await postSnapshot(page, 109, failed, 6);
     assert.equal(
       await page.locator(".toast--error").count(),
@@ -1539,6 +1531,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     await page.locator(
       '.page-shell[data-page-id="11"] .object-hit[data-object-id="101"]',
     ).click();
+    await openSelectionStyle(page);
     const queuedStyleMessageCount = await messageCount(page, "editShapeStyle");
     const queuedFillColor = page.locator(
       '.shape-style-editor input[aria-label="Fill color"]',
@@ -1606,7 +1599,8 @@ await withBrowser(output, async (browser, baseUrl) => {
       operation: "style",
       status: "rejected",
     });
-    await page.locator(".close-button").click();
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
 
     await page.locator(
       '.page-shell[data-page-id="11"] .object-hit[data-object-id="101"]',
@@ -1740,6 +1734,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     await page.locator(
       '.page-shell[data-page-id="11"] .object-hit[data-object-id="101"]',
     ).click();
+    await openSelectionStyle(page);
     const editCountBeforeMissingTarget = await messageCount(page, "editShapeStyle");
     await page.locator('.shape-style-editor input[aria-label="Fill color"]')
       .evaluate((input) => {
@@ -1753,13 +1748,15 @@ await withBrowser(output, async (browser, baseUrl) => {
       target.binding !== "summary"
     );
     await postSnapshot(page, 114, missingShapeTarget, 9);
-    await page.waitForSelector(".toast--error");
+    await page.waitForFunction(() => document.querySelector(".toast--error")?.textContent ===
+      "The target shape changed before the edit could be applied.");
     assert.equal(
       await page.locator(".toast--error").textContent(),
       "The target shape changed before the edit could be applied.",
       "a queued shape reconciliation failure was hidden or mislabeled",
     );
-    await page.locator(".close-button").click();
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
     await postSnapshot(page, 115, finalSnapshot, 9);
     await page.waitForFunction(() => !document.querySelector(".toast--error"));
     await page.locator('.page-shell[data-page-id="11"] .ss-pdf > canvas')
@@ -2104,6 +2101,7 @@ async function exerciseComponentWidth(browser, baseUrl, initial) {
       '.page-shell[data-page-id="22"] .ss-item[data-ss-node-id="202"]',
     );
     await target.click();
+    await page.getByRole("button", { name: "Position & size", exact: true }).click();
     assert.equal(
       await page.locator('input[aria-label="Component width"]').inputValue(),
       "380",
@@ -2312,4 +2310,10 @@ async function messageCount(page, type) {
     ).length,
     type,
   );
+}
+
+
+async function openSelectionStyle(page) {
+  const button = page.getByRole("button", { name: "Style", exact: true });
+  if (await button.getAttribute("aria-expanded") !== "true") await button.click();
 }

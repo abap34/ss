@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 
 export async function exerciseTranslationLifecycle(page, current) {
-  await page.locator(".object-sheet .close-button").click();
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Escape");
   assert.equal(
     await page.locator(".object-sheet").count(),
     0,

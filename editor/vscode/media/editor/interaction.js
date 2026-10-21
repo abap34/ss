@@ -54,6 +54,7 @@ export class InteractionController {
         render: actions.render,
         finish: () => this.notifyPointerOperationFinished(),
         stateChanged: () => this.actions.relativeAdjustmentChanged?.(),
+        geometryChanged: () => this.actions.selectionGeometryChanged?.(),
       },
     );
     this.updateDrag = this.updateDrag.bind(this);
@@ -112,14 +113,7 @@ export class InteractionController {
         page.id,
       )
     ) {
-      svg.append(
-        renderConstraints(
-          this.state.snapshot,
-          page,
-          this.state.selectedObjectId,
-          (nodeId) => this.frameByNode(page, nodeId),
-        ),
-      );
+      this.refreshConstraints(svg, page, this.state.selectedObjectId);
     }
     for (const object of objects) {
       svg.append(this.hitTarget(page, object, previewRoot));
@@ -295,6 +289,11 @@ export class InteractionController {
         return;
       }
       if (this.cancelInsertion()) event.preventDefault();
+      else if (!isTypingTarget(event.target) && this.state.selectedObjectId != null) {
+        event.preventDefault();
+        this.state.selectedObjectId = null;
+        this.actions.render();
+      }
       return;
     }
     if ((event.key === "Delete" || event.key === "Backspace") &&
@@ -688,6 +687,7 @@ export class InteractionController {
     for (const handle of drag.group.querySelectorAll(".shape-resize-handle")) {
       setResizeHandlePosition(handle, handle.dataset.direction, drag.bounds);
     }
+    this.actions.selectionGeometryChanged?.();
   }
 
   finishShapeResize(event) {
@@ -773,6 +773,7 @@ export class InteractionController {
     for (const circle of drag.handle.querySelectorAll("circle")) {
       setCirclePoint(circle, current);
     }
+    this.actions.selectionGeometryChanged?.();
   }
 
   finishLineEndpoint(event) {
@@ -906,20 +907,30 @@ export class InteractionController {
       }
     }
     if (this.isRelativeAdjustmentActive()) this.refreshDragConstraints();
+    this.actions.selectionGeometryChanged?.();
   }
 
   refreshDragConstraints() {
     const drag = this.drag;
     if (!drag) return;
+    this.refreshConstraints(drag.svg, drag.page, drag.object.id);
+  }
+
+  refreshConstraints(svg, page, objectId) {
+    const current = svg.querySelector(":scope > .constraint-layer");
+    if (!this.state.objectSheetSections?.constraints &&
+        !this.isRelativeAdjustmentActive()) {
+      current?.remove();
+      return;
+    }
     const next = renderConstraints(
       this.state.snapshot,
-      drag.page,
-      drag.object.id,
-      (nodeId) => this.frameByNode(drag.page, nodeId),
+      page,
+      objectId,
+      (nodeId) => this.frameByNode(page, nodeId),
     );
-    const current = drag.svg.querySelector(":scope > .constraint-layer");
     if (current) current.replaceWith(next);
-    else drag.svg.insertBefore(next, drag.svg.firstChild);
+    else svg.insertBefore(next, svg.firstChild);
   }
 
   finishDrag(event) {

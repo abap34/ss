@@ -4,6 +4,7 @@ import { disposePdfItems, renderPdfItems } from "./pdf.js";
 const templates = new WeakMap();
 const previews = new WeakMap();
 const displayNodes = new WeakMap();
+const thumbnailObservers = new WeakMap();
 const translationTolerance = 0.0001;
 
 export function renderPage(snapshot, pageId, thumbnail = false) {
@@ -32,7 +33,13 @@ export function renderPage(snapshot, pageId, thumbnail = false) {
     const layout = snapshot.layout.pages.find((candidate) =>
       candidate.id === pageId
     );
-    if (layout) preview.style.setProperty("--preview-scale", String(64 / layout.width));
+    if (layout) {
+      const observer = new ResizeObserver(([entry]) => {
+        preview.style.setProperty("--preview-scale", String(entry.contentRect.width / layout.width));
+      });
+      observer.observe(preview);
+      thumbnailObservers.set(preview, observer);
+    }
   }
   preview.append(clone);
   indexDisplayNodes(display, clone);
@@ -129,7 +136,10 @@ export function disposePages(snapshot) {
   const display = snapshot.display;
   const cached = previews.get(display);
   if (cached) {
-    for (const preview of cached.values()) disposePdfItems(preview);
+    for (const preview of cached.values()) {
+      thumbnailObservers.get(preview)?.disconnect();
+      disposePdfItems(preview);
+    }
     previews.delete(display);
   }
   templates.delete(display);

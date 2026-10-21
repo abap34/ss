@@ -54,7 +54,7 @@ export async function exerciseObjectDrag(browser, baseUrl, snapshot) {
       assert.deepEqual(await previewState(preview), original);
       assert.equal(await page.locator(".object-sheet").count(), 1,
         "click jitter did not select the object");
-      await page.locator(".object-sheet .source-button").click();
+      await page.locator(".object-sheet").getByRole("button", { name: "Open in Editor" }).click();
       assert.deepEqual(await lastReveal(page), {
         type: "revealSource", path: "/workspace/slide.ss", start: 40, end: 75,
       });

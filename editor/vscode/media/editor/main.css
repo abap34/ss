@@ -228,8 +228,8 @@ button {
 }
 .page-entry {
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr);
-  align-items: center;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
   gap: 8px;
   width: 100%;
   padding: 7px 8px 7px 6px;
@@ -250,9 +250,11 @@ button {
 }
 .page-entry strong {
   display: block;
-  margin-top: 3px;
+  padding-top: 4px;
   color: var(--text-strong);
   font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 .page-entry small {
   display: block;
@@ -265,8 +267,8 @@ button {
 }
 .page-thumbnail {
   display: block;
-  width: 64px;
-  height: 36px;
+  width: 100%;
+  aspect-ratio: 16 / 9;
   overflow: hidden;
   border: 1px solid var(--control-border);
   background: #f4f5f1;
@@ -1033,6 +1035,7 @@ button {
   }
 }
 .toast {
+  pointer-events: none;
   position: absolute;
   z-index: 30;
   top: calc(var(--toolbar) + 10px);
@@ -1073,7 +1076,6 @@ button {
   width: max-content;
   flex-direction: column;
   align-items: center;
-  gap: 52px;
   min-width: 100%;
 }
 .page-shell {
@@ -1083,6 +1085,9 @@ button {
   flex: 0 0 auto;
   width: var(--page-width);
   height: var(--page-height);
+}
+.page-shell + .page-shell {
+  margin-top: var(--page-gap-before, 52px);
 }
 .ruler {
   position: absolute;
@@ -1202,6 +1207,10 @@ button {
   color: var(--text-muted);
   font-size: 8px;
   font-weight: 700;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .page-source-button {
   position: absolute;
@@ -1463,80 +1472,82 @@ button {
 .object-sheet {
   position: absolute;
   z-index: 20;
-  right: 10px;
-  bottom: 10px;
-  left: 10px;
+  visibility: hidden;
+  width: max-content;
+  max-width: calc(100% - 16px);
+}
+.object-sheet [hidden] {
+  display: none;
+}
+.sheet-heading {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px;
+  border: 1px solid var(--sheet-border);
+  border-radius: 6px;
+  background: var(--sheet-background);
+  box-shadow: 0 2px 6px rgb(0 0 0 / 16%);
+}
+.sheet-action {
   display: grid;
-  grid-template-columns:
-    minmax(105px, 135px) minmax(142px, 170px) minmax(210px, 1fr);
-  gap: 14px;
-  min-height: 104px;
-  max-height: min(42%, 240px);
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-soft);
+  cursor: pointer;
+}
+.sheet-action svg {
+  width: 14px;
+  height: 14px;
+}
+.sheet-action:hover,
+.sheet-action[aria-expanded="true"],
+.sheet-action[aria-pressed="true"] {
+  background: var(--accent-background);
+  color: var(--accent-text);
+}
+.sheet-action:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: -2px;
+}
+.sheet-panel {
+  position: absolute;
+  width: 310px;
+  max-width: var(--sheet-panel-max-width);
+  max-height: var(--sheet-panel-max-height);
   overflow: auto;
-  padding: 12px 42px 12px 12px;
+  padding: 12px;
   border: 1px solid var(--sheet-border);
   border-radius: 8px;
   background: var(--sheet-background);
   box-shadow: var(--sheet-shadow);
-  backdrop-filter: blur(8px);
 }
-.object-sheet--shape {
-  grid-template-columns:
-    minmax(105px, 135px) minmax(142px, 170px) minmax(210px, 1fr)
-    minmax(180px, 220px);
-}
-.sheet-heading {
+.sheet-panel-heading {
   display: flex;
-  flex-direction: column;
-  align-content: start;
-  align-items: start;
-  gap: 8px;
-  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  font-size: 11px;
 }
-.sheet-heading > div {
-  min-width: 0;
+.sheet-panel .close-button {
+  position: static;
+  width: 24px;
+  height: 24px;
 }
-.sheet-heading small, .relation-details h2 {
-  display: block;
+.relation-details h2 {
   margin: 0 0 6px;
   color: var(--text-faint);
   font-size: 8px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-}
-.sheet-heading strong {
-  display: block;
-  overflow: hidden;
-  font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.sheet-heading-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-.object-lock-button {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 25px;
-  padding: 3px 8px;
-  border: 1px solid var(--control-border);
-  border-radius: 4px;
-  background: var(--control-background);
-  color: var(--text-muted);
-  font-size: 9px;
-  cursor: pointer;
-}
-.object-lock-button:hover,
-.object-lock-button:focus-visible,
-.object-lock-button.is-locked {
-  border-color: var(--accent-border);
-  background: var(--accent-background);
-  color: var(--accent-text);
-  outline: none;
 }
 .object-lock-icon {
   position: relative;
@@ -1565,8 +1576,7 @@ button {
   background: currentColor;
   content: "";
 }
-.outline-lock:not(.is-locked) .object-lock-icon::before,
-.object-lock-button:not(.is-locked) .object-lock-icon::before {
+.outline-lock:not(.is-locked) .object-lock-icon::before {
   left: 5px;
   border-left-color: transparent;
   transform: rotate(16deg);
@@ -1594,7 +1604,7 @@ button {
 }
 .bounds {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 5px;
   align-content: start;
 }
@@ -1858,9 +1868,6 @@ button {
   white-space: nowrap;
   cursor: pointer;
 }
-.sheet-heading .source-button {
-  flex: 0 0 auto;
-}
 .source-button:hover {
   border-color: var(--accent-border);
   color: var(--accent-text);
@@ -1878,26 +1885,6 @@ button {
 @media (max-width: 760px) {
   :root {
     --sidebar: 132px;
-  }
-  .page-entry {
-    grid-template-columns: 54px minmax(0, 1fr);
-  }
-  .page-thumbnail {
-    width: 54px;
-    height: 30px;
-  }
-  .object-sheet {
-    grid-template-columns:
-      minmax(95px, 120px) minmax(130px, 155px) minmax(180px, 1fr);
-  }
-}
-@media (max-width: 840px) {
-  .object-sheet {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  }
-  .relation-details,
-  .shape-style-editor {
-    grid-column: 1 / -1;
   }
 }
 @media (max-width: 520px) {
@@ -1926,11 +1913,5 @@ button {
   }
   .shape-style-popover {
     display: block;
-  }
-  .object-sheet {
-    grid-template-columns: 1fr 1fr;
-  }
-  .relation-details {
-    grid-column: 1 / -1;
   }
 }

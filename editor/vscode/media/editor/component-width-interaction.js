@@ -96,6 +96,7 @@ export class ComponentWidthInteraction {
       drag.target.id,
       drag.bounds.width,
     );
+    this.actions.geometryChanged?.();
   }
 
   finish(event) {

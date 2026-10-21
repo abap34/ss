@@ -21,6 +21,7 @@ import {
   reconcileSidebarSnapshot,
   renderActivityRail,
   renderSidebar,
+  syncSidebarLocks,
 } from "./sidebar.js";
 import { defaultShapeStyle, ShapeController } from "./shape-insertion.js";
 import { TranslationController } from "./translation.js";
@@ -40,6 +41,7 @@ const state = {
   previewScale: 1,
   currentPageId: null,
   selectedObjectId: null,
+  objectSheetSections: {},
   pointerMode: "select",
   shapeTool: "select",
   shapeStyle: structuredClone(defaultShapeStyle),
@@ -99,7 +101,10 @@ const icon = new IconController(state, {
 });
 const objectLocks = new ObjectLockController(state, {
   persist: (value) => persistWebviewState({ objectLocks: value }),
-  render,
+  changed: (nodeId) => {
+    if (!workspace.syncObjectLocks(nodeId)) render();
+    syncSidebarLocks(app, state, objectLocks);
+  },
 }, persistedState.objectLocks);
 const presentation = new PresentationController(state.presentation, {
   render,

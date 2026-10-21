@@ -14,6 +14,7 @@ export async function exerciseRelativeAdjustment(browser, baseUrl, snapshot, out
     await page.locator(".page-entry").nth(1).click();
     const target = page.locator('.object-hit[data-object-id="202"]');
     await target.click();
+    await page.getByRole("button", { name: "Constraints", exact: true }).click();
     const workspace = page.locator(".workspace");
     const indicator = page.locator(".relative-adjustment-status");
     const reference = page.locator('.constraint-reference[data-object-id="201"]');
@@ -65,24 +66,27 @@ export async function exerciseRelativeAdjustment(browser, baseUrl, snapshot, out
     await target.click();
 
     const width = page.getByRole("spinbutton", { name: "Component width" });
+    await page.getByRole("button", { name: "Position & size", exact: true }).click();
     await width.focus();
     await page.keyboard.down("Shift");
     await expectMode(page, false);
     await page.keyboard.up("Shift");
     await width.evaluate((node) => node.blur());
 
+    await page.getByRole("button", { name: "Constraints", exact: true }).click();
     await page.setViewportSize({ width: 560, height: 920 });
     await page.keyboard.down("Shift");
     await expectMode(page, true);
     const badgeBounds = await indicator.boundingBox();
-    const sheetBounds = await page.locator(".object-sheet").boundingBox();
+    const sheetBounds = await page.locator(".sheet-panel:not([hidden])").boundingBox();
     assert(badgeBounds && sheetBounds && badgeBounds.x >= sheetBounds.x &&
       badgeBounds.x + badgeBounds.width <= sheetBounds.x + sheetBounds.width,
       "the relative mode label overflowed the narrow object sheet");
     await page.keyboard.up("Shift");
     await page.setViewportSize({ width: 1024, height: 760 });
 
-    await page.locator(".object-sheet .close-button").click();
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
     await page.evaluate(() => new Promise((resolve) =>
       requestAnimationFrame(() => requestAnimationFrame(resolve))
     ));
@@ -149,6 +153,7 @@ async function expectMode(page, active) {
   await page.waitForFunction((expected) =>
     document.querySelector(".workspace")?.classList.contains("is-adjusting-relative") === expected,
   active);
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 }
 
 async function lastTranslationMode(page) {
