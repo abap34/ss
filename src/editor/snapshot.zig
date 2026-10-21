@@ -99,6 +99,7 @@ pub const EditingTarget = struct {
     binding_required: bool,
     minimum_width: f64,
     statement: utils.source.ByteSpan,
+    binding_introduction: ?editor_edit.BindingIntroduction = null,
     path: []u8,
     page: utils.source.ByteSpan,
 };
@@ -1064,6 +1065,7 @@ fn collectEditingTargets(allocator: std.mem.Allocator, state: *core.DocumentStat
                 .page_name = page_decl.name,
                 .binding = binding,
                 .binding_required = binding_required,
+                .binding_introduction = if (binding_required) bindingIntroduction(module.source, statement) else null,
                 .minimum_width = editor_edit.minimum_component_width,
                 .statement = .{ .start = statement.span.start, .end = statement.span.end },
                 .path = page_source.path,
@@ -1072,6 +1074,27 @@ fn collectEditingTargets(allocator: std.mem.Allocator, state: *core.DocumentStat
         }
     }
     return try targets.toOwnedSlice(allocator);
+}
+
+fn bindingIntroduction(source: []const u8, statement: *const ast.Statement) editor_edit.BindingIntroduction {
+    var result = editor_edit.BindingIntroduction{
+        .statement = .{ .start = statement.span.start, .end = statement.span.end },
+    };
+    if (statement.kind != .expr_stmt or statement.kind.expr_stmt != .call) return result;
+    const call = statement.kind.expr_stmt.call;
+    const callee = call.callee.span orelse return result;
+    if (callee.start != statement.span.start or call.args.items.len != 1 or call.args.items[0] != .string) return result;
+    const text = call.args.items[0].string.source_span orelse return result;
+    if (callee.end > text.start or text.end > source.len) return result;
+    // Line-text sugar has only whitespace between the callee and its content.
+    // Quoted strings, block strings and ordinary arguments retain their syntax.
+    if (std.mem.trim(u8, source[callee.end..text.start], " \t").len == 0) {
+        result.line_text = .{
+            .callee = .{ .start = callee.start, .end = callee.end },
+            .text = .{ .start = text.start, .end = text.end },
+        };
+    }
+    return result;
 }
 
 const PageEditingTargetView = struct {
@@ -1127,6 +1150,7 @@ const EditingTargetView = struct {
     binding_required: bool,
     minimum_width: f64,
     statement: utils.source.ByteSpan,
+    binding_introduction: ?editor_edit.BindingIntroduction = null,
     path: []const u8,
     page: utils.source.ByteSpan,
 };
@@ -1147,6 +1171,7 @@ fn appendEditingTarget(allocator: std.mem.Allocator, targets: *std.ArrayList(Edi
         .binding_required = view.binding_required,
         .minimum_width = view.minimum_width,
         .statement = view.statement,
+        .binding_introduction = view.binding_introduction,
         .path = path,
         .page = view.page,
     });

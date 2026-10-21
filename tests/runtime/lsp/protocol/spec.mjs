@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { assert, LspClient, withLspClient } from "../../harness.mjs";
+import { editingTarget, previewBounds, requestEdit } from "../../editor/support.mjs";
 
 const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-protocol-"));
 
@@ -102,6 +103,32 @@ end
       `out-of-range nodeId did not return Invalid params: ${invalidNode}`,
     );
 
+    // A disk edit without a change notification can invalidate source spans
+    // while a cached snapshot remains current. The failed edit must respond and
+    // unwind its generated state, leaving subsequent requests usable.
+    const externalSlide = path.join(project, "external.ss");
+    const externalUri = pathToFileURL(externalSlide).toString();
+    const externalSource = `import std:themes/default as *
+page external
+let item = text!("External")
+~ item.left == page.left + 40
+~ item.top == page.top - 60
+end
+`;
+    await writeFile(externalSlide, externalSource);
+    const external = await client.request("ss/editorSnapshot", { textDocument: { uri: externalUri } });
+    const target = editingTarget(external, "item");
+    const from = previewBounds(external, target.node_id);
+    const to = { ...from, x: from.x + 20, y: from.y + 10 };
+    await writeFile(externalSlide, externalSource.replace("+ 40", "% 40"));
+    const failedEdit = await requestEdit(client, externalUri, external, target, from, to, "relative", target.page_id)
+      .then(() => null, (error) => error);
+    assert(failedEdit instanceof Error && failedEdit.message.includes("-32603: InvalidConstraintOrigin"),
+      `failed request did not return an internal error: ${failedEdit}`);
+    await writeFile(externalSlide, externalSource);
+    const nextEdit = await requestEdit(client, externalUri, external, target, from, to, "relative", target.page_id);
+    assert(nextEdit.status === "ok", `failed request broke later edits: ${JSON.stringify(nextEdit)}`);
+
     const recoveredDiagnostics = client.waitForDiagnostics(
       uri,
       (diagnostics, message) => diagnostics.length === 0 && message.params.version === 2,
@@ -150,4 +177,22 @@ async function expectProtocolExit(label, bytes) {
     failure instanceof Error && !failure.message.includes("did not exit"),
     `${label} did not terminate the language server promptly: ${failure}`,
   );
+}
+
+
+// A failed response must cancel the stdin reader even when the peer keeps its
+// input open with an incomplete next frame.
+{
+  const client = new LspClient();
+  try {
+    await client.initialize();
+    client.child.stdout.destroy();
+    client.send({ jsonrpc: "2.0", id: 9002, method: "shutdown", params: null });
+    client.child.stdin.write("Content-Length: 100\r\n\r\n{");
+    const error = await client.waitForExit().then(() => null, (failure) => failure);
+    assert(error instanceof Error && client.exitStatus?.code === 1 && client.stderr.includes("output writer could not write"),
+      `failed worker left the server running: ${error}; ${client.stderr}`);
+  } finally {
+    if (!client.exitStatus) client.child.kill();
+  }
 }

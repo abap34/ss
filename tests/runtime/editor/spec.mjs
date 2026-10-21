@@ -16,6 +16,7 @@ import {
 await testSnapshotAndSourceEdits();
 await testComponentWidthEdits();
 await testPositionEditsAllowReflowAndMoveReturnedGroups();
+await testAnonymousCompositionMoves();
 await testSnapshotHighlightsPythonCode();
 await testSnapshotAssetsUseContentAddressedFiles();
 await testSnapshotRecoversAfterInvalidEdit();
@@ -1036,4 +1037,50 @@ let item = text!("${name}")
 ~ item.top == page.top - 96
 end
 `;
+}
+
+
+async function testAnonymousCompositionMoves() {
+  const project = await mkdtemp(path.join(os.tmpdir(), "ss-editor-composition-"));
+  try {
+    const slide = path.join(project, "slide.ss");
+    const uri = pathToFileURL(slide).toString();
+    const expressions = [
+      '(text!("Alpha") || text!("Beta"))',
+      '(text!("Alpha") || text!("Beta")) // text!("Gamma")',
+      '(text!("Alpha") || text!("Beta"))\n  // (text!("Gamma") || text!("Delta"))',
+      'text! Line text stays intact',
+      'text! "Quoted text stays intact"',
+    ];
+    for (const expression of expressions) {
+      let source = `import std:themes/default as *\npage demo\n  ${expression}\nend\n`;
+      await writeFile(slide, source);
+      await withLspClient({ cwd: project }, async (client) => {
+        await client.initialize();
+        let diagnostics = client.waitForDiagnostics(uri);
+        client.openDocument({ uri, text: source });
+        assert((await diagnostics).params.diagnostics.length === 0, `invalid fixture: ${expression}`);
+        let snapshot = await editorSnapshot(client, uri);
+        const binding = snapshot.editing.find((target) => target.binding_required && !target.binding.includes("."))?.binding;
+        assert(binding, `anonymous expression has no editable root: ${expression}`);
+        for (let move = 0; move < 3; move += 1) {
+          const target = editingTarget(snapshot, binding);
+          const from = previewBounds(snapshot, target.node_id);
+          const to = { ...from, x: 80 + move * 15, y: 90 + move * 10 };
+          const result = await requestEdit(client, uri, snapshot, target, from, to, "absolute", target.page_id);
+          assert(result.status === "ok", `anonymous move failed: ${JSON.stringify(result)}`);
+          source = applyProtocolEdits(source, result.workspaceEdit.changes[uri]);
+          diagnostics = client.waitForDiagnostics(uri);
+          client.changeDocument({ uri, version: move + 2, text: source });
+          assert((await diagnostics).params.diagnostics.length === 0, `edit produced diagnostics: ${source}`);
+          snapshot = await editorSnapshot(client, uri);
+          assertBounds(previewBounds(snapshot, editingTarget(snapshot, binding).node_id), to.x, to.y, "anonymous composition");
+        }
+        assert(source.includes(`let ${binding} = `), `missing binding: ${source}`);
+        assert(source.match(/let /g).length === 1, `repeated movement duplicated the binding: ${source}`);
+      });
+    }
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
 }

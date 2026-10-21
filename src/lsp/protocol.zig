@@ -47,19 +47,16 @@ pub const Range = struct {
     end_character: usize,
 };
 
-pub fn readMessage(allocator: std.mem.Allocator) !?[]u8 {
+pub fn readMessage(allocator: std.mem.Allocator, io: std.Io) !?[]u8 {
     var header = std.ArrayList(u8).empty;
     defer header.deinit(allocator);
     var last4 = [_]u8{ 0, 0, 0, 0 };
     while (true) {
         var byte: [1]u8 = undefined;
-        const n = std.c.read(0, &byte, 1);
-        switch (std.posix.errno(n)) {
-            .SUCCESS => {},
-            .INTR => continue,
-            .IO => return error.InputOutput,
-            else => |err| return std.posix.unexpectedErrno(err),
-        }
+        const n = std.Io.File.stdin().readStreaming(io, &.{&byte}) catch |err| switch (err) {
+            error.EndOfStream => return if (header.items.len == 0) null else error.UnexpectedEndOfStream,
+            else => return err,
+        };
         if (n == 0) return if (header.items.len == 0) null else error.UnexpectedEndOfStream;
         if (header.items.len == max_header_bytes) return error.HeaderTooLarge;
         try header.append(allocator, byte[0]);
@@ -72,14 +69,10 @@ pub fn readMessage(allocator: std.mem.Allocator) !?[]u8 {
     errdefer allocator.free(body);
     var offset: usize = 0;
     while (offset < body.len) {
-        const n = std.c.read(0, body[offset..].ptr, body.len - offset);
-        switch (std.posix.errno(n)) {
-            .SUCCESS => {},
-            .INTR => continue,
-            .IO => return error.InputOutput,
-            else => |err| return std.posix.unexpectedErrno(err),
-        }
-        if (n == 0) return error.UnexpectedEndOfStream;
+        const n = std.Io.File.stdin().readStreaming(io, &.{body[offset..]}) catch |err| switch (err) {
+            error.EndOfStream => return error.UnexpectedEndOfStream,
+            else => return err,
+        };
         offset += std.math.cast(usize, n) orelse return error.InputOutput;
     }
     return body;

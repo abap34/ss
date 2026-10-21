@@ -18,6 +18,7 @@ pub const component = @import("edit/component.zig");
 
 pub const BindingIntroduction = struct {
     statement: ByteSpan,
+    line_text: ?struct { callee: ByteSpan, text: ByteSpan } = null,
 };
 
 pub const ExistingUpdate = struct {
@@ -76,7 +77,7 @@ pub fn absolutePosition(
 
     if (binding_introduction) |introduction| {
         const binding_name = binding[0 .. std.mem.indexOfScalar(u8, binding, '.') orelse binding.len];
-        try appendBindingIntroduction(allocator, &edits, source, binding_name, introduction.statement);
+        try appendBindingIntroduction(allocator, &edits, source, binding_name, introduction);
     }
 
     var text = std.ArrayList(u8).empty;
@@ -107,7 +108,7 @@ pub fn componentWidth(
 
     if (binding_introduction) |introduction| {
         const binding_name = binding[0 .. std.mem.indexOfScalar(u8, binding, '.') orelse binding.len];
-        try appendBindingIntroduction(allocator, &edits, source, binding_name, introduction.statement);
+        try appendBindingIntroduction(allocator, &edits, source, binding_name, introduction);
     }
 
     if (existing_update) |update| {
@@ -253,44 +254,32 @@ fn appendBindingIntroduction(
     edits: *std.ArrayList(TextEdit),
     source: []const u8,
     binding: []const u8,
-    statement: ByteSpan,
+    introduction: BindingIntroduction,
 ) !void {
+    const statement = introduction.statement;
     if (statement.start >= statement.end or statement.end > source.len) return error.InvalidBindingStatement;
-    const statement_end = trimLineEnding(source, statement.end);
-    if (statement_end <= statement.start) return error.InvalidBindingStatement;
-    const statement_text = source[statement.start..statement_end];
-    const callee_end = std.mem.indexOfAny(u8, statement_text, " \t\r\n(") orelse statement_text.len;
-    if (callee_end == 0) return error.InvalidBindingStatement;
-    const raw_rest = statement_text[callee_end..];
-    const rest = raw_rest[leadingWhitespace(raw_rest)..];
-    if (rest.len == 0 or rest[0] == '(' or rest[0] == '"' or std.mem.startsWith(u8, rest, "<<")) {
+    if (introduction.line_text) |line| {
+        if (line.callee.start != statement.start or line.callee.end <= line.callee.start or line.callee.end > line.text.start or
+            line.text.start > line.text.end or line.text.end > statement.end)
+            return error.InvalidBindingStatement;
+        const line_start = lineStartBefore(source, statement.start, 0);
+        const indent = source[line_start..statement.start];
+        try edits.append(allocator, .{
+            .start = statement.start,
+            .end = trimLineEnding(source, statement.end),
+            .text = try std.fmt.allocPrint(
+                allocator,
+                "let {s} = {s} <<\n{s}{s}\n{s}>>",
+                .{ binding, source[line.callee.start..line.callee.end], indent, source[line.text.start..line.text.end], indent },
+            ),
+        });
+    } else {
         try edits.append(allocator, .{
             .start = statement.start,
             .end = statement.start,
             .text = try std.fmt.allocPrint(allocator, "let {s} = ", .{binding}),
         });
-        return;
     }
-
-    const line_start = lineStartBefore(source, statement.start, 0);
-    const indent = source[line_start..statement.start];
-    const raw_text = std.mem.trim(u8, statement_text[callee_end..], " \t\r\n");
-    const replacement = try std.fmt.allocPrint(
-        allocator,
-        "let {s} = {s} <<\n{s}{s}\n{s}>>",
-        .{ binding, statement_text[0..callee_end], indent, raw_text, indent },
-    );
-    try edits.append(allocator, .{
-        .start = statement.start,
-        .end = statement_end,
-        .text = replacement,
-    });
-}
-
-fn leadingWhitespace(text: []const u8) usize {
-    var index: usize = 0;
-    while (index < text.len and (text[index] == ' ' or text[index] == '\t')) index += 1;
-    return index;
 }
 
 fn deinitEdits(allocator: std.mem.Allocator, edits: *std.ArrayList(TextEdit)) void {

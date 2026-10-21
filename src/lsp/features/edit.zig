@@ -133,7 +133,7 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
             binding,
         );
         const introduction: ?editor_edit.BindingIntroduction = if (binding_required)
-            .{ .statement = editing.statement }
+            editing.binding_introduction
         else
             null;
         break :blk (try editor_edit.componentWidth(
@@ -157,7 +157,7 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     } else blk: {
         const updates = try edit_relations.existingUpdates(ctx.allocator, &layout.report, node_id, path, page_span);
         defer ctx.allocator.free(updates);
-        const introduction: ?editor_edit.BindingIntroduction = if (binding_required) .{ .statement = editing.statement } else null;
+        const introduction: ?editor_edit.BindingIntroduction = if (binding_required) editing.binding_introduction else null;
         break :blk (try editor_edit.absolutePosition(
             ctx.allocator,
             source,

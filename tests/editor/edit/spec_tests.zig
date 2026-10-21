@@ -995,11 +995,31 @@ test "absolute position converts line text before binding it" {
         120,
         140,
         &.{},
-        .{ .statement = .{ .start = statement_start, .end = statement_end } },
+        .{
+            .statement = .{ .start = statement_start, .end = statement_end },
+            .line_text = .{
+                .callee = .{ .start = statement_start, .end = statement_start + "heading!".len },
+                .text = .{ .start = statement_start + "heading! ".len, .end = statement_end },
+            },
+        },
     )).?;
     defer result.deinit(allocator);
 
     const updated = try edit.applyEdits(allocator, source, result.edits);
     defer allocator.free(updated);
     try expectFixtureOutput(allocator, "binding/line.ss", updated);
+}
+
+test "binding an anonymous composition preserves its complete expression" {
+    const allocator = std.testing.allocator;
+    const source = "page Example\n  (text!(\"Alpha\") || text!(\"Beta\")) // text!(\"Gamma\")\nend\n";
+    const start = std.mem.indexOf(u8, source, "(text!").?;
+    const end = std.mem.indexOfPos(u8, source, start, "\n").?;
+    var result = (try edit.absolutePosition(allocator, source, .{ .start = 0, .end = source.len }, "group_item", 120, 140, &.{}, .{
+        .statement = .{ .start = start, .end = end },
+    })).?;
+    defer result.deinit(allocator);
+    const updated = try edit.applyEdits(allocator, source, result.edits);
+    defer allocator.free(updated);
+    try std.testing.expect(std.mem.indexOf(u8, updated, "let group_item = (text!(\"Alpha\") || text!(\"Beta\")) // text!(\"Gamma\")") != null);
 }

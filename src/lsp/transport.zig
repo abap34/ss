@@ -117,10 +117,17 @@ pub const Ingress = struct {
     }
 
     pub fn read(self: *Ingress) void {
-        self.readMessages() catch self.read_failed.store(true, .release);
+        self.readMessages() catch |err| switch (err) {
+            error.Canceled, error.Closed => {},
+            else => self.read_failed.store(true, .release),
+        };
         self.finished.store(true, .release);
         self.queue.close(self.io);
         self.wake();
+    }
+
+    pub fn stop(self: *Ingress) void {
+        self.queue.close(self.io);
     }
 
     pub fn next(self: *Ingress, timeout_ms: ?u64) !?Envelope {
@@ -155,7 +162,7 @@ pub const Ingress = struct {
     }
 
     fn readMessages(self: *Ingress) !void {
-        while (try protocol.readMessage(self.allocator)) |body| {
+        while (try protocol.readMessage(self.allocator, self.io)) |body| {
             defer self.allocator.free(body);
             var parsed = utils.json.parseValue(self.allocator, body, .{}) catch |err| {
                 if (err == error.OutOfMemory) return err;

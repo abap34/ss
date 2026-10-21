@@ -994,35 +994,18 @@ fn putStringSet(allocator: std.mem.Allocator, set: *std.StringHashMap(void), val
     try set.put(owned, {});
 }
 
-const Worker = struct {
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    ingress: *transport.Ingress,
-    failure: ?anyerror = null,
-};
-
 pub fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     var ingress: transport.Ingress = undefined;
     ingress.init(allocator, io);
     defer ingress.deinit();
 
-    var worker = Worker{
-        .io = io,
-        .allocator = allocator,
-        .ingress = &ingress,
-    };
-    const thread = try std.Thread.spawn(.{}, workerMain, .{&worker});
-    ingress.read();
-    thread.join();
-
-    if (worker.failure) |err| return err;
+    var reader = try io.concurrent(transport.Ingress.read, .{&ingress});
+    defer {
+        ingress.stop();
+        reader.cancel(io);
+    }
+    try runWorker(io, allocator, &ingress);
     if (ingress.readFailed()) return error.ReadFailed;
-}
-
-fn workerMain(worker: *Worker) void {
-    runWorker(worker.io, worker.allocator, worker.ingress) catch |err| {
-        worker.failure = err;
-    };
 }
 
 fn runWorker(io: std.Io, allocator: std.mem.Allocator, ingress: *transport.Ingress) !void {
@@ -1071,7 +1054,13 @@ fn processEnvelope(server: *Server, value: transport.Envelope) !void {
                     server.acceptCurrentRevision();
                 }
             },
-            else => return err,
+            error.OutOfMemory, error.WriteFailed => return err,
+            else => {
+                // Requests own their temporary state and unwind it before this
+                // boundary. Failed notifications may have mutated shared state.
+                const request = envelope.request orelse return err;
+                try protocol.respondErrorId(server.allocator, request.key, -32603, @errorName(err));
+            },
         },
     }
 }
