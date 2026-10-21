@@ -61,6 +61,51 @@ test "document evaluation cooperatively cancels without adding a diagnostic" {
     try testing.expectEqual(diagnostic_count, evaluation.state.diagnostics.entries.items.len);
 }
 
+test "evaluation cancellation releases nested calls closures records and placed groups at every check" {
+    const source =
+        \\type Label { content: String }
+        \\fn display(self: Placed<Label>) -> Text
+        \\  return Text { content = self.value.content }
+        \\end
+        \\fn decorate(value: String, callback: String -> String) -> Label
+        \\  let result = callback(value)
+        \\  if true
+        \\    return Label { content = result }
+        \\  else
+        \\    return Label { content = value }
+        \\  end
+        \\end
+        \\page sample
+        \\  let suffix = " suffix"
+        \\  let callback = (value: String) |-> value ++ suffix
+        \\  let first = decorate("first", callback)
+        \\  let second = decorate("second", callback)
+        \\  let placed = place!(first |=| (second /=/ first))
+        \\  ~ placed.width == 600
+        \\end
+    ;
+    var counter = CancellationCounter{ .cancel_after = std.math.maxInt(usize) };
+    const options = compiler.lowering.EvaluateOptions{
+        .io = testing.io,
+        .cancellation = .{ .context = &counter, .is_canceled = cancelAfterCheck },
+    };
+    {
+        var evaluation = try prepare(testing.allocator, source);
+        defer evaluation.deinit();
+        try compiler.lowering.evaluateDocument(&evaluation.state, &evaluation.graph, options);
+    }
+    const total_checks = counter.checks;
+    try testing.expect(total_checks > 20);
+    for (1..total_checks + 1) |limit| {
+        var evaluation = try prepare(testing.allocator, source);
+        defer evaluation.deinit();
+        const diagnostic_count = evaluation.state.diagnostics.entries.items.len;
+        counter = .{ .cancel_after = limit };
+        try testing.expectError(error.Canceled, compiler.lowering.evaluateDocument(&evaluation.state, &evaluation.graph, options));
+        try testing.expectEqual(diagnostic_count, evaluation.state.diagnostics.entries.items.len);
+    }
+}
+
 fn canceledRead(_: ?*anyopaque, _: std.Io.File, _: []const []u8, _: u64) std.Io.File.ReadPositionalError!usize {
     return error.Canceled;
 }

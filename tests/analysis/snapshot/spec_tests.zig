@@ -219,6 +219,62 @@ test "snapshot cancellation releases results returned by the layout hook" {
     try testing.expect(cancellation.canceled);
 }
 
+test "snapshot cancellation releases each intermediate stage and preserves reusable sources" {
+    const entry = "stdlib/cancellation-entry.ss";
+    const source =
+        \\type Pair<T> { first: T second: T }
+        \\fn choose(value: Number, offset: Number = 2) -> Number
+        \\  if value > 0
+        \\    return value + offset
+        \\  else
+        \\    return offset
+        \\  end
+        \\end
+        \\fn apply(operation: Number -> Number, value: Number) -> Number
+        \\  return operation(value)
+        \\end
+        \\const initial: Number = 3
+        \\document
+        \\  let input = initial
+        \\  let callback = (value: Number) |-> choose(value)
+        \\  let first = apply(callback, input)
+        \\  let second = choose(first)
+        \\  let pair = Pair<Number> { first = first second = second }
+        \\end
+        \\page sample
+        \\  let value = choose(2)
+        \\end
+    ;
+    var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+    defer sources.deinit();
+    for ([_]bool{ false, true }) |broken| {
+        const text = if (broken) try std.fmt.allocPrint(testing.allocator, "{s}\npage unfinished\nlet partial =\n", .{source}) else try testing.allocator.dupe(u8, source);
+        defer testing.allocator.free(text);
+        try sources.put(entry, text);
+        var counter = CancelAtCheck{};
+        const options = analysis.snapshot.Options{
+            .retain_layout_inputs = true,
+            .cancellation = .{ .context = &counter, .is_canceled = CancelAtCheck.canceled },
+        };
+        {
+            var baseline = try analysis.snapshot.build(testing.allocator, &sources, entry, ".", options);
+            defer baseline.deinit();
+            try testing.expectEqual(broken, baseline.diagnostics.hasErrors());
+        }
+        const total_checks = counter.checks;
+        try testing.expect(total_checks > 20);
+        for (1..total_checks + 1) |limit| {
+            counter = .{ .limit = limit };
+            try testing.expectError(error.Canceled, analysis.snapshot.build(testing.allocator, &sources, entry, ".", options));
+        }
+        counter = .{};
+        var recovered = try analysis.snapshot.build(testing.allocator, &sources, entry, ".", options);
+        defer recovered.deinit();
+        try testing.expectEqual(broken, recovered.diagnostics.hasErrors());
+        try testing.expectEqualStrings(text, analysis.snapshot.sourceForPath(&recovered, entry).?);
+    }
+}
+
 test "snapshot retains recovered import diagnostics and clears them after repair" {
     var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
     defer sources.deinit();
