@@ -260,6 +260,7 @@ export type ComponentDeleteResult = LayoutEditResult;
 
 export type BuildStatus =
   "starting" |
+  "restarting" |
   "building" |
   "complete" |
   "manual" |
@@ -267,6 +268,7 @@ export type BuildStatus =
   "unavailable";
 
 export type HostMessage =
+  | { type: "serverRestarting"; revision: number }
   | {
     type: "snapshot";
     revision: number;
@@ -457,6 +459,7 @@ type ComponentWidthEditMessage = {
 export type WebviewMessage =
   | { type: "ready" }
   | { type: "refreshFull" }
+  | { type: "restart" }
   | {
     type: "snapshotResources";
     observedSnapshotId: string;

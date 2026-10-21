@@ -85,6 +85,20 @@ for (const kind of ["shape", "icon"]) {
   assert.equal(controller.reconcile(state.snapshot, 6)?.status, "failed");
   assert.equal(controller.isBusy(), false);
   assert.equal(state.shapeTool, "select", `${kind}: skipped insertions left the insertion tool active`);
+
+  state.shapeTool = kind === "shape" ? "rectangle" : "icon";
+  state.snapshot = snapshot("before-restart");
+  assert(insert());
+  const abandoned = messages.at(-1);
+  assert(insert(12));
+  const countBeforeReset = messages.length;
+  controller.reset();
+  assert.equal(controller.isBusy(), false);
+  assert.equal(messages.length, countBeforeReset, `${kind}: reset sent a queued edit`);
+  assert.equal(controller.acceptResult(result(abandoned, "applied", { documentVersion: 9 })), null);
+  state.snapshot = snapshot("after-restart");
+  controller.reconcile(state.snapshot, 9);
+  assert.equal(messages.length, countBeforeReset);
 }
 
 function snapshot(id, pageIds = [11, 12]) {

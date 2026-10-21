@@ -27,6 +27,9 @@ const definitions = Object.freeze({
   close: {
     path: "M18 6 6 18M6 6l12 12",
   },
+  restart: {
+    path: "M12 2v10M18.4 5.6a9 9 0 1 1-12.8 0",
+  },
   select: {
     viewBox: "0 0 20 20",
     filled: true,

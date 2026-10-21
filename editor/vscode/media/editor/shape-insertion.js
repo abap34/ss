@@ -252,6 +252,10 @@ export class ShapeController {
     return true;
   }
 
+  reset() {
+    this.edits.reset();
+  }
+
   /** @param {{page_id: number, binding: string}} target */
   cancelTarget(target) {
     const selection = { pageId: target.page_id, binding: target.binding };

@@ -79,6 +79,8 @@ await testComponentDeletionReachesTheWebview();
 await testIconCatalogAndInsertionReachTheWebview();
 await testResourceAcknowledgementsReachTheServer();
 await testPresentationDefersUntilFirstSnapshot();
+await testRestartDiscardsUnacknowledgedRequestsAndQueuedEdits();
+await testRestartFailureIsVisibleAndRetryCanRebuild();
 setProjectSettingsProvider(undefined);
 
 async function testOpenResolvesConfiguredEntryWithoutSsDocument() {
@@ -99,6 +101,7 @@ entry = "deck/slides.ss"
       { extensionUri: mock.Uri.file(fixture) },
       { appendLine() {} },
       () => undefined,
+      async () => {},
     );
 
     await controller.open(undefined);
@@ -142,6 +145,7 @@ entry = "slide.ss"
       { extensionUri: mock.Uri.file(fixture) },
       { appendLine() {} },
       () => client,
+      async () => {},
     );
 
     await controller.presentation(document);
@@ -230,6 +234,7 @@ entry = "slide.ss"
       { extensionUri: mock.Uri.file(fixture) },
       { appendLine() {} },
       () => client,
+      async () => {},
     );
     await controller.open(document);
     const session = controller.sessions.get(uri.toString());
@@ -843,6 +848,54 @@ async function testIconCatalogAndInsertionReachTheWebview() {
   });
 }
 
+async function testRestartDiscardsUnacknowledgedRequestsAndQueuedEdits() {
+  await withManualSession(async ({ controller, session, requests, messages }) => {
+    let releaseSnapshot;
+    await controller.handleMessage(session, { type: "restart" });
+    assert.equal(session.restartCalls, 1);
+    session.snapshotResponse = () => new Promise((resolve) => { releaseSnapshot = resolve; });
+    const oldRefresh = controller.refresh(session, session.serial);
+    await waitFor(() => session.requestRunning && releaseSnapshot != null);
+    session.sourceEditResponse = () => new Promise(() => {});
+    const oldEdit = controller.handleMessage(session, translationMessage(1));
+    const queuedEdit = controller.handleMessage(session, translationMessage(2));
+    await waitFor(() => requests.some((request) => request.method === "ss/layoutEdit"));
+    const version = session.document.version;
+
+    controller.serverRestarting();
+    await Promise.all([oldRefresh, oldEdit, queuedEdit]);
+    assert.equal(session.document.version, version, "restart applied an obsolete source edit");
+    assert.equal(requests.filter((request) => request.method === "ss/layoutEdit").length, 1,
+      "restart sent an edit queued for the old server");
+    assert.equal(session.snapshotId, undefined);
+    assert(messages.some((message) => message.type === "serverRestarting"));
+    await controller.build(session.document);
+    assert.equal(session.timer, undefined, "build ran while the server was restarting");
+
+    session.sourceEditResponse = undefined;
+    session.snapshotResponse = () => editorSnapshot("fresh");
+    controller.serverRestarted();
+    await waitFor(() => session.snapshotId === "fresh");
+    const freshRequest = requests.filter((request) => request.method === "ss/editorSnapshot").at(-1);
+    assert.equal(freshRequest.params.baseSnapshotId, "", "restart reused an old server snapshot");
+    releaseSnapshot(editorSnapshot("obsolete"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(session.snapshotId, "fresh");
+    assert(!messages.some((message) => message.snapshot?.snapshot_id === "obsolete"));
+  });
+}
+
+async function testRestartFailureIsVisibleAndRetryCanRebuild() {
+  await withManualSession(async ({ controller, session, messages }) => {
+    controller.serverRestarting();
+    controller.serverRestartFailed(new Error("spawn failed"));
+    assert(messages.some((message) => message.type === "error" && /spawn failed/.test(message.message)));
+    controller.serverRestarting();
+    controller.serverRestarted();
+    await waitFor(() => session.snapshotId === "reconciled");
+  });
+}
+
 async function withManualSession(run) {
   const fixture = await mkdtemp(path.join(os.tmpdir(), "ss-editor-controller-"));
   try {
@@ -885,6 +938,7 @@ automatic = false
       ready: true,
       sourceEditQueue: Promise.resolve(),
       serial: 0,
+      epoch: 0,
       requestRunning: false,
       refreshPending: false,
       editorReconciliationPending: false,
@@ -966,6 +1020,7 @@ automatic = false
       { extensionUri: mock.Uri.file(fixture) },
       { appendLine() {} },
       () => client,
+      async () => { session.restartCalls = (session.restartCalls ?? 0) + 1; },
     );
     controller.sessions.set(uri.toString(), session);
     mock.workspace.applyEdit = async () => {
@@ -1104,10 +1159,18 @@ function vscodeMock() {
   }
   class CancellationTokenSource {
     constructor() {
-      this.token = { isCancellationRequested: false };
+      this.listeners = new Set();
+      this.token = {
+        isCancellationRequested: false,
+        onCancellationRequested: (listener) => {
+          this.listeners.add(listener);
+          return { dispose: () => this.listeners.delete(listener) };
+        },
+      };
     }
     cancel() {
       this.token.isCancellationRequested = true;
+      for (const listener of this.listeners) listener();
     }
     dispose() {}
   }
@@ -1246,6 +1309,7 @@ async function testPendingOpenDoesNotSurviveDisposal() {
     { extensionUri: mock.Uri.file(os.tmpdir()) },
     { appendLine() {} },
     () => undefined,
+    async () => {},
   );
   const pending = controller.open({ uri: mock.Uri.file(entryPath), languageId: "ss-slide", version: 1 });
   controller.dispose();

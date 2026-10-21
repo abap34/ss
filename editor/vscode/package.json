@@ -24,12 +24,13 @@
     "watch": "node scripts/build.js --watch",
     "package": "npm run compile && vsce package",
     "package:prebuilt": "vsce package",
-    "test": "npm run compile && node ../../tests/project/schema/spec.cjs && node ../../tests/editor/vscode/spec.mjs && node ../../tests/editor/vscode/controller/spec.mjs && node ../../tests/editor/vscode/project_config/spec.mjs && node ../../tests/editor/vscode/view/spec.mjs && node ../../tests/editor/vscode/request/spec.mjs && node ../../tests/editor/vscode/timing/spec.mjs"
+    "test": "npm run compile && node ../../tests/project/schema/spec.cjs && node ../../tests/editor/vscode/spec.mjs && node ../../tests/editor/vscode/controller/spec.mjs && node ../../tests/editor/vscode/restart/spec.mjs && node ../../tests/editor/vscode/project_config/spec.mjs && node ../../tests/editor/vscode/view/spec.mjs && node ../../tests/editor/vscode/request/spec.mjs && node ../../tests/editor/vscode/timing/spec.mjs"
   },
   "activationEvents": [
     "onLanguage:ss-slide",
     "onCommand:ss.editor.open",
     "onCommand:ss.editor.build",
+    "onCommand:ss.editor.restart",
     "onCommand:ss.editor.presentation",
     "onCommand:ss.checkCurrentFile"
   ],
@@ -71,6 +72,11 @@
     ],
     "commands": [
       {
+        "command": "ss.editor.restart",
+        "title": "ss: Restart WYSIWYG",
+        "icon": "$(debug-restart)"
+      },
+      {
         "command": "ss.editor.open",
         "title": "ss: Open WYSIWYG Editor"
       },
@@ -102,6 +108,7 @@
         }
       ],
       "commandPalette": [
+        { "command": "ss.editor.restart" },
         {
           "command": "ss.editor.open"
         },

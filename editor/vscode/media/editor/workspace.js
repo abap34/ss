@@ -25,6 +25,7 @@ export const zoomPolicy = Object.freeze({
 });
 export const buildStatusPresentation = {
   starting: { label: "Starting…", icon: "" },
+  restarting: { label: "Restarting…", icon: "" },
   building: { label: "Building…", icon: "" },
   complete: { label: "Build complete", icon: "✓" },
   manual: { label: "Build required", icon: "↻" },
@@ -53,9 +54,13 @@ export class WorkspaceView {
     });
   }
 
-  render() {
+  resetInteractions() {
     this.interaction.reset();
     this.cleanupPan();
+  }
+
+  render() {
+    this.resetInteractions();
     const main = element("main", "workspace");
     main.append(this.toolbar());
     const viewport = element("div", "viewport");
@@ -414,7 +419,14 @@ export class WorkspaceView {
         iconActive ? this.iconStylePopover() : this.shapeStylePopover(),
       );
     }
-    bar.append(status);
+    const restart = element("button", "restart-button");
+    restart.type = "button";
+    restart.title = "Restart WYSIWYG language server";
+    restart.setAttribute("aria-label", restart.title);
+    restart.disabled = this.state.buildStatus === "restarting";
+    restart.append(toolIcon("restart"));
+    restart.addEventListener("click", () => this.actions.restart());
+    bar.append(status, restart);
     return bar;
   }
 
@@ -888,6 +900,8 @@ export class WorkspaceView {
   updateBuildStatus() {
     const status = this.root?.querySelector(".build-status");
     if (!status) return false;
+    const restart = this.root.querySelector(".restart-button");
+    if (restart) restart.disabled = this.state.buildStatus === "restarting";
     applyBuildStatus(
       status,
       this.state.buildStatus,
@@ -1137,6 +1151,7 @@ export function formatBuildDuration(durationMs) {
 export function emptyPreviewMessage(status) {
   switch (status) {
   case "starting": return "Starting WYSIWYG preview…";
+  case "restarting": return "Restarting WYSIWYG preview…";
   case "building": return "Building WYSIWYG preview…";
   case "manual":
     return "Run “ss: Build WYSIWYG Preview” to build the preview.";

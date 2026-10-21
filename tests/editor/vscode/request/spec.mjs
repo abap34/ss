@@ -18,7 +18,7 @@ const compiled = ts.transpileModule(source, {
     target: ts.ScriptTarget.ES2020,
   },
 }).outputText;
-const { isRetryableSnapshotError } = await import(
+const { isRetryableSnapshotError, withRequestDeadline } = await import(
   `data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`
 );
 
@@ -28,3 +28,43 @@ assert.equal(isRetryableSnapshotError({ code: -32603 }), false);
 assert.equal(isRetryableSnapshotError({ code: "-32801" }), false);
 assert.equal(isRetryableSnapshotError(new Error("content modified")), false);
 assert.equal(isRetryableSnapshotError(null), false);
+
+const success = cancellationSource();
+assert.equal(await withRequestDeadline(async () => 42, success), 42);
+assert.equal(success.listeners.size, 0, "successful requests retained cancellation listeners");
+
+const cancelled = cancellationSource();
+const waiting = withRequestDeadline(() => new Promise(() => {}), cancelled);
+cancelled.cancel();
+await assert.rejects(waiting, (error) => error.code === -32800);
+assert.equal(cancelled.listeners.size, 0);
+
+const stalled = cancellationSource();
+await assert.rejects(
+  withRequestDeadline(() => new Promise(() => {}), stalled, 5),
+  /Restart WYSIWYG/,
+);
+assert.equal(stalled.token.isCancellationRequested, true);
+assert.equal(stalled.listeners.size, 0);
+
+const failed = cancellationSource();
+await assert.rejects(withRequestDeadline(() => { throw new Error("failed"); }, failed), /failed/);
+assert.equal(failed.listeners.size, 0);
+
+function cancellationSource() {
+  const listeners = new Set();
+  return {
+    listeners,
+    token: {
+      isCancellationRequested: false,
+      onCancellationRequested(listener) {
+        listeners.add(listener);
+        return { dispose: () => listeners.delete(listener) };
+      },
+    },
+    cancel() {
+      this.token.isCancellationRequested = true;
+      for (const listener of listeners) listener();
+    },
+  };
+}

@@ -112,6 +112,7 @@ const presentation = new PresentationController(state.presentation, {
   renderPage: (id) => renderPage(state.snapshot, id),
 });
 const actions = {
+  restart: () => vscode.postMessage({ type: "restart" }),
   render,
   revealSource,
   selectObject,
@@ -136,7 +137,24 @@ app.addEventListener("ss-pdf-error", (event) => {
 
 window.addEventListener("message", (event) => {
   const message = event.data || {};
-  if (message.type === "snapshot") {
+  if (message.type === "serverRestarting") {
+    if (!Number.isSafeInteger(message.revision) || message.revision < state.buildRevision) return;
+    workspace.resetInteractions();
+    deferredSnapshot = null;
+    translation.cancel();
+    componentWidth.cancel();
+    componentDeletion.cancel();
+    shape.reset();
+    icon.reset();
+    if (state.snapshot) disposePages(state.snapshot);
+    disposePdfItems(app);
+    state.snapshot = null;
+    state.revision = message.revision;
+    setBuildStatus("restarting", message.revision);
+    clearToast();
+    if (state.presentation.active) presentation.exit();
+    else render();
+  } else if (message.type === "snapshot") {
     if (workspace.isPointerOperationActive()) deferSnapshot(message);
     else acceptSnapshot(message);
     reportSnapshotResources(message.snapshot?.snapshot_id);
@@ -574,6 +592,7 @@ function initialTheme() {
 }
 
 const buildStatuses = new Set([
+  "restarting",
   "starting",
   "building",
   "complete",

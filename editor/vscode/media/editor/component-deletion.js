@@ -41,6 +41,11 @@ export class ComponentDeletionController {
     return true;
   }
 
+  cancel() {
+    this.pending.clear();
+    this.inFlight = null;
+  }
+
   acceptResult(message) {
     const pending = this.inFlight;
     if (!pending || message.requestId !== pending.requestId) return null;

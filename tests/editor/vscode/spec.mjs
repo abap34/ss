@@ -17,6 +17,7 @@ testVerticalConstraintGeometry();
 await testCompletionDefaults();
 await testManualBuildCommand();
 await testPresentationCommand();
+await testRestartCommand();
 await testLineCommentSyntax();
 await testCompositionOperatorSyntax();
 await testPairedFunctionKeywordSyntax();
@@ -25,6 +26,14 @@ await testTypeDeclarationSyntax();
 await testZedDeclarationIndentation();
 await testBuiltinTypeSyntax();
 await testBlockStringSyntax();
+
+async function testRestartCommand() {
+  const manifest = JSON.parse(await readFile(path.join(root, "editor/vscode/package.json"), "utf8"));
+  assert(manifest.contributes.commands.some((command) => command.command === "ss.editor.restart"),
+    "restart command was not contributed");
+  assert(manifest.activationEvents.includes("onCommand:ss.editor.restart"),
+    "restart command cannot activate the extension");
+}
 
 async function testValueUpdateKeywordSyntax() {
   const grammar = JSON.parse(await readFile(path.join(root, "editor/vscode/syntaxes/ss.tmLanguage.json"), "utf8"));

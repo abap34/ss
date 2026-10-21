@@ -163,7 +163,7 @@ export class IconController {
   expireCatalogRequest(requestId) {
     if (requestId !== this.latestCatalogRequestId ||
         !this.state.iconCatalogPending) return false;
-    const message = "Icon catalog request timed out. Reload the VS Code window if retrying does not help.";
+    const message = "Icon catalog request timed out. Use Restart WYSIWYG if retrying does not help.";
     this.state.iconCatalogPending = false;
     this.state.iconCatalogError = message;
     if (typeof this.actions.reportError === "function") {
@@ -284,6 +284,17 @@ export class IconController {
     this.state.shapeTool = "select";
     this.actions.render();
     return true;
+  }
+
+  reset() {
+    this.edits.reset();
+    if (this.catalogTimer != null) clearTimeout(this.catalogTimer);
+    if (this.catalogRequestTimer != null) clearTimeout(this.catalogRequestTimer);
+    this.catalogTimer = null;
+    this.catalogRequestTimer = null;
+    this.latestCatalogRequestId = this.nextRequestId++;
+    this.state.iconCatalogPending = false;
+    this.state.iconPickerOpen = false;
   }
 
   /** @param {number} pageId */

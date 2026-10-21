@@ -378,6 +378,24 @@ button {
   border-bottom: 1px solid var(--border);
   background: var(--toolbar-background);
 }
+.restart-button {
+  display: grid;
+  place-items: center;
+  flex: 0 0 26px;
+  width: 26px;
+  height: 26px;
+  padding: 5px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--text-faint);
+  background: transparent;
+  cursor: pointer;
+}
+.restart-button:hover {
+  color: var(--text);
+  background: var(--control-background);
+}
+.restart-button:disabled { opacity: 0.45; cursor: wait; }
 .zoom-controls {
   display: flex;
   flex: 0 0 auto;
@@ -998,6 +1016,7 @@ button {
   line-height: 1;
 }
 .build-status--starting .build-status-icon,
+.build-status--restarting .build-status-icon,
 .build-status--building .build-status-icon {
   border-color: var(--text-faint);
   border-top-color: var(--accent);
@@ -1030,6 +1049,7 @@ button {
 }
 @media (prefers-reduced-motion: reduce) {
   .build-status--starting .build-status-icon,
+  .build-status--restarting .build-status-icon,
   .build-status--building .build-status-icon {
     animation: none;
   }

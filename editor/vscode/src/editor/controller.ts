@@ -12,7 +12,7 @@ import {
   ShapeEditResult,
   WebviewMessage,
 } from "./protocol";
-import { isRetryableSnapshotError } from "./request";
+import { isRetryableSnapshotError, withRequestDeadline } from "./request";
 import {
   documentVersions,
   revealSource,
@@ -34,7 +34,7 @@ import { ViewResources } from "./view";
 type ClientProvider = () => LanguageClient | undefined;
 type SourceEditMessage = Exclude<
   WebviewMessage,
-  { type: "ready" | "refreshFull" | "snapshotResources" | "revealSource" | "queryIcons" }
+  { type: "ready" | "restart" | "refreshFull" | "snapshotResources" | "revealSource" | "queryIcons" }
 >;
 
 const immediateRefreshDelayMs = 0;
@@ -86,6 +86,7 @@ interface Session {
   sourceEditCancellation?: vscode.CancellationTokenSource;
   timer?: NodeJS.Timeout;
   serial: number;
+  epoch: number;
   requestRunning: boolean;
   requestCancellation?: vscode.CancellationTokenSource;
   refreshPending: boolean;
@@ -101,11 +102,13 @@ export class EditorController implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
   private readonly view: ViewResources;
   private disposed = false;
+  private restarting = false;
 
   constructor(
     context: vscode.ExtensionContext,
     private readonly output: vscode.OutputChannel,
     private readonly clientProvider: ClientProvider,
+    private readonly restartServer: () => Promise<void>,
   ) {
     this.view = new ViewResources(context.extensionUri);
     this.disposables.push(vscode.workspace.onDidChangeTextDocument((event) => {
@@ -128,6 +131,7 @@ export class EditorController implements vscode.Disposable {
       if (session.timer) clearTimeout(session.timer);
       session.requestCancellation?.cancel();
       session.sourceEditCancellation?.cancel();
+      session.sourceEditCancellation = undefined;
       session.panel.dispose();
     }
     this.sessions.clear();
@@ -231,6 +235,7 @@ export class EditorController implements vscode.Disposable {
       pendingPresentationStart: false,
       sourceEditQueue: Promise.resolve(),
       serial: 0,
+      epoch: 0,
       requestRunning: false,
       refreshPending: false,
       editorReconciliationPending: false,
@@ -279,10 +284,51 @@ export class EditorController implements vscode.Disposable {
     return true;
   }
 
+  serverRestarting(): void {
+    this.restarting = true;
+    for (const session of this.sessions.values()) {
+      if (session.timer) clearTimeout(session.timer);
+      session.timer = undefined;
+      this.invalidateRefresh(session);
+      session.epoch += 1;
+      session.sourceEditCancellation?.cancel();
+      session.sourceEditCancellation = undefined;
+      session.sourceEditQueue = Promise.resolve();
+      session.requestCancellation = undefined;
+      session.requestRunning = false;
+      session.refreshPending = false;
+      session.pendingRefreshSinceMs = undefined;
+      session.snapshotId = undefined;
+      session.editorReconciliationPending = false;
+      void this.post(session, { type: "serverRestarting", revision: session.serial });
+    }
+  }
+
+  serverRestarted(): void {
+    this.restarting = false;
+    for (const session of this.sessions.values()) {
+      if (session.ready) this.schedule(session, immediateRefreshDelayMs);
+    }
+  }
+
+  serverRestartFailed(error: unknown): void {
+    this.restarting = false;
+    for (const session of this.sessions.values()) {
+      void this.post(session, {
+        type: "error", revision: ++session.serial, buildDurationMs: 0,
+        message: `Could not restart the language server: ${String(error)}`,
+      });
+    }
+  }
+
   private async handleMessage(
     session: Session,
     message: WebviewMessage,
   ): Promise<void> {
+    if (message.type === "restart") {
+      await this.restartServer();
+      return;
+    }
     if (message.type === "ready") {
       session.ready = true;
       this.schedule(session, immediateRefreshDelayMs);
@@ -346,8 +392,9 @@ export class EditorController implements vscode.Disposable {
     session: Session,
     operation: () => Promise<void>,
   ): Promise<void> {
+    const epoch = session.epoch;
     const run = session.sourceEditQueue.then(async () => {
-      if (session.disposed) return;
+      if (session.disposed || this.restarting || epoch !== session.epoch) return;
       const cancellation = new vscode.CancellationTokenSource();
       session.sourceEditCancellation = cancellation;
       try {
@@ -379,8 +426,10 @@ export class EditorController implements vscode.Disposable {
       });
       return;
     }
+    const epoch = session.epoch;
+    const cancellation = new vscode.CancellationTokenSource();
     try {
-      const result = await client.sendRequest<IconCatalogResult>(
+      const result = await withRequestDeadline(() => client.sendRequest<IconCatalogResult>(
         "ss/iconCatalog",
         {
           query: message.query,
@@ -388,8 +437,9 @@ export class EditorController implements vscode.Disposable {
           category: message.category,
           offset: message.offset,
         },
-      );
-      if (session.disposed) return;
+        cancellation.token,
+      ), cancellation);
+      if (session.disposed || epoch !== session.epoch) return;
       if (!Array.isArray(result.icons) || !Array.isArray(result.categories)) {
         throw new Error("The language server returned an invalid icon catalog.");
       }
@@ -399,12 +449,15 @@ export class EditorController implements vscode.Disposable {
         result,
       });
     } catch (error) {
+      if (session.disposed || epoch !== session.epoch) return;
       this.output.appendLine(`[editor] icon catalog failed: ${String(error)}`);
       await this.post(session, {
         type: "iconCatalogError",
         requestId: message.requestId,
         message: String(error),
       });
+    } finally {
+      cancellation.dispose();
     }
   }
 
@@ -644,10 +697,13 @@ export class EditorController implements vscode.Disposable {
       };
     }
     const versions = documentVersions();
-    const token = session.sourceEditCancellation?.token;
+    const cancellation = session.sourceEditCancellation ?? new vscode.CancellationTokenSource();
+    const ownsCancellation = session.sourceEditCancellation !== cancellation;
+    const token = cancellation.token;
+    const epoch = session.epoch;
     try {
-      const result = await request(client, token);
-      if (session.disposed || token?.isCancellationRequested) return undefined;
+      const result = await withRequestDeadline(() => request(client, token), cancellation);
+      if (session.disposed || epoch !== session.epoch || token.isCancellationRequested) return undefined;
       if (!workspaceEditTargetsAreCurrent(result.workspaceEdit, versions)) {
         return {
           status: "stale",
@@ -677,6 +733,7 @@ export class EditorController implements vscode.Disposable {
       const applied = await vscode.workspace.applyEdit(
         toWorkspaceEdit(result.workspaceEdit),
       );
+      if (session.disposed || epoch !== session.epoch || token.isCancellationRequested) return undefined;
       if (!applied) {
         return {
           status: "rejected",
@@ -690,12 +747,15 @@ export class EditorController implements vscode.Disposable {
         refresh: true,
       };
     } catch (error) {
-      if (session.disposed || token?.isCancellationRequested) return undefined;
+      if (session.disposed || epoch !== session.epoch ||
+          (token.isCancellationRequested && isRetryableSnapshotError(error))) return undefined;
       this.output.appendLine(`[editor] ${messages.logLabel} failed: ${String(error)}`);
       return {
         status: "rejected",
         message: String(error),
       };
+    } finally {
+      if (ownsCancellation) cancellation.dispose();
     }
   }
 
@@ -754,7 +814,7 @@ export class EditorController implements vscode.Disposable {
   }
 
   private markBuildRequired(session: Session): void {
-    if (session.disposed) return;
+    if (session.disposed || this.restarting) return;
     if (session.timer) clearTimeout(session.timer);
     session.timer = undefined;
     session.pendingRefreshSinceMs = undefined;
@@ -790,7 +850,7 @@ export class EditorController implements vscode.Disposable {
     delayMs: number,
     maxWaitMs = delayMs,
   ): void {
-    if (session.disposed) return;
+    if (session.disposed || this.restarting) return;
     if (session.requestRunning) {
       session.refreshPending = true;
     }
@@ -839,14 +899,14 @@ export class EditorController implements vscode.Disposable {
     const documentVersion = session.document.version;
     const buildStartedAt = performance.now();
     try {
-      const snapshot = await client.sendRequest<EditorSnapshot>(
+      const snapshot = await withRequestDeadline(() => client.sendRequest<EditorSnapshot>(
         "ss/editorSnapshot",
         {
           textDocument: { uri: session.document.uri.toString() },
           baseSnapshotId: session.snapshotId ?? "",
         },
         requestCancellation.token,
-      );
+      ), requestCancellation);
       if (
         session.disposed || serial !== session.serial ||
         documentVersion !== session.document.version
@@ -896,15 +956,15 @@ export class EditorController implements vscode.Disposable {
       requestCancellation.dispose();
       if (session.requestCancellation === requestCancellation) {
         session.requestCancellation = undefined;
-      }
-      session.requestRunning = false;
-      const refreshImmediately = shouldStartPendingRefresh(
-        session.refreshPending,
-        session.timer !== undefined,
-      );
-      session.refreshPending = false;
-      if (refreshImmediately && !session.disposed) {
-        this.schedule(session, immediateRefreshDelayMs);
+        session.requestRunning = false;
+        const refreshImmediately = shouldStartPendingRefresh(
+          session.refreshPending,
+          session.timer !== undefined,
+        );
+        session.refreshPending = false;
+        if (refreshImmediately && !session.disposed) {
+          this.schedule(session, immediateRefreshDelayMs);
+        }
       }
     }
   }

@@ -3,11 +3,15 @@ import { LanguageClient, LanguageClientOptions, Middleware, ServerOptions, Trace
 import { PageGuideDecorations } from "./pageGuide";
 import { initializeProjectSettings, onDidChangeProjectSettings, projectSettings, ProjectSettingsResponse, setProjectSettingsProvider } from "./projectConfig";
 import { EditorController } from "./editor/controller";
+import { ServerProcess } from "./serverProcess";
+import { withRequestDeadline } from "./editor/request";
 
 let client: LanguageClient | undefined;
 let pageGuide: PageGuideDecorations | undefined;
 let editorController: EditorController | undefined;
 let outputChannel: vscode.OutputChannel | undefined;
+let restartTask: Promise<void> | undefined;
+const serverProcesses = new WeakMap<LanguageClient, ServerProcess>();
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   context.subscriptions.push(initializeProjectSettings());
@@ -20,9 +24,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }).catch((error) => output.appendLine(`Project settings notification failed: ${String(error)}`));
   }));
   pageGuide = new PageGuideDecorations();
-  editorController = new EditorController(context, output, () => client);
+  const restart = () => restartLanguageClient(context);
+  editorController = new EditorController(context, output, () => client, restart);
 
   context.subscriptions.push(output, pageGuide, editorController);
+  context.subscriptions.push(vscode.commands.registerCommand("ss.editor.restart", restart));
   context.subscriptions.push(vscode.commands.registerCommand("ss.editor.open", () =>
     editorController?.open(vscode.window.activeTextEditor?.document)
   ));
@@ -60,20 +66,47 @@ export async function deactivate(): Promise<void> {
   outputChannel = undefined;
 }
 
-async function restartLanguageClient(context: vscode.ExtensionContext): Promise<void> {
+function restartLanguageClient(context: vscode.ExtensionContext): Promise<void> {
+  // Coalesce repeated clicks and configuration changes into one restart.
+  if (restartTask) return restartTask;
+  restartTask = restartLanguageClientOnce(context).catch(async (error) => {
+    outputChannel?.appendLine(`[editor] restart failed: ${String(error)}`);
+    editorController?.serverRestartFailed(error);
+    await vscode.window.showErrorMessage(`Could not restart ss: ${String(error)}`);
+  }).finally(() => { restartTask = undefined; });
+  return restartTask;
+}
+
+async function restartLanguageClientOnce(context: vscode.ExtensionContext): Promise<void> {
+  editorController?.serverRestarting();
   await stopLanguageClient();
   if (!outputChannel) {
     return;
   }
   const active = createLanguageClient(outputChannel);
   client = active;
-  context.subscriptions.push(active);
-  const ready = active.start();
+  const cancellation = new vscode.CancellationTokenSource();
+  const ready = withRequestDeadline(() => active.start(), cancellation);
   setProjectSettingsProvider(async (projectFile) => {
     await ready;
-    return active.sendRequest<ProjectSettingsResponse>("ss/projectSettings", { projectFile });
+    const requestCancellation = new vscode.CancellationTokenSource();
+    try {
+      return await withRequestDeadline(() => active.sendRequest<ProjectSettingsResponse>(
+        "ss/projectSettings", { projectFile }, requestCancellation.token,
+      ), requestCancellation);
+    } finally {
+      requestCancellation.dispose();
+    }
   }, (message) => outputChannel?.appendLine(message));
-  await ready;
+  try {
+    await ready;
+    editorController?.serverRestarted();
+  } catch (error) {
+    await stopLanguageClient();
+    throw error;
+  } finally {
+    cancellation.dispose();
+  }
 }
 
 async function stopLanguageClient(): Promise<void> {
@@ -81,19 +114,28 @@ async function stopLanguageClient(): Promise<void> {
   client = undefined;
   setProjectSettingsProvider(undefined);
   if (active) {
-    await active.stop();
+    try {
+      await active.stop(2_000);
+    } catch (error) {
+      outputChannel?.appendLine(`[editor] server shutdown failed: ${String(error)}`);
+    } finally {
+      await serverProcesses.get(active)?.stop();
+      try {
+        await active.dispose();
+      } catch (error) {
+        outputChannel?.appendLine(`[editor] client disposal failed: ${String(error)}`);
+      }
+    }
   }
 }
 
 function createLanguageClient(output: vscode.OutputChannel): LanguageClient {
   const command = vscode.workspace.getConfiguration("ss").get<string>("cli.path", "ss");
-  const serverOptions: ServerOptions = {
+  const serverProcess = new ServerProcess();
+  const serverOptions: ServerOptions = () => serverProcess.start(
     command,
-    args: ["lsp"],
-    options: {
-      cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
-    },
-  };
+    vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+  );
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{ scheme: "file", language: "ss-slide" }],
     outputChannel: output,
@@ -107,6 +149,7 @@ function createLanguageClient(output: vscode.OutputChannel): LanguageClient {
   };
 
   const active = new LanguageClient("ss", "ss Language Server", serverOptions, clientOptions);
+  serverProcesses.set(active, serverProcess);
   applyTraceSetting(active);
   return active;
 }

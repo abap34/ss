@@ -13,6 +13,7 @@ import { exerciseRelativeAdjustment } from "./relative-adjustment.mjs";
 import { exerciseObjectDrag } from "./drag.mjs";
 import { exerciseSnapping } from "./snapping.mjs";
 import { exerciseObjectDetails } from "./details.mjs";
+import { exerciseRestart } from "./restart.mjs";
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const source = path.join(repository, "editor/vscode/media/editor");
@@ -63,6 +64,11 @@ await writeFile(path.join(output, "asset.pdf"), pdfAsset());
 await writeFile(path.join(output, "index.html"), testDocument(), "utf8");
 
 await withBrowser(output, async (browser, baseUrl) => {
+  await exerciseRestart(browser, baseUrl, editorSnapshot());
+  if (process.argv.includes("--restart-only")) {
+    console.log("WYSIWYG restart UI checks passed.");
+    return;
+  }
   await exerciseObjectDetails(browser, baseUrl, editorSnapshot(), output);
   if (process.argv.includes("--details-only")) {
     console.log("WYSIWYG compact object details checks passed.");

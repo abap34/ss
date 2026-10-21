@@ -20,6 +20,11 @@ export class EditQueue {
     return this.pending != null || this.followups.length > 0;
   }
 
+  reset() {
+    this.followups = [];
+    this.discardPending();
+  }
+
   intents() {
     return this.pending ? [this.pending, ...this.followups] : this.followups;
   }

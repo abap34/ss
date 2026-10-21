@@ -22,6 +22,11 @@ export class ComponentWidthController {
     return this.minimum(nodeId) != null;
   }
 
+  cancel() {
+    this.pending.clear();
+    this.inFlight = null;
+  }
+
   minimum(nodeId) {
     const value = this.target(nodeId)?.minimum_width;
     return Number.isFinite(value) && value > 0 ? value : null;
