@@ -212,13 +212,15 @@ pub const Ingress = struct {
                 self.allocator.destroy(value.state);
             };
 
+            const exits = if (method) |name| std.mem.eql(u8, name, "exit") else false;
             try self.enqueue(.{
                 .payload = .{ .message = parsed },
                 .revision = revision,
                 .request = request,
             });
             parsed_owned = false;
-            if (method) |name| if (std.mem.eql(u8, name, "exit")) return;
+            // The worker may already have freed the message after enqueueing.
+            if (exits) return;
         }
     }
 
