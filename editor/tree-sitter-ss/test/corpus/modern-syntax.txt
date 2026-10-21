@@ -22,11 +22,11 @@ page Lambda
   let has_marker = marker?
   let missing_marker = !has_marker
   let label = marker ?? colored
-  let sample = code """
+  let sample = code <<
 fn sample() -> Number
   return 1
 end
-"""
+>>
   let value = ((x: Number) |-> x + 1)(2)
 end
 
@@ -182,7 +182,7 @@ end
         (callable_identifier
           (bare_callable_identifier
             (identifier)))
-        (string)))
+        (block_text)))
     (let_statement
       (identifier)
       (call_expression

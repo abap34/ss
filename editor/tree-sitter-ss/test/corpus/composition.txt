@@ -136,9 +136,8 @@ Layout symbols in strings and text bodies
 
 page Text
   let literal = "a || b // c"
-  let triple = """
-a || b // c
-"""
+  let multiline = "a || b
+// c"
   text! a || b // c
   text! <<
 a || b // c

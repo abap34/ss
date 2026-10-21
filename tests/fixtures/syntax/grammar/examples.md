@@ -141,9 +141,9 @@ text(<<
 
 <!-- syntax: accept expression -->
 ```ss
-"""
+<<
 Literal text
-"""
+>>
 ```
 
 <!-- syntax: reject expression UnterminatedBlockString -->
@@ -212,7 +212,7 @@ end
 
 <!-- syntax: accept expression -->
 ```ss
-c"""#123456"""
+c"#123456"
 ```
 
 <!-- syntax: accept expression -->

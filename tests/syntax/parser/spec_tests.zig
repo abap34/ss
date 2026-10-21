@@ -288,9 +288,9 @@ test "syntax spec: double slashes remain text and single slash remains division"
         \\page Example
         \\  text("https://example.com/a//b")
         \\  text line // body
-        \\  text """
+        \\  text <<
         \\// multiline body
-        \\"""
+        \\>>
         \\  let quotient = 8 / 2
         \\end
     );
@@ -1734,9 +1734,6 @@ test "syntax spec: raw strings preserve composition markers" {
     var parsed = try parse(
         \\page Text
         \\  text "a || b // c"
-        \\  text """
-        \\a || b // c
-        \\"""
         \\  text <<
         \\a || b // c
         \\>>
@@ -1744,7 +1741,7 @@ test "syntax spec: raw strings preserve composition markers" {
     );
     defer parsed.deinit();
     const statements = parsed.module.pages.items[0].statements.items;
-    try testing.expectEqual(@as(usize, 3), statements.len);
+    try testing.expectEqual(@as(usize, 2), statements.len);
     for (statements) |statement| {
         const call = try expectCall(statement.kind.expr_stmt, "text", 1);
         try expectString(call.args.items[0], "a || b // c");
@@ -1962,9 +1959,9 @@ test "syntax spec: call sugar is explicit about text-bearing and zero-argument c
         \\first
         \\second
         \\>>
-        \\  quote """
+        \\  quote <<
         \\hello
-        \\"""
+        \\>>
         \\end
         \\
     );

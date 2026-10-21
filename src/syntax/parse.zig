@@ -1011,7 +1011,7 @@ const Parser = struct {
 
     fn parseImportSpec(self: *Parser) !ParsedImportSpec {
         source.skipInlineSpaces(self.source, &self.pos);
-        if (!self.eof() and (self.source[self.pos] == '"' or source.startsWithAt(self.source, self.pos, "\"\"\""))) {
+        if (!self.eof() and self.source[self.pos] == '"') {
             const literal = try self.parseStringLiteral();
             return .{ .text = literal.text, .span = literal.source_span.? };
         }
@@ -1862,7 +1862,7 @@ const Parser = struct {
         if (self.startsColorLiteral()) {
             return .{ .color = try self.parseColorLiteralString() };
         }
-        if (!self.eof() and (self.source[self.pos] == '"' or source.startsWithAt(self.source, self.pos, "\"\"\""))) {
+        if (!self.eof() and self.source[self.pos] == '"') {
             return .{ .string = try self.parseStringLiteral() };
         }
         if (source.startsWithAt(self.source, self.pos, "<<")) {
@@ -1914,7 +1914,7 @@ const Parser = struct {
             name_owned = false;
             return .{ .call = try self.makeUnaryStringCall(name, text) };
         }
-        if (!self.eof() and (self.source[self.pos] == '"' or source.startsWithAt(self.source, self.pos, "\"\"\""))) {
+        if (!self.eof() and self.source[self.pos] == '"') {
             const text = try self.parseStringLiteral();
             name_owned = false;
             return .{ .call = try self.makeUnaryStringCall(name, text) };
@@ -2532,25 +2532,6 @@ const Parser = struct {
 
     fn parseStringLiteral(self: *Parser) !ast.StringLiteral {
         source.skipTriviaFrom(self.source, &self.pos);
-        if (source.startsWithAt(self.source, self.pos, "\"\"\"")) {
-            self.pos += 3;
-            const start = self.pos;
-            while (!self.eof() and !source.startsWithAt(self.source, self.pos, "\"\"\"")) {
-                self.pos += 1;
-            }
-            if (self.eof()) return self.fail(error.UnterminatedString);
-            const raw = self.source[start..self.pos];
-            const bounds = normalizedBlockStringBounds(raw);
-            self.pos += 3;
-            return .{
-                .text = try self.allocator.dupe(u8, raw[bounds.start..bounds.end]),
-                .source_span = .{
-                    .start = start + bounds.start,
-                    .end = start + bounds.end,
-                },
-            };
-        }
-
         if (self.eof() or self.source[self.pos] != '"') return self.fail(error.ExpectedString);
         self.pos += 1;
 

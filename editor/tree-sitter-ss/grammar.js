@@ -312,10 +312,7 @@ module.exports = grammar({
     import_spec: _ => /[A-Za-z0-9_./:-]+/,
     _type_name: $ => choice(alias($.identifier, $.type_identifier), $.qualified_type_identifier),
     qualified_type_identifier: $ => seq(field("module", $.identifier), "::", field("name", alias($.identifier, $.type_identifier))),
-    string: _ => token(choice(
-      seq('"""', repeat(choice(/[^"]+/, /"[^"]/, /""[^"]/)), '"""'),
-      seq('"', repeat(/[^"]/), '"'),
-    )),
+    string: _ => /"[^"]*"/,
     color_string: _ => /c"[^"]*"/,
     // Only a line-leading delimiter closes the literal. Leave its suffix and
     // newline to the surrounding expression, just like other string literals.

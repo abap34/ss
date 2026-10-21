@@ -62,12 +62,6 @@ pub const TokenIterator = struct {
                 return self.advance(line_value, end, .operator);
             }
             if (self.skipChevronBlockString(line_value)) continue;
-            if (source.startsWithAt(self.text, self.cursor, "\"\"\"")) {
-                const end = skipTripleQuotedString(self.text, self.cursor);
-                if (end <= line_value.span.end) return self.advance(line_value, end, .string);
-                self.advanceToAbsolute(end);
-                continue;
-            }
             if (source.startsWithAt(self.text, self.cursor, "c\"")) {
                 const end = source.skipDoubleQuotedString(self.text, self.cursor + 1, self.text.len);
                 if (end <= line_value.span.end) return self.advance(line_value, end, .color_string);
@@ -281,14 +275,6 @@ fn operatorEnd(text: []const u8, start: usize, line_end: usize) ?usize {
         if (start + operator.len <= end and source.startsWithAt(text, start, operator)) return start + operator.len;
     }
     return null;
-}
-
-fn skipTripleQuotedString(text: []const u8, start: usize) usize {
-    var index = @min(start + 3, text.len);
-    while (index + 3 <= text.len) : (index += 1) {
-        if (std.mem.eql(u8, text[index .. index + 3], "\"\"\"")) return index + 3;
-    }
-    return text.len;
 }
 
 fn semanticKindForIdentifier(word: []const u8, previous_word: ?[]const u8, next: ?u8, previous: ?u8) ?SemanticKind {

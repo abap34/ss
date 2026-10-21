@@ -20,9 +20,9 @@ test "syntax scanner: tokenizes source words and literals without comments" {
         \\  let quoted = "not a color c\"#000000\""
         \\  let multiline = "English Text
         \\inside"
-        \\  quote """
+        \\  quote <<
         \\English Text
-        \\"""
+        \\>>
         \\  code <<
         \\English Text
         \\>>
@@ -178,9 +178,9 @@ test "syntax scanner: classifies semantic tokens without LSP logic" {
         \\  let lambda = (x: Number) |-> x
         \\  let multiline = "English Text
         \\inside"
-        \\  quote """
+        \\  quote <<
         \\English Text
-        \\"""
+        \\>>
         \\  code <<
         \\English Text
         \\>>

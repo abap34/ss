@@ -1137,7 +1137,6 @@ fn printRule(count: usize) void {
 
 const HighlightState = enum {
     normal,
-    triple_string,
     chevron_block,
 };
 
@@ -1160,14 +1159,6 @@ fn scanHighlightState(slice: []const u8, initial: HighlightState) HighlightState
     var index: usize = 0;
     while (index < slice.len) {
         switch (state) {
-            .triple_string => {
-                if (std.mem.indexOfPos(u8, slice, index, "\"\"\"")) |end| {
-                    index = end + "\"\"\"".len;
-                    state = .normal;
-                    continue;
-                }
-                return .triple_string;
-            },
             .chevron_block => {
                 index = source.chevronTerminatorEnd(slice, 0) orelse return .chevron_block;
                 state = .normal;
@@ -1183,12 +1174,6 @@ fn scanHighlightState(slice: []const u8, initial: HighlightState) HighlightState
 
         if (source.lineCommentMarkerLength(slice, index) != null) return .normal;
         if (startsChevronBlock(slice, index)) return .chevron_block;
-
-        if (std.mem.startsWith(u8, slice[index..], "\"\"\"")) {
-            index += "\"\"\"".len;
-            state = .triple_string;
-            continue;
-        }
 
         if (std.mem.startsWith(u8, slice[index..], "c\"")) {
             index = source.skipDoubleQuotedString(slice, index + 1, slice.len);
@@ -1221,18 +1206,6 @@ fn printHighlightedSlice(slice: []const u8, initial: HighlightState) void {
     var index: usize = 0;
     while (index < slice.len) {
         switch (state) {
-            .triple_string => {
-                const end = if (std.mem.indexOfPos(u8, slice, index, "\"\"\"")) |close|
-                    close + "\"\"\"".len
-                else
-                    slice.len;
-                printAnsi("32");
-                printDisplayRaw(slice[index..end]);
-                printReset();
-                index = end;
-                state = if (end < slice.len) .normal else .triple_string;
-                continue;
-            },
             .chevron_block => {
                 const end = source.chevronTerminatorEnd(slice, 0) orelse slice.len;
                 printAnsi("32");
@@ -1263,19 +1236,6 @@ fn printHighlightedSlice(slice: []const u8, initial: HighlightState) void {
             printDisplayRaw(slice[index..]);
             printReset();
             return;
-        }
-
-        if (std.mem.startsWith(u8, slice[index..], "\"\"\"")) {
-            const end = if (std.mem.indexOfPos(u8, slice, index + "\"\"\"".len, "\"\"\"")) |close|
-                close + "\"\"\"".len
-            else
-                slice.len;
-            printAnsi("32");
-            printDisplayRaw(slice[index..end]);
-            printReset();
-            index = end;
-            state = if (end < slice.len) .normal else .triple_string;
-            continue;
         }
 
         if (std.mem.startsWith(u8, slice[index..], "c\"")) {

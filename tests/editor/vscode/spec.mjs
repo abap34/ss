@@ -116,7 +116,7 @@ async function testCompositionOperatorSyntax() {
   }
 
   const includes = grammar.patterns.map((pattern) => pattern.include);
-  for (const literal of ["#block-string", "#triple-string", "#double-string"]) {
+  for (const literal of ["#block-string", "#double-string"]) {
     assert(includes.indexOf(literal) < includes.indexOf("#operators"), `${literal} must protect composition characters`);
   }
 

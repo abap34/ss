@@ -4,7 +4,6 @@
   "patterns": [
     { "include": "#comments" },
     { "include": "#block-string" },
-    { "include": "#triple-string" },
     { "include": "#color-string" },
     { "include": "#double-string" },
     { "include": "#annotations" },
@@ -32,21 +31,6 @@
           "name": "string.unquoted.block.ss",
           "begin": "<<[ \\t\\r]*(?:;;.*)?$",
           "end": "^[ \\t\\r]*>>",
-          "beginCaptures": {
-            "0": { "name": "punctuation.definition.string.begin.ss" }
-          },
-          "endCaptures": {
-            "0": { "name": "punctuation.definition.string.end.ss" }
-          }
-        }
-      ]
-    },
-    "triple-string": {
-      "patterns": [
-        {
-          "name": "string.quoted.triple.ss",
-          "begin": "\"\"\"",
-          "end": "\"\"\"",
           "beginCaptures": {
             "0": { "name": "punctuation.definition.string.begin.ss" }
           },

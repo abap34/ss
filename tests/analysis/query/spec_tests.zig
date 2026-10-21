@@ -370,9 +370,9 @@ test "hover and definition ignore literal and comment contents with either query
         \\fn target() -> String = "Value"
         \\page main
         \\  let a = "target"
-        \\  let b = """
+        \\  let b = "
         \\    target
-        \\  """
+        \\  "
         \\  let c = <<
         \\    target
         \\  >>

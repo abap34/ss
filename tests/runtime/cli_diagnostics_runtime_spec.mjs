@@ -55,8 +55,8 @@ async function testColoredDiagnosticsHighlightProgramBody() {
       `page broken
 let title = text!("hello", color = c"#ff0033")
 let call = place!(title) ?? text!("fallback")
-let multiline = """hello
-world"""
+let multiline = "hello
+world"
 let raw = <<
 plain text
 >>
@@ -71,7 +71,7 @@ end
     assert(result.code !== 0, "check should fail for a missing expression");
     assert(output.includes("\u001b[36mtext!\u001b[0m"), `callable identifier should include the bang in one highlighted token:\n${output}`);
     assert(output.includes('\u001b[32mc"#ff0033"\u001b[0m'), `color string should be highlighted as one string token:\n${output}`);
-    assert(output.includes('\u001b[32m"""hello\u001b[0m'), `triple-quoted string start should be highlighted as one string token:\n${output}`);
+    assert(output.includes('\u001b[32m"hello\u001b[0m'), `quoted string start should be highlighted as one string token:\n${output}`);
     assert(output.includes("\u001b[33m??\u001b[0m"), `operator should be highlighted:\n${output}`);
     assert(output.includes("\u001b[32mplain text\u001b[0m"), `chevron block body should be highlighted as string content:\n${output}`);
   } finally {
