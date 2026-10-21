@@ -11,6 +11,7 @@ pub const Suite = struct {
     all: *Step,
     checks: dependencies.Checks,
     bridge: qpdf.Bridge,
+    document_testing: *Module,
     allocation_testing: *Module,
     layout_testing: *Module,
 
@@ -19,10 +20,12 @@ pub const Suite = struct {
         description: []const u8 = "",
         link_qpdf: bool = false,
         layout_fixture: bool = false,
+        document_fixture: bool = false,
     };
 
     pub fn add(self: Suite, module: *Module, options: Options) *Step.Run {
         const b = self.ctx.b;
+        if (options.document_fixture) module.addImport("document_testing", self.document_testing);
         module.addImport("allocation_testing", self.allocation_testing);
         if (options.layout_fixture) module.addImport("layout_testing", self.layout_testing);
         if (options.link_qpdf) qpdf.link(self.bridge, b, module, self.ctx.target, .build);

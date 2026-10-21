@@ -103,7 +103,7 @@ pub fn register(suite: Suite, modules: project.ProjectModules, build_options: *S
         import("render_resources", modules.render_resources),
         import("render_text", modules.render_text),
     }, null);
-    _ = suite.add(render_compile_spec_mod, .{ .layout_fixture = true, .name = "test-render-compile", .description = "Run focused render compiler tests", .link_qpdf = true });
+    _ = suite.add(render_compile_spec_mod, .{ .document_fixture = true, .layout_fixture = true, .name = "test-render-compile", .description = "Run focused render compiler tests", .link_qpdf = true });
     const semantic_spec_mod = createModule(ctx, "tests/render/semantics/spec_tests.zig", &.{
         import("compiler", project.createCompilerModule(ctx, modules)),
         import("render", modules.render),

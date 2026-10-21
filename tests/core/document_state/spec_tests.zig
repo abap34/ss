@@ -1,3 +1,4 @@
+const document_testing = @import("document_testing");
 const std = @import("std");
 const allocation_testing = @import("allocation_testing");
 const ast = @import("ast");
@@ -155,8 +156,8 @@ test "document state spec: repeated input registration creates independent place
         try testing.expectEqual(page_id, node.placement.?.parent_id);
         try testing.expectEqual(page_id, state.parentPageOf(id).?);
         try testing.expectEqual(page_id, state.layoutPageOf(id).?);
-        try testing.expect(node.payload_kind == null and node.object_kind == null);
-        try testing.expect(node.content == null);
+        try testing.expect(core.nodePayloadKind(node) == null);
+        try testing.expect(core.nodeContent(node) == null);
     }
 }
 
@@ -187,7 +188,6 @@ test "document state spec: placement children have one direct parent and inherit
     try testing.expectEqualSlices(core.NodeId, &.{ first, second }, state.childrenOf(parent).?);
     try testing.expectError(error.DuplicateObjectParent, state.addContainment(second, first));
     try testing.expectError(error.DuplicateObjectParent, state.addContainment(page, first));
-    try testing.expectError(error.DuplicatePlacement, state.placeObjectOnPage(page, parent));
 }
 
 test "document state spec: registration order does not reorder authored placement roots or display children" {
@@ -216,13 +216,11 @@ test "document state spec: registration rejects invalid parents without allocati
     var state = try initEmptyDocumentState();
     defer state.deinit();
     const page = try state.addPage("Page");
-    const legacy = try state.makeObject(page, "legacy", .text, .text, "Legacy");
     const count = state.nodeCount();
     var input = try placementInput(testing.allocator);
     defer input.deinit(testing.allocator);
     try testing.expectError(error.UnknownNode, state.registerPlacement(999, input, null));
     try testing.expectError(error.InvalidPlacementParent, state.registerPlacement(state.graph.document_id, input, null));
-    try testing.expectError(error.InvalidPlacementParent, state.registerPlacement(legacy, input, null));
     try testing.expectError(error.InvalidValueTag, state.registerPlacement(page, .void, null));
     try testing.expectEqual(count, state.nodeCount());
 }
@@ -319,7 +317,7 @@ test "document state spec: containment is idempotent for the same parent-child p
     defer state.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "title", .text, .text, "Hello");
+    const object = try document_testing.native(&state, page, "title", .text, "Hello");
     try state.addContainment(page, object);
     try state.addContainment(page, object);
 
@@ -330,214 +328,14 @@ test "document state spec: containment is idempotent for the same parent-child p
     try testing.expectEqual(page, state.layoutPageOf(object).?);
 }
 
-test "document state spec: page-local validation reports duplicate page ownership" {
-    var state = try initEmptyDocumentState();
-    defer state.deinit();
-
-    const first = try state.addPage("First");
-    const second = try state.addPage("Second");
-    const object = try state.makeObject(first, "title", .text, .text, "Hello");
-    try state.addContainment(second, object);
-
-    try state.validatePageLocalLayout();
-
-    try testing.expectEqual(first, state.parentPageOf(object).?);
-    try testing.expectEqual(@as(?core.NodeId, null), state.layoutPageOf(object));
-    try expectDiagnosticCode(&state, "PageOwnershipConflict:");
-}
-
-test "document state spec: indirect group containment does not assign a page until placement" {
-    var state = try initEmptyDocumentState();
-    defer state.deinit();
-
-    const page = try state.addPage("Page");
-    const child = try state.createObjectWithOrigin("child", .text, .text, "Child", null);
-    const group = try state.createGroupWithOrigin(&.{child}, null);
-
-    try testing.expectEqual(@as(?core.NodeId, null), state.parentPageOf(child));
-    try testing.expectEqual(@as(?core.NodeId, null), state.layoutPageOf(child));
-
-    try state.placeObjectOnPage(page, group);
-
-    try testing.expectEqual(page, state.parentPageOf(group).?);
-    try testing.expectEqual(page, state.layoutPageOf(group).?);
-    try testing.expectEqual(page, state.parentPageOf(child).?);
-    try testing.expectEqual(page, state.layoutPageOf(child).?);
-}
-
-test "document state spec: only groups inherit layout ownership from children" {
-    var state = try initEmptyDocumentState();
-    defer state.deinit();
-
-    const page = try state.addPage("Page");
-    const child = try state.makeObject(page, "child", .text, .text, "Child");
-    const shape = try state.createObjectWithOrigin("shape", .overlay, .text, "", null);
-    try state.addContainment(shape, child);
-    const group = try state.createGroupWithOrigin(&.{child}, null);
-
-    try testing.expectEqual(@as(?core.NodeId, null), state.layoutPageOf(shape));
-    try testing.expectEqual(page, state.layoutPageOf(group).?);
-}
-
-test "document state spec: a group of placed objects infers layout ownership without placement" {
-    var state = try initEmptyDocumentState();
-    defer state.deinit();
-
-    const page = try state.addPage("Page");
-    const first = try state.createObjectWithOrigin("first", .text, .text, "First", null);
-    const second = try state.createObjectWithOrigin("second", .text, .text, "Second", null);
-    try state.placeObjectOnPage(page, first);
-    try state.placeObjectOnPage(page, second);
-    const group = try state.createGroupWithOrigin(&.{ first, second }, null);
-
-    try testing.expectEqual(@as(usize, 0), state.constraints.active.items.len);
-    try testing.expectEqual(page, state.layoutPageOf(group).?);
-    try testing.expectEqual(@as(?core.NodeId, null), state.parentPageOf(group));
-    try testing.expect(!state.getNode(group).?.attached);
-    try testing.expectEqualSlices(core.NodeId, &.{ first, second }, state.placementRootsOf(page));
-    try testing.expectEqualSlices(core.NodeId, &.{ first, second }, state.childrenOf(page).?);
-    try testing.expectEqualSlices(core.NodeId, &.{ first, second }, state.childrenOf(group).?);
-
-    try state.validatePageLocalLayout();
-    try testing.expectEqual(@as(usize, 0), state.diagnostics.entries.items.len);
-}
-
-test "document state spec: nested groups can share placed children without changing ownership" {
-    var state = try initEmptyDocumentState();
-    defer state.deinit();
-
-    const page = try state.addPage("Page");
-    const first = try state.makeObject(page, "first", .text, .text, "First");
-    const shared = try state.makeObject(page, "shared", .text, .text, "Shared");
-    const last = try state.makeObject(page, "last", .text, .text, "Last");
-    const left = try state.createGroupWithOrigin(&.{ first, shared }, null);
-    const right = try state.createGroupWithOrigin(&.{ shared, last }, null);
-    const outer = try state.createGroupWithOrigin(&.{ left, right }, null);
-
-    for ([_]core.NodeId{ left, right, outer }) |group| {
-        try testing.expectEqual(page, state.layoutPageOf(group).?);
-        try testing.expectEqual(@as(?core.NodeId, null), state.parentPageOf(group));
-        try testing.expect(!state.getNode(group).?.attached);
-    }
-    try testing.expectEqual(page, state.parentPageOf(shared).?);
-    try testing.expectEqual(page, state.layoutPageOf(shared).?);
-    try testing.expectEqualSlices(core.NodeId, &.{ first, shared }, state.childrenOf(left).?);
-    try testing.expectEqualSlices(core.NodeId, &.{ shared, last }, state.childrenOf(right).?);
-    try state.validatePageLocalLayout();
-    try testing.expectEqual(@as(usize, 0), state.diagnostics.entries.items.len);
-}
-
-test "document state spec: group inference requires every live child to have a page" {
-    var state = try initEmptyDocumentState();
-    defer state.deinit();
-
-    const page = try state.addPage("Page");
-    const placed = try state.makeObject(page, "placed", .text, .text, "Placed");
-    const unplaced = try state.createObjectWithOrigin("unplaced", .text, .text, "Unplaced", null);
-    const partial = try state.createGroupWithOrigin(&.{ placed, unplaced }, null);
-    const outer = try state.createGroupWithOrigin(&.{ placed, partial }, null);
-    const empty = try state.createGroupWithOrigin(&.{}, null);
-
-    for ([_]core.NodeId{ partial, outer, empty }) |group| {
-        try testing.expectEqual(@as(?core.NodeId, null), state.layoutPageOf(group));
-        try testing.expectEqual(@as(?core.NodeId, null), state.parentPageOf(group));
-        try testing.expect(!state.getNode(group).?.attached);
-    }
-    try state.validatePageLocalLayout();
-    try expectNoDiagnosticCode(&state, "UnplacedObject");
-
-    try state.placeObjectOnPage(page, unplaced);
-    try testing.expectEqual(page, state.layoutPageOf(partial).?);
-    try testing.expectEqual(page, state.layoutPageOf(outer).?);
-    try testing.expect(!state.getNode(partial).?.attached);
-    try testing.expect(!state.getNode(outer).?.attached);
-}
-
-test "document state spec: discarded children do not prevent group page inference" {
-    var state = try initEmptyDocumentState();
-    defer state.deinit();
-
-    const page = try state.addPage("Page");
-    const placed = try state.makeObject(page, "placed", .text, .text, "Placed");
-    const unused = try state.createObjectWithOrigin("unused", .text, .text, "Unused", null);
-    const group = try state.createGroupWithOrigin(&.{ placed, unused }, null);
-    try state.discardObjectSubtree(unused);
-    try testing.expectEqual(page, state.layoutPageOf(group).?);
-    try testing.expect(!state.getNode(group).?.attached);
-    try state.validatePageLocalLayout();
-    try testing.expectEqual(@as(usize, 0), state.diagnostics.entries.items.len);
-}
-
-test "document state spec: ambiguous nested groups cannot inherit a sibling page" {
-    var state = try initEmptyDocumentState();
-    defer state.deinit();
-
-    const first_page = try state.addPage("First");
-    const second_page = try state.addPage("Second");
-    const first = try state.makeObject(first_page, "first", .text, .text, "First");
-    const second = try state.makeObject(second_page, "second", .text, .text, "Second");
-    const mixed = try state.createGroupWithOrigin(&.{ first, second }, null);
-    const before = try state.createGroupWithOrigin(&.{ first, mixed }, null);
-    const after = try state.createGroupWithOrigin(&.{ mixed, first }, null);
-
-    for ([_]core.NodeId{ mixed, before, after }) |group| {
-        try testing.expectEqual(@as(?core.NodeId, null), state.layoutPageOf(group));
-    }
-
-    const duplicate = try state.makeObject(first_page, "duplicate", .text, .text, "Duplicate");
-    try state.addContainment(second_page, duplicate);
-    const ambiguous = try state.createGroupWithOrigin(&.{ first, duplicate }, null);
-    try testing.expectEqual(@as(?core.NodeId, null), state.layoutPageOf(ambiguous));
-    try state.validatePageLocalLayout();
-    try expectNoDiagnosticCode(&state, "UnplacedObject");
-    try expectDiagnosticCode(&state, "PageOwnershipConflict");
-}
-
-test "document state spec: cyclic group containment cannot infer page ownership" {
-    var state = try initEmptyDocumentState();
-    defer state.deinit();
-
-    const page = try state.addPage("Page");
-    const child = try state.makeObject(page, "child", .text, .text, "Child");
-    const first = try state.createGroupWithOrigin(&.{child}, null);
-    const second = try state.createGroupWithOrigin(&.{first}, null);
-    try state.addContainment(first, second);
-
-    try testing.expectEqual(@as(?core.NodeId, null), state.layoutPageOf(first));
-    try testing.expectEqual(@as(?core.NodeId, null), state.layoutPageOf(second));
-    try testing.expectEqual(page, state.layoutPageOf(child).?);
-}
-
-test "document state spec: page placement records roots without flattening groups or duplicating objects" {
-    var state = try initEmptyDocumentState();
-    defer state.deinit();
-
-    const page = try state.addPage("Page");
-    const first_child = try state.createObjectWithOrigin("first", .text, .text, "First", null);
-    const second_child = try state.createObjectWithOrigin("second", .text, .text, "Second", null);
-    const group = try state.createGroupWithOrigin(&.{ first_child, second_child }, null);
-    const label = try state.createObjectWithOrigin("label", .text, .text, "Label", null);
-
-    try state.placeObjectOnPage(page, group);
-    try state.placeObjectOnPage(page, label);
-    try testing.expectError(error.DuplicatePlacement, state.placeObjectOnPage(page, label));
-    try state.markReturnedObjectOrigins(label, state.nodeCount(), .{ .label = "label-return" });
-
-    const placement_roots = state.placementRootsOf(page);
-    try testing.expectEqualSlices(core.NodeId, &.{ group, label }, placement_roots);
-
-    const page_objects = state.childrenOf(page).?;
-    try testing.expectEqualSlices(core.NodeId, &.{ group, first_child, second_child, label }, page_objects);
-}
-
 test "document state spec: page-local validation reports cross-page constraints" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
 
     const first = try state.addPage("First");
     const second = try state.addPage("Second");
-    const target = try state.makeObject(first, "target", .text, .text, "Target");
-    const source = try state.makeObject(second, "source", .text, .text, "Source");
+    const target = try document_testing.native(&state, first, "target", .text, "Target");
+    const source = try document_testing.native(&state, second, "source", .text, "Source");
 
     try state.constraints.addAnchor(state.allocator, target, .top, .{ .node = .{ .node_id = source, .anchor = .top } }, 0, .{ .label = "cross-page" });
     try state.validatePageLocalLayout();
@@ -545,26 +343,12 @@ test "document state spec: page-local validation reports cross-page constraints"
     try expectDiagnosticCode(&state, "CrossPageConstraint:");
 }
 
-test "document state spec: page-local validation reports unowned layout objects" {
-    var state = try initEmptyDocumentState();
-    defer state.deinit();
-
-    const page = try state.addPage("Page");
-    const placed = try state.makeObject(page, "placed", .text, .text, "Placed");
-    const helper = try state.createObjectWithOrigin("helper", .text, .text, "Helper", null);
-
-    try state.constraints.addAnchor(state.allocator, placed, .top, .{ .node = .{ .node_id = helper, .anchor = .top } }, 0, .{ .label = "unowned" });
-    try state.validatePageLocalLayout();
-
-    try expectDiagnosticCode(&state, "UnownedLayoutObject:");
-}
-
 test "document state spec: position updates replace deeper constraints across anchors on the same axis" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "item", .text, .text, "Item");
+    const object = try document_testing.native(&state, page, "item", .text, "Item");
     try state.constraints.addAnchorAtScope(state.allocator, object, .center_x, .{ .page = .center_x }, 0, .{ .label = "component-center" }, 1);
     try state.constraints.addAnchorAtScope(state.allocator, object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, 240, .{ .label = "component-width" }, 1);
     try state.constraints.addUpdate(state.allocator, object, .left, .position, 0, .{ .page = .left }, 80, .{ .label = "page-left" });
@@ -584,10 +368,10 @@ test "document state spec: group position updates replace external placement of 
     defer state.deinit();
 
     const page = try state.addPage("Page");
-    const title = try state.makeObject(page, "title", .text, .text, "Title");
-    const rule = try state.makeObject(page, "rule", .text, .text, "");
-    const inner = try state.makeGroupWithOrigin(page, true, &.{ title, rule }, .{ .label = "inner-group" });
-    const root = try state.makeGroupWithOrigin(page, true, &.{inner}, .{ .label = "root-group" });
+    const title = try document_testing.native(&state, page, "title", .text, "Title");
+    const rule = try document_testing.native(&state, page, "rule", .text, "");
+    const inner = try document_testing.group(&state, page, &.{ title, rule }, .{ .label = "inner-group" });
+    const root = try document_testing.group(&state, page, &.{inner}, .{ .label = "root-group" });
 
     try state.constraints.addAnchorAtScope(state.allocator, title, .left, .{ .page = .left }, 72, .{ .label = "component-left" }, 1);
     try state.constraints.addAnchorAtScope(state.allocator, title, .top, .{ .page = .top }, -100, .{ .label = "component-top" }, 1);
@@ -615,8 +399,8 @@ test "document state spec: overlapping group and descendant updates use scope an
     defer later_descendant.deinit();
 
     const first_page = try later_descendant.addPage("Page");
-    const first_child = try later_descendant.makeObject(first_page, "child", .text, .text, "Child");
-    const first_group = try later_descendant.makeGroupWithOrigin(first_page, true, &.{first_child}, .{ .label = "group" });
+    const first_child = try document_testing.native(&later_descendant, first_page, "child", .text, "Child");
+    const first_group = try document_testing.group(&later_descendant, first_page, &.{first_child}, .{ .label = "group" });
     try later_descendant.constraints.addUpdate(later_descendant.allocator, first_group, .left, .position, 0, .{ .page = .left }, 100, .{ .label = "group-first" });
     try later_descendant.constraints.addUpdate(later_descendant.allocator, first_child, .left, .position, 0, .{ .page = .left }, 160, .{ .label = "child-last" });
 
@@ -632,8 +416,8 @@ test "document state spec: overlapping group and descendant updates use scope an
     defer shallower_group.deinit();
 
     const second_page = try shallower_group.addPage("Page");
-    const second_child = try shallower_group.makeObject(second_page, "child", .text, .text, "Child");
-    const second_group = try shallower_group.makeGroupWithOrigin(second_page, true, &.{second_child}, .{ .label = "group" });
+    const second_child = try document_testing.native(&shallower_group, second_page, "child", .text, "Child");
+    const second_group = try document_testing.group(&shallower_group, second_page, &.{second_child}, .{ .label = "group" });
     try shallower_group.constraints.addUpdate(shallower_group.allocator, second_group, .left, .position, 0, .{ .page = .left }, 100, .{ .label = "caller-group" });
     try shallower_group.constraints.addUpdate(shallower_group.allocator, second_child, .left, .position, 1, .{ .page = .left }, 160, .{ .label = "component-child" });
 
@@ -651,7 +435,7 @@ test "document state spec: size updates preserve position constraints" {
     defer state.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "item", .text, .text, "Item");
+    const object = try document_testing.native(&state, page, "item", .text, "Item");
     try state.constraints.addAnchorAtScope(state.allocator, object, .center_x, .{ .page = .center_x }, 0, .{ .label = "component-center" }, 1);
     try state.constraints.addAnchorAtScope(state.allocator, object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, 240, .{ .label = "component-width" }, 1);
     try state.constraints.addUpdate(
@@ -681,7 +465,7 @@ test "document state spec: pure updates suppress inherited constraints without a
     defer state.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "item", .text, .text, "Item");
+    const object = try document_testing.native(&state, page, "item", .text, "Item");
     try state.constraints.addAnchorAtScope(state.allocator, object, .top, .{ .page = .top }, -40, .{ .label = "component-top" }, 1);
     try state.constraints.addUpdate(state.allocator, object, .top, .position, 0, null, 0, .{ .label = "page-top" });
 
@@ -698,8 +482,8 @@ test "document state spec: suppressed cross-page constraints are not diagnosed" 
 
     const first = try state.addPage("First");
     const second = try state.addPage("Second");
-    const target = try state.makeObject(first, "target", .text, .text, "Target");
-    const source = try state.makeObject(second, "source", .text, .text, "Source");
+    const target = try document_testing.native(&state, first, "target", .text, "Target");
+    const source = try document_testing.native(&state, second, "source", .text, "Source");
     try state.constraints.addAnchorAtScope(state.allocator, target, .left, .{ .node = .{ .node_id = source, .anchor = .left } }, 0, .{ .label = "component-left" }, 1);
     try state.constraints.addUpdate(state.allocator, target, .left, .position, 0, null, 0, .{ .label = "page-left" });
 
@@ -719,7 +503,7 @@ test "document state spec: caller updates have authority over deeper updates" {
     defer state.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "item", .text, .text, "Item");
+    const object = try document_testing.native(&state, page, "item", .text, "Item");
     try state.constraints.addUpdate(state.allocator, object, .left, .position, 2, .{ .page = .left }, 20, .{ .label = "nested-left" });
     try state.constraints.addUpdate(state.allocator, object, .right, .position, 0, .{ .page = .right }, -60, .{ .label = "page-right" });
     try state.constraints.addUpdate(state.allocator, object, .center_x, .position, 1, .{ .page = .center_x }, 10, .{ .label = "component-center" });
@@ -740,7 +524,7 @@ test "document state spec: later updates replace earlier updates in the same sco
     defer state.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "item", .text, .text, "Item");
+    const object = try document_testing.native(&state, page, "item", .text, "Item");
     try state.constraints.addAnchorAtScope(state.allocator, object, .center_x, .{ .page = .center_x }, 0, .{ .label = "component-center" }, 1);
     try state.constraints.addUpdate(state.allocator, object, .left, .position, 0, null, 0, .{ .label = "first" });
     try state.constraints.addUpdate(state.allocator, object, .right, .position, 0, .{ .page = .right }, -40, .{ .label = "second" });
@@ -760,7 +544,7 @@ test "document state spec: later pure updates suppress earlier replacements" {
     defer state.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "item", .text, .text, "Item");
+    const object = try document_testing.native(&state, page, "item", .text, "Item");
     try state.constraints.addAnchorAtScope(state.allocator, object, .center_x, .{ .page = .center_x }, 0, .{ .label = "component-center" }, 1);
     try state.constraints.addUpdate(state.allocator, object, .left, .position, 0, .{ .page = .left }, 40, .{ .label = "first" });
     try state.constraints.addUpdate(state.allocator, object, .right, .position, 0, null, 0, .{ .label = "second" });
@@ -779,7 +563,7 @@ test "document state spec: prepared pages collect inline math asset dependencies
     defer state.deinit();
 
     const page = try state.addPage("Page");
-    _ = try state.makeObject(page, "body", .text, .text, "value $x+y$");
+    _ = try document_testing.native(&state, page, "body", .text, "value $x+y$");
 
     var pages = try core.prepared.prepare(testing.allocator, &state);
     defer pages.deinit(testing.allocator);
@@ -797,7 +581,7 @@ test "document state spec: prepared pages preserve explicit LaTeX body dependenc
     defer state.deinit();
 
     const page = try state.addPage("Page");
-    _ = try state.makeObject(page, "latex", .asset, .latex, "\\begin{center}$x+y$\\end{center}");
+    _ = try document_testing.native(&state, page, "latex", .latex, "\\begin{center}$x+y$\\end{center}");
 
     var pages = try core.prepared.prepare(testing.allocator, &state);
     defer pages.deinit(testing.allocator);
@@ -815,7 +599,7 @@ test "document state spec: layout results collect solved page frames" {
     defer state.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "body", .text, .text, "Hello");
+    const object = try document_testing.native(&state, page, "body", .text, "Hello");
     try state.constraints.addAnchor(state.allocator, object, .left, .{ .page = .left }, 40, .{ .label = "body-left" });
     try state.constraints.addAnchor(state.allocator, object, .top, .{ .page = .top }, -80, .{ .label = "body-top" });
 
@@ -837,7 +621,7 @@ test "document state spec: layout results own page diagnostics" {
     defer state.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "body", .text, .text, "Hello");
+    const object = try document_testing.native(&state, page, "body", .text, "Hello");
     try state.constraints.addAnchor(state.allocator, object, .left, .{ .page = .left }, -40, .{ .label = "body-left" });
     try state.constraints.addAnchor(state.allocator, object, .top, .{ .page = .top }, -80, .{ .label = "body-top" });
 
@@ -875,7 +659,7 @@ test "document state spec: node fields reject duplicate keys" {
     defer state.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "shape", .overlay, .text, "");
+    const object = page;
 
     try state.setNodeFieldValue(object, "fill", .{ .string = "red" });
     try state.setNodeFieldValue(object, "stroke", .{ .string = "black" });
@@ -890,7 +674,7 @@ test "document state spec: node fields reject duplicate keys" {
 test "document state spec: node field writes retain their scope and origin" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
-    const group = try state.createGroupWithOrigin(&.{}, null);
+    const group = try document_testing.group(&state, try state.addPage("Page"), &.{}, null);
     const origin = core.SourceOrigin.at("group.ss", .{ .start = 12, .end = 14 });
     try state.setNodeFieldValueWithOrigin(group, "enabled", .{ .boolean = true }, 3, origin);
     const field = state.getNode(group).?.fields.items[0];
@@ -907,8 +691,8 @@ test "document state spec: selection ordering rejects nodes outside typed placem
     var state = try initEmptyDocumentState();
     defer state.deinit();
     const page = try state.addPage("Page");
-    const a = try state.makeObject(page, "a", .text, .text, "A");
-    const b = try state.makeObject(page, "b", .text, .text, "B");
+    const a = page;
+    const b = state.graph.document_id;
     var selection = core.Selection.init(.object, "invalid placements");
     defer selection.deinit(testing.allocator);
     try selection.ids.appendSlice(testing.allocator, &.{ b, a });
@@ -1147,7 +931,7 @@ test "document state spec: field writes release partial allocations before publi
     for (0..3) |fail_index| {
         var state = try initEmptyDocumentState();
         defer state.deinit();
-        const group = try state.createGroupWithOrigin(&.{}, null);
+        const group = try document_testing.group(&state, try state.addPage("Page"), &.{}, null);
         var value = core.ConstraintSet.init();
         defer value.deinit(testing.allocator);
         try value.items.append(testing.allocator, .{
@@ -1361,7 +1145,7 @@ test "diagnostic constructors release message ownership when origin cloning fail
 fn exercisePropertyPathDefinitions(allocator: std.mem.Allocator) !void {
     var state = try initEmptyDocumentStateWithAllocator(allocator);
     defer state.deinit();
-    const object = try state.createGroupWithOrigin(&.{}, null);
+    const object = try document_testing.group(&state, try state.addPage("Page"), &.{}, null);
     var record = core.RecordValue.init(ast.Type.recordType("LayoutStyle"));
     defer record.deinit(allocator);
     try record.fields.append(allocator, .{ .name = "x", .value = .{ .number = 12 } });
@@ -1383,22 +1167,6 @@ test "document state spec: property path definitions are atomic on allocation fa
     try allocation_testing.checkAllAllocationFailures(testing.allocator, exercisePropertyPathDefinitions, .{});
 }
 
-test "document state spec: placement rejects a shared descendant before publishing membership" {
-    var state = try initEmptyDocumentState();
-    defer state.deinit();
-    const page = try state.addPage("Page");
-    const child = try state.createObjectWithOrigin("child", .text, .text, "Child", null);
-    const left = try state.createGroupWithOrigin(&.{child}, null);
-    const right = try state.createGroupWithOrigin(&.{child}, null);
-    const outer = try state.createGroupWithOrigin(&.{ left, right }, null);
-    try testing.expectError(error.DuplicateObjectParent, state.placeObjectOnPage(page, outer));
-    try testing.expectEqual(@as(usize, 0), state.placementRootsOf(page).len);
-    for ([_]core.NodeId{ child, left, right, outer }) |id| {
-        try testing.expect(!state.getNode(id).?.attached);
-        try testing.expectEqual(@as(?core.NodeId, null), state.parentPageOf(id));
-    }
-}
-
 test "document state spec: composition order preserves page indices and explicit group children" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
@@ -1412,17 +1180,19 @@ test "document state spec: composition order preserves page indices and explicit
     try testing.expectEqualSlices(core.NodeId, &.{ first_page, middle_page, last_page }, state.childrenOf(state.graph.document_id).?);
     for (state.graph.page_order.items, 1..) |id, index| try testing.expectEqual(index, state.getNode(id).?.page_index.?);
 
-    const a = try state.createObjectWithOrigin("a", .text, .text, "A", null);
-    const b = try state.createObjectWithOrigin("b", .text, .text, "B", null);
-    const c = try state.createObjectWithOrigin("c", .text, .text, "C", null);
     state.graph.composition_cursor = .{ .source_order = 50 };
-    try state.placeObjectOnPage(first_page, c);
-    const group = try state.createGroupWithOrigin(&.{ b, a }, null);
+    const c = try document_testing.native(&state, first_page, "c", .text, "C");
     state.graph.composition_cursor = .{ .source_order = 40 };
-    try state.placeObjectOnPage(first_page, group);
+    var input = try placementInput(testing.allocator);
+    defer input.deinit(testing.allocator);
+    var value = try compositionInput(testing.allocator, &.{ input, input }, .overlay, 0);
+    defer value.deinit(testing.allocator);
+    const group = try state.registerPlacement(first_page, value, null);
+    const children = state.childrenOf(group).?;
     try testing.expectEqualSlices(core.NodeId, &.{ group, c }, state.placementRootsOf(first_page));
-    try testing.expectEqualSlices(core.NodeId, &.{ group, b, a, c }, state.childrenOf(first_page).?);
-    try testing.expectEqualSlices(core.NodeId, &.{ b, a }, state.childrenOf(group).?);
+    try testing.expectEqualSlices(core.NodeId, &.{ group, c }, state.childrenOf(first_page).?);
+    try testing.expectEqual(@as(usize, 2), children.len);
+    for (children) |child| try testing.expectEqual(group, state.getNode(child).?.placement.?.parent_id);
 }
 
 fn exerciseFunctionInstanceStore(allocator: std.mem.Allocator) !void {

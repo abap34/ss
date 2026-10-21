@@ -1,3 +1,4 @@
+const document_testing = @import("document_testing");
 const LayoutFixture = @import("layout_testing").Fixture;
 const std = @import("std");
 const allocation_testing = @import("allocation_testing");
@@ -26,13 +27,7 @@ fn initDocumentState(allocator: std.mem.Allocator) !core.DocumentState {
 
 fn addLayoutFixture(state: *core.DocumentState, geometry: *LayoutFixture) !void {
     const page_id = try state.addPage("page");
-    const object_id = try state.makeObject(
-        page_id,
-        "object",
-        .text,
-        .text,
-        "content",
-    );
+    const object_id = try document_testing.native(state, page_id, "object", .text, "content");
     (try geometry.frame(page_id)).* = .{ .width = 640, .height = 360 };
     (try geometry.frame(object_id)).* = .{
         .x = 10,
@@ -134,7 +129,7 @@ fn releasePreparedLayoutInputs(allocator: std.mem.Allocator, retain_state: bool)
     var state_owned = true;
     defer if (state_owned) state.deinit();
     const page_id = try state.addPage("retained");
-    _ = try state.makeObject(page_id, "object", .text, .text, "content");
+    _ = try document_testing.native(&state, page_id, "object", .text, "content");
     var output = analysis.snapshot.LayoutHookOutput{ .reuse_inputs = .{
         .pages = try core.prepared.prepare(allocator, &state),
         .font_environment = std.mem.zeroes(render_text.FontEnvironment),

@@ -16,6 +16,7 @@ pub fn register(ctx: project.Context, modules: project.ProjectModules, build_opt
         .all = all,
         .checks = checks,
         .bridge = bridge,
+        .document_testing = project.createModule(ctx, "tests/support/document.zig", &.{ project.import("core", modules.core), project.import("ast", modules.ast) }, null),
         .allocation_testing = project.createModule(ctx, "tests/support/allocation.zig", &.{}, null),
         .layout_testing = project.createModule(ctx, "tests/support/layout.zig", &.{project.import("core", modules.core)}, null),
     };

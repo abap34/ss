@@ -12,7 +12,7 @@ pub fn register(suite: Suite, modules: project.ProjectModules) void {
         import("model", modules.model),
         import("language_type", modules.language_type),
     }, true);
-    _ = suite.add(document_state_spec_mod, .{ .name = "test-document-state", .description = "Run focused document state tests" });
+    _ = suite.add(document_state_spec_mod, .{ .document_fixture = true, .name = "test-document-state", .description = "Run focused document state tests" });
     const markdown_spec_mod = createModule(ctx, "tests/core/markdown/spec_tests.zig", &.{
         import("core", modules.core),
     }, true);
@@ -27,7 +27,7 @@ pub fn register(suite: Suite, modules: project.ProjectModules) void {
         import("core", modules.core),
         import("ast", modules.ast),
     }, true);
-    _ = suite.add(layout_partition_spec_mod, .{ .layout_fixture = true, .name = "test-layout-partition", .description = "Run focused page partition tests" });
+    _ = suite.add(layout_partition_spec_mod, .{ .document_fixture = true, .layout_fixture = true, .name = "test-layout-partition", .description = "Run focused page partition tests" });
     const layout_graph_spec_mod = createModule(ctx, "tests/layout/graph/spec_tests.zig", &.{
         import("core", modules.core),
         import("utils", modules.utils),
@@ -35,10 +35,10 @@ pub fn register(suite: Suite, modules: project.ProjectModules) void {
         import("model", modules.model),
         import("language_type", modules.language_type),
     }, true);
-    _ = suite.add(layout_graph_spec_mod, .{ .layout_fixture = true, .name = "test-layout", .description = "Run focused layout graph and solver tests" });
+    _ = suite.add(layout_graph_spec_mod, .{ .document_fixture = true, .layout_fixture = true, .name = "test-layout", .description = "Run focused layout graph and solver tests" });
     const layout_conflicts_spec_mod = createModule(ctx, "tests/layout/conflicts/spec_tests.zig", &.{
         import("core", modules.core),
         import("ast", modules.ast),
     }, true);
-    _ = suite.add(layout_conflicts_spec_mod, .{ .layout_fixture = true, .name = "test-layout-conflicts", .description = "Run focused layout conflict report tests" });
+    _ = suite.add(layout_conflicts_spec_mod, .{ .document_fixture = true, .layout_fixture = true, .name = "test-layout-conflicts", .description = "Run focused layout conflict report tests" });
 }

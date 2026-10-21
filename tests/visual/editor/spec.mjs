@@ -1209,8 +1209,11 @@ await withBrowser(output, async (browser, baseUrl) => {
       if (shells.length !== 2) return false;
       const first = shells[0].getBoundingClientRect();
       const second = shells[1].getBoundingClientRect();
-      return second.top - first.bottom >= 45;
+      return second.top - first.bottom >= 19;
     });
+    assert.equal(await page.locator(".page-caption").evaluateAll((captions) =>
+      captions.every((caption) => caption.hidden)
+    ), true, "small page previews retained their captions");
     const pageSelectionScrollTop = await page.locator(".viewport").evaluate((viewport) => {
       viewport.scrollTop = Math.min(37, viewport.scrollHeight - viewport.clientHeight);
       return viewport.scrollTop;
@@ -2067,7 +2070,6 @@ async function exerciseComponentWidth(browser, baseUrl, initial) {
       id: 203,
       page_id: 22,
       name: "detail_child",
-      role: "decoration",
       x: 580,
       y: 500,
       width: 30,

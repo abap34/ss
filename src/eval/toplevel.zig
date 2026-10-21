@@ -169,7 +169,6 @@ pub const EvalContext = struct {
         try checkCancellation(self);
         const child = try self.state.registerPlacement(id, output, origin);
         const parent = self.state.getNode(id).?;
-        parent.object_kind = .group;
         parent.placement.?.display = .{ .expanded = .{ .target = target, .child = child } };
         return child;
     }
@@ -188,7 +187,6 @@ pub const EvalContext = struct {
                 }
                 const children = try self.state.registerPlacementChildren(id, placement.value.group.children.items, node.origin);
                 const parent = self.state.getNode(id).?;
-                parent.object_kind = .group;
                 parent.placement.?.display = .group;
                 return children;
             },
@@ -245,12 +243,6 @@ pub const EvalContext = struct {
                         });
                     }
                 }
-                node.object_kind = switch (kind) {
-                    .text, .code, .latex => .text,
-                    .image, .pdf, .icon => .asset,
-                    .path_shape => .text,
-                };
-                node.payload_kind = payload_kind;
                 placement.display = .{ .native = kind };
                 return &.{};
             },
@@ -378,12 +370,6 @@ fn reportDuplicatePropertyDefinition(state: *core.DocumentState, origin: core.So
     });
 }
 
-fn reportDuplicateContentDefinition(state: *core.DocumentState, origin: core.SourceOrigin) !void {
-    try state.addValidationDiagnostic(.@"error", null, null, origin, .{
-        .user_report = .{ .code = "DuplicateContentDefinition", .message = try state.allocator.dupe(u8, "object content is already defined") },
-    });
-}
-
 fn reportRecordUpdateError(state: *core.DocumentState, origin: core.SourceOrigin, code: []const u8, comptime fmt: []const u8, args: anytype) !void {
     try state.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{
@@ -467,9 +453,7 @@ fn lowerErrorMessage(err: anyerror) ?[]const u8 {
         error.LayoutDependencyCycle => "layout reads cannot feed object creation, content, properties, or constraints because layout is solved once",
         error.PostLayoutComputationUnsupported => "layout-reading scheduled computations are not implemented yet",
         error.ExecutionDependencyCycle => "document evaluation dependencies contain a cycle",
-        error.DuplicatePlacement => "object is already placed on a page",
         error.DuplicateObjectParent => "object occurs under multiple parents in the placed group",
-        error.DuplicateContentDefinition => "object content is already defined",
         error.DuplicatePropertyDefinition => "property is already defined on this target",
         error.ExpectedSelection => "expected a selection value",
         error.ExpectedConstraintSet => "expected a constraint set",
@@ -800,26 +784,15 @@ fn evalMemberValue(
         const value = target.record.field(name) orelse return .{ .none = {} };
         return try value.clone(state.allocator);
     }
-    if (target == .object) {
-        const node = state.getNode(target.object) orelse return error.UnknownNode;
-        if (node.placement != null) return eval_value.placementMember(state, node.id, name);
-    }
-    if (target == .object or target == .page) {
+    if (target == .object) return eval_value.placementMember(state, target.object, name);
+    if (target == .page) {
         if (names.parseAnchorName(name)) |anchor| {
-            return .{ .anchor = if (target == .object)
-                .{ .node = .{ .node_id = target.object, .anchor = anchor } }
-            else
-                .{ .page = .{ .page_id = target.page, .anchor = anchor } } };
+            return .{ .anchor = .{ .page = .{ .page_id = target.page, .anchor = anchor } } };
         }
-    }
-    if (std.mem.eql(u8, name, "content")) {
-        const object_id = try resolveValueObjectId(target);
-        return .{ .string = state.getNode(object_id).?.content orelse "" };
     }
     const node_id = switch (target) {
         .document => |id| id,
         .page => |id| id,
-        .object => |id| id,
         else => return error.InvalidValueTag,
     };
     const node = state.getNode(node_id) orelse return error.UnknownNode;
@@ -1719,18 +1692,6 @@ fn writeNodeFieldValue(
     origin: core.SourceOrigin,
     scope_depth: u32,
 ) !void {
-    if (std.mem.eql(u8, field_name, "content")) {
-        const text = try resolveValuePropertyString(state.allocator, value);
-        defer if (eval_value.propertyStringNeedsFree(value)) state.allocator.free(text);
-        state.setNodeContent(node_id, text) catch |err| switch (err) {
-            error.DuplicateContentDefinition => {
-                try reportDuplicateContentDefinition(state, origin);
-                return err;
-            },
-            else => return err,
-        };
-        return;
-    }
     state.setNodeFieldValueWithOrigin(node_id, field_name, value, scope_depth, origin) catch |err| switch (err) {
         error.DuplicatePropertyDefinition => {
             try reportDuplicatePropertyDefinition(state, origin, node_id, field_name);

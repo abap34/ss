@@ -1,3 +1,4 @@
+const document_testing = @import("document_testing");
 const LayoutFixture = @import("layout_testing").Fixture;
 const std = @import("std");
 const allocation_testing = @import("allocation_testing");
@@ -32,20 +33,8 @@ fn initDocumentState(allocator: std.mem.Allocator) !core.DocumentState {
 fn addFixture(state: *core.DocumentState, geometry: *LayoutFixture) !Fixture {
     const first_page = try state.addPage("first");
     const second_page = try state.addPage("second");
-    const first_object = try state.makeObject(
-        first_page,
-        "first-object",
-        .text,
-        .text,
-        "first",
-    );
-    const second_object = try state.makeObject(
-        second_page,
-        "second-object",
-        .text,
-        .text,
-        "second",
-    );
+    const first_object = try document_testing.native(state, first_page, "first-object", .text, "first");
+    const second_object = try document_testing.native(state, second_page, "second-object", .text, "second");
     try state.constraints.addAnchor(
         state.allocator,
         first_object,

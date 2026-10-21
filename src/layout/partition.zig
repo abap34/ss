@@ -45,8 +45,8 @@ pub const Document = struct {
             }
         }
 
-        // A referenced group needs the bounds of its entire subtree, including
-        // unattached inner groups. Unreferenced groups remain outside the graph.
+        // Registered placements retain their complete subtree in the same page,
+        // including children whose display has not been evaluated yet.
         for (builders, 0..) |*builder, page_index| {
             var cursor: usize = 0;
             while (cursor < builder.node_ids.items.len) : (cursor += 1) {

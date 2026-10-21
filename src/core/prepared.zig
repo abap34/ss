@@ -197,7 +197,7 @@ pub fn prepareObjectWithRender(
     };
     const semantics = try resolveSemantics(state, node);
     const config = try latex_config.forNode(node);
-    const uses_asset_content = switch (node.payload_kind orelse .text) {
+    const uses_asset_content = switch (model.nodePayloadKind(node) orelse .text) {
         .image_ref, .pdf_ref => true,
         else => false,
     };
@@ -270,11 +270,10 @@ pub fn prepareObjectWithRender(
     errdefer if (!latex_preamble_transferred) allocator.free(latex_preamble);
     asset_deps_transferred = true;
     latex_preamble_transferred = true;
-    const provenance = if (uses_asset_content) node.content_provenance.items else model.nodeDisplayContentProvenance(node);
     return .{
         .node_id = node.id,
         .content = content,
-        .content_provenance = if (provenance.len == 0) state.stringProvenance(content) else provenance,
+        .content_provenance = state.stringProvenance(content),
         .link_id = nodeStringField(node, "link_id"),
         .render = render,
         .semantics = semantics,
@@ -285,7 +284,7 @@ pub fn prepareObjectWithRender(
         .latex_preamble = latex_preamble,
         .latex_engine = config.engine,
         .origin = node.origin,
-        .payload_kind = node.payload_kind,
+        .payload_kind = model.nodePayloadKind(node),
         .attached = node.attached,
     };
 }

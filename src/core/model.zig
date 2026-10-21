@@ -107,14 +107,6 @@ pub const NodeKind = enum {
     object,
 };
 
-pub const ObjectKind = enum {
-    group,
-    text,
-    source,
-    overlay,
-    asset,
-};
-
 pub const PayloadKind = enum {
     text,
     code,
@@ -429,11 +421,6 @@ pub const Node = struct {
     attached: bool = false,
     discarded: bool = false,
     placement: ?Placement = null,
-    object_kind: ?ObjectKind = null,
-    payload_kind: ?PayloadKind = null,
-    content: ?[]const u8 = null,
-    content_owned: bool = false,
-    content_provenance: std.ArrayList(ContentProvenance) = .empty,
     page_index: ?usize = null,
     composition_order: ?CompositionOrder = null,
     origin: ?SourceOrigin = null,
@@ -446,11 +433,6 @@ pub const Node = struct {
         self.fields.deinit(allocator);
         for (self.property_definitions.items) |definition| allocator.free(definition.path);
         self.property_definitions.deinit(allocator);
-        if (self.content_owned) {
-            if (self.content) |content| allocator.free(content);
-        }
-        for (self.content_provenance.items) |*entry| entry.deinit(allocator);
-        self.content_provenance.deinit(allocator);
     }
 };
 
@@ -936,7 +918,7 @@ pub fn nodeContent(node: *const Node) ?[]const u8 {
             .path_shape => "",
         };
     }
-    return node.content;
+    return null;
 }
 
 pub fn nodeDisplayContent(node: *const Node) []const u8 {
@@ -946,8 +928,15 @@ pub fn nodeDisplayContent(node: *const Node) []const u8 {
     return nodeContent(node) orelse "";
 }
 
-pub fn nodeDisplayContentProvenance(node: *const Node) []const ContentProvenance {
-    return node.content_provenance.items;
+pub fn nodePayloadKind(node: *const Node) ?PayloadKind {
+    const placement = node.placement orelse return null;
+    if (placement.display != .native) return null;
+    return switch (placement.display.native) {
+        .text, .code, .icon, .path_shape => .text,
+        .latex => .latex,
+        .image => .image_ref,
+        .pdf => .pdf_ref,
+    };
 }
 
 pub const Query = struct {
@@ -1007,5 +996,5 @@ pub const Query = struct {
 /// Expanded displays and input groups own the bounds of their children.
 pub fn isGroupNode(node: *const Node) bool {
     if (node.placement) |placement| return placement.display == .expanded or placement.display == .group;
-    return node.object_kind == .group;
+    return false;
 }

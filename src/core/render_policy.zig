@@ -342,14 +342,7 @@ pub fn resolveKind(node: *const Node) RenderKind {
         },
         .pending, .running => {},
     };
-    if (node.object_kind == .group) return .chrome_only;
-    return switch (node.payload_kind orelse .text) {
-        .text => .text,
-        .code => .code,
-        .latex => .latex,
-        .image_ref => .raster_asset,
-        .pdf_ref => .vector_asset,
-    };
+    return .chrome_only;
 }
 
 pub fn resolveTextForNode(state: anytype, node: *const Node) ?TextPaint {
@@ -368,7 +361,7 @@ pub fn resolveTextMetrics(state: anytype, node: *const Node) TextMetrics {
 
 pub fn shouldWrapText(state: anytype, node: *const Node) bool {
     if (naturalPathSize(node) != null) return false;
-    switch (node.payload_kind orelse .text) {
+    switch (model.nodePayloadKind(node) orelse .text) {
         .image_ref, .pdf_ref => return false,
         else => {},
     }

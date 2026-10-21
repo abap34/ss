@@ -65,7 +65,6 @@ pub fn stateSource(state: *core.DocumentState, pages: *core.prepared.PreparedPag
     for (state.graph.nodes.items) |*node| {
         relocateOrigin(&node.origin, edit, state.projectPath(), syntax);
         for (node.fields.items) |*field| relocateOrigin(&field.origin, edit, state.projectPath(), syntax);
-        for (node.content_provenance.items) |*entry| relocateOriginValue(&entry.origin, edit, state.projectPath(), syntax);
     }
     var provenance = state.runtime.string_provenance.valueIterator();
     while (provenance.next()) |entries| for (entries.items) |*entry| relocateOriginValue(&entry.origin, edit, state.projectPath(), syntax);
@@ -77,7 +76,7 @@ pub fn stateSource(state: *core.DocumentState, pages: *core.prepared.PreparedPag
         if (item.replacement) |*value| relocateOrigin(&value.origin, edit, state.projectPath(), syntax);
     }
     for (pages.pages) |*page| for (page.objects) |*object| {
-        // Content provenance borrows the node's already relocated entries.
+        // Content provenance borrows the store's already relocated entries.
         relocateOrigin(&object.origin, edit, state.projectPath(), syntax);
     };
 }

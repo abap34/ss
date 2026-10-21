@@ -365,7 +365,7 @@ test "native text display: a user display reaches Markdown preparation through i
     try testing.expect(state.childrenOf(child) == null);
     const node = state.getNode(child).?;
     try testing.expectEqual(@as(usize, 0), node.fields.items.len);
-    try testing.expectEqual(core.ObjectKind.text, node.object_kind.?);
+    try testing.expectEqual(core.native_display.Kind.text, node.placement.?.display.native);
     try testing.expectEqualStrings("# Overview\n\n**Typed** text", core.nodeDisplayContent(node));
     const render = core.render_policy.resolve(&state, node);
     try testing.expectEqual(@as(f32, 31), render.text.?.font_size);
@@ -374,7 +374,7 @@ test "native text display: a user display reaches Markdown preparation through i
     try testing.expectEqual(core.markdown.ParseMode.block, prepared.parse_mode);
     try testing.expect(prepared.markdown_doc.?.blocks.items.len >= 2);
     try testing.expectEqualStrings("# Overview\n\n**Typed** text", prepared.content);
-    try testing.expectEqual(core.ObjectKind.group, state.getNode(parent).?.object_kind.?);
+    try testing.expect(state.getNode(parent).?.placement.?.display == .expanded);
     try testing.expectEqual(core.render_policy.RenderKind.chrome_only, core.render_policy.resolveKind(state.getNode(parent).?));
     var pages = try core.prepared.prepare(testing.allocator, &state);
     defer pages.deinit(testing.allocator);
@@ -415,9 +415,8 @@ test "native image display: immutable inputs retain asset styles and independent
         const node = state.getNode(id).?;
         try testing.expectEqual(core.native_display.Kind.image, node.placement.?.display.native);
         try testing.expectEqual(if (id == child) second_page else first_page, node.placement.?.page_id);
-        try testing.expectEqual(core.ObjectKind.asset, node.object_kind.?);
-        try testing.expectEqual(core.PayloadKind.image_ref, node.payload_kind.?);
-        try testing.expect(node.content == null);
+        try testing.expectEqual(core.native_display.Kind.image, node.placement.?.display.native);
+        try testing.expectEqual(core.PayloadKind.image_ref, core.nodePayloadKind(node).?);
         try testing.expectEqual(@as(usize, 0), node.fields.items.len);
         const paint = core.render_policy.resolve(&state, node);
         try testing.expectEqual(core.render_policy.RenderKind.raster_asset, paint.kind);
@@ -473,7 +472,6 @@ test "native code display: source, language and styles remain immutable across p
     for (ids, languages, [_]f32{ 18, 22, 18 }) |id, language, size| {
         const node = state.getNode(id).?;
         try testing.expectEqual(core.native_display.Kind.code, node.placement.?.display.native);
-        try testing.expect(node.content == null);
         try testing.expectEqual(@as(usize, 0), node.fields.items.len);
         const paint = core.render_policy.resolve(&state, node);
         try testing.expectEqual(core.render_policy.RenderKind.code, paint.kind);
@@ -1745,7 +1743,6 @@ test "native icon display: immutable inputs preserve identity, paint and bundled
     for (selected.ids.items, 0..) |id, index| {
         const node = state.getNode(id).?;
         try testing.expectEqual(core.native_display.Kind.icon, node.placement.?.display.native);
-        try testing.expect(node.content == null);
         try testing.expectEqual(@as(usize, 0), node.fields.items.len);
         const paint = core.render_policy.resolve(&state, node);
         try testing.expectEqual(core.render_policy.RenderKind.vector_asset, paint.kind);
@@ -1837,7 +1834,6 @@ test "asset constructors: reused paths retain their source through helpers and d
         try testing.expectEqualStrings("AssetNotFound", diagnostic.code());
         try testing.expectEqual(start, diagnostic.origin.?.span.?.start);
         const node = state.getNode(id).?;
-        try testing.expect(node.content == null);
         var prepared = try core.prepared.prepareObject(testing.allocator, &state, node);
         defer prepared.deinit(testing.allocator);
         const origin = core.ContentProvenance.originForSpan(prepared.content_provenance, 0, prepared.content.len).?;

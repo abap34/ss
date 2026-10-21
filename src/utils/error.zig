@@ -711,7 +711,7 @@ fn printDiagnosticNodeField(state: anytype, node_id: anytype) void {
     const id = node_id orelse return;
     const node = state.getNode(id) orelse return;
     var buffer: [192]u8 = undefined;
-    const payload = if (node.payload_kind) |payload_kind| @tagName(payload_kind) else "-";
+    const payload = if (model.nodePayloadKind(node)) |payload_kind| @tagName(payload_kind) else "-";
     const label = std.fmt.bufPrint(&buffer, "#{d} {s} payload={s}", .{ id, node.name, payload }) catch return;
     printBoxField("object", label);
 }
@@ -1027,7 +1027,6 @@ pub fn isExpectedCliError(err: anyerror) bool {
         error.LayoutDependencyCycle,
         error.PostLayoutComputationUnsupported,
         error.ExecutionDependencyCycle,
-        error.DuplicateContentDefinition,
         error.DuplicatePropertyDefinition,
         error.ConstraintConflict,
         error.NegativeFrameSize,

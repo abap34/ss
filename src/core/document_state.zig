@@ -11,9 +11,6 @@ const DocumentDiagnostics = @import("diagnostics.zig").DocumentDiagnostics;
 const Allocator = model.Allocator;
 const NodeId = model.NodeId;
 const Node = model.Node;
-const NodeKind = model.NodeKind;
-const ObjectKind = model.ObjectKind;
-const PayloadKind = model.PayloadKind;
 const Constraint = model.Constraint;
 const ContentProvenance = model.ContentProvenance;
 const Selection = model.Selection;
@@ -652,15 +649,6 @@ pub const DocumentState = struct {
         ownership.count += 1;
     }
 
-    fn addPagePlacementRoot(self: *DocumentState, page_id: NodeId, object_id: NodeId) !void {
-        const gop = try self.graph.page_placement_roots.getOrPut(page_id);
-        if (!gop.found_existing) gop.value_ptr.* = .empty;
-        for (gop.value_ptr.items) |existing| {
-            if (existing == object_id) return;
-        }
-        _ = try self.insertComposition(gop.value_ptr, object_id);
-    }
-
     pub fn addPage(self: *DocumentState, name: []const u8) !NodeId {
         const page_id = try self.freshId();
         const owned_name = try self.copyString(name);
@@ -677,17 +665,6 @@ pub const DocumentState = struct {
         }
         try self.addContainment(self.graph.document_id, page_id);
         return page_id;
-    }
-
-    pub fn makeObject(
-        self: *DocumentState,
-        page_id: NodeId,
-        name: []const u8,
-        object_kind: ObjectKind,
-        payload_kind: PayloadKind,
-        content: ?[]const u8,
-    ) !NodeId {
-        return self.makeNodeWithOrigin(page_id, true, .object, name, object_kind, payload_kind, content, null);
     }
 
     /// Register a fresh placement without evaluating its display. The caller
@@ -880,93 +857,8 @@ pub const DocumentState = struct {
                 .page_id = page_id,
                 .display = if (input == .group) .group else .pending,
             },
-            .object_kind = if (input == .group) .group else null,
             .origin = origin,
         });
-    }
-
-    pub fn createObjectWithOrigin(
-        self: *DocumentState,
-        name: []const u8,
-        object_kind: ObjectKind,
-        payload_kind: PayloadKind,
-        content: ?[]const u8,
-        origin: ?model.SourceOrigin,
-    ) !NodeId {
-        return self.makeNodeWithOrigin(self.graph.document_id, false, .object, name, object_kind, payload_kind, content, origin);
-    }
-
-    pub fn makeGroupWithOrigin(
-        self: *DocumentState,
-        page_id: NodeId,
-        attached: bool,
-        children: []const NodeId,
-        origin: ?model.SourceOrigin,
-    ) !NodeId {
-        const group_id = try self.makeNodeWithOrigin(
-            page_id,
-            attached,
-            .object,
-            "group",
-            .group,
-            .text,
-            "",
-            origin,
-        );
-        for (children) |child_id| {
-            try self.addContainment(group_id, child_id);
-        }
-        return group_id;
-    }
-
-    pub fn createGroupWithOrigin(
-        self: *DocumentState,
-        children: []const NodeId,
-        origin: ?model.SourceOrigin,
-    ) !NodeId {
-        return try self.makeGroupWithOrigin(self.graph.document_id, false, children, origin);
-    }
-
-    pub fn placeObjectOnPage(self: *DocumentState, page_id: NodeId, object_id: NodeId) !void {
-        const page = self.getNode(page_id) orelse return error.UnknownNode;
-        if (page.kind != .page) return error.InvalidValueTag;
-        // Validate the whole composition before publishing any membership.
-        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
-        defer seen.deinit();
-        var pending = std.ArrayList(NodeId).empty;
-        defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, object_id);
-        var index: usize = 0;
-        while (index < pending.items.len) : (index += 1) {
-            const id = pending.items[index];
-            const entry = try seen.getOrPut(id);
-            if (entry.found_existing) return error.DuplicateObjectParent;
-            const node = self.getNode(id) orelse return error.UnknownNode;
-            if (node.kind != .object) return error.InvalidValueTag;
-            if (node.attached) return error.DuplicatePlacement;
-            if (self.childrenOf(id)) |children| try pending.appendSlice(self.allocator, children);
-        }
-        try self.attachObjectSubtreeToPage(page_id, object_id);
-        try self.addPagePlacementRoot(page_id, object_id);
-    }
-
-    fn attachObjectSubtreeToPage(self: *DocumentState, page_id: NodeId, object_id: NodeId) !void {
-        var visited = std.AutoHashMap(NodeId, void).init(self.allocator);
-        defer visited.deinit();
-        try self.placeObjectSubtree(page_id, object_id, &visited);
-    }
-
-    fn placeObjectSubtree(self: *DocumentState, page_id: NodeId, object_id: NodeId, visited: *std.AutoHashMap(NodeId, void)) !void {
-        if (visited.contains(object_id)) return;
-        try visited.put(object_id, {});
-        const node = self.getNode(object_id) orelse return error.UnknownNode;
-        if (node.kind != .object) return error.InvalidValueTag;
-        node.attached = true;
-        node.discarded = false;
-        node.composition_order = self.nextCompositionOrder();
-        try self.addContainment(page_id, object_id);
-        const children = self.childrenOf(object_id) orelse return;
-        for (children) |child_id| try self.placeObjectSubtree(page_id, child_id, visited);
     }
 
     pub fn discardObjectSubtree(self: *DocumentState, object_id: NodeId) !void {
@@ -1097,73 +989,6 @@ pub const DocumentState = struct {
     pub fn getNodeField(self: *DocumentState, node_id: NodeId, key: []const u8) ?Value {
         const node = self.getNode(node_id) orelse return null;
         return nodeField(node, key);
-    }
-
-    fn clearNodeContentProvenance(self: *DocumentState, node: *Node) void {
-        for (node.content_provenance.items) |*entry| entry.deinit(self.allocator);
-        node.content_provenance.clearRetainingCapacity();
-    }
-
-    pub fn setNodeContent(self: *DocumentState, node_id: NodeId, value: []const u8) !void {
-        const node = self.getNode(node_id) orelse return error.UnknownNode;
-        if (node.content != null) return error.DuplicateContentDefinition;
-        const owned_value = try self.allocator.dupe(u8, value);
-        errdefer self.allocator.free(owned_value);
-        const provenance = self.stringProvenance(value);
-        var owned_provenance = try self.cloneProvenanceList(provenance);
-        errdefer self.deinitProvenanceList(&owned_provenance);
-        try self.setStringProvenance(owned_value, owned_provenance.items);
-        if (node.content_owned) {
-            if (node.content) |content| self.allocator.free(content);
-        }
-        self.clearNodeContentProvenance(node);
-        node.content = owned_value;
-        node.content_owned = true;
-        node.content_provenance = owned_provenance;
-    }
-
-    fn makeNodeWithOrigin(
-        self: *DocumentState,
-        page_id: NodeId,
-        attached: bool,
-        kind: NodeKind,
-        name: []const u8,
-        object_kind: ObjectKind,
-        payload_kind: PayloadKind,
-        content: ?[]const u8,
-        origin: ?model.SourceOrigin,
-    ) !NodeId {
-        const obj_id = try self.freshId();
-        const owned_name = try self.copyString(name);
-        const owned_content = try self.copyOptionalString(content);
-        const owned_origin = if (origin) |value| try self.copyOrigin(value) else null;
-        var content_provenance = if (content) |value|
-            try self.cloneProvenanceList(self.stringProvenance(value))
-        else
-            std.ArrayList(ContentProvenance).empty;
-        var content_provenance_transferred = false;
-        errdefer {
-            if (!content_provenance_transferred) self.deinitProvenanceList(&content_provenance);
-        }
-        if (owned_content) |value| try self.setStringProvenance(value, content_provenance.items);
-        try self.graph.nodes.append(self.allocator, .{
-            .id = obj_id,
-            .kind = kind,
-            .name = owned_name,
-            .attached = attached,
-            .object_kind = object_kind,
-            .payload_kind = payload_kind,
-            .content = owned_content,
-            .origin = owned_origin,
-            .content_provenance = content_provenance,
-        });
-        content_provenance_transferred = true;
-        if (attached) {
-            self.getNode(obj_id).?.composition_order = self.nextCompositionOrder();
-            try self.addContainment(page_id, obj_id);
-            if (kind == .object) try self.addPagePlacementRoot(page_id, obj_id);
-        }
-        return obj_id;
     }
 
     pub fn addObjectSource(
@@ -1304,37 +1129,8 @@ pub const DocumentState = struct {
     }
 
     pub fn layoutPageOf(self: *DocumentState, node_id: NodeId) ?NodeId {
-        return self.layoutPageOfReference(node_id, self.graph.nodes.items.len);
-    }
-
-    fn layoutPageOfReference(self: *DocumentState, node_id: NodeId, remaining_nodes: usize) ?NodeId {
-        if (remaining_nodes == 0) return null;
         const direct = self.directPageOwnershipInfo(node_id);
-        if (direct.count == 1) return direct.first;
-        if (direct.count > 1) return null;
-        const node = self.getNode(node_id) orelse return null;
-        if (!model.isGroupNode(node)) return null;
-        // A group can describe the bounds of already placed children without
-        // itself becoming a drawing object or a page placement root.
-        return self.uniqueAttachedDescendantPage(node_id, remaining_nodes - 1);
-    }
-
-    fn uniqueAttachedDescendantPage(self: *DocumentState, node_id: NodeId, remaining_nodes: usize) ?NodeId {
-        var result: ?NodeId = null;
-        const children = self.childrenOf(node_id) orelse return null;
-        for (children) |child_id| {
-            const child = self.getNode(child_id) orelse continue;
-            if (child.kind != .object or child.discarded) continue;
-            // Unknown ownership must propagate: a partially placed or
-            // cross-page subtree cannot acquire a page from another sibling.
-            const page_id = self.layoutPageOfReference(child_id, remaining_nodes) orelse return null;
-            if (result) |existing| {
-                if (existing != page_id) return null;
-            } else {
-                result = page_id;
-            }
-        }
-        return result;
+        return if (direct.count == 1) direct.first else null;
     }
 
     fn addCrossPageConstraintDiagnosticIfKnown(self: *DocumentState, constraint: Constraint) !void {

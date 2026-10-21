@@ -109,14 +109,14 @@ fn intrinsicWidthWithCache(state: *Workspace, node: *const Node, cache: ?*Measur
         const available_width = maxWidthForStyle(layout_style) + chrome_width;
         if (try measurements.renderedMeasurement(state, node, available_width, .natural)) |measured| {
             if (measured.width > 0) {
-                return switch (node.payload_kind orelse .text) {
+                return switch (model.nodePayloadKind(node) orelse .text) {
                     .image_ref, .pdf_ref => measured.width,
                     else => @min(available_width, measured.width),
                 };
             }
         }
     }
-    switch (node.payload_kind orelse .text) {
+    switch (model.nodePayloadKind(node) orelse .text) {
         .image_ref, .pdf_ref => {
             return @min(maxWidthForStyle(layout_style), Defaults.default_asset_width) * assetScale(state, node) + chrome_width;
         },
@@ -185,7 +185,7 @@ fn intrinsicHeightWithCache(state: *Workspace, node: *const Node, frame: model.F
             if (measured.height > 0) return measured.height;
         }
     }
-    return switch (node.payload_kind orelse .text) {
+    return switch (model.nodePayloadKind(node) orelse .text) {
         .image_ref, .pdf_ref => Defaults.max_figure_height * assetScale(state, node) + chrome_height,
         .latex => blk: {
             const content = model.nodeDisplayContent(node);
@@ -543,7 +543,7 @@ fn wrappedLineCount(state: *Workspace, node: *const Node, cache: ?*MeasurementCa
 }
 
 fn plainTextFaceForNode(node: *const Node, faces: font_model.TextFaces) font_model.Face {
-    if ((node.payload_kind orelse .text) == .code) return faces.code;
+    if ((model.nodePayloadKind(node) orelse .text) == .code) return faces.code;
     return faces.normal;
 }
 

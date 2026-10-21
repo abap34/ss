@@ -47,7 +47,7 @@ pub fn register(suite: Suite, modules: project.ProjectModules) void {
         import("core", modules.core),
         import("render_text", modules.render_text),
     }, true);
-    _ = suite.add(analysis_snapshot_spec_mod, .{ .layout_fixture = true, .name = "test-analysis-snapshot", .description = "Run focused analysis snapshot tests" });
+    _ = suite.add(analysis_snapshot_spec_mod, .{ .document_fixture = true, .layout_fixture = true, .name = "test-analysis-snapshot", .description = "Run focused analysis snapshot tests" });
     const inference_ownership_spec_mod = createModule(ctx, "tests/analysis/inference/spec_tests.zig", &.{
         import("analysis", analysis_mod),
     }, true);

@@ -27,14 +27,13 @@ export function editorSnapshot() {
         },
       ],
       objects: [
-        { id: 101, page_id: 11, name: "summary", role: "body", x: 100, y: 500, width: 360, height: 100, group: false },
-        { id: 102, page_id: 11, name: "line_item", role: "line", x: 520, y: 430, width: 240, height: 120, group: false },
-        { id: 201, page_id: 22, name: "anchor", role: "label", x: 60, y: 530, width: 120, height: 60, group: false },
+        { id: 101, page_id: 11, name: "summary", x: 100, y: 500, width: 360, height: 100, group: false },
+        { id: 102, page_id: 11, name: "line_item", x: 520, y: 430, width: 240, height: 120, group: false },
+        { id: 201, page_id: 22, name: "anchor", x: 60, y: 530, width: 120, height: 60, group: false },
         {
           id: 202,
           page_id: 22,
           name: "detail",
-          role: "body",
           x: 240,
           y: 470,
           width: 380,
