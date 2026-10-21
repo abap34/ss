@@ -1561,10 +1561,6 @@ fn validatePropertySetPath(
     }
     if (state) |sink| {
         const first = path[0];
-        if (path.len == 1 and std.mem.eql(u8, first.name, "content")) {
-            try ensureType(sink, allocator, value_info, Type.string, origin, .UnmatchedArgumentType);
-            return;
-        }
         if (fieldTypeForTarget(sema, target_info, first.name)) |field| {
             if (path.len == 1) {
                 try validateExpectedFieldValueAtSpan(sink, field, first.name, value_info, origin, first.span);

@@ -115,27 +115,18 @@ pub const PropertyOwner = union(enum) {
 
 pub const PropertyKey = union(enum) {
     any,
-    content,
     named: []const u8,
-
-    const content_name = "content";
 
     pub fn fromName(maybe_name: ?[]const u8) PropertyKey {
         const value = maybe_name orelse return .any;
-        if (std.mem.eql(u8, value, content_name)) return .content;
         return .{ .named = value };
     }
 
     pub fn intersects(self: PropertyKey, other: PropertyKey) bool {
         return switch (self) {
             .any => true,
-            .content => switch (other) {
-                .any, .content => true,
-                .named => |named_value| std.mem.eql(u8, named_value, content_name),
-            },
             .named => |left| switch (other) {
                 .any => true,
-                .content => std.mem.eql(u8, left, content_name),
                 .named => |right| core.PropertyPath.intersects(left, right),
             },
         };
@@ -150,7 +141,6 @@ pub const PropertyKey = union(enum) {
     pub fn displayName(self: PropertyKey) ?[]const u8 {
         return switch (self) {
             .any => null,
-            .content => content_name,
             .named => |value| value,
         };
     }
@@ -322,10 +312,6 @@ pub const Resource = union(ResourceKind) {
 
     pub fn makeProperty(owner: PropertyOwner, key: ?[]const u8) Resource {
         return .{ .property = .{ .owner = owner, .key = PropertyKey.fromName(key) } };
-    }
-
-    pub fn makeContentProperty(owner: PropertyOwner) Resource {
-        return .{ .property = .{ .owner = owner, .key = .content } };
     }
 
     pub fn makePages(page_id: ?core.NodeId) Resource {

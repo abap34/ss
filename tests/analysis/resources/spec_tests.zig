@@ -56,7 +56,7 @@ test "resource index: candidates equal pairwise intersections across scopes owne
         .{ .origin = .local, .scope = .{ .page = 1 }, .name = "title", .local_id = 1 },
         .{ .origin = .local, .scope = .{ .page = 1 }, .name = "title", .local_id = 2 },
     };
-    const keys = [_]Key{ .any, .content, .{ .named = "content" }, .{ .named = "x" }, .{ .named = "y" }, .{ .named = "layout" }, .{ .named = "layout.x" }, .{ .named = "layout.y" }, .{ .named = "layout_extra.x" }, .{ .named = "text.font" }, .{ .named = "text.font.family" } };
+    const keys = [_]Key{ .any, .{ .named = "background_fill" }, .{ .named = "x" }, .{ .named = "y" }, .{ .named = "layout" }, .{ .named = "layout.x" }, .{ .named = "layout.y" }, .{ .named = "layout_extra.x" }, .{ .named = "text.font" }, .{ .named = "text.font.family" } };
     var resources = std.ArrayList(Resource).empty;
     defer resources.deinit(testing.allocator);
     for (scopes) |scope| {
@@ -141,7 +141,7 @@ test "resource index: allocation failures release every partially built bucket" 
         Resource{ .objects = .{ .input_type = compiler.language.Type.recordType("Heading").inModule(1) } },
         Resource.makeProperty(.any, null),
         Resource.makeProperty(.document, "x"),
-        Resource.makeContentProperty(.page),
+        Resource.makeProperty(.page, "layout_h_center_offset"),
         Resource.makeProperty(.{ .object = .{} }, "x"),
         Resource.makeProperty(.{ .object = .{ .identity = .{ .scope = .{ .page = 1 }, .name = "other" } } }, "x"),
         Resource.makeProperty(.{ .object = .{ .identity = .{ .scope = .{ .page = 1 }, .name = "title" } } }, null),

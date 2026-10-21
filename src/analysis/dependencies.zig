@@ -2852,7 +2852,6 @@ fn appendPropertyOwnerKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8),
 fn appendPropertyKeyKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), key: PropertyKey) !void {
     switch (key) {
         .any => try out.append(allocator, '*'),
-        .content => try out.append(allocator, 'c'),
         .named => |name| {
             try out.append(allocator, 'n');
             try appendKeyBytes(allocator, out, name);
