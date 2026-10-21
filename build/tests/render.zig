@@ -104,6 +104,12 @@ pub fn register(suite: Suite, modules: project.ProjectModules, build_options: *S
         import("render_text", modules.render_text),
     }, null);
     _ = suite.add(render_compile_spec_mod, .{ .document_fixture = true, .layout_fixture = true, .name = "test-render-compile", .description = "Run focused render compiler tests", .link_qpdf = true });
+    const preload_ownership_spec_mod = createModule(ctx, "tests/render/compile/preload/spec_tests.zig", &.{
+        import("ast", modules.ast),
+        import("core", modules.core),
+        import("render_compile", render_compile_mod),
+    }, null);
+    _ = suite.add(preload_ownership_spec_mod, .{ .name = "test-preload-ownership", .description = "Check render preload ownership on allocation failure", .link_qpdf = true });
     const semantic_spec_mod = createModule(ctx, "tests/render/semantics/spec_tests.zig", &.{
         import("compiler", project.createCompilerModule(ctx, modules)),
         import("render", modules.render),

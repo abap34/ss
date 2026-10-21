@@ -180,6 +180,14 @@ const LatexPreload = struct {
     engine: LatexEngine,
     kind: LatexFragmentKind,
     target: RenderDiagnosticTarget = .{},
+
+    fn clone(self: LatexPreload, allocator: Allocator) !LatexPreload {
+        var result = self;
+        result.source = try allocator.dupe(u8, self.source);
+        errdefer allocator.free(result.source);
+        result.preamble = try allocator.dupe(u8, self.preamble);
+        return result;
+    }
 };
 
 const RasterPreload = struct {
@@ -941,22 +949,22 @@ fn collectPreparedObjectPreloads(
         switch (dep.kind) {
             .inline_math, .display_math => {
                 const kind: LatexFragmentKind = if (dep.kind == .display_math) .display_math else .inline_math;
-                try registerPlanPreloadTask(ctx, tasks, seen, deps, .{ .latex = .{
-                    .source = try ctx.allocator.dupe(u8, dep.source),
-                    .preamble = try ctx.allocator.dupe(u8, object.latex_preamble),
+                try registerPlanPreloadTask(ctx, tasks, seen, deps, .{ .latex = try (LatexPreload{
+                    .source = dep.source,
+                    .preamble = object.latex_preamble,
                     .engine = object.latex_engine,
                     .kind = kind,
                     .target = dep_target,
-                } });
+                }).clone(ctx.allocator) });
             },
             .latex_body => {
-                try registerPlanPreloadTask(ctx, tasks, seen, deps, .{ .latex = .{
-                    .source = try ctx.allocator.dupe(u8, dep.source),
-                    .preamble = try ctx.allocator.dupe(u8, object.latex_preamble),
+                try registerPlanPreloadTask(ctx, tasks, seen, deps, .{ .latex = try (LatexPreload{
+                    .source = dep.source,
+                    .preamble = object.latex_preamble,
                     .engine = object.latex_engine,
                     .kind = .body,
                     .target = dep_target,
-                } });
+                }).clone(ctx.allocator) });
             },
             .icon => try registerPlanPreloadTask(ctx, tasks, seen, deps, .{ .icon = .{
                 .source = try ctx.allocator.dupe(u8, dep.source),
@@ -1001,13 +1009,13 @@ fn collectObjectPreloads(
     switch (command.render.kind) {
         .text => {},
         .latex => {
-            if (command.latex_kind == .body) try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .latex = .{
-                .source = try ctx.allocator.dupe(u8, command.content),
-                .preamble = try ctx.allocator.dupe(u8, command.latex_preamble),
+            if (command.latex_kind == .body) try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .latex = try (LatexPreload{
+                .source = command.content,
+                .preamble = command.latex_preamble,
                 .engine = command.latex_engine,
                 .kind = command.latex_kind,
                 .target = targetWithContentSpan(target, 0, command.content.len),
-            } });
+            }).clone(ctx.allocator) });
         },
         .vector_asset => {
             const source = try artifacts.resolveAssetPath(artifactContext(ctx), command.content);
@@ -1048,22 +1056,22 @@ fn collectAssetDepsForPlan(
         switch (dep.kind) {
             .inline_math, .display_math => {
                 const kind: LatexFragmentKind = if (dep.kind == .display_math) .display_math else .inline_math;
-                try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .latex = .{
-                    .source = try ctx.allocator.dupe(u8, dep.source),
-                    .preamble = try ctx.allocator.dupe(u8, command.latex_preamble),
+                try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .latex = try (LatexPreload{
+                    .source = dep.source,
+                    .preamble = command.latex_preamble,
                     .engine = command.latex_engine,
                     .kind = kind,
                     .target = dep_target,
-                } });
+                }).clone(ctx.allocator) });
             },
             .latex_body => {
-                if (command.latex_kind == .body) try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .latex = .{
-                    .source = try ctx.allocator.dupe(u8, dep.source),
-                    .preamble = try ctx.allocator.dupe(u8, command.latex_preamble),
+                if (command.latex_kind == .body) try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .latex = try (LatexPreload{
+                    .source = dep.source,
+                    .preamble = command.latex_preamble,
                     .engine = command.latex_engine,
                     .kind = command.latex_kind,
                     .target = dep_target,
-                } });
+                }).clone(ctx.allocator) });
             },
             .icon => try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .icon = .{
                 .source = try ctx.allocator.dupe(u8, dep.source),
@@ -1098,6 +1106,7 @@ fn targetWithContentSpan(target: RenderDiagnosticTarget, start: usize, end: usiz
     return refined;
 }
 
+// Consumes task on success and failure. Reserve all containers before transfer.
 fn registerPlanPreloadTask(
     ctx: *DrawContext,
     tasks: *std.ArrayList(PreloadTask),
@@ -1105,21 +1114,23 @@ fn registerPlanPreloadTask(
     page_deps: *std.ArrayList(usize),
     task: PreloadTask,
 ) !void {
+    var transferred = false;
+    defer if (!transferred) freePreloadTask(ctx.allocator, task);
     const key = try preloadTaskKey(ctx, task);
-    errdefer {
-        ctx.allocator.free(key);
-        freePreloadTask(ctx.allocator, task);
-    }
+    defer if (!transferred) ctx.allocator.free(key);
     if (seen.get(key)) |existing_index| {
-        ctx.allocator.free(key);
-        freePreloadTask(ctx.allocator, task);
         try appendUniqueIndex(ctx.allocator, page_deps, existing_index);
         return;
     }
+    try seen.ensureUnusedCapacity(1);
+    try tasks.ensureUnusedCapacity(ctx.allocator, 1);
+    try page_deps.ensureUnusedCapacity(ctx.allocator, 1);
+
     const index = tasks.items.len;
-    try seen.put(key, index);
-    try tasks.append(ctx.allocator, task);
-    try appendUniqueIndex(ctx.allocator, page_deps, index);
+    seen.putAssumeCapacityNoClobber(key, index);
+    tasks.appendAssumeCapacity(task);
+    page_deps.appendAssumeCapacity(index);
+    transferred = true;
 }
 
 fn appendUniqueIndex(allocator: Allocator, values: *std.ArrayList(usize), value: usize) !void {
