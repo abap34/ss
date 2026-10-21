@@ -57,7 +57,7 @@
       flake = false;
     };
     tree-sitter-scheme = {
-      url = "github:6cdh/tree-sitter-scheme/1b112d9571e4f62fb3d095d52a51f1da7756fb94";
+      url = "github:6cdh/tree-sitter-scheme/45c72463ac4260ef6e07d1c0642ed43d4e9957b4";
       flake = false;
     };
     tree-sitter-toml = {
