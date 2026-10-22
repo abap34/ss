@@ -77,6 +77,10 @@ pub const AnalysisKind = enum {
     semantics_pages,
     semantics_dependency_queries,
     semantics_call_graph,
+    semantics_displays,
+    semantics_input_join,
+    semantics_placement_inputs,
+    semantics_call_keys,
     semantics_function_bodies,
     semantics_type_fields,
     execution_graph,
@@ -201,6 +205,10 @@ var analysis_semantics_functions = CountTime{};
 var analysis_semantics_pages = CountTime{};
 var analysis_semantics_dependency_queries = CountTime{};
 var analysis_semantics_call_graph = CountTime{};
+var analysis_semantics_displays = CountTime{};
+var analysis_semantics_input_join = CountTime{};
+var analysis_semantics_placement_inputs = CountTime{};
+var analysis_semantics_call_keys = CountTime{};
 var analysis_semantics_function_bodies = CountTime{};
 var analysis_semantics_type_fields = CountTime{};
 var analysis_execution_graph = CountTime{};
@@ -448,6 +456,10 @@ pub fn printIfEnabled() void {
     printCounter("analysis semantics pages", &analysis_semantics_pages);
     printCounter("analysis semantics dependency queries", &analysis_semantics_dependency_queries);
     printCounter("analysis semantics call graph", &analysis_semantics_call_graph);
+    printCounter("analysis display calls", &analysis_semantics_displays);
+    printCounter("analysis input join", &analysis_semantics_input_join);
+    printCounter("analysis placement inputs", &analysis_semantics_placement_inputs);
+    printCounter("analysis call keys", &analysis_semantics_call_keys);
     printCounter("analysis semantics function bodies", &analysis_semantics_function_bodies);
     printCounter("analysis semantics type fields", &analysis_semantics_type_fields);
     printCounter("analysis execution graph", &analysis_execution_graph);
@@ -480,6 +492,10 @@ fn analysisCounter(kind: AnalysisKind) *CountTime {
         .semantics_pages => &analysis_semantics_pages,
         .semantics_dependency_queries => &analysis_semantics_dependency_queries,
         .semantics_call_graph => &analysis_semantics_call_graph,
+        .semantics_displays => &analysis_semantics_displays,
+        .semantics_input_join => &analysis_semantics_input_join,
+        .semantics_placement_inputs => &analysis_semantics_placement_inputs,
+        .semantics_call_keys => &analysis_semantics_call_keys,
         .semantics_function_bodies => &analysis_semantics_function_bodies,
         .semantics_type_fields => &analysis_semantics_type_fields,
         .execution_graph => &analysis_execution_graph,

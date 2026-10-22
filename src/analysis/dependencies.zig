@@ -1190,7 +1190,10 @@ pub const Analyzer = struct {
             .record => |record| blk: {
                 var fields = std.ArrayList(ValueFacts.Field).empty;
                 const allocator = self.value_storage.allocator();
-                for (record.fields.items) |field| try fields.append(allocator, .{ .name = field.name, .value = try self.valueFacts(field.value) });
+                for (record.fields.items) |field| {
+                    const value = try self.valueFacts(field.value);
+                    if (value.id != 0) try fields.append(allocator, .{ .name = field.name, .value = value });
+                }
                 if (self.sema.recordConstruction(record)) |decl| {
                     for (decl.decl.fields.items) |field| {
                         if (record.hasField(field.name)) continue;
@@ -1200,7 +1203,8 @@ pub const Analyzer = struct {
                             const previous = self.sema;
                             self.sema = self.sema.forModule(decl.module_id);
                             defer self.sema = previous;
-                            try fields.append(allocator, .{ .name = field.name, .value = try self.valueFacts(default.*) });
+                            const value = try self.valueFacts(default.*);
+                            if (value.id != 0) try fields.append(allocator, .{ .name = field.name, .value = value });
                         }
                     }
                 }
@@ -1254,9 +1258,12 @@ pub const Analyzer = struct {
                 break :blk .{ .closure = .{ .module_id = closure.module_id, .lambda = closure.lambda, .bindings = bindings } };
             },
         };
-        const fields = try allocator.alloc(ValueFacts.Field, input.fields.len);
-        for (input.fields, fields) |field, *output| output.* = .{ .name = field.name, .value = try self.importPlacementInput(field.value, depth + 1) };
-        var result = try self.newValueFacts(candidates, fields);
+        var fields = std.ArrayList(ValueFacts.Field).empty;
+        for (input.fields) |field| {
+            const value = try self.importPlacementInput(field.value, depth + 1);
+            if (value.id != 0) try fields.append(allocator, .{ .name = field.name, .value = value });
+        }
+        var result = try self.newValueFacts(candidates, fields.items);
         if (input.reference) |reference| switch (reference) {
             .unknown => result = try self.withPropertyTarget(result, PropertyTarget.any()),
             .document => result = try self.withPropertyTarget(result, PropertyTarget.document()),
@@ -1399,7 +1406,8 @@ pub const Analyzer = struct {
         for (record.decl.fields.items) |field| {
             var field_type = (try self.sema.recordFieldType(allocator, ty, field.name)) orelse continue;
             defer field_type.deinit(allocator);
-            try fields.append(allocator, .{ .name = field.name, .value = try self.valueFactsForType(field_type, depth + 1) });
+            const value = try self.valueFactsForType(field_type, depth + 1);
+            if (value.id != 0) try fields.append(allocator, .{ .name = field.name, .value = value });
         }
         return self.newValueFacts(&.{}, fields.items);
     }

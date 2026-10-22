@@ -991,3 +991,41 @@ test "typed queries: fold checks callbacks obtained after the initial accumulato
     try testing.expectError(error.ImpureDisplayFunction, analyzeGraph(&state));
     try testing.expectEqual(@as(usize, 0), state.graph.page_order.items.len);
 }
+
+test "typed queries: placement input joins retain late nested callback captures" {
+    var state = try document(
+        \\import std:text/content as native
+        \\type Payload { format: () -> String }
+        \\type Entry { payload: Payload }
+        \\type Pair {
+        \\  first: Entry
+        \\  second: Entry
+        \\}
+        \\type Summary {}
+        \\fn display(self: Placed<Entry>) -> native::Text = native::Text { content = self.value.payload.format() }
+        \\fn display(self: Placed<Pair>) -> Group<Entry, Entry> = group(self.value.first, self.value.second)
+        \\fn display(self: Placed<Summary>) -> native::Text
+        \\  let entries = select<Entry>(self.document)
+        \\  let last = fold(entries, Entry { payload = Payload { format = () |-> "Empty" } }, (acc: Entry, item: Placed<Entry>) |-> item.value)
+        \\  return native::Text { content = join(entries, ",", (item: Placed<Entry>) |-> item.value.payload.format()) ++ ":" ++ last.payload.format() }
+        \\end
+        \\fn entry(label: String, context: Document) -> Entry
+        \\  return Entry { payload = Payload { format = () |-> str(context.layout_h_center_offset) ++ label } }
+        \\end
+        \\page summary
+        \\  place!(Summary {})
+        \\end
+        \\page body
+        \\  place!(Pair { first = entry("A", docctx()), second = entry("B", docctx()) })
+        \\  place!(entry("C", docctx()))
+        \\  docctx().layout_h_center_offset = 42
+        \\end
+    );
+    defer state.deinit();
+    var graph = try checkedGraph(&state);
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const summary = state.placementRootsOf(state.graph.page_order.items[0])[0];
+    const text = state.getNode(state.childrenOf(summary).?[0]).?;
+    try testing.expectEqualStrings("42A,42B,42C:42C", core.nodeDisplayContent(text));
+}

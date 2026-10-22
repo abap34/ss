@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
+const measure_profile = @import("utils").measure_profile;
 
 const registry = @import("../language/registry.zig");
 const language_names = @import("../language/names.zig");
@@ -140,31 +141,6 @@ const ValueFacts = struct {
         self.objects.deinit();
     }
 
-    fn eql(self: ValueFacts, other: ValueFacts) bool {
-        if (self.selected_types.items.len != other.selected_types.items.len) return false;
-        for (self.selected_types.items) |ty| {
-            var found = false;
-            for (other.selected_types.items) |other_ty| if (ast.Type.eql(ty, other_ty)) {
-                found = true;
-                break;
-            };
-            if (!found) return false;
-        }
-        if (self.unknown != other.unknown or self.unknown_objects != other.unknown_objects or
-            self.unknown_string != other.unknown_string or self.unknown_reference != other.unknown_reference or
-            self.labels.count() != other.labels.count() or self.objects.count() != other.objects.count() or
-            self.fields.count() != other.fields.count() or self.children.items.len != other.children.items.len or
-            !referenceEql(self.reference, other.reference) or !optionalStringEql(self.string_literal, other.string_literal)) return false;
-        var labels = self.labels.keyIterator();
-        while (labels.next()) |label| if (!other.labels.contains(label.*)) return false;
-        var objects = self.objects.keyIterator();
-        while (objects.next()) |id| if (!other.objects.contains(id.*)) return false;
-        var fields = self.fields.iterator();
-        while (fields.next()) |field| if (!field.value_ptr.eql(other.fields.get(field.key_ptr.*) orelse return false)) return false;
-        for (self.children.items, other.children.items) |left, right| if (!left.eql(right)) return false;
-        return true;
-    }
-
     fn isEmpty(self: ValueFacts) bool {
         return !self.unknown and !self.unknown_objects and !self.unknown_string and !self.unknown_reference and self.labels.count() == 0 and
             self.objects.count() == 0 and self.fields.count() == 0 and self.children.items.len == 0 and
@@ -172,7 +148,13 @@ const ValueFacts = struct {
     }
 
     fn unionWith(self: *ValueFacts, other: ValueFacts) anyerror!void {
-        if (other.isEmpty()) return;
+        _ = try self.join(other);
+    }
+
+    // Report growth while joining, without cloning the accumulated fixed point.
+    fn join(self: *ValueFacts, other: ValueFacts) anyerror!bool {
+        if (other.isEmpty()) return false;
+        var changed = false;
         const empty = self.isEmpty();
         for (other.selected_types.items) |ty| {
             var found = false;
@@ -180,23 +162,41 @@ const ValueFacts = struct {
                 found = true;
                 break;
             };
-            if (!found) try self.selected_types.append(self.fields.allocator, ty);
+            if (!found) {
+                try self.selected_types.append(self.fields.allocator, ty);
+                changed = true;
+            }
         }
-        self.unknown_reference = self.unknown_reference or other.unknown_reference or (!empty and !referenceEql(self.reference, other.reference));
-        self.unknown_string = self.unknown_string or other.unknown_string or (!empty and !optionalStringEql(self.string_literal, other.string_literal));
-        self.reference = if (self.unknown_reference) null else other.reference;
-        self.string_literal = if (self.unknown_string) null else other.string_literal;
+        const unknown_reference = self.unknown_reference or other.unknown_reference or (!empty and !referenceEql(self.reference, other.reference));
+        const unknown_string = self.unknown_string or other.unknown_string or (!empty and !optionalStringEql(self.string_literal, other.string_literal));
+        const reference = if (unknown_reference) null else other.reference;
+        const string_literal = if (unknown_string) null else other.string_literal;
+        changed = changed or self.unknown_reference != unknown_reference or self.unknown_string != unknown_string or
+            !referenceEql(self.reference, reference) or !optionalStringEql(self.string_literal, string_literal);
+        self.unknown_reference = unknown_reference;
+        self.unknown_string = unknown_string;
+        self.reference = reference;
+        self.string_literal = string_literal;
         var objects = other.objects.keyIterator();
-        while (objects.next()) |id| try self.objects.put(id.*, {});
+        while (objects.next()) |id| {
+            const entry = try self.objects.getOrPut(id.*);
+            if (!entry.found_existing) changed = true;
+        }
+        if (other.unknown_objects and !self.unknown_objects) changed = true;
         self.unknown_objects = self.unknown_objects or other.unknown_objects;
         var labels = other.labels.keyIterator();
-        while (labels.next()) |label| try self.labels.put(label.*, {});
+        while (labels.next()) |label| {
+            const entry = try self.labels.getOrPut(label.*);
+            if (!entry.found_existing) changed = true;
+        }
         var fields = self.fields.iterator();
         while (fields.next()) |field| {
             if (other.fields.get(field.key_ptr.*)) |value| {
-                try field.value_ptr.unionWith(value);
+                const grew = try field.value_ptr.join(value);
+                changed = changed or grew;
             } else if (other.unknown) {
-                try field.value_ptr.unionWith(unknownValue(self.fields.allocator));
+                const grew = try field.value_ptr.join(unknownValue(self.fields.allocator));
+                changed = changed or grew;
             }
         }
         var other_fields = other.fields.iterator();
@@ -205,11 +205,16 @@ const ValueFacts = struct {
             var value = try field.value_ptr.clone(self.fields.allocator);
             if (self.unknown) try value.unionWith(unknownValue(self.fields.allocator));
             try self.fields.put(field.key_ptr.*, value);
+            changed = true;
         }
         for (self.children.items, 0..) |*child, index| {
             if (index < other.children.items.len) {
-                try child.unionWith(other.children.items[index]);
-            } else if (other.unknown) try child.unionWith(unknownValue(self.fields.allocator));
+                const grew = try child.join(other.children.items[index]);
+                changed = changed or grew;
+            } else if (other.unknown) {
+                const grew = try child.join(unknownValue(self.fields.allocator));
+                changed = changed or grew;
+            }
         }
         if (other.children.items.len > self.children.items.len) {
             try self.children.ensureTotalCapacity(self.fields.allocator, other.children.items.len);
@@ -219,8 +224,11 @@ const ValueFacts = struct {
                 if (self.unknown) try copy.unionWith(unknownValue(self.fields.allocator));
                 self.children.appendAssumeCapacity(copy);
             }
+            changed = true;
         }
+        if (other.unknown and !self.unknown) changed = true;
         self.unknown = self.unknown or other.unknown;
+        return changed;
     }
 
     fn clone(self: ValueFacts, allocator: std.mem.Allocator) anyerror!ValueFacts {
@@ -305,6 +313,7 @@ const EffectFrame = struct {
 
 const Analyzer = struct {
     allocator: std.mem.Allocator,
+    key_allocator: std.mem.Allocator,
     state: *core.DocumentState,
     sema: SemanticEnv,
     states: std.StringHashMap(u8),
@@ -329,9 +338,10 @@ const Analyzer = struct {
     input_type_keys: std.ArrayList(ast.Type) = .empty,
     typed_displays: std.ArrayList(struct { plan: usize, receiver: ValueFacts, origin: ?core.SourceOrigin }) = .empty,
 
-    fn init(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) Analyzer {
+    fn init(allocator: std.mem.Allocator, key_allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) Analyzer {
         return .{
             .allocator = allocator,
+            .key_allocator = key_allocator,
             .state = state,
             .sema = sema.*,
             .states = std.StringHashMap(u8).init(allocator),
@@ -346,7 +356,7 @@ const Analyzer = struct {
         };
     }
 
-    fn checkAll(self: *Analyzer) !void {
+    fn checkDeclarations(self: *Analyzer) !void {
         var const_it = self.state.constants.declarations.iterator();
         while (const_it.next()) |entry| {
             var labels = try self.constFacts(.{
@@ -364,30 +374,28 @@ const Analyzer = struct {
             for (func.params.items) |param| try env.bind(param.name, ValueFacts.unknownValue(self.allocator));
             _ = try self.enter(.{ .label = label, .env = env, .owner = func });
         }
-        // Display bodies use the same call analysis in a read-only environment.
-        // Keep its summaries separate from ordinary construction calls.
-        var displays = Analyzer.init(self.allocator, self.state, &self.sema);
-        displays.checking_display = true;
-        displays.types_checked = self.types_checked;
+    }
+
+    fn checkDeclaredDisplays(self: *Analyzer) !void {
+        self.checking_display = true;
         var display_it = self.sema.functions.iterator();
         while (display_it.next()) |entry| {
             const func = entry.value_ptr.*;
             if (!func.isDisplay()) continue;
             var env = FunctionEnv.init(self.allocator);
             for (func.params.items) |param| try env.bind(param.name, ValueFacts.unknownValue(self.allocator));
-            _ = try displays.enter(.{ .label = displays.namedLabel(entry.key_ptr.*), .env = env, .owner = func });
+            _ = try self.enter(.{ .label = self.namedLabel(entry.key_ptr.*), .env = env, .owner = func });
         }
-        // Declaration checking leaves higher-order parameters open. Recheck
-        // executed roots with actual arguments, without reusing open captures
-        // or summaries as evidence that a call has been verified.
-        var roots = Analyzer.init(self.allocator, self.state, &self.sema);
-        roots.types_checked = self.types_checked;
-        if (self.types_checked) try roots.collectPlacementInputs();
-        roots.require_known_calls = self.types_checked;
-        roots.clearPass();
-        try roots.checkRoots();
-        try roots.checkDisplayFunctions();
-        if (self.types_checked) try roots.publishInputs();
+    }
+
+    fn checkExecutedRoots(self: *Analyzer) !void {
+        // Actual arguments are checked independently of open declarations.
+        if (self.types_checked) try self.collectPlacementInputs();
+        self.require_known_calls = self.types_checked;
+        self.clearPass();
+        try self.checkRoots();
+        try self.checkDisplayFunctions();
+        if (self.types_checked) try self.publishInputs();
     }
 
     fn clearPass(self: *Analyzer) void {
@@ -400,6 +408,8 @@ const Analyzer = struct {
     // Queries start with no candidates. Join immutable inputs to a fixed point,
     // then check executed calls strictly; discovery never licenses an unknown call.
     fn collectPlacementInputs(self: *Analyzer) !void {
+        const measure_start = measure_profile.start();
+        defer measure_profile.recordAnalysis(.semantics_placement_inputs, measure_start);
         self.collecting_inputs = true;
         defer self.collecting_inputs = false;
         for (0..max_call_analysis_depth) |_| {
@@ -416,14 +426,11 @@ const Analyzer = struct {
     }
 
     fn rememberInput(self: *Analyzer, input: ast.Type, receiver: ValueFacts) !void {
+        const measure_start = measure_profile.start();
+        defer measure_profile.recordAnalysis(.semantics_input_join, measure_start);
         for (self.typed_inputs.items) |*entry| {
             if (!ast.Type.eql(entry.input, input)) continue;
-            var combined = try entry.receiver.clone(self.allocator);
-            try combined.unionWith(receiver);
-            if (!combined.eql(entry.receiver)) {
-                entry.receiver = combined;
-                self.inputs_changed = true;
-            }
+            if (try entry.receiver.join(receiver)) self.inputs_changed = true;
             return;
         }
         try self.typed_inputs.append(self.allocator, .{ .input = input, .receiver = try receiver.clone(self.allocator) });
@@ -474,6 +481,7 @@ const Analyzer = struct {
         self.call_depth += 1;
         defer self.call_depth -= 1;
         const key = try self.activationKey(activation);
+        defer self.key_allocator.free(key);
         const frame_index = self.effect_frames.items.len;
         const frame = if (activation.label == .function)
             try self.functionEffectFrame(activation.label.function, &activation.env)
@@ -509,12 +517,15 @@ const Analyzer = struct {
         self.sema = self.sema.forModule(activation.label.moduleId());
         defer self.sema = previous;
 
-        try self.states.put(key, 1);
+        const stored_key = if (memoize) try self.allocator.dupe(u8, key) else key;
+        try self.states.put(stored_key, 1);
         var result = ValueFacts.init(self.allocator);
         switch (activation.label) {
             .function => |function_key| {
                 const func = self.sema.functions.get(function_key) orelse return ValueFacts.init(self.allocator);
-                var env = try activation.env.clone();
+                // Every activation owns its parameter environment. Captures
+                // are copied when the activation is created, not again here.
+                var env = activation.env;
                 try self.analyzeStatements(func.statements.items, &env, &result, func);
             },
             .lambda => |lambda_key| {
@@ -527,8 +538,8 @@ const Analyzer = struct {
             },
         }
         if (memoize) {
-            try self.states.put(key, 2);
-            try self.returns.put(key, .{ .value = try result.clone(self.allocator), .places_objects = self.effect_frames.items[frame_index].places_objects });
+            try self.states.put(stored_key, 2);
+            try self.returns.put(stored_key, .{ .value = try result.clone(self.allocator), .places_objects = self.effect_frames.items[frame_index].places_objects });
         }
         return result;
     }
@@ -703,10 +714,7 @@ const Analyzer = struct {
                         try callback_args.appendSlice(self.allocator, arg_labels.items[callback_spec.function_arg_index + 1 ..]);
                         const returned = try self.invokeValue(callback, callback_args.items, owner);
                         if (primitive.op != .fold) break;
-                        var combined = try accumulator.clone(self.allocator);
-                        try combined.unionWith(returned);
-                        if (combined.eql(accumulator)) return combined;
-                        accumulator = combined;
+                        if (!try accumulator.join(returned)) return accumulator;
                     } else {
                         try self.state.addValidationDiagnostic(.@"error", null, null, self.current_origin, .{
                             .user_report = .{ .code = "FunctionAnalysisLimitExceeded", .message = try self.state.allocator.dupe(u8, "cannot establish a finite set of function candidates in a fold accumulator") },
@@ -860,6 +868,8 @@ const Analyzer = struct {
     }
 
     fn checkDisplayFunctions(self: *Analyzer) !void {
+        const measure_start = measure_profile.start();
+        defer measure_profile.recordAnalysis(.semantics_displays, measure_start);
         self.checking_display = true;
         defer self.checking_display = false;
         self.states.clearRetainingCapacity();
@@ -1092,11 +1102,12 @@ const Analyzer = struct {
             for (references) |name| if (env.get(name)) |value| try captured.bind(name, value);
         }
         const key = try self.activationKey(.{ .label = label, .env = captured, .owner = null });
+        defer self.key_allocator.free(key);
         if (self.capture_keys.get(key)) |existing| return existing;
         label.lambda.capture_id = self.capture_keys.count() + 1;
         try self.lambda_exprs.put(label.lambda, lambda);
         try self.lambda_captures.put(label.lambda, captured);
-        try self.capture_keys.put(key, label);
+        try self.capture_keys.put(try self.allocator.dupe(u8, key), label);
         return label;
     }
 
@@ -1152,40 +1163,58 @@ const Analyzer = struct {
     }
 
     fn activationKey(self: *Analyzer, activation: Activation) ![]const u8 {
+        const measure_start = measure_profile.start();
+        defer measure_profile.recordAnalysis(.semantics_call_keys, measure_start);
+        const allocator = self.key_allocator;
         var names = std.ArrayList([]const u8).empty;
-        var iterator = activation.env.values.iterator();
-        while (iterator.next()) |entry| {
-            try names.append(self.allocator, entry.key_ptr.*);
-        }
-        std.mem.sort([]const u8, names.items, {}, stringLessThan);
+        defer names.deinit(allocator);
+        var iterator = activation.env.values.keyIterator();
+        while (iterator.next()) |name| try names.append(allocator, name.*);
+        std.mem.sortUnstable([]const u8, names.items, {}, stringLessThan);
 
         var out = std.ArrayList(u8).empty;
+        errdefer out.deinit(self.key_allocator);
         try self.appendLabel(&out, activation.label);
+        try self.appendInteger(&out, names.items.len);
         for (names.items) |name| {
-            try out.append(self.allocator, '|');
-            try out.appendSlice(self.allocator, name);
-            try out.append(self.allocator, '=');
+            try self.appendBytes(&out, name);
             try self.appendValue(&out, activation.env.values.get(name).?);
         }
-        return try out.toOwnedSlice(self.allocator);
+        return try out.toOwnedSlice(self.key_allocator);
+    }
+
+    // Keys are exact, length-delimited binary encodings, local to this analysis.
+    // Formatting every scalar into an arena retained large temporary strings.
+    fn appendInteger(self: *Analyzer, out: *std.ArrayList(u8), value: usize) !void {
+        try out.appendSlice(self.key_allocator, std.mem.asBytes(&value));
+    }
+
+    fn appendBytes(self: *Analyzer, out: *std.ArrayList(u8), value: []const u8) !void {
+        try self.appendInteger(out, value.len);
+        try out.appendSlice(self.key_allocator, value);
     }
 
     fn appendValue(self: *Analyzer, out: *std.ArrayList(u8), value: ValueFacts) anyerror!void {
-        if (value.unknown_string) try out.appendSlice(self.allocator, "string:?");
-        if (value.unknown_reference) try out.appendSlice(self.allocator, "reference:?");
-        if (value.reference) |reference| switch (reference) {
-            .unknown => try out.appendSlice(self.allocator, "reference:?"),
-            .document => try out.appendSlice(self.allocator, "doc"),
-            .page => try out.appendSlice(self.allocator, "page"),
-            .placement => |placement| {
-                try out.appendSlice(self.allocator, try std.fmt.allocPrint(self.allocator, "place:{d}:", .{placement.call}));
-                for (placement.path) |position| try out.appendSlice(self.allocator, try std.fmt.allocPrint(self.allocator, "{d}/", .{position}));
-            },
-        };
+        const allocator = self.key_allocator;
+        try out.appendSlice(self.key_allocator, &.{
+            @intFromBool(value.unknown),        @intFromBool(value.unknown_objects),
+            @intFromBool(value.unknown_string), @intFromBool(value.unknown_reference),
+        });
+        if (value.reference) |reference| {
+            try out.append(self.key_allocator, @as(u8, @intFromEnum(reference)) + 1);
+            if (reference == .placement) {
+                try self.appendInteger(out, @intCast(reference.placement.call));
+                try self.appendInteger(out, reference.placement.path.len);
+                for (reference.placement.path) |position| try self.appendInteger(out, position);
+            }
+        } else try out.append(self.key_allocator, 0);
+        try out.append(self.key_allocator, @intFromBool(value.string_literal != null));
+        if (value.string_literal) |literal| try self.appendBytes(out, literal);
+
         // Intern exact types, including defining modules and type arguments.
-        // Display names alone can collide across modules. Sort the set so joins
-        // with different insertion orders share the same closure identity.
+        // Sort sets so insertion order does not change closure identity.
         var type_keys = std.ArrayList(usize).empty;
+        defer type_keys.deinit(allocator);
         for (value.selected_types.items) |ty| {
             const key = for (self.input_type_keys.items, 0..) |existing, index| {
                 if (ast.Type.eql(ty, existing)) break index;
@@ -1194,56 +1223,59 @@ const Analyzer = struct {
                 try self.input_type_keys.append(self.allocator, ty);
                 break :blk index;
             };
-            try type_keys.append(self.allocator, key);
+            try type_keys.append(allocator, key);
         }
-        std.mem.sort(usize, type_keys.items, {}, std.sort.asc(usize));
-        for (type_keys.items) |key| try out.appendSlice(self.allocator, try std.fmt.allocPrint(self.allocator, "select:{d};", .{key}));
-        if (value.string_literal) |literal| try out.appendSlice(self.allocator, try std.fmt.allocPrint(self.allocator, "string:{d}:{s}", .{ literal.len, literal }));
-        try out.appendSlice(self.allocator, if (value.unknown) "?[" else "[");
+        std.mem.sortUnstable(usize, type_keys.items, {}, std.sort.asc(usize));
+        try self.appendInteger(out, type_keys.items.len);
+        for (type_keys.items) |key| try self.appendInteger(out, key);
         var labels = std.ArrayList(Label).empty;
+        defer labels.deinit(allocator);
         var iterator = value.labels.keyIterator();
-        while (iterator.next()) |label| try labels.append(self.allocator, label.*);
-        std.mem.sort(Label, labels.items, {}, Label.lessThan);
-        for (labels.items) |label| {
-            try self.appendLabel(out, label);
-            try out.append(self.allocator, ',');
-        }
-        try out.appendSlice(self.allocator, "]{");
+        while (iterator.next()) |label| try labels.append(allocator, label.*);
+        std.mem.sortUnstable(Label, labels.items, {}, Label.lessThan);
+        try self.appendInteger(out, labels.items.len);
+        for (labels.items) |label| try self.appendLabel(out, label);
         var names = std.ArrayList([]const u8).empty;
+        defer names.deinit(allocator);
         var fields = value.fields.keyIterator();
-        while (fields.next()) |name| try names.append(self.allocator, name.*);
-        std.mem.sort([]const u8, names.items, {}, stringLessThan);
+        while (fields.next()) |name| try names.append(allocator, name.*);
+        std.mem.sortUnstable([]const u8, names.items, {}, stringLessThan);
+        try self.appendInteger(out, names.items.len);
         for (names.items) |name| {
-            try out.appendSlice(self.allocator, name);
-            try out.append(self.allocator, '=');
+            try self.appendBytes(out, name);
             try self.appendValue(out, value.fields.get(name).?);
-            try out.append(self.allocator, ';');
         }
-        try out.appendSlice(self.allocator, "children[");
-        for (value.children.items) |child| {
-            try self.appendValue(out, child);
-            try out.append(self.allocator, ';');
-        }
-        try out.append(self.allocator, ']');
-        try out.appendSlice(self.allocator, if (value.unknown_objects) "}?objects[" else "}objects[");
+        try self.appendInteger(out, value.children.items.len);
+        for (value.children.items) |child| try self.appendValue(out, child);
         var ids = std.ArrayList(usize).empty;
+        defer ids.deinit(allocator);
         var objects = value.objects.keyIterator();
-        while (objects.next()) |id| try ids.append(self.allocator, id.*);
-        std.mem.sort(usize, ids.items, {}, std.sort.asc(usize));
-        for (ids.items) |id| try out.appendSlice(self.allocator, try std.fmt.allocPrint(self.allocator, "{d},", .{id}));
-        try out.append(self.allocator, ']');
+        while (objects.next()) |id| try ids.append(allocator, id.*);
+        std.mem.sortUnstable(usize, ids.items, {}, std.sort.asc(usize));
+        try self.appendInteger(out, ids.items.len);
+        for (ids.items) |id| try self.appendInteger(out, id);
     }
 
     fn appendLabel(self: *Analyzer, out: *std.ArrayList(u8), label: Label) !void {
-        const text = try self.labelText(label);
-        try out.appendSlice(self.allocator, text);
-    }
-
-    fn labelText(self: *Analyzer, label: Label) ![]const u8 {
-        return switch (label) {
-            .function => |key| try std.fmt.allocPrint(self.allocator, "fn:{d}:{s}:{?d}:{?d}", .{ key.module_id, key.name, key.declaration_start, key.instance_id }),
-            .lambda => |key| try std.fmt.allocPrint(self.allocator, "lambda:{d}:{d}-{d}:{d}:{?d}", .{ key.module_id, key.span.start, key.span.end, key.capture_id, key.analysis_id }),
-        };
+        try out.append(self.key_allocator, @intFromEnum(label));
+        switch (label) {
+            .function => |key| {
+                try self.appendInteger(out, key.module_id);
+                try self.appendBytes(out, key.name);
+                try out.append(self.key_allocator, @intFromBool(key.declaration_start != null));
+                if (key.declaration_start) |start| try self.appendInteger(out, start);
+                try out.append(self.key_allocator, @intFromBool(key.instance_id != null));
+                if (key.instance_id) |id| try self.appendInteger(out, @intCast(id));
+            },
+            .lambda => |key| {
+                try self.appendInteger(out, key.module_id);
+                try self.appendInteger(out, key.span.start);
+                try self.appendInteger(out, key.span.end);
+                try self.appendInteger(out, key.capture_id);
+                try out.append(self.key_allocator, @intFromBool(key.analysis_id != null));
+                if (key.analysis_id) |id| try self.appendInteger(out, @intCast(id));
+            },
+        }
     }
 
     fn reportRecursiveActivation(self: *Analyzer, activation: Activation) !void {
@@ -1269,12 +1301,20 @@ pub fn checkFunctionCallGraph(allocator: std.mem.Allocator, state: *core.Documen
 }
 
 fn checkCallGraph(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv, types_checked: bool) !void {
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    var analyzer = Analyzer.init(arena.allocator(), state, sema);
-    analyzer.types_checked = types_checked;
-    defer analyzer.const_visiting.deinit();
-    try analyzer.checkAll();
+    // These checks share no facts. Release each one's temporary store before
+    // starting the next, rather than retaining all three until analysis ends.
+    const Pass = enum { declarations, displays, roots };
+    for ([_]Pass{ .declarations, .displays, .roots }) |pass| {
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        var analyzer = Analyzer.init(arena.allocator(), allocator, state, sema);
+        analyzer.types_checked = types_checked;
+        switch (pass) {
+            .declarations => try analyzer.checkDeclarations(),
+            .displays => try analyzer.checkDeclaredDisplays(),
+            .roots => try analyzer.checkExecutedRoots(),
+        }
+    }
 }
 
 fn reportRecursiveFunction(state: *core.DocumentState, module_id: core.SourceModuleId, func: ast.FunctionDecl) !void {
