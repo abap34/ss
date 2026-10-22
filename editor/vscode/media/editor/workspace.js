@@ -5,7 +5,7 @@ import {
   shouldLoadMoreIcons,
 } from "./icon-insertion.js";
 import { InteractionController } from "./interaction.js";
-import { renderPage } from "./document.js";
+import { releasePage, renderPage } from "./document.js";
 import { strokeStylePicker } from "./shape-style.js";
 import { toolIcon } from "./tool-icons.js";
 
@@ -43,6 +43,8 @@ export class WorkspaceView {
     this.iconGalleryScrollTop = 0;
     this.pan = null;
     this.sheetPositionFrame = null;
+    this.pageEntries = new Map();
+    this.pageWindowFrame = null;
     this.handlePinch = this.handlePinch.bind(this);
     this.beginPan = this.beginPan.bind(this);
     this.updatePan = this.updatePan.bind(this);
@@ -61,11 +63,16 @@ export class WorkspaceView {
 
   render() {
     this.resetInteractions();
+    const previousPages = this.pageEntries;
+    this.pageEntries = new Map();
     const main = element("main", "workspace");
     main.append(this.toolbar());
     const viewport = element("div", "viewport");
     viewport.classList.toggle("viewport--pan", this.state.pointerMode === "pan");
-    viewport.addEventListener("scroll", () => this.scheduleObjectSheetPosition(), { passive: true });
+    viewport.addEventListener("scroll", () => {
+      this.scheduleObjectSheetPosition();
+      this.schedulePageWindow();
+    }, { passive: true });
     viewport.addEventListener("wheel", this.handlePinch, { passive: false });
     viewport.addEventListener("pointerdown", this.beginPan, true);
     viewport.addEventListener("click", (event) => {
@@ -77,6 +84,10 @@ export class WorkspaceView {
     if (this.state.snapshot) {
       for (const page of this.state.snapshot.layout.pages) {
         pages.append(this.pageShell(page));
+        if (previousPages.get(page.id)?.preview &&
+            previousPages.get(page.id).snapshot.display === this.state.snapshot.display) {
+          this.mountPage(this.pageEntries.get(page.id));
+        }
       }
     } else {
       const empty = element("div", "empty-state");
@@ -127,8 +138,13 @@ export class WorkspaceView {
       const surface = shell.querySelector(":scope > .page-surface");
       const preview = surface?.querySelector(":scope > .preview");
       const interaction = surface?.querySelector(":scope > .interaction-layer");
-      if (Number(shell.dataset.pageId) !== page.id ||
-          !surface || !preview || !interaction) return false;
+      if (Number(shell.dataset.pageId) !== page.id || !surface ||
+          Boolean(preview) !== Boolean(interaction)) return false;
+      const entry = this.pageEntries.get(page.id);
+      if (entry) {
+        entry.page = page;
+        entry.snapshot = snapshot;
+      }
       retainedPages.push({ page, shell, preview, interaction });
     }
 
@@ -143,7 +159,7 @@ export class WorkspaceView {
       const { page, shell, preview, interaction } = retained;
       shell.dataset.pageWidth = String(page.width);
       shell.dataset.pageHeight = String(page.height);
-      if (interactionPageIds == null || interactionPageIds.has(page.id)) {
+      if (preview && (interactionPageIds == null || interactionPageIds.has(page.id))) {
         this.actions.translation.applyPreview(preview, page.id);
         this.actions.componentWidth.applyPreview(preview, page.id);
         this.actions.shape.applyPreview(preview, page.id);
@@ -343,6 +359,8 @@ export class WorkspaceView {
         `.page-shell[data-page-id="${selectedPageId}"]`,
       );
       const surface = shell?.querySelector(":scope > .page-surface");
+      const entry = this.pageEntries.get(selectedPageId);
+      if (entry && !entry.preview) this.mountPage(entry);
       const preview = surface?.querySelector(":scope > .preview");
       const interaction = surface?.querySelector(":scope > .interaction-layer");
       if (!page || !preview || !interaction) return false;
@@ -920,13 +938,9 @@ export class WorkspaceView {
     shell.append(this.ruler("horizontal", page.width));
     shell.append(this.ruler("vertical", page.height));
     const surface = element("div", "page-surface");
-    const preview = renderPage(this.state.snapshot, page.id);
-    this.actions.translation.applyPreview(preview, page.id);
-    this.actions.componentWidth.applyPreview(preview, page.id);
-    this.actions.shape.applyPreview(preview, page.id);
-    this.actions.componentDeletion.applyPreview(preview, page.id);
-    surface.append(preview);
-    surface.append(this.interaction.renderLayer(page, preview));
+    this.pageEntries.set(page.id, {
+      page, shell, surface, snapshot: this.state.snapshot, preview: null,
+    });
     shell.append(surface);
     if (page.location?.path) {
       const open = sourceButton(page, this.actions.revealSource);
@@ -939,6 +953,49 @@ export class WorkspaceView {
     caption.textContent = page.name;
     shell.append(caption);
     return shell;
+  }
+
+  mountPage(entry) {
+    if (entry.preview) return;
+    const { page, surface } = entry;
+    const preview = renderPage(this.state.snapshot, page.id);
+    this.actions.translation.applyPreview(preview, page.id);
+    this.actions.componentWidth.applyPreview(preview, page.id);
+    this.actions.shape.applyPreview(preview, page.id);
+    this.actions.componentDeletion.applyPreview(preview, page.id);
+    surface.append(preview, this.interaction.renderLayer(page, preview));
+    entry.preview = preview;
+    if (preview.isConnected) this.actions.previewMounted?.(preview);
+  }
+
+  schedulePageWindow() {
+    if (this.pageWindowFrame != null) return;
+    this.pageWindowFrame = requestAnimationFrame(() => {
+      this.pageWindowFrame = null;
+      this.refreshPageWindow();
+    });
+  }
+
+  refreshPageWindow() {
+    if (!this.viewport?.isConnected || this.state.presentation.active) return;
+    const bounds = this.viewport.getBoundingClientRect();
+    const margin = this.viewport.clientHeight * 2;
+    // Read geometry before mounting pages, which changes their DOM contents.
+    const visibility = [...this.pageEntries.values()].map((entry) => {
+      const rect = entry.shell.getBoundingClientRect();
+      return { entry, visible: rect.bottom >= bounds.top - margin &&
+        rect.top <= bounds.bottom + margin };
+    });
+    const interacting = this.isPointerOperationActive();
+    for (const { entry, visible } of visibility) {
+      if (visible) this.mountPage(entry);
+      else if (entry.preview && !interacting) {
+        releasePage(entry.snapshot, entry.page.id);
+        entry.surface.replaceChildren();
+        entry.preview = null;
+      }
+    }
+    this.scheduleObjectSheetPosition();
   }
 
   ruler(axis, extent) {
@@ -1007,6 +1064,7 @@ export class WorkspaceView {
         !showRulers && !showCaption ? "20px" : "52px");
     }
     this.updateZoomControls(scale);
+    this.refreshPageWindow();
     this.scheduleObjectSheetPosition();
     return scale;
   }

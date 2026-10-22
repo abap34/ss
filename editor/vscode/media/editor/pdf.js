@@ -7,7 +7,7 @@ const activeMounts = new Set();
 export async function renderPdfItems(root, options = {}) {
   disposeRoot(root);
   if (!root.querySelector(".ss-pdf")) return;
-  const mount = { root, cancelled: false, controller: null };
+  const mount = { root, thumbnail: Boolean(options.thumbnail), cancelled: false, controller: null };
   mounts.set(root, mount);
   activeMounts.add(mount);
   root.dataset.ssPdfRenderRoot = "true";
@@ -33,6 +33,9 @@ export async function renderPdfItems(root, options = {}) {
       return pdfjsModule;
     };
     mount.controller = renderer.mountPdfPages(root, loadPdfjs, worker, {
+      cacheRaster: true,
+      visibilityRoot: root.closest(options.thumbnail ? ".sidebar" : ".viewport"),
+      prefetchScreens: options.thumbnail ? 0 : 2,
       ...options,
       onError: reportError,
     });
@@ -43,6 +46,15 @@ export async function renderPdfItems(root, options = {}) {
     disposeRoot(root);
     throw error;
   }
+}
+
+// Cached previews can move into a replacement viewport during a UI update.
+export function refreshPdfItems(root) {
+  queueMicrotask(() => {
+    const mount = mounts.get(root);
+    if (!mount?.controller || mount.cancelled || !root.isConnected) return;
+    mount.controller.setVisibilityRoot(root.closest(mount.thumbnail ? ".sidebar" : ".viewport"));
+  });
 }
 
 export function disposePdfItems(root) {

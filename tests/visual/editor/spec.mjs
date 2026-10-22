@@ -14,6 +14,9 @@ import { exerciseObjectDrag } from "./drag.mjs";
 import { exerciseSnapping } from "./snapping.mjs";
 import { exerciseObjectDetails } from "./details.mjs";
 import { exerciseRestart } from "./restart.mjs";
+import { exerciseThumbnails } from "./thumbnails.mjs";
+import { exercisePdfViewportLifecycle } from "./pdf-lifecycle.mjs";
+import { exercisePageWindow } from "./viewport.mjs";
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const source = path.join(repository, "editor/vscode/media/editor");
@@ -62,8 +65,25 @@ await cp(path.join(repository, "third_party/pdfjs/pdf.mjs"), path.join(output, "
 await cp(path.join(repository, "third_party/pdfjs/pdf.worker.mjs"), path.join(output, "out/pdfjs/pdf.worker.mjs"));
 await writeFile(path.join(output, "asset.pdf"), pdfAsset());
 await writeFile(path.join(output, "index.html"), testDocument(), "utf8");
+await writeFile(path.join(output, "thumbnails.html"),
+  '<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="main.css">');
 
 await withBrowser(output, async (browser, baseUrl) => {
+  await exercisePdfViewportLifecycle(browser, baseUrl, editorSnapshot());
+  if (process.argv.includes("--pdf-lifecycle-only")) {
+    console.log("WYSIWYG PDF viewport lifecycle checks passed.");
+    return;
+  }
+  await exercisePageWindow(browser, baseUrl, editorSnapshot());
+  if (process.argv.includes("--viewport-only")) {
+    console.log("WYSIWYG bounded page window checks passed.");
+    return;
+  }
+  await exerciseThumbnails(browser, baseUrl, editorSnapshot());
+  if (process.argv.includes("--thumbnails-only")) {
+    console.log("WYSIWYG lightweight thumbnail checks passed.");
+    return;
+  }
   await exerciseRestart(browser, baseUrl, editorSnapshot());
   if (process.argv.includes("--restart-only")) {
     console.log("WYSIWYG restart UI checks passed.");
@@ -159,14 +179,15 @@ await withBrowser(output, async (browser, baseUrl) => {
     });
     assert.equal(await page.locator('.page-shell[data-page-id="11"] .ss-item[data-ss-node-id="101"]').count(), 1,
       "central preview did not reuse the shared HTML item");
-    assert.equal(pdfRequests, 1, "central preview and thumbnail loaded the same PDF more than once");
-    assert.equal(await page.locator(".page-thumbnail .ss-pdf .textLayer").count(), 0,
-      "PDF thumbnail created a text layer");
+    assert.equal(pdfRequests, 1, "central preview loaded the same PDF more than once");
+    assert.equal(await page.locator(".page-thumbnail canvas").count(), 0,
+      "page thumbnails retained a PDF canvas");
+    assert.equal(await page.locator(".page-thumbnail .ss-pdf > img").count(), 1,
+      "page thumbnail omitted the fixed PDF image");
+    assert.equal(await page.locator(".page-thumbnail .ss-pdf > img").evaluate((image) =>
+      image.naturalWidth), 256, "PDF thumbnail did not use a fixed resolution");
     assert.equal(await page.locator('.page-shell[data-page-id="11"] .ss-pdf .textLayer').count(), 0,
       "central editor preview created an unreachable PDF text layer");
-    const mainCanvasWidth = await page.locator('.page-shell[data-page-id="11"] .ss-pdf > canvas').evaluate((canvas) => canvas.width);
-    const thumbnailCanvasWidth = await page.locator('.page-thumbnail .ss-pdf > canvas').evaluate((canvas) => canvas.width);
-    assert(thumbnailCanvasWidth < mainCanvasWidth, "PDF thumbnail rendered at the central preview resolution");
     await page.setViewportSize({ width: 1200, height: 920 });
     await page.waitForFunction(() =>
       !document.querySelector(".viewport")?.classList.contains("viewport--rulers-hidden")

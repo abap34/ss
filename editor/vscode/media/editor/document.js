@@ -1,5 +1,6 @@
 import { element } from "./dom.js";
-import { disposePdfItems, renderPdfItems } from "./pdf.js";
+import { disposePdfItems, refreshPdfItems, renderPdfItems } from "./pdf.js";
+import { thumbnailPage } from "./thumbnails.js";
 
 const templates = new WeakMap();
 const previews = new WeakMap();
@@ -16,7 +17,10 @@ export function renderPage(snapshot, pageId, thumbnail = false) {
   }
   const key = String(pageId) + ":" + String(thumbnail);
   const existing = cached.get(key);
-  if (existing) return existing;
+  if (existing) {
+    refreshPdfItems(existing);
+    return existing;
+  }
 
   const preview = element("div", thumbnail ? "thumbnail-preview" : "preview");
   if (thumbnail) preview.setAttribute("aria-hidden", "true");
@@ -25,11 +29,10 @@ export function renderPage(snapshot, pageId, thumbnail = false) {
     cached.set(key, preview);
     return preview;
   }
-  const clone = page.cloneNode(true);
+  const clone = thumbnail ? thumbnailPage(page) : page.cloneNode(true);
   clone.classList.add("preview-page");
   applyDisplayTranslations(clone, snapshot.display.translations || []);
   if (thumbnail) {
-    clone.querySelectorAll(".ss-semantic-layer, .ss-link, .ss-destination").forEach((node) => node.remove());
     const layout = snapshot.layout.pages.find((candidate) =>
       candidate.id === pageId
     );
@@ -132,6 +135,24 @@ function hasTranslation(item) {
       Math.abs(item.y) >= translationTolerance);
 }
 
+export function releasePage(snapshot, pageId, thumbnail = false) {
+  const display = snapshot.display;
+  const cached = previews.get(display);
+  const key = String(pageId) + ":" + String(thumbnail);
+  const preview = cached?.get(key);
+  if (!preview) return;
+  thumbnailObservers.get(preview)?.disconnect();
+  disposePdfItems(preview);
+  const indexed = displayNodes.get(display);
+  for (const item of preview.querySelectorAll("[data-ss-node-id]")) {
+    const matches = indexed?.get(item.dataset.ssNodeId);
+    matches?.delete(item);
+    if (matches?.size === 0) indexed.delete(item.dataset.ssNodeId);
+  }
+  preview.remove();
+  cached.delete(key);
+}
+
 export function disposePages(snapshot) {
   const display = snapshot.display;
   const cached = previews.get(display);
@@ -167,13 +188,14 @@ function indexDisplayNodes(display, root) {
 function pageTemplate(snapshot, pageId) {
   if (!snapshot?.display?.html) return null;
   const display = snapshot.display;
-  let template = templates.get(display);
-  if (!template) {
-    template = document.createElement("template");
+  let pages = templates.get(display);
+  if (!pages) {
+    const template = document.createElement("template");
     template.innerHTML = snapshot.display.html;
-    templates.set(display, template);
+    pages = new Map([...template.content.querySelectorAll(".ss-page")].map((page) =>
+      [Number(page.dataset.ssPageId), page]
+    ));
+    templates.set(display, pages);
   }
-  return [...template.content.querySelectorAll(".ss-page")].find((page) =>
-    Number(page.dataset.ssPageId) === pageId
-  ) || null;
+  return pages.get(pageId) || null;
 }

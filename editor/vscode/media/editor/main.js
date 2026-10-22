@@ -125,7 +125,13 @@ const actions = {
   icon,
   objectLocks,
   presentation,
-  pointerOperationFinished: flushDeferredSnapshots,
+  pointerOperationFinished: () => {
+    flushDeferredSnapshots();
+    workspace.schedulePageWindow();
+  },
+  previewMounted: (preview) => {
+    void alignTextBaselines(preview).catch(() => {});
+  },
 };
 const navigation = new EditorNavigation(state);
 const workspace = new WorkspaceView(state, actions);
@@ -479,6 +485,8 @@ function render() {
   if (state.sidebar) shell.append(renderSidebar(state, actions));
   shell.append(workspace.render());
   app.append(shell);
+  navigation.restoreViewport(workspace.viewport);
+  workspace.updateScale();
   void alignTextBaselines(app).then(() => {
     if (generation !== renderGeneration) return;
     app.dataset.ssTextAligned = "true";
@@ -553,10 +561,8 @@ function selectObject(objectId, pageId, rerender = true) {
     state.selectedObjectId !== objectId || state.currentPageId !== pageId;
   const result = navigation.selectObject(objectId, pageId);
   if (!result.selected) return;
-  if (rerender && selectionChanged) render();
   if (
     rerender &&
-    !selectionChanged &&
     (!reconcileSidebarSnapshot(app, state, state.snapshot) ||
       !workspace.syncSelection(pageId))
   ) {
