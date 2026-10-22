@@ -1,3 +1,5 @@
+const thumbnailSize = 256;
+
 export function pageGeometry(page, container, view, options) {
   const selectedBox = pageBox(container);
   const rotation = pageRotation(container);
@@ -9,9 +11,10 @@ export function pageGeometry(page, container, view, options) {
     throw new Error("invalid PDF page box");
   }
 
-  const style = view.getComputedStyle(container);
-  const logicalWidth = positiveNumber(style.width, "PDF canvas width");
-  const logicalHeight = positiveNumber(style.height, "PDF canvas height");
+  const style = options.thumbnail ? null : view.getComputedStyle(container);
+  const fixedSize = options.thumbnail ? thumbnailPixelSize(container) : null;
+  const logicalWidth = fixedSize?.width ?? positiveNumber(style.width, "PDF canvas width");
+  const logicalHeight = fixedSize?.height ?? positiveNumber(style.height, "PDF canvas height");
   const viewport = page.getViewport({
     scale: logicalWidth / unitSelection.width,
     rotation,
@@ -19,7 +22,7 @@ export function pageGeometry(page, container, view, options) {
   const selection = normalizedRectangle(
     viewport.convertToViewportRectangle(selectedBox),
   );
-  const pixelSize = visiblePixelSize(container, view, options.maximumCanvasPixels);
+  const pixelSize = fixedSize ?? visiblePixelSize(container, view, options.maximumCanvasPixels);
   const rasterScaleX = pixelSize.width / selection.width;
   const rasterScaleY = pixelSize.height / selection.height;
   return {
@@ -38,6 +41,19 @@ export function pageGeometry(page, container, view, options) {
       -selection.top * rasterScaleY,
     ],
   };
+}
+
+export function thumbnailPixelSize(container) {
+  const box = pageBox(container);
+  const rotation = pageRotation(container);
+  const width = Math.abs(box[2] - box[0]);
+  const height = Math.abs(box[3] - box[1]);
+  positiveNumber(width, "PDF thumbnail width");
+  positiveNumber(height, "PDF thumbnail height");
+  const scale = thumbnailSize / Math.max(width, height);
+  return rotation === 90 || rotation === 270
+    ? { width: Math.max(1, Math.round(height * scale)), height: Math.max(1, Math.round(width * scale)) }
+    : { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
 }
 
 export function visiblePixelSize(container, view, maximumPixels) {

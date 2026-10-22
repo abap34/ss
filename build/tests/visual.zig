@@ -42,6 +42,9 @@ pub fn register(ctx: project.Context, modules: project.ProjectModules, build_opt
     pdf_runtime.step.dependOn(&checks.visual_test_packages.step);
     const pdf_runtime_step = b.step("test-render-pdf-runtime", "Inspect PDF image loading and cancellation locally");
     pdf_runtime_step.dependOn(&pdf_runtime.step);
+    const pdf_cache = steps.node(b, &checks.node.step, "tests/visual/render/pdf/cache_spec.mjs", null);
+    pdf_cache.step.dependOn(&checks.visual_test_packages.step);
+    pdf_runtime_step.dependOn(&pdf_cache.step);
 
     const full = steps.node(b, &checks.node.step, "tests/visual/render/spec.mjs", null);
     full.addArg("--full");

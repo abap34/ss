@@ -31,9 +31,6 @@ export class RenderQueue {
       };
       signal?.addEventListener("abort", item.onAbort, { once: true });
       this.pending.push(item);
-      this.pending.sort((left, right) =>
-        right.priority - left.priority || left.serial - right.serial
-      );
       this.scheduleDrain();
     });
   }
@@ -62,6 +59,10 @@ export class RenderQueue {
 
   drain() {
     if (this.closed) return;
+    for (const item of this.pending) item.currentPriority = priorityOf(item);
+    this.pending.sort((left, right) =>
+      right.currentPriority - left.currentPriority || left.serial - right.serial
+    );
     while (this.active < this.limit && this.pending.length > 0) {
       const item = this.pending.shift();
       if (item.state !== "pending") continue;
@@ -98,6 +99,10 @@ export class RenderQueue {
     this.resolveClose = null;
     resolve();
   }
+}
+
+function priorityOf(item) {
+  return typeof item.priority === "function" ? item.priority() : item.priority;
 }
 
 export const aborted = Symbol("PDF operation aborted");

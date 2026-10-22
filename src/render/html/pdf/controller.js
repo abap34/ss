@@ -1,14 +1,18 @@
 import {
   clearPdfPlacement,
+  copyPdfRaster,
+  createPdfImage,
   isPdfRenderCancellation,
   PdfPlacementRender,
   placementPageNumber,
   placementRequestKey,
+  rasterKey,
+  thumbnailSource,
 } from "@ss/pdf/placement";
 import { aborted, waitForAbort } from "@ss/pdf/queue";
+import { thumbnailPixelSize, visiblePixelSize } from "@ss/pdf/geometry";
 
 const maximumCanvasPixels = 16 * 1024 * 1024;
-const visibilityMargin = "160px";
 const visibilityDistance = 160;
 
 export class PdfRenderController {
@@ -20,6 +24,9 @@ export class PdfRenderController {
       textLayer: true,
       annotationLayer: true,
       thumbnail: false,
+      cacheRaster: false,
+      visibilityRoot: null,
+      prefetchScreens: 0,
       maximumCanvasPixels,
       ...options,
     };
@@ -27,6 +34,7 @@ export class PdfRenderController {
     this.disposed = false;
     this.onDestroy = onDestroy;
     this.intersectionObserver = null;
+    this.observationMargin = null;
     this.resizeObserver = null;
     this.ready = Promise.resolve();
     this.view = root.defaultView ||
@@ -53,37 +61,45 @@ export class PdfRenderController {
     await nextFrame(this.view);
     if (this.disposed) return;
 
-    if (typeof this.view?.IntersectionObserver === "function") {
-      this.intersectionObserver = new this.view.IntersectionObserver(
-        (entries) => this.intersections(entries),
-        { root: null, rootMargin: visibilityMargin },
-      );
-      for (const container of containers) {
-        this.intersectionObserver.observe(container);
-      }
-    }
+    this.observeIntersections();
     if (typeof this.view?.ResizeObserver === "function") {
       this.resizeObserver = new this.view.ResizeObserver(() =>
         this.refreshVisible()
       );
       for (const container of containers) this.resizeObserver.observe(container);
       if (this.root.nodeType === 1) this.resizeObserver.observe(this.root);
+      if (this.options.visibilityRoot) {
+        this.resizeObserver.observe(this.options.visibilityRoot);
+      }
     }
     this.view?.addEventListener?.("resize", this.onResize);
     this.view?.visualViewport?.addEventListener?.("resize", this.onResize);
 
     const initial = [];
     for (const [container, state] of this.states) {
-      state.visible = isVisible(container, this.view);
+      state.visible = this.isVisible(container);
       if (state.visible) initial.push(this.schedule(container, state));
     }
     await Promise.all(initial);
   }
 
+  setVisibilityRoot(root) {
+    if (this.disposed) return;
+    const previous = this.options.visibilityRoot;
+    if (previous !== root) {
+      if (previous) this.resizeObserver?.unobserve(previous);
+      this.options.visibilityRoot = root;
+      if (root) this.resizeObserver?.observe(root);
+      this.observationMargin = null;
+    }
+    this.refreshVisible();
+  }
+
   refreshVisible() {
     if (this.disposed) return;
+    this.observeIntersections();
     for (const [container, state] of this.states) {
-      const visible = isVisible(container, this.view);
+      const visible = this.isVisible(container);
       state.visible = visible;
       if (visible) {
         this.scheduleInBackground(container, state);
@@ -103,7 +119,7 @@ export class PdfRenderController {
   restoreAfterPrint() {
     if (this.disposed) return;
     for (const [container, state] of this.states) {
-      state.visible = isVisible(container, this.view);
+      state.visible = this.isVisible(container);
       if (state.visible) {
         this.scheduleInBackground(container, state);
         continue;
@@ -130,6 +146,34 @@ export class PdfRenderController {
     const descendants = [...this.root.querySelectorAll(".ss-pdf")];
     if (this.root.matches?.(".ss-pdf")) descendants.unshift(this.root);
     return descendants;
+  }
+
+  visibilityDistance() {
+    return this.options.prefetchScreens > 0
+      ? Math.round((this.options.visibilityRoot?.clientHeight ??
+        this.view.innerHeight) * this.options.prefetchScreens)
+      : visibilityDistance;
+  }
+
+  isVisible(container, distance = this.visibilityDistance()) {
+    return isVisible(container, this.view, this.options.visibilityRoot, distance);
+  }
+
+  observeIntersections() {
+    if (typeof this.view?.IntersectionObserver !== "function") return;
+    const distance = this.visibilityDistance();
+    const margin = this.options.visibilityRoot
+      ? `${distance}px 0px` : `${distance}px`;
+    if (this.observationMargin === margin) return;
+    this.intersectionObserver?.disconnect();
+    this.observationMargin = margin;
+    this.intersectionObserver = new this.view.IntersectionObserver(
+      (entries) => this.intersections(entries),
+      { root: this.options.visibilityRoot, rootMargin: margin },
+    );
+    for (const container of this.states.keys()) {
+      this.intersectionObserver.observe(container);
+    }
   }
 
   intersections(entries) {
@@ -163,59 +207,19 @@ export class PdfRenderController {
     state.forced = force;
     const abortController = new AbortController();
     state.abortController = abortController;
-    const priority = force ? 50 : this.options.thumbnail ? 10 : 100;
-    const promise = this.service.schedule(priority, async (jobSignal) => {
-      const cancelPlacement = () => state.activePlacement?.cancel();
-      jobSignal.addEventListener("abort", cancelPlacement);
-      try {
-        if (jobSignal.aborted ||
-            !this.current(container, state, generation, force)) return;
-        const unresolvedSource = container.dataset.pdfSrc;
-        if (!unresolvedSource) throw new Error("missing PDF resource");
-        const source = await waitForAbort(
-          Promise.resolve(this.options.resolveSource(unresolvedSource)),
-          jobSignal,
-        );
-        if (source === aborted ||
-            !this.current(container, state, generation, force)) return;
-        if (typeof source !== "string" || source.length === 0) {
-          throw new Error("invalid PDF resource URL");
+    const priority = () => force ? 50 : this.isVisible(container, 0) ? 100 : 20;
+    const work = this.options.thumbnail
+      ? this.renderThumbnail(container, () =>
+        this.current(container, state, generation, force), abortController.signal
+      ).then((rendered) => {
+        if (rendered && this.current(container, state, generation, force)) {
+          this.markRendered(container, state, requestKey);
         }
-        const pageWork = this.service.usePage(
-          source,
-          placementPageNumber(container),
-          async (page, pdfjs) => {
-            if (!this.current(container, state, generation, force)) return;
-            const placement = new PdfPlacementRender(
-              container,
-              page,
-              pdfjs,
-              this.view,
-              this.options,
-            );
-            state.activePlacement = placement;
-            try {
-              await placement.prepare(() =>
-                this.current(container, state, generation, force)
-              );
-              if (!this.current(container, state, generation, force)) return;
-              placement.commit();
-              delete container.dataset.error;
-              container.dataset.ssPdfRendered = "true";
-              state.renderedKey = requestKey;
-            } finally {
-              if (state.activePlacement === placement) {
-                state.activePlacement = null;
-              }
-            }
-          },
-          jobSignal,
-        );
-        await pageWork;
-      } finally {
-        jobSignal.removeEventListener("abort", cancelPlacement);
-      }
-    }, abortController.signal).catch((error) => {
+      })
+      : this.renderPlacement(
+        container, state, generation, force, requestKey, priority, abortController.signal,
+      );
+    const promise = work.catch((error) => {
       if (state.generation !== generation ||
           isPdfRenderCancellation(error)) return;
       container.dataset.error = error instanceof Error
@@ -237,9 +241,126 @@ export class PdfRenderController {
     return promise;
   }
 
+  async renderPlacement(container, state, generation, force, requestKey, priority, signal) {
+    const source = await this.resolveSource(container, signal);
+    if (source === aborted ||
+        !this.current(container, state, generation, force)) return;
+    const cacheRaster = this.options.cacheRaster &&
+      !this.options.textLayer && !this.options.annotationLayer;
+    const key = cacheRaster ? rasterKey(container, source) : null;
+    if (key) {
+      const cached = this.service.cachedRaster(key);
+      if (cached) {
+        const size = visiblePixelSize(
+          container, this.view, this.options.maximumCanvasPixels,
+        );
+        if (cached.width >= size.width && cached.height >= size.height) {
+          copyPdfRaster(container, cached, size);
+          this.markRendered(container, state, requestKey);
+          return;
+        }
+      }
+    }
+    return this.service.schedule(priority, async (jobSignal) => {
+      const cancelPlacement = () => state.activePlacement?.cancel();
+      jobSignal.addEventListener("abort", cancelPlacement);
+      try {
+        if (jobSignal.aborted ||
+            !this.current(container, state, generation, force)) return;
+        await this.service.usePage(
+          source,
+          placementPageNumber(container),
+          async (page, pdfjs) => {
+            if (!this.current(container, state, generation, force)) return;
+            const placement = new PdfPlacementRender(
+              container,
+              page,
+              pdfjs,
+              this.view,
+              this.options,
+            );
+            state.activePlacement = placement;
+            try {
+              await placement.prepare(() =>
+                this.current(container, state, generation, force)
+              );
+              if (!this.current(container, state, generation, force)) return;
+              const canvas = placement.commit();
+              if (key) this.service.rememberRaster(key, canvas);
+              this.markRendered(container, state, requestKey);
+            } finally {
+              if (state.activePlacement === placement) {
+                state.activePlacement = null;
+              }
+            }
+          },
+          jobSignal,
+        );
+      } finally {
+        jobSignal.removeEventListener("abort", cancelPlacement);
+      }
+    }, signal);
+  }
+
+  async renderThumbnail(container, isCurrent, signal) {
+    const source = await this.resolveSource(container, signal);
+    if (source === aborted || !isCurrent()) return false;
+    const metadata = container.cloneNode(false);
+    const key = rasterKey(metadata, source);
+    const pending = this.service.thumbnail(key, () =>
+      this.service.schedule(10, async (jobSignal) => {
+        const cached = this.service.cachedRaster(key);
+        const size = thumbnailPixelSize(metadata);
+        if (cached && cached.width >= size.width && cached.height >= size.height) {
+          return thumbnailSource(metadata, cached);
+        }
+        return this.service.usePage(source, placementPageNumber(metadata), async (page, pdfjs) => {
+          const placement = new PdfPlacementRender(metadata, page, pdfjs, this.view, {
+            ...this.options, textLayer: false, annotationLayer: false,
+          });
+          const cancel = () => placement.cancel();
+          jobSignal.addEventListener("abort", cancel);
+          try {
+            const { canvas } = await placement.prepare(() => !jobSignal.aborted);
+            return canvas.toDataURL("image/png");
+          } finally {
+            jobSignal.removeEventListener("abort", cancel);
+            placement.cancel();
+          }
+        }, jobSignal);
+      })
+    );
+    const imageSource = await waitForAbort(pending, signal);
+    if (imageSource === aborted || !isCurrent()) return false;
+    const image = await createPdfImage(container, imageSource);
+    if (!isCurrent()) return false;
+    const previous = container.querySelector(":scope > img");
+    if (previous) previous.replaceWith(image);
+    else container.prepend(image);
+    return true;
+  }
+
+  async resolveSource(container, signal) {
+    const unresolved = container.dataset.pdfSrc;
+    if (!unresolved) throw new Error("missing PDF resource");
+    const source = await waitForAbort(
+      Promise.resolve(this.options.resolveSource(unresolved)), signal,
+    );
+    if (source !== aborted && (typeof source !== "string" || source.length === 0)) {
+      throw new Error("invalid PDF resource URL");
+    }
+    return source;
+  }
+
   current(container, state, generation, force) {
     return !this.disposed && container.isConnected &&
       state.generation === generation && (force || state.visible);
+  }
+
+  markRendered(container, state, requestKey) {
+    delete container.dataset.error;
+    container.dataset.ssPdfRendered = "true";
+    state.renderedKey = requestKey;
   }
 
   scheduleInBackground(container, state) {
@@ -258,16 +379,23 @@ export class PdfRenderController {
   }
 }
 
-function isVisible(element, view) {
+function isVisible(element, view, root, distance) {
   if (!element.isConnected) return false;
   const style = view.getComputedStyle(element);
   if (style.display === "none" || style.visibility === "hidden") return false;
   const bounds = element.getBoundingClientRect();
   if (bounds.width <= 0 || bounds.height <= 0) return false;
-  return bounds.right >= -visibilityDistance &&
-    bounds.bottom >= -visibilityDistance &&
-    bounds.left <= view.innerWidth + visibilityDistance &&
-    bounds.top <= view.innerHeight + visibilityDistance;
+  const viewport = root?.getBoundingClientRect() ?? {
+    left: 0, top: 0, right: view.innerWidth, bottom: view.innerHeight,
+  };
+  if (viewport.right <= viewport.left || viewport.bottom <= viewport.top) {
+    return false;
+  }
+  const horizontalDistance = root ? 0 : distance;
+  return bounds.right >= viewport.left - horizontalDistance &&
+    bounds.left <= viewport.right + horizontalDistance &&
+    bounds.bottom >= viewport.top - distance &&
+    bounds.top <= viewport.bottom + distance;
 }
 
 function nextFrame(view) {

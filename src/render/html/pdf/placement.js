@@ -1,4 +1,4 @@
-import { pageGeometry, visiblePixelSize } from "@ss/pdf/geometry";
+import { pageGeometry, thumbnailPixelSize, visiblePixelSize } from "@ss/pdf/geometry";
 
 export class PdfPlacementRender {
   constructor(container, page, pdfjs, view, options) {
@@ -58,6 +58,7 @@ export class PdfPlacementRender {
       : null;
     this.assertCurrent(isCurrent);
     this.prepared = { canvas, text, annotations };
+    return this.prepared;
   }
 
   commit() {
@@ -76,8 +77,10 @@ export class PdfPlacementRender {
     annotationLayer.replaceChildren(
       ...(this.prepared.annotations ? [this.prepared.annotations] : []),
     );
+    const canvas = this.prepared.canvas;
     this.prepared = null;
     this.textLayer = null;
+    return canvas;
   }
 
   cancel() {
@@ -142,10 +145,51 @@ export class PdfPlacementRender {
 
 }
 
+export function rasterKey(container, source) {
+  return JSON.stringify([
+    source,
+    container.dataset.page,
+    container.dataset.viewBox,
+    container.dataset.rotation,
+    container.dataset.canvasBackground,
+  ]);
+}
+
+export function copyPdfRaster(container, raster, size) {
+  const canvas = scaledRaster(container.ownerDocument, raster, size);
+  const previous = container.querySelector(":scope > canvas");
+  if (previous) previous.replaceWith(canvas);
+  else container.querySelector(":scope > .ss-pdf-text").before(canvas);
+}
+
+export function thumbnailSource(container, raster) {
+  return scaledRaster(container.ownerDocument, raster, thumbnailPixelSize(container)).toDataURL("image/png");
+}
+
+export async function createPdfImage(container, source) {
+  const image = container.ownerDocument.createElement("img");
+  image.alt = "";
+  image.src = source;
+  await image.decode();
+  return image;
+}
+
+function scaledRaster(document, raster, size) {
+  const canvas = document.createElement("canvas");
+  canvas.width = size.width;
+  canvas.height = size.height;
+  canvas.setAttribute("aria-hidden", "true");
+  const context = canvas.getContext("2d", { alpha: true });
+  if (!context) throw new Error("PDF canvas is unavailable");
+  context.drawImage(raster, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
 export function placementRequestKey(container, view, options) {
   if (!container.isConnected) return null;
   const bounds = container.getBoundingClientRect();
   if (bounds.width <= 0 || bounds.height <= 0) return null;
+  if (options.thumbnail) return rasterKey(container, container.dataset.pdfSrc);
   const pixelSize = visiblePixelSize(
     container,
     view,
@@ -178,6 +222,7 @@ export function placementPageNumber(container) {
 
 export function clearPdfPlacement(container) {
   container.querySelector(":scope > canvas")?.remove();
+  container.querySelector(":scope > img")?.remove();
   container.querySelector(":scope > .ss-pdf-text")?.replaceChildren();
   container.querySelector(":scope > .ss-pdf-annotations")?.replaceChildren();
   delete container.dataset.ssPdfRendered;

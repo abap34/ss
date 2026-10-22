@@ -2,6 +2,9 @@ import { aborted, RenderQueue, waitForAbort } from "@ss/pdf/queue";
 
 const maximumConcurrentRenders = 2;
 const maximumCachedDocuments = 8;
+const maximumCachedRasterBytes = 128 * 1024 * 1024;
+const maximumCachedThumbnailBytes = 16 * 1024 * 1024;
+const maximumCachedThumbnails = 256;
 
 export class PdfService {
   constructor(pdfjsProvider, workerSource) {
@@ -15,6 +18,10 @@ export class PdfService {
     this.retiredDocuments = new Set();
     this.queue = new RenderQueue(maximumConcurrentRenders);
     this.clock = 0;
+    this.rasters = new Map();
+    this.rasterBytes = 0;
+    this.thumbnails = new Map();
+    this.thumbnailBytes = 0;
     this.disposed = false;
     this.destroyPromise = null;
   }
@@ -22,6 +29,64 @@ export class PdfService {
   schedule(priority, body, signal) {
     if (this.disposed) return Promise.reject(new Error("PDF service was disposed"));
     return this.queue.enqueue(priority, body, signal);
+  }
+
+  cachedRaster(key) {
+    const canvas = this.rasters.get(key);
+    if (!canvas) return null;
+    this.rasters.delete(key);
+    this.rasters.set(key, canvas);
+    return canvas;
+  }
+
+  rememberRaster(key, canvas) {
+    if (this.disposed) return;
+    const previous = this.rasters.get(key);
+    const bytes = canvas.width * canvas.height * 4;
+    if (bytes > maximumCachedRasterBytes ||
+        (previous && previous.width * previous.height > canvas.width * canvas.height)) {
+      return;
+    }
+    if (previous) {
+      this.rasters.delete(key);
+      this.rasterBytes -= previous.width * previous.height * 4;
+    }
+    this.rasters.set(key, canvas);
+    this.rasterBytes += bytes;
+    while (this.rasterBytes > maximumCachedRasterBytes) {
+      const [oldestKey, oldest] = this.rasters.entries().next().value;
+      this.rasters.delete(oldestKey);
+      this.rasterBytes -= oldest.width * oldest.height * 4;
+    }
+  }
+
+  thumbnail(key, create) {
+    if (this.disposed) return Promise.reject(new Error("PDF service was disposed"));
+    let entry = this.thumbnails.get(key);
+    if (entry) {
+      this.thumbnails.delete(key);
+      this.thumbnails.set(key, entry);
+      return entry.promise;
+    }
+    entry = { promise: null, bytes: 0 };
+    this.thumbnails.set(key, entry);
+    entry.promise = Promise.resolve().then(create).then((source) => {
+      if (this.thumbnails.get(key) !== entry) return source;
+      entry.bytes = source.length * 2;
+      this.thumbnailBytes += entry.bytes;
+      for (const [oldestKey, oldest] of this.thumbnails) {
+        if (this.thumbnailBytes <= maximumCachedThumbnailBytes &&
+            this.thumbnails.size <= maximumCachedThumbnails) break;
+        if (oldest.bytes === 0) continue;
+        this.thumbnails.delete(oldestKey);
+        this.thumbnailBytes -= oldest.bytes;
+      }
+      return source;
+    }).catch((error) => {
+      if (this.thumbnails.get(key) === entry) this.thumbnails.delete(key);
+      throw error;
+    });
+    return entry.promise;
   }
 
   async pdfjs() {
@@ -146,6 +211,10 @@ export class PdfService {
   destroy() {
     if (this.destroyPromise) return this.destroyPromise;
     this.disposed = true;
+    this.rasters.clear();
+    this.rasterBytes = 0;
+    this.thumbnails.clear();
+    this.thumbnailBytes = 0;
     const queueDrain = this.queue.close();
     for (const entry of this.documents.values()) this.retireDocument(entry);
     this.documents.clear();
