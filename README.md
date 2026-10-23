@@ -62,8 +62,6 @@ A page number helper can be written in ss and uses that
 document-wide view of the deck like this:
 
 ```ss
-import std:prelude as *
-
 fn add_pageno!() -> Void
   foreach(
     pages(docctx()),
@@ -163,8 +161,6 @@ asset_base_dir = "."
 Create `slide.ss`:
 
 ```ss
-import std:prelude as *
-
 fn add_pageno!(target: Page) -> Void
   let number = place_on!(target, pageno())
   target ~ number.right == target.right - 24
