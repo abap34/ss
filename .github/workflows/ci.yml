@@ -12,8 +12,28 @@ env:
   ZIG_VERSION: 0.16.0
 
 jobs:
+  editor-references:
+    name: Editor grammar references
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Test grammar reference verification
+        run: python3 tests/editor/zed/reference/spec.py
+
+      - name: Check published Zed grammar
+        run: python3 editor/zed/tools/check-grammar.py
+
   test:
     name: Zig ${{ matrix.zig-version }} build test
+    needs: editor-references
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -152,6 +172,7 @@ jobs:
 
   qpdf-compatibility:
     name: Native PDF ${{ matrix.environment }}
+    needs: editor-references
     runs-on: ${{ matrix.runner }}
 
     strategy:
