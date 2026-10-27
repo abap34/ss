@@ -77,6 +77,78 @@ test "function dependency summaries have one owner on allocation failure" {
     try allocation_testing.checkAllAllocationFailures(testing.allocator, analyzeFunctionDependencies, .{&state});
 }
 
+test "type facts preserve generic arguments and outlive individual analyzers" {
+    var state = try document(
+        \\type Holder<T> { item: T }
+        \\fn number(value: Holder<Number>) -> Number = value.item
+        \\fn first(value: Holder<Placement>) -> Number = value.item.x
+        \\fn second(value: Holder<Placement>) -> Number = value.item.x
+        \\document
+        \\  let a = number(input)
+        \\  let b = first(input)
+        \\  let c = second(input)
+        \\end
+    );
+    defer state.deinit();
+    const dependencies = compiler.analysis.dependencies;
+    const sema = compiler.semantic_env.SemanticEnv.init(&state, state.declaration_index, &state.functions);
+    var strings = std.heap.ArenaAllocator.init(testing.allocator);
+    defer strings.deinit();
+    var cache = dependencies.RunCache.init(testing.allocator, strings.allocator());
+    defer cache.deinit();
+    const statements = state.projectSyntax().document_statements.items;
+    var number_count: usize = 0;
+    {
+        var analyzer = dependencies.Analyzer.initWithScopeAndCache(testing.allocator, &sema, .{ .document = 0 }, &cache);
+        defer analyzer.deinit();
+        var numeric = try analyzer.documentStatements(statements[0..1]);
+        defer numeric.deinit();
+        number_count = cache.type_body_analyses;
+        try testing.expect(number_count > 0);
+        var placement = try analyzer.documentStatements(statements[1..2]);
+        defer placement.deinit();
+        try testing.expect(cache.type_body_analyses > number_count);
+    }
+    const placement_count = cache.type_body_analyses;
+    var analyzer = dependencies.Analyzer.initWithScopeAndCache(testing.allocator, &sema, .{ .document = 0 }, &cache);
+    defer analyzer.deinit();
+    var reused = try analyzer.documentStatements(statements[2..]);
+    defer reused.deinit();
+    try testing.expectEqual(placement_count, cache.type_body_analyses);
+    var uncached = dependencies.Analyzer.init(testing.allocator, &sema);
+    defer uncached.deinit();
+    var expected = try uncached.documentStatements(statements[2..]);
+    defer expected.deinit();
+    try testing.expectEqualDeep(expected.reads.items, reused.reads.items);
+    try testing.expectEqualDeep(expected.writes.items, reused.writes.items);
+}
+
+fn analyzeCachedTypeFacts(allocator: std.mem.Allocator, state: *core.DocumentState) !void {
+    const dependencies = compiler.analysis.dependencies;
+    const sema = compiler.semantic_env.SemanticEnv.init(state, state.declaration_index, &state.functions);
+    var strings = std.heap.ArenaAllocator.init(allocator);
+    defer strings.deinit();
+    var cache = dependencies.RunCache.init(allocator, strings.allocator());
+    defer cache.deinit();
+    var analyzer = dependencies.Analyzer.initWithScopeAndCache(allocator, &sema, .{ .document = 0 }, &cache);
+    defer analyzer.deinit();
+    var summary = try analyzer.documentStatements(state.projectSyntax().document_statements.items);
+    defer summary.deinit();
+}
+
+test "cached type facts release every partially constructed field tree" {
+    var state = try document(
+        \\type Inner { item: Placement }
+        \\type Outer { inner: Inner }
+        \\fn read(value: Outer) -> Number = value.inner.item.x
+        \\document
+        \\  let result = read(input)
+        \\end
+    );
+    defer state.deinit();
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, analyzeCachedTypeFacts, .{&state});
+}
+
 test "diagnostic analysis leaves pages untouched while evaluation registers ordered pages and origins" {
     var state = try document(
         \\page first

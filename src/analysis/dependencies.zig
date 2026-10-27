@@ -389,14 +389,37 @@ fn appendUnique(allocator: std.mem.Allocator, list: *std.ArrayList(Resource), re
 const SummaryCache = std.StringHashMap(AccessSummary);
 const ReturnFact = union(enum) { string_literal: ?[]const u8, property_target: ?PropertyTarget };
 
+const TypeFactKey = struct {
+    module_id: core.SourceModuleId,
+    ty: ast.Type,
+    depth: usize,
+};
+
+const TypeFactContext = struct {
+    pub fn hash(_: TypeFactContext, key: TypeFactKey) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        std.hash.autoHash(&hasher, key.module_id);
+        std.hash.autoHash(&hasher, key.depth);
+        key.ty.hashInto(&hasher);
+        return hasher.final();
+    }
+
+    pub fn eql(_: TypeFactContext, left: TypeFactKey, right: TypeFactKey) bool {
+        return left.module_id == right.module_id and left.depth == right.depth and ast.Type.eql(left.ty, right.ty);
+    }
+};
+
 pub const RunCache = struct {
     allocator: std.mem.Allocator,
     name_resolution: analysis_cache.NameResolutionCache,
     summaries: SummaryCache,
     return_facts: std.StringHashMap(ReturnFact),
+    type_facts: std.HashMap(TypeFactKey, ValueFacts, TypeFactContext, std.hash_map.default_max_load_percentage),
+    type_storage: std.heap.ArenaAllocator,
     // Borrowed from the graph; cached and returned summaries share these bytes.
     string_allocator: std.mem.Allocator,
     return_body_analyses: usize = 0,
+    type_body_analyses: usize = 0,
     next_value_fact_id: usize = 1,
     next_local_object_id: usize = 1,
 
@@ -406,11 +429,15 @@ pub const RunCache = struct {
             .name_resolution = analysis_cache.NameResolutionCache.init(allocator),
             .summaries = SummaryCache.init(allocator),
             .return_facts = .init(allocator),
+            .type_facts = .init(allocator),
+            .type_storage = .init(allocator),
             .string_allocator = string_allocator,
         };
     }
 
     pub fn deinit(self: *RunCache) void {
+        self.type_facts.deinit();
+        self.type_storage.deinit();
         var iter = self.summaries.iterator();
         while (iter.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
@@ -490,7 +517,7 @@ const CallbackArgBinding = struct {
 };
 
 // Immutable value facts carry callable candidates and object identities through
-// records and captures. Storage lives until the owning analyzer is destroyed.
+// records and captures. Type-derived facts live in the run cache when present.
 const max_value_fact_depth = 128;
 const max_effect_analysis_depth = 128;
 const ValueFacts = struct {
@@ -1040,6 +1067,10 @@ pub const Analyzer = struct {
     }
 
     fn newValueFacts(self: *Analyzer, candidates: []const ValueFacts.Callable, fields: []const ValueFacts.Field) !ValueFacts {
+        return self.newValueFactsIn(self.value_storage.allocator(), candidates, fields);
+    }
+
+    fn newValueFactsIn(self: *Analyzer, allocator: std.mem.Allocator, candidates: []const ValueFacts.Callable, fields: []const ValueFacts.Field) !ValueFacts {
         var field_count: usize = 0;
         for (fields) |field| if (field.value.id != 0) {
             field_count += 1;
@@ -1048,7 +1079,6 @@ pub const Analyzer = struct {
         const counter = if (self.run_cache) |cache| &cache.next_value_fact_id else &self.next_value_fact_id;
         const id = counter.*;
         counter.* += 1;
-        const allocator = self.value_storage.allocator();
         const kept_fields = try allocator.alloc(ValueFacts.Field, field_count);
         var field_index: usize = 0;
         for (fields) |field| {
@@ -1397,19 +1427,31 @@ pub const Analyzer = struct {
 
     fn valueFactsForType(self: *Analyzer, ty: ast.Type, depth: usize) anyerror!ValueFacts {
         if (depth >= max_value_fact_depth) return error.FunctionAnalysisLimitExceeded;
+        const cache = self.run_cache orelse return self.buildTypeFacts(ty, depth, self.value_storage.allocator());
+        // Include the lexical module for unresolved nominal types, and the
+        // depth so a cached subtree cannot bypass the analysis depth limit.
+        const key = TypeFactKey{ .module_id = self.sema.module_id, .ty = ty, .depth = depth };
+        if (cache.type_facts.get(key)) |value| return value;
+        const allocator = cache.type_storage.allocator();
+        const value = try self.buildTypeFacts(ty, depth, allocator);
+        try cache.type_facts.put(.{ .module_id = key.module_id, .ty = try ty.clone(allocator), .depth = depth }, value);
+        cache.type_body_analyses += 1;
+        return value;
+    }
+
+    fn buildTypeFacts(self: *Analyzer, ty: ast.Type, depth: usize, allocator: std.mem.Allocator) anyerror!ValueFacts {
         if (self.propertyTargetForType(ty)) |target| return self.withPropertyTarget(.{}, target);
         if (ty.kind == .optional) return if (ty.optional_child) |child| self.valueFactsForType(child.*, depth + 1) else .{};
         if (ty.kind != .record) return .{};
         const record = self.sema.record(ty.nominal_module_id, ty.class_name orelse return .{}) orelse return .{};
         var fields = std.ArrayList(ValueFacts.Field).empty;
-        const allocator = self.value_storage.allocator();
         for (record.decl.fields.items) |field| {
             var field_type = (try self.sema.recordFieldType(allocator, ty, field.name)) orelse continue;
             defer field_type.deinit(allocator);
             const value = try self.valueFactsForType(field_type, depth + 1);
             if (value.id != 0) try fields.append(allocator, .{ .name = field.name, .value = value });
         }
-        return self.newValueFacts(&.{}, fields.items);
+        return self.newValueFactsIn(allocator, &.{}, fields.items);
     }
 
     fn bindParamFacts(self: *Analyzer, param: ast.ParamDecl, facts: anytype) !void {
