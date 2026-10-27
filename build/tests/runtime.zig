@@ -64,7 +64,6 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
         .{ .path = "tests/runtime/lsp/diagnostics/layout_spec.mjs" },
         .{ .path = "tests/runtime/lsp/generated_edit/spec.mjs" },
         .{ .path = "tests/runtime/lsp/generated_edit/reuse_spec.mjs" },
-        .{ .path = "tests/runtime/lsp/manual_wysiwyg/spec.mjs" },
         .{ .path = "tests/runtime/lsp/protocol/spec.mjs" },
         .{ .path = "tests/runtime/lsp/render_cancellation/spec.mjs" },
         .{ .path = "tests/runtime/lsp_completion_runtime_spec.mjs" },
@@ -90,6 +89,7 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
         test_step.dependOn(&run.step);
         if (spec.name) |name| steps.focused(b, name, spec.description, &run.step);
     }
+    addManualWysiwygSpec(suite, exe);
 
     const vscode_tests = b.addSystemCommand(&.{ "npm", "test" });
     vscode_tests.setName("npm test (editor/vscode)");
@@ -106,6 +106,21 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
     editor_view_tests.step.dependOn(&suite.checks.vscode_packages.step);
     addFocusedTestStep(b, "test-editor-view", "Run focused editor view resource tests", &editor_view_tests.step);
     addStdlibChecks(b, test_step, exe);
+}
+
+fn addManualWysiwygSpec(suite: Suite, exe: std.Build.LazyPath) void {
+    const ctx = suite.ctx;
+    const b = ctx.b;
+    const run = steps.node(b, &suite.checks.node.step, "tests/runtime/lsp/manual_wysiwyg/spec.mjs", exe);
+    if (ctx.target.result.os.tag == .linux) {
+        const module = b.createModule(.{ .target = ctx.target, .optimize = ctx.optimize, .link_libc = true });
+        module.addCSourceFile(.{ .file = b.path("tests/runtime/lsp/manual_wysiwyg/response_delay.c") });
+        module.linkSystemLibrary("dl", .{});
+        const delay = b.addLibrary(.{ .name = "ss-test-edit-response-delay", .root_module = module, .linkage = .dynamic });
+        run.addFileArg(delay.getEmittedBin());
+    }
+    suite.all.dependOn(&run.step);
+    steps.focused(b, "test-lsp-manual-wysiwyg", "Check manual previews and generated edit response ordering", &run.step);
 }
 
 fn addStdlibChecks(b: *std.Build, test_step: *Step, exe: std.Build.LazyPath) void {

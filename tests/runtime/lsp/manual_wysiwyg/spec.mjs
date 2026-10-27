@@ -11,6 +11,7 @@ import {
   requestEdit,
 } from "../../editor/support.mjs";
 
+const responseDelayLibrary = process.argv[3];
 const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-manual-wysiwyg-"));
 
 try {
@@ -165,6 +166,12 @@ async function testContinuousPositionEdits(debounceMs) {
   try {
     const slide = path.join(fixture, "slide.ss");
     const uri = pathToFileURL(slide).toString();
+    const responseBarrier = path.join(fixture, "release-edit-response");
+    const env = responseDelayLibrary ? {
+      ...process.env,
+      LD_PRELOAD: path.resolve(responseDelayLibrary),
+      SS_TEST_EDIT_RESPONSE_BARRIER: responseBarrier,
+    } : process.env;
     let source = `import std:themes/default as *
 
 page demo
@@ -182,7 +189,7 @@ automatic = false
 `, "utf8");
     await writeFile(slide, source, "utf8");
 
-    await withLspClient({ cwd: fixture }, async (client) => {
+    await withLspClient({ cwd: fixture, env }, async (client) => {
       await client.initialize();
       const initialDiagnostics = client.waitForDiagnostics(uri);
       client.openDocument({ uri, text: source, version: 1 });
@@ -250,6 +257,9 @@ automatic = false
         secondEdit.workspaceEdit?.changes?.[uri] ?? [],
       );
       client.changeDocument({ uri, version: 3, text: source });
+      if (responseDelayLibrary) {
+        await writeFile(responseBarrier, "release");
+      }
 
       const afterSecond = await client.request("ss/editorSnapshot", {
         textDocument: { uri },
@@ -305,6 +315,12 @@ automatic = false
           source.includes("~!~ item.top == page.top - 140"),
         `third manual position edit did not reach source with debounce ${debounceMs}: ${source}`,
       );
+      if (responseDelayLibrary) {
+        assert(
+          client.stderr.includes("Paused after the second layout edit response"),
+          `response ordering fixture did not run: ${client.stderr}`,
+        );
+      }
     });
   } finally {
     await rm(fixture, { recursive: true, force: true });

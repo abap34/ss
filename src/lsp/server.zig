@@ -517,12 +517,17 @@ const Server = struct {
         if (self.workStatus() != .current) return error.Canceled;
     }
 
-    fn respondResult(self: *Server, id: ?JsonValue, result_json: []const u8) !void {
+    /// Returns true after sending a successful result.
+    fn respondResult(self: *Server, id: ?JsonValue, result_json: []const u8) !bool {
         switch (self.workStatus()) {
-            .current => try respond(self.allocator, id, result_json),
+            .current => {
+                try respond(self.allocator, id, result_json);
+                return true;
+            },
             .canceled => try respondError(self.allocator, id, -32800, "request cancelled"),
             .content_modified => try respondError(self.allocator, id, -32801, "content modified"),
         }
+        return false;
     }
 
     fn respondCanceled(self: *Server, id_json: []const u8) !void {
@@ -1260,7 +1265,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         };
         const result = try feature_completion.result(&ctx, params);
         defer server.allocator.free(result);
-        try server.respondResult(id, result);
+        _ = try server.respondResult(id, result);
         return;
     }
     if (std.mem.eql(u8, method, "textDocument/hover")) {
@@ -1272,7 +1277,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         };
         const result = try feature_hover.result(&ctx, params);
         defer server.allocator.free(result);
-        try server.respondResult(id, result);
+        _ = try server.respondResult(id, result);
         return;
     }
     if (std.mem.eql(u8, method, "textDocument/definition")) {
@@ -1285,7 +1290,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         };
         const result = try feature_definition.result(&ctx, params);
         defer server.allocator.free(result);
-        try server.respondResult(id, result);
+        _ = try server.respondResult(id, result);
         return;
     }
     if (std.mem.eql(u8, method, "textDocument/documentSymbol")) {
@@ -1296,7 +1301,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         };
         const result = try feature_symbols.result(&ctx, params);
         defer server.allocator.free(result);
-        try server.respondResult(id, result);
+        _ = try server.respondResult(id, result);
         return;
     }
     if (std.mem.eql(u8, method, "textDocument/foldingRange")) {
@@ -1307,7 +1312,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         };
         const result = try feature_folding.result(&ctx, params);
         defer server.allocator.free(result);
-        try server.respondResult(id, result);
+        _ = try server.respondResult(id, result);
         return;
     }
     if (std.mem.eql(u8, method, "textDocument/semanticTokens/full")) {
@@ -1319,7 +1324,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         };
         const result = try feature_tokens.result(&ctx, params);
         defer server.allocator.free(result);
-        try server.respondResult(id, result);
+        _ = try server.respondResult(id, result);
         return;
     }
     if (std.mem.eql(u8, method, "textDocument/documentColor")) {
@@ -1331,7 +1336,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         };
         const result = try feature_colors.documentColorsResult(&ctx, params);
         defer server.allocator.free(result);
-        try server.respondResult(id, result);
+        _ = try server.respondResult(id, result);
         return;
     }
     if (std.mem.eql(u8, method, "textDocument/colorPresentation")) {
@@ -1343,13 +1348,13 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         };
         const result = try feature_colors.colorPresentationResult(&ctx, params);
         defer server.allocator.free(result);
-        try server.respondResult(id, result);
+        _ = try server.respondResult(id, result);
         return;
     }
     if (std.mem.eql(u8, method, "ss/projectSettings")) {
         const result = try feature_project.settingsResult(server.allocator, server.io, params);
         defer server.allocator.free(result);
-        try server.respondResult(id, result);
+        _ = try server.respondResult(id, result);
         return;
     }
     if (std.mem.eql(u8, method, "ss/projectInfo")) {
@@ -1360,7 +1365,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         };
         const result = try feature_project.result(&ctx, params);
         defer server.allocator.free(result);
-        try server.respondResult(id, result);
+        _ = try server.respondResult(id, result);
         return;
     }
     if (std.mem.eql(u8, method, "ss/layoutConflicts")) {
@@ -1374,7 +1379,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         };
         const result = try feature_layout.result(&ctx, params);
         defer server.allocator.free(result);
-        try server.respondResult(id, result);
+        _ = try server.respondResult(id, result);
         return;
     }
     if (std.mem.eql(u8, method, "ss/editorSnapshot")) {
@@ -1414,7 +1419,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         };
         const result = try feature_editor.snapshotResult(&ctx, params);
         defer server.allocator.free(result);
-        try server.respondResult(id, result);
+        _ = try server.respondResult(id, result);
         server.releaseUnusedEditorResources();
         server.pruneRenderCache();
         return;
@@ -1450,8 +1455,9 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         };
         const result = try feature_edit.result(&ctx, params);
         defer server.allocator.free(result);
-        try server.respondResult(id, result);
-        if (server.workStatus() != .current) server.clearGeneratedEdit();
+        // The client may apply the edit before the response write returns.
+        // Preserve its metadata whenever the successful result was sent.
+        if (!try server.respondResult(id, result)) server.clearGeneratedEdit();
         return;
     }
     if (std.mem.eql(u8, method, "ss/deleteComponent")) {
@@ -1465,7 +1471,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         };
         const result = try feature_component_edit.result(&ctx, params);
         defer server.allocator.free(result);
-        try server.respondResult(id, result);
+        _ = try server.respondResult(id, result);
         return;
     }
     if (std.mem.eql(u8, method, "ss/insertShape")) {
@@ -1479,13 +1485,13 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         };
         const result = try feature_shape_edit.insertResult(&ctx, params);
         defer server.allocator.free(result);
-        try server.respondResult(id, result);
+        _ = try server.respondResult(id, result);
         return;
     }
     if (std.mem.eql(u8, method, "ss/iconCatalog")) {
         const result = try feature_icon_edit.catalogResult(server.allocator, params);
         defer server.allocator.free(result);
-        try server.respondResult(id, result);
+        _ = try server.respondResult(id, result);
         return;
     }
     if (std.mem.eql(u8, method, "ss/insertIcon")) {
@@ -1499,7 +1505,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         };
         const result = try feature_icon_edit.insertResult(&ctx, params);
         defer server.allocator.free(result);
-        try server.respondResult(id, result);
+        _ = try server.respondResult(id, result);
         return;
     }
     if (std.mem.eql(u8, method, "ss/editLineGeometry")) {
@@ -1513,7 +1519,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         };
         const result = try feature_shape_edit.lineGeometryResult(&ctx, params);
         defer server.allocator.free(result);
-        try server.respondResult(id, result);
+        _ = try server.respondResult(id, result);
         return;
     }
     if (std.mem.eql(u8, method, "ss/editShapeBounds")) {
@@ -1527,7 +1533,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         };
         const result = try feature_shape_edit.closedGeometryResult(&ctx, params);
         defer server.allocator.free(result);
-        try server.respondResult(id, result);
+        _ = try server.respondResult(id, result);
         return;
     }
     if (std.mem.eql(u8, method, "ss/shapeStyleEdit")) {
@@ -1541,7 +1547,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         };
         const result = try feature_shape_edit.styleResult(&ctx, params);
         defer server.allocator.free(result);
-        try server.respondResult(id, result);
+        _ = try server.respondResult(id, result);
         return;
     }
     if (id != null) switch (server.workStatus()) {
