@@ -32,6 +32,15 @@ pub fn register(suite: Suite, modules: project.ProjectModules, build_options: *S
         import("render_resources", modules.render_resources),
     }, null);
     _ = suite.add(latex_inputs_spec_mod, .{ .name = "test-latex-inputs", .description = "Run focused TeX recorder and dependency manifest tests" });
+    const latex_references_mod = createModule(ctx, "src/render/compile/latex_references.zig", &.{
+        import("utils", modules.utils),
+        import("render_resources", modules.render_resources),
+    }, null);
+    const latex_references_spec_mod = createModule(ctx, "tests/render/latex/references/spec_tests.zig", &.{
+        import("latex_references", latex_references_mod),
+        import("utils", modules.utils),
+    }, null);
+    _ = suite.add(latex_references_spec_mod, .{ .name = "test-latex-references", .description = "Run focused shared LaTeX reference tests" });
     const render_pdf_document_mod = createModule(ctx, "src/render/pdf.zig", &.{
         import("pdf_backend", modules.pdf_backend),
         import("pdf_ffi", modules.pdf_ffi),

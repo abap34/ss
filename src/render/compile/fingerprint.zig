@@ -4,6 +4,7 @@ const pdf_ffi = @import("pdf_ffi");
 const render_resources = @import("render_resources");
 const syntax_highlight = @import("syntax_highlight.zig");
 const latex_inputs = @import("latex_inputs.zig");
+const latex_references = @import("latex_references.zig");
 const utils = @import("utils");
 const cache_versions = @import("cache_versions.zig");
 
@@ -18,6 +19,7 @@ pub const Context = struct {
     asset_base_dir: []const u8,
     cache_dir: []const u8 = utils.render_cache.native_path,
     resource_cache: ?*render_resources.SourceCache = null,
+    latex_references: ?*latex_references.Cache = null,
     font_environment: [c.SS_FONT_ENVIRONMENT_ID_SIZE]u8 = @splat(0),
 };
 
@@ -186,19 +188,13 @@ pub fn latexReferencePath(ctx: Context, source: []const u8, preamble: []const u8
 fn hashLatexInputs(ctx: Context, files: *std.StringHashMap(File), hasher: *std.hash.Wyhash, source: []const u8, preamble: []const u8, engine: core.latex_config.LatexEngine, kind: []const u8) !void {
     const path = try latexReferencePath(ctx, source, preamble, engine, kind);
     defer ctx.allocator.free(path);
-    const contents = utils.fs.readFileAllocLimited(ctx.io, ctx.allocator, path, .limited(utils.render_cache.LatexReference.read_limit)) catch |err| switch (err) {
+    var reference = latex_references.read(ctx.allocator, ctx.io, path, ctx.latex_references) catch |err| switch (err) {
         error.OutOfMemory, error.Canceled => return err,
         else => return hashBool(hasher, false),
     };
-    defer ctx.allocator.free(contents);
-    const reference = utils.render_cache.LatexReference.parse(contents) catch return hashBool(hasher, false);
-    var manifest = latex_inputs.parse(ctx.allocator, reference.dependencies) catch |err| switch (err) {
-        error.OutOfMemory => return err,
-        else => return hashBool(hasher, false),
-    };
-    defer manifest.deinit();
+    defer reference.deinit();
     hashBool(hasher, true);
-    for (manifest.value.inputs) |input| {
+    for (reference.inputs) |input| {
         const current = try fileFingerprint(ctx, files, input.path);
         latex_inputs.hashInput(hasher, input.path, .{ .present = current.present, .digest = current.digest });
     }

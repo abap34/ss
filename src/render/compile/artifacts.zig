@@ -7,6 +7,7 @@ const render_resources = @import("render_resources");
 const fingerprint = @import("fingerprint.zig");
 const latex_document = @import("latex.zig");
 const latex_inputs = @import("latex_inputs.zig");
+const latex_references = @import("latex_references.zig");
 const external_process = @import("external_process.zig");
 const native_artifact_cache_version = @import("cache_versions.zig").native_artifacts;
 const hashString = fingerprint.hashString;
@@ -32,6 +33,7 @@ pub const Context = struct {
     asset_base_dir: []const u8,
     cache_dir: []const u8,
     resource_cache: ?*render_resources.SourceCache = null,
+    latex_references: ?*latex_references.Cache = null,
     file_inputs: ?*utils.FileInputs = null,
     failure: ?FailureSink = null,
 };
@@ -300,18 +302,12 @@ fn recordMissingLatexInputs(ctx: Context, directory: []const u8, working_directo
 
 fn recordPreviousLatexInputs(ctx: Context, reference_path: []const u8) !void {
     const observed = ctx.file_inputs orelse return;
-    const contents = utils.fs.readFileAllocLimited(ctx.io, ctx.allocator, reference_path, .limited(utils.render_cache.LatexReference.read_limit)) catch |err| switch (err) {
+    var reference = latex_references.read(ctx.allocator, ctx.io, reference_path, ctx.latex_references) catch |err| switch (err) {
         error.Canceled, error.OutOfMemory => return err,
         else => return,
     };
-    defer ctx.allocator.free(contents);
-    const reference = utils.render_cache.LatexReference.parse(contents) catch return;
-    var manifest = latex_inputs.parse(ctx.allocator, reference.dependencies) catch |err| switch (err) {
-        error.OutOfMemory => return err,
-        else => return,
-    };
-    defer manifest.deinit();
-    for (manifest.value.inputs) |input| try observed.record(".", input.path, .file);
+    defer reference.deinit();
+    for (reference.inputs) |input| try observed.record(".", input.path, .file);
 }
 
 fn latexInputContext(ctx: Context) latex_inputs.Context {
@@ -353,20 +349,18 @@ pub fn cachedLatexReference(ctx: Context, reference_path: []const u8) !?LatexAss
 }
 
 fn readLatexReference(ctx: Context, reference_path: []const u8) !LatexAsset {
-    const contents = utils.fs.readFileAllocLimited(ctx.io, ctx.allocator, reference_path, .limited(utils.render_cache.LatexReference.read_limit)) catch |err| switch (err) {
+    var cached = latex_references.read(ctx.allocator, ctx.io, reference_path, ctx.latex_references) catch |err| switch (err) {
         error.Canceled, error.OutOfMemory => return err,
         else => return NativePdfError.InvalidPdfCache,
     };
-    defer ctx.allocator.free(contents);
-    const reference = try utils.render_cache.LatexReference.parse(contents);
-    var manifest = try latex_inputs.parse(ctx.allocator, reference.dependencies);
-    defer manifest.deinit();
+    defer cached.deinit();
+    const reference = cached.value;
     var inputs_ctx = latexInputContext(ctx);
     inputs_ctx.observed = null;
-    if (!try latex_inputs.matches(inputs_ctx, manifest.value.inputs)) return NativePdfError.InvalidPdfCache;
+    if (!try latex_inputs.matches(inputs_ctx, cached.inputs)) return NativePdfError.InvalidPdfCache;
     if (ctx.file_inputs) |observed| {
-        for (manifest.value.inputs) |input| try observed.record(".", input.path, .file);
-        if (!try latex_inputs.matches(inputs_ctx, manifest.value.inputs)) return NativePdfError.InvalidPdfCache;
+        for (cached.inputs) |input| try observed.record(".", input.path, .file);
+        if (!try latex_inputs.matches(inputs_ctx, cached.inputs)) return NativePdfError.InvalidPdfCache;
     }
     const directory = std.fs.path.dirname(reference_path) orelse ".";
     const pdf_path = try std.fs.path.join(ctx.allocator, &.{ directory, reference.pdf_name });

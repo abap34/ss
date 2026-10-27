@@ -7,6 +7,7 @@ const resource_compile = @import("render_resources");
 const text_compile = @import("render_text");
 const semantics = @import("compile/semantics.zig");
 const syntax_highlight = @import("compile/syntax_highlight.zig");
+const latex_references = @import("compile/latex_references.zig");
 
 pub const table = @import("compile/table.zig");
 
@@ -96,7 +97,9 @@ pub fn compile(
     defer local_highlight_cache.deinit();
     var local_resource_cache = resource_compile.SourceCache.init(std.heap.smp_allocator, io);
     defer local_resource_cache.deinit();
-    var item_compiler = items.Compiler{ .io = io, .options = .{
+    var references = latex_references.Cache.init(std.heap.smp_allocator);
+    defer references.deinit();
+    var item_compiler = items.Compiler{ .io = io, .latex_references = &references, .options = .{
         .jobs = options.jobs,
         .cache_dir = options.cache_dir,
         .highlight_languages = options.highlight_languages,

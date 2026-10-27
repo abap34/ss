@@ -10,6 +10,7 @@ const render_text = @import("render_text");
 const render_compile = @import("../compile.zig");
 const fingerprint = @import("fingerprint.zig");
 const latex_document = @import("latex.zig");
+const latex_references = @import("latex_references.zig");
 const artifacts = @import("artifacts.zig");
 const inline_layout = @import("inline.zig");
 const table_layout = @import("table.zig");
@@ -96,6 +97,7 @@ const DrawContext = struct {
     text_cache: ?*render_text.Cache = null,
     highlight_cache: ?*syntax_highlight.Cache = null,
     resource_cache: ?*render_resources.SourceCache = null,
+    latex_references: ?*latex_references.Cache = null,
     file_inputs: ?*utils.FileInputs = null,
     command_failure: ?*CommandFailure = null,
     synthetic_font_detected: ?*bool = null,
@@ -119,6 +121,7 @@ fn artifactContext(ctx: *const DrawContext) artifacts.Context {
         .asset_base_dir = ctx.asset_base_dir,
         .cache_dir = ctx.cache_dir,
         .resource_cache = ctx.resource_cache,
+        .latex_references = ctx.latex_references,
         .file_inputs = ctx.file_inputs,
         .failure = if (ctx.command_failure) |failure| .{ .context = failure, .write = CommandFailure.recordArtifactFailure } else null,
     };
@@ -327,6 +330,7 @@ pub const LayoutMeasurementScope = struct {
     local_text_cache: render_text.Cache,
     local_highlight_cache: syntax_highlight.Cache,
     local_resource_cache: render_resources.SourceCache,
+    latex_references: latex_references.Cache,
     prepared_objects: std.AutoHashMap(core.NodeId, *const core.prepared.PreparedObject),
     font_environment: render_text.FontEnvironment,
 
@@ -387,6 +391,7 @@ pub const LayoutMeasurementScope = struct {
             .local_text_cache = render_text.Cache.init(std.heap.smp_allocator, io),
             .local_highlight_cache = syntax_highlight.Cache.init(std.heap.smp_allocator, io),
             .local_resource_cache = render_resources.SourceCache.init(std.heap.smp_allocator, io),
+            .latex_references = latex_references.Cache.init(std.heap.smp_allocator),
             .prepared_objects = prepared_objects,
             .font_environment = options.font_environment,
         };
@@ -397,6 +402,7 @@ pub const LayoutMeasurementScope = struct {
         self.local_text_cache.deinit();
         self.local_highlight_cache.deinit();
         self.local_resource_cache.deinit();
+        self.latex_references.deinit();
         self.prepared_objects.deinit();
         if (self.owns_measurements) {
             self.measurements.deinit();
@@ -445,6 +451,7 @@ pub const LayoutMeasurementScope = struct {
         measurement_ctx.highlight_cache = self.ctx.highlight_cache orelse &self.local_highlight_cache;
         measurement_ctx.text_cache = self.ctx.text_cache orelse &self.local_text_cache;
         measurement_ctx.command_failure = &target;
+        measurement_ctx.latex_references = &self.latex_references;
         var cache_key = self.measurementKey(state.allocator, command, width, mode) catch |err| {
             if (err == error.Canceled) return error.Canceled;
             try addMeasurementRenderDiagnostic(&measurement_ctx, state, &command, err, &target);
@@ -482,6 +489,7 @@ pub const LayoutMeasurementScope = struct {
                 .asset_base_dir = self.ctx.asset_base_dir,
                 .cache_dir = self.ctx.cache_dir,
                 .resource_cache = self.ctx.resource_cache orelse &self.local_resource_cache,
+                .latex_references = &self.latex_references,
                 .font_environment = self.font_environment.id,
             },
             layout_measurement_cache_version,
@@ -599,6 +607,8 @@ pub fn preloadPreparedPageArtifacts(
 
     var resource_cache = render_resources.SourceCache.init(allocator, io);
     defer resource_cache.deinit();
+    var references = latex_references.Cache.init(allocator);
+    defer references.deinit();
     var ctx = DrawContext{
         .allocator = allocator,
         .io = io,
@@ -606,6 +616,7 @@ pub fn preloadPreparedPageArtifacts(
         .cache_dir = asset_cache_dir,
         .highlight_languages = options.highlight_languages,
         .resource_cache = &resource_cache,
+        .latex_references = &references,
         .file_inputs = state.file_inputs,
     };
 
@@ -666,6 +677,7 @@ pub const Compiler = struct {
     options: render_compile.Options,
     font_environment: ?render_text.FontEnvironment = null,
     diagnostic_mutex: std.Io.Mutex = .init,
+    latex_references: ?*latex_references.Cache = null,
 
     pub fn prepare(
         self: *Compiler,
@@ -720,6 +732,7 @@ pub const Compiler = struct {
             .text_cache = self.options.text_cache,
             .highlight_cache = self.options.highlight_cache,
             .resource_cache = self.options.resource_cache,
+            .latex_references = self.latex_references,
             .synthetic_font_detected = &synthetic_font_detected,
         };
 
@@ -775,6 +788,7 @@ const PageCompilation = struct {
                 .asset_base_dir = self.draw_context.asset_base_dir,
                 .cache_dir = self.draw_context.cache_dir,
                 .resource_cache = self.compiler.options.resource_cache,
+                .latex_references = self.compiler.latex_references,
                 .font_environment = self.font_environment.id,
             },
             render_page_cache_version,
@@ -1613,6 +1627,7 @@ fn buildRenderPage(
         .text_cache = parent_ctx.text_cache,
         .highlight_cache = parent_ctx.highlight_cache,
         .resource_cache = parent_ctx.resource_cache,
+        .latex_references = parent_ctx.latex_references,
         .command_failure = parent_ctx.command_failure,
         .synthetic_font_detected = parent_ctx.synthetic_font_detected,
         .emitter = .{
