@@ -250,6 +250,8 @@ fn check(output: Output) void {
         \\  {s}--warnings off{s}          Hide warning diagnostics
         \\  {s}--quiet{s}                 Hide progress and warning diagnostics
         \\  {s}--measure-profile{s}       Print detailed timing counters
+        \\  --profile DIR           Save Perfetto trace and recording metadata
+        \\  --profile-buffer-kb N  Recording buffer in KiB (default: 32768)
         \\
         \\{s}Examples:{s}
         \\  {s}ss check slide.ss{s}
@@ -293,6 +295,8 @@ fn render(output: Output) void {
         \\  {s}--warnings off{s}          Hide warning diagnostics
         \\  {s}--quiet{s}                 Hide progress and warning diagnostics
         \\  {s}--measure-profile{s}       Print detailed timing counters
+        \\  --profile DIR           Save Perfetto trace and recording metadata
+        \\  --profile-buffer-kb N  Recording buffer in KiB (default: 32768)
         \\
     , .{
         s.heading, s.reset,
@@ -351,6 +355,8 @@ fn present(output: Output) void {
         \\  --warnings off           Hide warning diagnostics
         \\  --quiet                  Hide progress and warning diagnostics
         \\  --measure-profile        Print detailed timing counters
+        \\  --profile DIR           Save Perfetto trace and recording metadata
+        \\  --profile-buffer-kb N  Recording buffer in KiB (default: 32768)
         \\
     );
 }
@@ -372,6 +378,8 @@ fn dump(output: Output) void {
         \\  {s}--warnings off{s}          Hide warning diagnostics
         \\  {s}--quiet{s}                 Hide progress and warning diagnostics
         \\  {s}--measure-profile{s}       Print detailed timing counters
+        \\  --profile DIR           Save Perfetto trace and recording metadata
+        \\  --profile-buffer-kb N  Recording buffer in KiB (default: 32768)
         \\
     , .{
         s.heading, s.reset,
@@ -421,6 +429,8 @@ fn watch(output: Output) void {
         \\  {s}--warnings off{s}          Hide warning diagnostics
         \\  {s}--quiet{s}                 Hide progress and warning diagnostics
         \\  {s}--measure-profile{s}       Print detailed timing counters
+        \\  --profile DIR           Save Perfetto trace and recording metadata
+        \\  --profile-buffer-kb N  Recording buffer in KiB (default: 32768)
         \\
     , .{
         s.heading, s.reset,
@@ -473,6 +483,8 @@ fn debug(output: Output) void {
         \\  {s}--warnings off{s}          Hide warning diagnostics
         \\  {s}--quiet{s}                 Hide progress and warning diagnostics
         \\  {s}--measure-profile{s}       Print detailed timing counters
+        \\  --profile DIR           Save Perfetto trace and recording metadata
+        \\  --profile-buffer-kb N  Recording buffer in KiB (default: 32768)
         \\
     , .{
         s.heading, s.reset,
@@ -539,10 +551,11 @@ fn lsp(output: Output) void {
     const s = style(output);
     outputPrint(output,
         \\{s}Usage:{s}
-        \\  {s}ss lsp{s} [--measure-profile]
+        \\  {s}ss lsp{s} [--measure-profile] [--profile DIR]
         \\
         \\Run the language server over stdio.
         \\Use --measure-profile to print detailed timing counters on stderr.
+        \\Use --profile DIR to record operations; ss/profile exports a checkpoint.
         \\
     , .{
         s.heading, s.reset,
@@ -655,16 +668,16 @@ const bash_completion =
     \\
     \\  local commands="init doctor check render present dump watch debug cache lsp version completion help"
     \\  local common_opts="help --help -h"
-    \\  local diagnostic_opts="--diagnostic-level --warnings --quiet --measure-profile"
+    \\  local diagnostic_opts="--diagnostic-level --warnings --quiet --measure-profile --profile --profile-buffer-kb"
     \\  local project_opts="--project --asset-base-dir --jobs --color $diagnostic_opts"
     \\  local render_opts="$project_opts --output --format --diagnostics-json"
     \\
     \\  case "$prev" in
-    \\    --project|--asset-base-dir|--output|--diagnostics-json|--entry)
+    \\    --project|--asset-base-dir|--output|--diagnostics-json|--entry|--profile)
     \\      COMPREPLY=( $(compgen -f -- "$cur") )
     \\      return 0
     \\      ;;
-    \\    --jobs|--interval-ms)
+    \\    --jobs|--interval-ms|--profile-buffer-kb)
     \\      COMPREPLY=( $(compgen -W "1 2 4 8" -- "$cur") )
     \\      return 0
     \\      ;;
@@ -736,6 +749,9 @@ const bash_completion =
     \\        COMPREPLY=( $(compgen -W "clear prune stats help --help -h" -- "$cur") )
     \\      fi
     \\      ;;
+    \\    lsp)
+    \\      COMPREPLY=( $(compgen -W "$common_opts --measure-profile --profile --profile-buffer-kb" -- "$cur") )
+    \\      ;;
     \\    completion)
     \\      COMPREPLY=( $(compgen -W "bash zsh fish help --yes --print --help -h" -- "$cur") )
     \\      ;;
@@ -771,7 +787,7 @@ const zsh_completion =
     \\
     \\  local -a common_opts project_opts render_opts
     \\  common_opts=('help[show command help]' '--help[show command help]' '-h[show command help]')
-    \\  project_opts=('--project[load ss.toml]:file or dir:_files' '--asset-base-dir[resolve assets from dir]:dir:_files -/' '--jobs[parallel page-processing jobs]:jobs:' '--color[color mode]:(auto always never)' '--diagnostic-level[diagnostic display level]:(note warning error off)' '--warnings[warning display]:(off)' '--quiet[hide progress and warning diagnostics]' '--measure-profile[print detailed timing counters]')
+    \\  project_opts=('--project[load ss.toml]:file or dir:_files' '--asset-base-dir[resolve assets from dir]:dir:_files -/' '--jobs[parallel page-processing jobs]:jobs:' '--color[color mode]:(auto always never)' '--diagnostic-level[diagnostic display level]:(note warning error off)' '--warnings[warning display]:(off)' '--quiet[hide progress and warning diagnostics]' '--measure-profile[print detailed timing counters]' '--profile[save profiling session]:new directory:_files -/' '--profile-buffer-kb[trace buffer size in KiB]:count:')
     \\  render_opts=($project_opts '--output[output path]:file:_files' '--format[output format]:(pdf html)' '--diagnostics-json[diagnostics JSON path]:file:_files')
     \\
     \\  if (( CURRENT == 2 )); then
@@ -807,6 +823,9 @@ const zsh_completion =
     \\      else
     \\        _arguments '2:target:(project tree-sitter help)' '3:command:(clear prune stats help)' $common_opts
     \\      fi
+    \\      ;;
+    \\    lsp)
+    \\      _arguments '--measure-profile[print detailed timing counters]' '--profile[save profiling session]:new directory:_files -/' '--profile-buffer-kb[trace buffer size in KiB]:count:' $common_opts
     \\      ;;
     \\    completion)
     \\      _arguments '2:shell:(bash zsh fish help)' '--yes[install without prompting]' '--print[write script to stdout]' $common_opts
@@ -851,6 +870,8 @@ const fish_completion =
     \\complete -c ss -n '__fish_seen_subcommand_from check dump render present watch debug' -l diagnostic-level -r -a 'note warning error off' -d 'Diagnostic display level'
     \\complete -c ss -n '__fish_seen_subcommand_from check dump render present watch debug' -l warnings -r -a 'off' -d 'Warning display'
     \\complete -c ss -n '__fish_seen_subcommand_from check dump render present watch debug' -l quiet -d 'Hide progress and warning diagnostics'
+    \\complete -c ss -n '__fish_seen_subcommand_from check dump render present watch debug lsp' -l profile -r -d 'Save profiling session'
+    \\complete -c ss -n '__fish_seen_subcommand_from check dump render present watch debug lsp' -l profile-buffer-kb -x -d 'Recording buffer in KiB'
     \\complete -c ss -n '__fish_seen_subcommand_from check dump render present watch debug' -l measure-profile -d 'Print detailed timing counters'
     \\complete -c ss -n '__fish_seen_subcommand_from dump render present watch debug' -l output -r -d 'Output path'
     \\complete -c ss -n '__fish_seen_subcommand_from render watch' -l format -r -a 'pdf html' -d 'Output format'

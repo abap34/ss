@@ -88,6 +88,7 @@ const Server = struct {
     editor_diagnostics: ResponseStore = .{},
     published_diagnostic_uris: std.StringHashMap(void),
     pending_rebuild_path: ?[]u8 = null,
+    pending_profile_task: utils.profile.Task = .{},
     pending_rebuild_due_ms: u64 = 0,
     pending_rebuild_revision: u64 = 0,
     pending_rebuild_translation_patch: bool = false,
@@ -381,6 +382,7 @@ const Server = struct {
         errdefer self.allocator.free(owned_path);
         self.clearPendingRebuild();
         self.pending_rebuild_path = owned_path;
+        self.pending_profile_task = utils.profile.Task.enqueue("lsp.rebuild", .{ .revision = self.active_revision });
         self.pending_rebuild_due_ms = saturatedAddMillis(monotonicMillis(), delay_ms);
         self.pending_rebuild_revision = self.active_revision;
         self.pending_rebuild_translation_patch = prefer_translation_patch;
@@ -391,6 +393,9 @@ const Server = struct {
         const path = self.pending_rebuild_path orelse return;
         defer self.allocator.free(path);
         const revision = self.pending_rebuild_revision;
+        var profile_operation = self.pending_profile_task.run();
+        self.pending_profile_task = .{};
+        defer profile_operation.finish();
         const prefer_translation_patch = self.pending_rebuild_translation_patch;
         const required_layout = layout_build == .required or self.pending_rebuild_layout_build == .required;
         self.pending_rebuild_path = null;
@@ -406,7 +411,10 @@ const Server = struct {
             self.active_revision = previous_revision;
             self.active_request = previous_request;
         }
-        try self.rebuild(path, if (required_layout) .required else .configured, prefer_translation_patch);
+        self.rebuild(path, if (required_layout) .required else .configured, prefer_translation_patch) catch |err| {
+            profile_operation.outcome = if (err == error.Canceled) .canceled else .failed;
+            return err;
+        };
     }
 
     fn flushPendingRebuildIfDue(self: *Server) !void {
@@ -431,7 +439,10 @@ const Server = struct {
     }
 
     fn clearPendingRebuild(self: *Server) void {
-        if (self.pending_rebuild_path) |path| self.allocator.free(path);
+        if (self.pending_rebuild_path) |path| {
+            self.pending_profile_task.discard();
+            self.allocator.free(path);
+        }
         self.pending_rebuild_path = null;
         self.pending_rebuild_due_ms = 0;
         self.pending_rebuild_revision = 0;
@@ -845,7 +856,7 @@ fn runAnalysisLayout(context: *anyopaque, state: *core.DocumentState, graph: *co
 
     var result_buffer: [2]AnalysisLayoutTaskResult = undefined;
     var tasks = std.Io.Select(AnalysisLayoutTaskResult).init(hook.server.io, &result_buffer);
-    try tasks.concurrent(.layout, runAnalysisLayoutWork, .{ context, state, graph });
+    try utils.profile.concurrent(&tasks, .layout, runAnalysisLayoutWork, .{ context, state, graph });
     defer cancelAnalysisLayoutTasks(&tasks, state.allocator);
     try tasks.concurrent(.canceled, waitForAnalysisCancellation, .{hook.server});
 
@@ -867,7 +878,7 @@ fn runAnalysisLayoutWork(context: *anyopaque, state: *core.DocumentState, graph:
     state.file_inputs = &external_inputs;
     defer state.file_inputs = null;
     try recordLayoutInputs(hook, state, &external_inputs);
-    const layout_start = utils.measure_profile.start();
+    const layout_start = utils.profile.start();
     var prepared = try render_layout.evaluateAndSolvePreparedPages(hook.server.io, state, graph, .{
         .highlight_languages = hook.highlight_languages,
         .resource_cache = &hook.server.render_resource_cache,
@@ -878,7 +889,7 @@ fn runAnalysisLayoutWork(context: *anyopaque, state: *core.DocumentState, graph:
             .is_canceled = analysisCanceled,
         },
     });
-    utils.measure_profile.recordWysiwyg(.evaluate_solve, layout_start);
+    utils.profile.recordWysiwyg(.evaluate_solve, layout_start);
     var prepared_owned = true;
     defer if (prepared_owned) prepared.deinit(state.allocator);
     try hook.server.checkCanceled();
@@ -938,7 +949,7 @@ fn reuseLayoutPreview(hook: *const AnalysisLayoutContext, state: *core.DocumentS
 }
 
 fn buildLayoutPreview(hook: *const AnalysisLayoutContext, state: *core.DocumentState, prepared: *const render_layout.EvaluatedPreparedPages, external_inputs: *utils.FileInputs, conflicts_json: []u8) !editor_snapshot.Output {
-    const render_start = utils.measure_profile.start();
+    const render_start = utils.profile.start();
     var render_ir = try render_compiler.compile(state.allocator, hook.server.io, state, &prepared.pages, &prepared.layouts, .{
         .jobs = 1,
         .highlight_languages = hook.highlight_languages,
@@ -948,11 +959,11 @@ fn buildLayoutPreview(hook: *const AnalysisLayoutContext, state: *core.DocumentS
         .page_cache = &hook.server.render_page_cache,
         .font_environment = prepared.font_environment,
     });
-    utils.measure_profile.recordWysiwyg(.render_compile, render_start);
+    utils.profile.recordWysiwyg(.render_compile, render_start);
     defer render_ir.deinit(state.allocator);
     try hook.server.checkCanceled();
-    const snapshot_start = utils.measure_profile.start();
-    defer utils.measure_profile.recordWysiwyg(.snapshot, snapshot_start);
+    const snapshot_start = utils.profile.start();
+    defer utils.profile.recordWysiwyg(.snapshot, snapshot_start);
     external_inputs.observations_complete = try editor_reuse.inputs.matches(external_inputs, &hook.server.render_resource_cache);
     return try editor_snapshot.build(
         state.allocator,
@@ -1029,6 +1040,19 @@ fn runWorker(io: std.Io, allocator: std.mem.Allocator, ingress: *transport.Ingre
 fn processEnvelope(server: *Server, value: transport.Envelope) !void {
     var envelope = value;
     defer envelope.deinit(server.ingress);
+    var profile_operation = envelope.profile_task.run();
+    envelope.profile_task = .{};
+    defer {
+        if (profile_operation.outcome == .success) {
+            if (envelope.request) |request| {
+                if (request.state.canceled.load(.acquire)) profile_operation.outcome = .canceled;
+            }
+            if (profile_operation.outcome == .success and envelope.revision != server.ingress.revision.load(.acquire)) profile_operation.outcome = .superseded;
+        }
+        utils.profile.counter("document.generation", server.documents.generation);
+        profile_operation.finish();
+    }
+    errdefer profile_operation.outcome = .failed;
 
     server.active_revision = envelope.revision;
     server.active_request = if (envelope.request) |request| request.state else null;
@@ -1044,9 +1068,11 @@ fn processEnvelope(server: *Server, value: transport.Envelope) !void {
         },
         .message => |*message| handleMessage(server, &message.value) catch |err| switch (err) {
             error.Canceled => {
+                profile_operation.outcome = if (server.workStatus() == .content_modified) .superseded else .canceled;
                 if (envelope.request) |request| try server.respondCanceled(request.key);
             },
             error.InvalidParams => {
+                profile_operation.outcome = .failed;
                 if (envelope.request) |request| {
                     try protocol.respondErrorId(server.allocator, request.key, -32602, "Invalid params");
                 } else {
@@ -1057,6 +1083,7 @@ fn processEnvelope(server: *Server, value: transport.Envelope) !void {
             else => {
                 // Requests own their temporary state and unwind it before this
                 // boundary. Failed notifications may have mutated shared state.
+                profile_operation.outcome = .failed;
                 const request = envelope.request orelse return err;
                 try protocol.respondErrorId(server.allocator, request.key, -32603, @errorName(err));
             },
@@ -1085,6 +1112,11 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
     }
     const params = if (utils.json.fieldValue(&root, "params")) |value| value.* else null;
 
+    if (std.mem.eql(u8, method, "ss/profile")) {
+        if (!try utils.profile.checkpoint()) return error.InvalidParams;
+        try respond(server.allocator, id, "{\"written\":true}");
+        return;
+    }
     if (std.mem.eql(u8, method, "initialize")) {
         const result = try initializeResult(server.allocator);
         defer server.allocator.free(result);
@@ -1103,6 +1135,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         if (params) |p| if (objectField(p, "textDocument")) |doc| {
             if (stringField(doc, "uri")) |uri| {
                 const text = stringField(doc, "text") orelse "";
+                utils.profile.identifySource(text);
                 const path = try server.documents.replaceUri(uri, text, intField(doc, "version"));
                 defer server.allocator.free(path);
                 try server.scheduleRebuild(path);

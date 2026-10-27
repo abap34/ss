@@ -1,7 +1,7 @@
 const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
-const measure_profile = @import("utils").measure_profile;
+const profile = @import("utils").profile;
 
 const registry = @import("../language/registry.zig");
 const language_names = @import("../language/names.zig");
@@ -408,8 +408,8 @@ const Analyzer = struct {
     // Queries start with no candidates. Join immutable inputs to a fixed point,
     // then check executed calls strictly; discovery never licenses an unknown call.
     fn collectPlacementInputs(self: *Analyzer) !void {
-        const measure_start = measure_profile.start();
-        defer measure_profile.recordAnalysis(.semantics_placement_inputs, measure_start);
+        const measure_start = profile.start();
+        defer profile.recordAnalysis(.semantics_placement_inputs, measure_start);
         self.collecting_inputs = true;
         defer self.collecting_inputs = false;
         for (0..max_call_analysis_depth) |_| {
@@ -426,8 +426,8 @@ const Analyzer = struct {
     }
 
     fn rememberInput(self: *Analyzer, input: ast.Type, receiver: ValueFacts) !void {
-        const measure_start = measure_profile.start();
-        defer measure_profile.recordAnalysis(.semantics_input_join, measure_start);
+        const measure_start = profile.start();
+        defer profile.recordAnalysis(.semantics_input_join, measure_start);
         for (self.typed_inputs.items) |*entry| {
             if (!ast.Type.eql(entry.input, input)) continue;
             if (try entry.receiver.join(receiver)) self.inputs_changed = true;
@@ -868,8 +868,8 @@ const Analyzer = struct {
     }
 
     fn checkDisplayFunctions(self: *Analyzer) !void {
-        const measure_start = measure_profile.start();
-        defer measure_profile.recordAnalysis(.semantics_displays, measure_start);
+        const measure_start = profile.start();
+        defer profile.recordAnalysis(.semantics_displays, measure_start);
         self.checking_display = true;
         defer self.checking_display = false;
         self.states.clearRetainingCapacity();
@@ -1163,8 +1163,8 @@ const Analyzer = struct {
     }
 
     fn activationKey(self: *Analyzer, activation: Activation) ![]const u8 {
-        const measure_start = measure_profile.start();
-        defer measure_profile.recordAnalysis(.semantics_call_keys, measure_start);
+        const measure_start = profile.start();
+        defer profile.recordAnalysis(.semantics_call_keys, measure_start);
         const allocator = self.key_allocator;
         var names = std.ArrayList([]const u8).empty;
         defer names.deinit(allocator);

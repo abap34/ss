@@ -69,12 +69,12 @@ pub fn addFontEnvironmentDiagnostic(state: *core.DocumentState, err: anyerror) !
 }
 
 pub fn acquireFontEnvironment() !FontEnvironmentToken {
-    const refresh_fonts_start = utils.measure_profile.start();
+    const refresh_fonts_start = utils.profile.start();
     _ = try text_compile.fontEnvironmentRefresh();
-    utils.measure_profile.recordRenderCompile(.font_environment, refresh_fonts_start);
-    const font_environment_start = utils.measure_profile.start();
+    utils.profile.recordRenderCompile(.font_environment, refresh_fonts_start);
+    const font_environment_start = utils.profile.start();
     const font_environment = try text_compile.fontEnvironmentSnapshot();
-    utils.measure_profile.recordRenderCompile(.font_environment, font_environment_start);
+    utils.profile.recordRenderCompile(.font_environment, font_environment_start);
     return font_environment;
 }
 
@@ -86,7 +86,10 @@ pub fn compile(
     layouts: *const core.layout.Document,
     options: Options,
 ) !render.Ir {
+    const profile_zone = utils.profile.zone(@src());
+    defer profile_zone.end();
     try layouts.validate();
+    utils.profile.counter("document.pages", pages.pages.len);
     var local_text_cache = text_compile.Cache.init(std.heap.smp_allocator, io);
     defer local_text_cache.deinit();
     var local_highlight_cache = HighlightCache.init(std.heap.smp_allocator, io);
@@ -111,12 +114,12 @@ pub fn compile(
         },
         .already_preloaded => {
             item_compiler.font_environment = if (options.font_environment) |expected| blk: {
-                const font_environment_start = utils.measure_profile.start();
+                const font_environment_start = utils.profile.start();
                 text_compile.refreshAndValidateFontEnvironment(expected) catch |err| {
                     _ = try addFontEnvironmentDiagnostic(state, err);
                     return err;
                 };
-                utils.measure_profile.recordRenderCompile(.font_environment, font_environment_start);
+                utils.profile.recordRenderCompile(.font_environment, font_environment_start);
                 break :blk expected;
             } else acquireFontEnvironment() catch |err| {
                 _ = try addFontEnvironmentDiagnostic(state, err);
@@ -177,10 +180,10 @@ fn preparedDocument(
     resource_cache: ?*resource_compile.SourceCache,
 ) !render.Ir {
     if (compiler.options.text_cache) |text_cache| {
-        const text_cache_start = utils.measure_profile.start();
+        const text_cache_start = utils.profile.start();
         try text_cache.beginDocument();
         defer text_cache.endDocument();
-        utils.measure_profile.recordRenderCompile(.text_cache_begin, text_cache_start);
+        utils.profile.recordRenderCompile(.text_cache_begin, text_cache_start);
     }
     if (compiler.options.page_cache) |page_cache| {
         page_cache.beginDocument(prepared_pages.pages.len);
@@ -286,19 +289,20 @@ fn parallelPreparedDocument(
         work.failed.store(true, .seq_cst);
         for (threads[0..started]) |thread| thread.join();
     };
-    const workers_start = utils.measure_profile.start();
+    utils.profile.counter("workers.render_compile", worker_count);
+    const workers_start = utils.profile.start();
     while (started < worker_count) : (started += 1) {
-        threads[started] = try std.Thread.spawn(.{}, pageCompilationWorker, .{&work});
+        threads[started] = try utils.profile.spawn(.{}, pageCompilationWorker, .{&work});
     }
     for (threads[0..started]) |thread| thread.join();
-    utils.measure_profile.recordRenderCompile(.workers, workers_start);
+    utils.profile.recordRenderCompile(.workers, workers_start);
     joined = true;
     if (work.failed.load(.seq_cst)) {
         for (outputs) |output| if (output.err) |err| return err;
         return error.RenderPageCompilationFailed;
     }
 
-    const merge_start = utils.measure_profile.start();
+    const merge_start = utils.profile.start();
     var pages = std.ArrayList(render.Page).empty;
     errdefer deinitPages(allocator, &pages);
     try pages.ensureTotalCapacity(allocator, outputs.len);
@@ -307,7 +311,7 @@ fn parallelPreparedDocument(
         pages.appendAssumeCapacity(page.*);
         output.page = null;
     }
-    utils.measure_profile.recordRenderCompile(.merge_pages, merge_start);
+    utils.profile.recordRenderCompile(.merge_pages, merge_start);
     return try finishDocument(allocator, state, prepared_pages, &resources, &fonts, &pages);
 }
 
@@ -344,9 +348,9 @@ fn finishDocument(
     fonts: *render.FontBuilder,
     pages: *std.ArrayList(render.Page),
 ) !render.Ir {
-    const profile_start = utils.measure_profile.start();
-    defer utils.measure_profile.recordRenderCompile(.finish_document, profile_start);
-    const sources_start = utils.measure_profile.start();
+    const profile_start = utils.profile.start();
+    defer utils.profile.recordRenderCompile(.finish_document, profile_start);
+    const sources_start = utils.profile.start();
     var source_ranges = std.AutoHashMap(core.NodeId, render.SourceRange).init(allocator);
     defer source_ranges.deinit();
     for (state.source_map.objects.items) |source| {
@@ -364,21 +368,21 @@ fn finishDocument(
             try std.fmt.allocPrint(allocator, "Page {d}", .{prepared_page.index + 1});
         for (page.items.items) |*item| item.setSource(if (item.nodeId()) |node_id| source_ranges.get(node_id) else null);
     }
-    utils.measure_profile.recordRenderCompile(.finish_sources, sources_start);
+    utils.profile.recordRenderCompile(.finish_sources, sources_start);
     var ir = render.Ir{ .pages = &.{} };
     errdefer ir.deinit(allocator);
-    const semantics_start = utils.measure_profile.start();
+    const semantics_start = utils.profile.start();
     ir.semantics = try semantics.build(allocator, state, prepared_pages, pages.items);
-    utils.measure_profile.recordRenderCompile(.finish_semantics, semantics_start);
-    const catalogs_start = utils.measure_profile.start();
+    utils.profile.recordRenderCompile(.finish_semantics, semantics_start);
+    const catalogs_start = utils.profile.start();
     ir.resources = try resources.take(allocator);
     ir.fonts = try fonts.take(allocator);
     ir.pages = try pages.toOwnedSlice(allocator);
     pages.* = .empty;
-    utils.measure_profile.recordRenderCompile(.finish_catalogs, catalogs_start);
-    const validation_start = utils.measure_profile.start();
+    utils.profile.recordRenderCompile(.finish_catalogs, catalogs_start);
+    const validation_start = utils.profile.start();
     try ir.validate();
-    utils.measure_profile.recordRenderCompile(.finish_validation, validation_start);
+    utils.profile.recordRenderCompile(.finish_validation, validation_start);
     return ir;
 }
 

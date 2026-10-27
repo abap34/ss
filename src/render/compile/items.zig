@@ -425,18 +425,18 @@ pub const LayoutMeasurementScope = struct {
 
     fn measureNode(self: *LayoutMeasurementScope, state: *core.layout.Workspace, node: *const core.Node, width: f32, mode: core.LayoutMeasurementMode) !?core.LayoutMeasurement {
         try std.Io.checkCancel(self.io);
-        const profile_total = utils.measure_profile.start();
-        defer utils.measure_profile.recordLayoutMeasurementTotal(profile_total);
+        const profile_total = utils.profile.start();
+        defer utils.profile.recordLayoutMeasurementTotal(profile_total);
 
         if (node.kind != .object) return null;
 
-        const profile_object_command = utils.measure_profile.start();
+        const profile_object_command = utils.profile.start();
         var command = try self.objectCommandForNode(state.allocator, node, state.frame(node.id).*, width, mode);
         command.page_id = state.source.layoutPageOf(node.id) orelse return error.UnknownNode;
-        utils.measure_profile.recordLayoutMeasurementObjectCommand(profile_object_command);
+        utils.profile.recordLayoutMeasurementObjectCommand(profile_object_command);
         defer command.deinit(state.allocator);
 
-        const profile_cache_key = utils.measure_profile.start();
+        const profile_cache_key = utils.profile.start();
         var target = CommandFailure{ .allocator = state.allocator };
         defer target.deinit();
         var measurement_ctx = self.ctx;
@@ -450,13 +450,13 @@ pub const LayoutMeasurementScope = struct {
             try addMeasurementRenderDiagnostic(&measurement_ctx, state, &command, err, &target);
             return err;
         };
-        utils.measure_profile.recordLayoutMeasurementCacheKey(profile_cache_key);
+        utils.profile.recordLayoutMeasurementCacheKey(profile_cache_key);
 
         if (try self.measurements.get(cache_key)) |cached| return cached;
 
         try render_text.validateFontEnvironment(self.font_environment);
-        const profile_intrinsic = utils.measure_profile.start();
-        defer utils.measure_profile.recordRenderIntrinsic(profileRenderMeasureKind(command.render.kind), profile_intrinsic);
+        const profile_intrinsic = utils.profile.start();
+        defer utils.profile.recordRenderIntrinsic(profileRenderMeasureKind(command.render.kind), profile_intrinsic);
         var measured = measureObjectCommandIntrinsic(&measurement_ctx, &command, width, mode) catch |err| {
             if (err == error.Canceled) return error.Canceled;
             try addMeasurementRenderDiagnostic(&measurement_ctx, state, &command, err, &target);
@@ -619,17 +619,17 @@ pub fn preloadPreparedPageArtifacts(
 
     var miss_count: usize = 0;
     for (tasks, 0..) |task, index| {
-        const profile_scan = utils.measure_profile.start();
+        const profile_scan = utils.profile.start();
         var failure = CommandFailure{ .allocator = state.allocator };
         defer failure.deinit();
         var diagnostic_ctx = ctx;
         diagnostic_ctx.command_failure = &failure;
         cached[index] = preloadTaskPresent(&diagnostic_ctx, task) catch |err| {
-            utils.measure_profile.recordArtifactScan(profilePreloadKind(task), false, profile_scan);
+            utils.profile.recordArtifactScan(profilePreloadKind(task), false, profile_scan);
             if (err != error.Canceled) try addPreloadRenderDiagnostic(state, task, err, &failure);
             return err;
         };
-        utils.measure_profile.recordArtifactScan(profilePreloadKind(task), cached[index], profile_scan);
+        utils.profile.recordArtifactScan(profilePreloadKind(task), cached[index], profile_scan);
         if (!cached[index]) miss_count += 1;
     }
 
@@ -637,8 +637,8 @@ pub fn preloadPreparedPageArtifacts(
     if (progress) |p| p.artifactCompleted(p.context, initial_done, tasks.len);
     if (miss_count == 0) return;
 
-    const profile_build_wall = utils.measure_profile.start();
-    defer utils.measure_profile.recordArtifactBuildWall(miss_count, profile_build_wall);
+    const profile_build_wall = utils.profile.start();
+    defer utils.profile.recordArtifactBuildWall(miss_count, profile_build_wall);
     executePreloadTaskList(&ctx, tasks, cached, miss_count, options, progress) catch |err| {
         if (err == error.Canceled) return error.Canceled;
         try collectPreloadTaskDiagnostics(&ctx, state, tasks, cached);
@@ -751,14 +751,14 @@ const PageCompilation = struct {
 
     fn compile(self: *const PageCompilation, resources: *render_resources.Builder, fonts: *render_ir.FontBuilder) !render_ir.Page {
         const cache = self.compiler.options.page_cache orelse return self.build(resources, fonts);
-        const started = utils.measure_profile.start();
+        const started = utils.profile.start();
         const key = try self.cacheKey();
         if (try cache.materialize(key, self.draw_context.allocator, self.compiler.io, resources, fonts)) |page| {
-            utils.measure_profile.recordRenderPage(true, started);
+            utils.profile.recordRenderPage(true, started);
             return page;
         }
         const page = try self.buildCached(cache, key, resources, fonts);
-        utils.measure_profile.recordRenderPage(false, started);
+        utils.profile.recordRenderPage(false, started);
         return page;
     }
 
@@ -1302,7 +1302,7 @@ fn objectCommandLabel(command: *const ObjectCommand) []const u8 {
     };
 }
 
-fn profileRenderMeasureKind(kind: RenderKind) utils.measure_profile.RenderMeasureKind {
+fn profileRenderMeasureKind(kind: RenderKind) utils.profile.RenderMeasureKind {
     return switch (kind) {
         .text => .text,
         .code => .code,
@@ -1332,7 +1332,7 @@ fn preloadTaskLabel(task: PreloadTask) []const u8 {
     };
 }
 
-fn profilePreloadKind(task: PreloadTask) utils.measure_profile.ArtifactKind {
+fn profilePreloadKind(task: PreloadTask) utils.profile.ArtifactKind {
     return switch (task) {
         .latex => .latex,
         .icon => .icon,
@@ -1415,9 +1415,9 @@ fn preloadLatexTaskBatches(
         while (start < group.entries.items.len) {
             const end = latex_document.batchChunkEnd(document_entries, start);
             const chunk = group.entries.items[start..end];
-            const profile_build = utils.measure_profile.start();
+            const profile_build = utils.profile.start();
             try preloadLatexBatchGroup(ctx, chunk, progress, completed, tasks.len);
-            utils.measure_profile.recordArtifactBuildMany(.latex, chunk.len, profile_build);
+            utils.profile.recordArtifactBuildMany(.latex, chunk.len, profile_build);
             for (chunk) |entry| cached[entry.task_index] = true;
             start = end;
         }
@@ -1491,7 +1491,7 @@ fn executePreloadTaskList(
     }
 
     while (started < worker_count) : (started += 1) {
-        threads[started] = try std.Thread.spawn(.{}, preloadTaskWorker, .{&work});
+        threads[started] = try utils.profile.spawn(.{}, preloadTaskWorker, .{&work});
     }
 
     var last_done: usize = initial_done;
@@ -1527,12 +1527,12 @@ fn executePreloadTaskListSequential(
     var done = initial_done;
     for (tasks, 0..) |task, index| {
         if (cached[index]) continue;
-        const profile_build = utils.measure_profile.start();
+        const profile_build = utils.profile.start();
         preloadOne(ctx, task) catch |err| {
-            utils.measure_profile.recordArtifactBuild(profilePreloadKind(task), profile_build);
+            utils.profile.recordArtifactBuild(profilePreloadKind(task), profile_build);
             return err;
         };
-        utils.measure_profile.recordArtifactBuild(profilePreloadKind(task), profile_build);
+        utils.profile.recordArtifactBuild(profilePreloadKind(task), profile_build);
         done += 1;
         if (progress) |p| p.artifactCompleted(p.context, done, tasks.len);
     }
@@ -1553,13 +1553,13 @@ fn preloadTaskWorker(work: *PreloadWork) void {
             .cache_dir = work.cache_dir,
             .highlight_languages = work.highlight_languages,
         };
-        const profile_build = utils.measure_profile.start();
+        const profile_build = utils.profile.start();
         preloadOne(&ctx, work.plan[index]) catch {
-            utils.measure_profile.recordArtifactBuild(profilePreloadKind(work.plan[index]), profile_build);
+            utils.profile.recordArtifactBuild(profilePreloadKind(work.plan[index]), profile_build);
             work.failed.store(true, .seq_cst);
             break;
         };
-        utils.measure_profile.recordArtifactBuild(profilePreloadKind(work.plan[index]), profile_build);
+        utils.profile.recordArtifactBuild(profilePreloadKind(work.plan[index]), profile_build);
         _ = work.completed.fetchAdd(1, .release);
         _ = arena.reset(.retain_capacity);
     }

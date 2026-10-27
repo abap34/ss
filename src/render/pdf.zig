@@ -145,6 +145,8 @@ pub fn writeValidated(
     options: Options,
     progress: ?Progress,
 ) !void {
+    const profile_zone = utils.profile.zone(@src());
+    defer profile_zone.end();
     var cache = try CachePaths.init(allocator, io, options);
     defer cache.deinit(allocator);
     var manifest = buildOutputManifest(allocator, ir, options.jobs) catch |err| {
@@ -542,7 +544,7 @@ fn renderMissingPages(
         for (threads[0..started]) |thread| thread.join();
     };
     while (started < worker_count) : (started += 1) {
-        threads[started] = std.Thread.spawn(.{}, pageWorker, .{&work}) catch |err| {
+        threads[started] = utils.profile.spawn(.{}, pageWorker, .{&work}) catch |err| {
             recordWriteFailure(allocator, options, .preparation, "start parallel PDF page renderer", options.cache_dir, err);
             return err;
         };
@@ -883,7 +885,7 @@ fn buildOutputManifest(
             for (threads[0..started]) |thread| thread.join();
         };
         while (started < worker_count) : (started += 1) {
-            threads[started] = try std.Thread.spawn(.{}, manifestWorker, .{&work});
+            threads[started] = try utils.profile.spawn(.{}, manifestWorker, .{&work});
         }
         for (threads[0..started]) |thread| thread.join();
         joined = true;

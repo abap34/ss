@@ -39,13 +39,13 @@ pub fn evaluateAndSolvePreparedPages(
     options: Options,
 ) !EvaluatedPreparedPages {
     try options.checkCanceled();
-    const evaluate_start = utils.measure_profile.start();
+    const evaluate_start = utils.profile.start();
     try lowering.evaluateDocument(state, graph, .{ .io = io, .cancellation = options.cancellation });
-    utils.measure_profile.recordWysiwyg(.evaluate, evaluate_start);
+    utils.profile.recordWysiwyg(.evaluate, evaluate_start);
     try options.checkCanceled();
-    const prepare_start = utils.measure_profile.start();
+    const prepare_start = utils.profile.start();
     var pages = try core.prepared.prepare(state.allocator, state);
-    utils.measure_profile.recordWysiwyg(.prepare, prepare_start);
+    utils.profile.recordWysiwyg(.prepare, prepare_start);
     errdefer pages.deinit(state.allocator);
     try options.checkCanceled();
     const font_environment = options.font_environment orelse
@@ -58,9 +58,9 @@ pub fn evaluateAndSolvePreparedPages(
     var retained_measurements: ?measurements.Store = null;
     errdefer if (retained_measurements) |*store| store.deinit();
     solve_options.retained_measurements = &retained_measurements;
-    const solve_start = utils.measure_profile.start();
+    const solve_start = utils.profile.start();
     var results = try solvePreparedPages(io, state, &pages, solve_options);
-    utils.measure_profile.recordWysiwyg(.solve, solve_start);
+    utils.profile.recordWysiwyg(.solve, solve_start);
     errdefer results.deinit(state.allocator);
     try options.checkCanceled();
     return .{

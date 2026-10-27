@@ -32,8 +32,8 @@ pub fn load(
     project_syntax: ast.Module,
     options: LoadOptions,
 ) !Index {
-    const measure_start = utils.measure_profile.start();
-    defer utils.measure_profile.recordAnalysis(.module_index, measure_start);
+    const measure_start = utils.profile.start();
+    defer utils.profile.recordAnalysis(.module_index, measure_start);
     const module_graph = try module_loader.loadGraphWithOptions(allocator, io, base_dir, project_syntax, .{
         .overlay = options.overlay,
         .diagnostics = options.diagnostics,

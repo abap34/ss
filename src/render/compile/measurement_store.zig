@@ -49,30 +49,30 @@ pub const Store = struct {
     }
 
     pub fn get(self: *Store, key: u64) !?core.LayoutMeasurement {
-        const lock_start = utils.measure_profile.start();
+        const lock_start = utils.profile.start();
         self.mutex.lockUncancelable(self.io);
-        utils.measure_profile.recordLayoutMeasurementLockWait(lock_start);
+        utils.profile.recordLayoutMeasurementLockWait(lock_start);
         defer self.mutex.unlock(self.io);
-        const memory_start = utils.measure_profile.start();
+        const memory_start = utils.profile.start();
         if (self.run.get(key)) |value| {
-            utils.measure_profile.recordLayoutMeasurementCache(.memory_hit, memory_start);
+            utils.profile.recordLayoutMeasurementCache(.memory_hit, memory_start);
             self.touch(key);
             return value.value;
         }
-        const file_start = utils.measure_profile.start();
+        const file_start = utils.profile.start();
         if (self.persistent.get(key)) |value| {
-            utils.measure_profile.recordLayoutMeasurementCache(.file_hit, file_start);
+            utils.profile.recordLayoutMeasurementCache(.file_hit, file_start);
             try self.insert(key, value);
             return value;
         }
-        utils.measure_profile.recordLayoutMeasurementCache(.file_miss, file_start);
+        utils.profile.recordLayoutMeasurementCache(.file_miss, file_start);
         return null;
     }
 
     pub fn put(self: *Store, key: u64, value: core.LayoutMeasurement) !void {
-        const lock_start = utils.measure_profile.start();
+        const lock_start = utils.profile.start();
         self.mutex.lockUncancelable(self.io);
-        utils.measure_profile.recordLayoutMeasurementLockWait(lock_start);
+        utils.profile.recordLayoutMeasurementLockWait(lock_start);
         defer self.mutex.unlock(self.io);
         var normalized = value;
         normalized.cache_key = key;
@@ -121,8 +121,8 @@ pub const Store = struct {
     /// Called after all page workers have joined.
     pub fn flush(self: *Store) !void {
         if (!self.dirty or self.run.count() == 0) return;
-        const write_start = utils.measure_profile.start();
-        defer utils.measure_profile.recordLayoutMeasurementCache(.write, write_start);
+        const write_start = utils.profile.start();
+        defer utils.profile.recordLayoutMeasurementCache(.write, write_start);
         var output = std.ArrayList(u8).empty;
         defer output.deinit(self.allocator);
         try output.print(self.allocator, "{s}\t{s}\n", .{ format, version });

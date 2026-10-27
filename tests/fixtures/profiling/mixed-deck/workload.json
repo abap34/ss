@@ -1,0 +1,67 @@
+{
+  "$schema": "../../../profiling/workload.schema.json",
+  "schema_version": 1,
+  "id": "mixed-deck",
+  "entry": "slide.ss",
+  "inputs": {
+    "assets.json": "50c8f2cc4efdc9bb367a44008071c7b7cee3e8932b237c80c4da689c4603bed0",
+    "components.ss": "21f70f629a7da79c489856926519fb3ada7b27fe7577f979f976bf2136b1498c",
+    "preamble.tex": "310082f29229efab87da687ef5f9cac7d5b0b2ed86099b1b1852d31ef236f2d1",
+    "slide.ss": "7a973aeafbbef192b0e89bce8b9a877257fe32e281f6fddaaa7e1b5c59b9f530",
+    "ss.toml": "4b68ebbef95764fea5ab9b87e7478b6aef3e5fb369b34265be1b6737b7a7dac4",
+    "theme.ss": "832327ff088b33790ebfcdbf36ba8a956aeccb2b986c7469dc78e6496f59f34f"
+  },
+  "assets": {
+    "recipe": "assets.json"
+  },
+  "requires": {
+    "fonts": [
+      "M PLUS 1p",
+      "JuliaMono"
+    ],
+    "tex": {
+      "packages": [
+        "amsmath",
+        "amssymb",
+        "stmaryrd",
+        "url",
+        "amsthm",
+        "bm",
+        "listings",
+        "tikz",
+        "fancybox",
+        "ascmac",
+        "tcolorbox"
+      ]
+    }
+  },
+  "expect": {
+    "pages": 104
+  },
+  "editor": {
+    "edits": [
+      {
+        "id": "beginning",
+        "before": "item066! \"Oak Ink へォゲゾンリ食堂・描写\"\n\ntext! <<\n## **4 ニモヒコヵクへ写真大地**\n",
+        "after": "item066! \"Xak Ink へォゲゾンリ食堂・描写\"\n\ntext! <<\n## **4 ニモヒコヵクへ写真大地**\n"
+      },
+      {
+        "id": "middle",
+        "before": "item066! \"音量昼間へ A-砂糖春風階\"\n\ntext! <<\n油絵ゾンモも MAP へ雨音へ止へ風へ (布へゾンモ)\n",
+        "after": "item066! \"音量昼間へ X-砂糖春風階\"\n\ntext! <<\n油絵ゾンモも MAP へ雨音へ止へ風へ (布へゾンモ)\n"
+      },
+      {
+        "id": "end",
+        "before": "item066! \"給水空色額縁へ A-砂糖春風階\"\n\ntext! <<\n**案内:**\n",
+        "after": "item066! \"給水空色額縁へ X-砂糖春風階\"\n\ntext! <<\n**案内:**\n"
+      }
+    ],
+    "burst": [
+      "beginning",
+      "middle",
+      "end",
+      "beginning",
+      "middle"
+    ]
+  }
+}

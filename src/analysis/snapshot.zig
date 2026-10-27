@@ -732,9 +732,9 @@ const SnapshotInputs = struct {
         const state = &self.state.?;
         const project_facts = try ProjectFacts.fromDocumentState(allocator, state, entry_path, asset_base_dir, options);
         diagnostics_moved.* = true;
-        const snapshot_facts_start = utils.measure_profile.start();
+        const snapshot_facts_start = utils.profile.start();
         var snapshot = try AnalysisSnapshot.fromDocumentState(allocator, state, state.declaration_index, diagnostic_bag.*, self.parse_holes, project_facts);
-        utils.measure_profile.recordAnalysis(.snapshot_facts, snapshot_facts_start);
+        utils.profile.recordAnalysis(.snapshot_facts, snapshot_facts_start);
         snapshot.generation = options.generation;
         snapshot.layout_output = self.layout_output;
         self.layout_output = null;

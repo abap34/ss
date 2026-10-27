@@ -52,6 +52,7 @@ pub fn create(ctx: Context, build_options: *Step.Options, tree_sitter: tree_sitt
         import("model", model_mod),
         import("syntax_keywords", keywords_mod),
     }, null);
+    @import("profiling.zig").configure(ctx, utils_mod);
     const ast_mod = createModule(ctx, "src/ast.zig", &.{
         import("model", model_mod),
         import("language_type", language_type_mod),

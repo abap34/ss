@@ -259,8 +259,8 @@ pub const Cache = struct {
     }
 
     pub fn beginDocument(self: *Cache) !void {
-        const profile_start = utils.measure_profile.start();
-        defer utils.measure_profile.recordTextCacheBeginDocument(profile_start);
+        const profile_start = utils.profile.start();
+        defer utils.profile.recordTextCacheBeginDocument(profile_start);
         self.document_lock.lockUncancelable(self.io);
         errdefer self.document_lock.unlock(self.io);
         const environment = try fontEnvironmentSnapshot();
@@ -288,8 +288,8 @@ pub const Cache = struct {
     }
 
     pub fn restore(self: *Cache, cache_dir: []const u8) void {
-        const profile_start = utils.measure_profile.start();
-        defer utils.measure_profile.recordTextCacheRestore(profile_start);
+        const profile_start = utils.profile.start();
+        defer utils.profile.recordTextCacheRestore(profile_start);
         self.document_lock.lockUncancelable(self.io);
         defer self.document_lock.unlock(self.io);
         self.lock.lockUncancelable(self.io);
@@ -299,8 +299,8 @@ pub const Cache = struct {
     }
 
     pub fn persist(self: *Cache, cache_dir: []const u8) void {
-        const profile_start = utils.measure_profile.start();
-        defer utils.measure_profile.recordTextCachePersist(profile_start);
+        const profile_start = utils.profile.start();
+        defer utils.profile.recordTextCachePersist(profile_start);
         self.document_lock.lockUncancelable(self.io);
         defer self.document_lock.unlock(self.io);
         self.lock.lockUncancelable(self.io);
@@ -415,12 +415,12 @@ pub const Cache = struct {
         if (self.shapes.getPtr(key)) |cached| {
             self.touch(cached);
             if (self.font_environment != null and cached.materialized_epoch == self.document_epoch) {
-                const profile_clone = utils.measure_profile.start();
+                const profile_clone = utils.profile.start();
                 const layout = cached.layout.clone(allocator) catch |err| {
                     self.lock.unlockShared(self.io);
                     return err;
                 };
-                utils.measure_profile.recordTextCacheClone(profile_clone);
+                utils.profile.recordTextCacheClone(profile_clone);
                 self.lock.unlockShared(self.io);
                 return layout;
             }
@@ -432,8 +432,8 @@ pub const Cache = struct {
         const cached = self.shapes.getPtr(key) orelse return null;
         self.touch(cached);
         if (self.font_environment == null or cached.materialized_epoch != self.document_epoch) {
-            const profile_materialize = utils.measure_profile.start();
-            defer utils.measure_profile.recordTextCacheMaterialize(profile_materialize);
+            const profile_materialize = utils.profile.start();
+            defer utils.profile.recordTextCacheMaterialize(profile_materialize);
             for (cached.fonts) |font| {
                 const resource = resources.addPath(allocator, io, .font, font.path) catch |err| switch (err) {
                     error.OutOfMemory, error.Canceled => return err,
@@ -454,11 +454,11 @@ pub const Cache = struct {
             }
             cached.materialized_epoch = if (self.font_environment != null) self.document_epoch else 0;
         }
-        const profile_share = utils.measure_profile.start();
+        const profile_share = utils.profile.start();
         try cached.layout.share(self.allocator);
-        utils.measure_profile.recordTextCacheShare(profile_share);
-        const profile_clone = utils.measure_profile.start();
-        defer utils.measure_profile.recordTextCacheClone(profile_clone);
+        utils.profile.recordTextCacheShare(profile_share);
+        const profile_clone = utils.profile.start();
+        defer utils.profile.recordTextCacheClone(profile_clone);
         return try cached.layout.clone(allocator);
     }
 
@@ -1190,9 +1190,9 @@ fn shapeImpl(
     cache: ?*Cache,
     failure: ?*ShapeFailure,
 ) !render.TextLayout {
-    const profile_start = utils.measure_profile.start();
+    const profile_start = utils.profile.start();
     var profile_hit = false;
-    defer utils.measure_profile.recordTextShape(profile_hit, profile_start);
+    defer utils.profile.recordTextShape(profile_hit, profile_start);
     const environment = if (cache) |shape_cache|
         shape_cache.currentEnvironment() orelse try fontEnvironmentSnapshot()
     else
@@ -1511,8 +1511,8 @@ fn nativeRect(value: c.SsPdfInkExtents) render.Rect {
 pub fn shapeParagraph(allocator: Allocator, io: std.Io, request: paragraph.Request, cache: ?*Cache) !*paragraph.Layout {
     const environment = if (cache) |retained| retained.currentEnvironment() orelse try fontEnvironmentSnapshot() else try fontEnvironmentSnapshot();
     if (cache) |retained| return retained.paragraphs.get(request, environment);
-    const profile_start = utils.measure_profile.start();
-    defer utils.measure_profile.recordTextShape(false, profile_start);
+    const profile_start = utils.profile.start();
+    defer utils.profile.recordTextShape(false, profile_start);
     return paragraph.shape(allocator, io, request, environment);
 }
 
