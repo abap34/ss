@@ -1130,6 +1130,29 @@ test "text shaping replaces synthesized faces with an actual fallback" {
         if (!std.mem.eql(u8, requested_family, std.mem.span(family_ptr))) used_fallback = true;
     }
     try testing.expect(used_fallback);
+
+    // Reuse the same character set in a different order and at a different
+    // point size. The selected family is reusable, but geometry is not.
+    var repeated = std.mem.zeroes(c.SsTextShape);
+    try testing.expectEqual(@as(c_int, 0), c.ss_text_shape(
+        "\u{5b57}\u{6f22}",
+        requested_family,
+        700,
+        0,
+        4,
+        24,
+        640,
+        0,
+        &repeated,
+    ));
+    defer c.ss_text_shape_free(&repeated);
+    try testing.expect(repeated.run_count != 0);
+    try testing.expectApproxEqAbs(shape.logical_bounds.width / 2, repeated.logical_bounds.width, 1);
+    for (repeated.runs[0..repeated.run_count]) |run| {
+        try testing.expectEqual(@as(c_int, 0), run.synthetic_bold);
+        try testing.expectEqual(@as(c_int, 0), run.synthetic_italic);
+        try testing.expectEqualStrings(std.mem.span(shape.runs[0].font_family), std.mem.span(run.font_family));
+    }
 }
 
 test "markdown underline paint controls color opacity width offset and dash" {
@@ -1495,6 +1518,54 @@ const ResourceReadProbe = struct {
         return testing.io.vtable.fileReadPositional(userdata, file, data, offset);
     }
 };
+
+const ResourceMetadataProbe = struct {
+    opens: usize = 0,
+    stats: usize = 0,
+
+    var active: *ResourceMetadataProbe = undefined;
+
+    fn open(userdata: ?*anyopaque, dir: std.Io.Dir, path: []const u8, options: std.Io.Dir.OpenFileOptions) std.Io.File.OpenError!std.Io.File {
+        active.opens += 1;
+        return testing.io.vtable.dirOpenFile(userdata, dir, path, options);
+    }
+
+    fn stat(userdata: ?*anyopaque, dir: std.Io.Dir, path: []const u8, options: std.Io.Dir.StatFileOptions) std.Io.Dir.StatFileError!std.Io.File.Stat {
+        active.stats += 1;
+        return testing.io.vtable.dirStatFile(userdata, dir, path, options);
+    }
+};
+
+test "source cache: metadata hits avoid opening files and follow replaced symlinks" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    var temporary = testing.tmpDir(.{});
+    defer temporary.cleanup();
+    try temporary.dir.writeFile(testing.io, .{ .sub_path = "first", .data = "first" });
+    try temporary.dir.writeFile(testing.io, .{ .sub_path = "second", .data = "second" });
+    try temporary.dir.symLink(testing.io, "first", "link", .{});
+    const path = try std.fmt.allocPrint(testing.allocator, ".zig-cache/tmp/{s}/link", .{temporary.sub_path});
+    defer testing.allocator.free(path);
+    var probe = ResourceMetadataProbe{};
+    ResourceMetadataProbe.active = &probe;
+    var vtable = testing.io.vtable.*;
+    vtable.dirOpenFile = ResourceMetadataProbe.open;
+    vtable.dirStatFile = ResourceMetadataProbe.stat;
+    var cache = render_resources.SourceCache.init(testing.allocator, .{ .userdata = testing.io.userdata, .vtable = &vtable });
+    defer cache.deinit();
+    const first = try cache.fileFingerprint(path);
+    const opens = probe.opens;
+    const stats = probe.stats;
+    try testing.expectEqualDeep(first, try cache.fileFingerprint(path));
+    try testing.expectEqual(opens, probe.opens);
+    try testing.expect(probe.stats > stats);
+    try temporary.dir.deleteFile(testing.io, "link");
+    try temporary.dir.symLink(testing.io, "second", "link", .{});
+    try testing.expect(first.digest != (try cache.fileFingerprint(path)).digest);
+    try temporary.dir.deleteFile(testing.io, "second");
+    const missing_opens = probe.opens;
+    try testing.expect(!(try cache.fileFingerprint(path)).present);
+    try testing.expectEqual(missing_opens, probe.opens);
+}
 
 const SourceCacheWork = struct {
     cache: *render_resources.SourceCache,

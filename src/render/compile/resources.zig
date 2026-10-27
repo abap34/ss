@@ -598,9 +598,7 @@ const Source = struct {
 };
 
 fn statPath(io: std.Io, path: []const u8) !std.Io.File.Stat {
-    var file = try std.Io.Dir.cwd().openFile(io, path, .{});
-    defer file.close(io);
-    return try file.stat(io);
+    return try std.Io.Dir.cwd().statFile(io, path, .{});
 }
 
 fn sameFile(left: std.Io.File.Stat, right: std.Io.File.Stat) bool {
