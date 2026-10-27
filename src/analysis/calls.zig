@@ -234,7 +234,22 @@ const ValueFacts = struct {
     fn clone(self: ValueFacts, allocator: std.mem.Allocator) anyerror!ValueFacts {
         var out = init(allocator);
         errdefer out.deinit();
-        try out.unionWith(self);
+        out.unknown = self.unknown;
+        out.unknown_objects = self.unknown_objects;
+        out.unknown_string = self.unknown_string;
+        out.unknown_reference = self.unknown_reference;
+        out.reference = self.reference;
+        out.string_literal = self.string_literal;
+        out.labels = try self.labels.cloneWithAllocator(allocator);
+        out.objects = try self.objects.cloneWithAllocator(allocator);
+        try out.selected_types.appendSlice(allocator, self.selected_types.items);
+        try out.fields.ensureTotalCapacity(self.fields.count());
+        var fields = self.fields.iterator();
+        while (fields.next()) |field| {
+            out.fields.putAssumeCapacity(field.key_ptr.*, try field.value_ptr.clone(allocator));
+        }
+        try out.children.ensureTotalCapacity(allocator, self.children.items.len);
+        for (self.children.items) |child| out.children.appendAssumeCapacity(try child.clone(allocator));
         return out;
     }
 
@@ -287,15 +302,10 @@ const ValueFacts = struct {
     }
 };
 
-fn cloneValueFacts(allocator: std.mem.Allocator, labels: ValueFacts) anyerror!ValueFacts {
-    return labels.clone(allocator);
-}
-
-fn deinitValueFacts(labels: *ValueFacts) void {
-    labels.deinit();
-}
-
-const FunctionEnv = analysis_env.CloneEnv(ValueFacts, cloneValueFacts, deinitValueFacts);
+// Bound facts are immutable and live in the analysis pass arena. Copy the
+// binding map for branches and captures; expressions clone facts before any
+// update or independent destruction, so bindings can share their value trees.
+const FunctionEnv = analysis_env.ValueEnv(ValueFacts);
 
 const Activation = struct {
     label: Label,
@@ -309,6 +319,29 @@ const EffectFrame = struct {
     places_objects: bool = false,
     parameter_functions: ?LabelMap = null,
     forwarding_depth: usize = 0,
+};
+
+// Sorting storage belongs to one key construction. Nested records retain
+// their binding range while children may grow the same buffer.
+const KeyScratch = struct {
+    const Binding = struct {
+        name: []const u8,
+        value: *const ValueFacts,
+
+        fn lessThan(_: void, left: Binding, right: Binding) bool {
+            return std.mem.lessThan(u8, left.name, right.name);
+        }
+    };
+
+    bindings: std.ArrayList(Binding) = .empty,
+    labels: std.ArrayList(Label) = .empty,
+    integers: std.ArrayList(usize) = .empty,
+
+    fn deinit(self: *KeyScratch, allocator: std.mem.Allocator) void {
+        self.bindings.deinit(allocator);
+        self.labels.deinit(allocator);
+        self.integers.deinit(allocator);
+    }
 };
 
 const Analyzer = struct {
@@ -649,6 +682,9 @@ const Analyzer = struct {
                 return try self.invokeValue(callee_labels, arg_labels.items, owner);
             },
             .member => |member| {
+                // Immutable local records can be inspected without copying
+                // every sibling field at each step of a member path.
+                if (borrowLocalFacts(env, member.target.*)) |target| return self.memberFacts(target, member.name);
                 var value = try self.exprFacts(member.target.*, env, owner);
                 defer value.deinit();
                 return self.memberFacts(value, member.name);
@@ -666,6 +702,14 @@ const Analyzer = struct {
                 return target;
             },
         }
+    }
+
+    fn borrowLocalFacts(env: *const FunctionEnv, expr: ast.Expr) ?ValueFacts {
+        return switch (expr) {
+            .ident => |ident| if (!ident.reference().isQualified()) env.get(ident.name) else null,
+            .member => |member| if (borrowLocalFacts(env, member.target.*)) |target| target.fields.get(member.name) else null,
+            else => null,
+        };
     }
 
     fn callFacts(self: *Analyzer, call: ast.CallExpr, env: *const FunctionEnv, owner: ?ast.FunctionDecl) anyerror!ValueFacts {
@@ -714,7 +758,11 @@ const Analyzer = struct {
                         try callback_args.appendSlice(self.allocator, arg_labels.items[callback_spec.function_arg_index + 1 ..]);
                         const returned = try self.invokeValue(callback, callback_args.items, owner);
                         if (primitive.op != .fold) break;
-                        if (!try accumulator.join(returned)) return accumulator;
+                        // A callback can capture its parameter facts. Keep
+                        // that snapshot immutable while growing the next one.
+                        var next = try accumulator.clone(self.allocator);
+                        if (!try next.join(returned)) return next;
+                        accumulator = next;
                     } else {
                         try self.state.addValidationDiagnostic(.@"error", null, null, self.current_origin, .{
                             .user_report = .{ .code = "FunctionAnalysisLimitExceeded", .message = try self.state.allocator.dupe(u8, "cannot establish a finite set of function candidates in a fold accumulator") },
@@ -1165,22 +1213,34 @@ const Analyzer = struct {
     fn activationKey(self: *Analyzer, activation: Activation) ![]const u8 {
         const measure_start = profile.start();
         defer profile.recordAnalysis(.semantics_call_keys, measure_start);
-        const allocator = self.key_allocator;
-        var names = std.ArrayList([]const u8).empty;
-        defer names.deinit(allocator);
-        var iterator = activation.env.values.keyIterator();
-        while (iterator.next()) |name| try names.append(allocator, name.*);
-        std.mem.sortUnstable([]const u8, names.items, {}, stringLessThan);
-
+        var scratch = KeyScratch{};
+        defer scratch.deinit(self.key_allocator);
         var out = std.ArrayList(u8).empty;
         errdefer out.deinit(self.key_allocator);
         try self.appendLabel(&out, activation.label);
-        try self.appendInteger(&out, names.items.len);
-        for (names.items) |name| {
-            try self.appendBytes(&out, name);
-            try self.appendValue(&out, activation.env.values.get(name).?);
-        }
+        try self.appendBindings(&out, &scratch, &activation.env.values);
         return try out.toOwnedSlice(self.key_allocator);
+    }
+
+    fn appendBindings(self: *Analyzer, out: *std.ArrayList(u8), scratch: *KeyScratch, bindings: *const std.StringHashMap(ValueFacts)) anyerror!void {
+        const start = scratch.bindings.items.len;
+        defer scratch.bindings.shrinkRetainingCapacity(start);
+        const count = bindings.count();
+        try scratch.bindings.ensureUnusedCapacity(self.key_allocator, count);
+        var iterator = bindings.iterator();
+        while (iterator.next()) |binding| scratch.bindings.appendAssumeCapacity(.{
+            .name = binding.key_ptr.*,
+            .value = binding.value_ptr,
+        });
+        if (count > 1) std.mem.sortUnstable(KeyScratch.Binding, scratch.bindings.items[start..], {}, KeyScratch.Binding.lessThan);
+        try self.appendInteger(out, count);
+        for (0..count) |index| {
+            // Recursive calls may reallocate scratch.bindings. Copy this entry
+            // and access the next one by index after the call returns.
+            const binding = scratch.bindings.items[start + index];
+            try self.appendBytes(out, binding.name);
+            try self.appendValue(out, scratch, binding.value);
+        }
     }
 
     // Keys are exact, length-delimited binary encodings, local to this analysis.
@@ -1194,7 +1254,7 @@ const Analyzer = struct {
         try out.appendSlice(self.key_allocator, value);
     }
 
-    fn appendValue(self: *Analyzer, out: *std.ArrayList(u8), value: ValueFacts) anyerror!void {
+    fn appendValue(self: *Analyzer, out: *std.ArrayList(u8), scratch: *KeyScratch, value: *const ValueFacts) anyerror!void {
         const allocator = self.key_allocator;
         try out.appendSlice(self.key_allocator, &.{
             @intFromBool(value.unknown),        @intFromBool(value.unknown_objects),
@@ -1213,8 +1273,7 @@ const Analyzer = struct {
 
         // Intern exact types, including defining modules and type arguments.
         // Sort sets so insertion order does not change closure identity.
-        var type_keys = std.ArrayList(usize).empty;
-        defer type_keys.deinit(allocator);
+        scratch.integers.clearRetainingCapacity();
         for (value.selected_types.items) |ty| {
             const key = for (self.input_type_keys.items, 0..) |existing, index| {
                 if (ast.Type.eql(ty, existing)) break index;
@@ -1223,37 +1282,26 @@ const Analyzer = struct {
                 try self.input_type_keys.append(self.allocator, ty);
                 break :blk index;
             };
-            try type_keys.append(allocator, key);
+            try scratch.integers.append(allocator, key);
         }
-        std.mem.sortUnstable(usize, type_keys.items, {}, std.sort.asc(usize));
-        try self.appendInteger(out, type_keys.items.len);
-        for (type_keys.items) |key| try self.appendInteger(out, key);
-        var labels = std.ArrayList(Label).empty;
-        defer labels.deinit(allocator);
+        if (scratch.integers.items.len > 1) std.mem.sortUnstable(usize, scratch.integers.items, {}, std.sort.asc(usize));
+        try self.appendInteger(out, scratch.integers.items.len);
+        for (scratch.integers.items) |key| try self.appendInteger(out, key);
+        scratch.labels.clearRetainingCapacity();
         var iterator = value.labels.keyIterator();
-        while (iterator.next()) |label| try labels.append(allocator, label.*);
-        std.mem.sortUnstable(Label, labels.items, {}, Label.lessThan);
-        try self.appendInteger(out, labels.items.len);
-        for (labels.items) |label| try self.appendLabel(out, label);
-        var names = std.ArrayList([]const u8).empty;
-        defer names.deinit(allocator);
-        var fields = value.fields.keyIterator();
-        while (fields.next()) |name| try names.append(allocator, name.*);
-        std.mem.sortUnstable([]const u8, names.items, {}, stringLessThan);
-        try self.appendInteger(out, names.items.len);
-        for (names.items) |name| {
-            try self.appendBytes(out, name);
-            try self.appendValue(out, value.fields.get(name).?);
-        }
+        while (iterator.next()) |label| try scratch.labels.append(allocator, label.*);
+        if (scratch.labels.items.len > 1) std.mem.sortUnstable(Label, scratch.labels.items, {}, Label.lessThan);
+        try self.appendInteger(out, scratch.labels.items.len);
+        for (scratch.labels.items) |label| try self.appendLabel(out, label);
+        try self.appendBindings(out, scratch, &value.fields);
         try self.appendInteger(out, value.children.items.len);
-        for (value.children.items) |child| try self.appendValue(out, child);
-        var ids = std.ArrayList(usize).empty;
-        defer ids.deinit(allocator);
+        for (value.children.items) |*child| try self.appendValue(out, scratch, child);
+        scratch.integers.clearRetainingCapacity();
         var objects = value.objects.keyIterator();
-        while (objects.next()) |id| try ids.append(allocator, id.*);
-        std.mem.sortUnstable(usize, ids.items, {}, std.sort.asc(usize));
-        try self.appendInteger(out, ids.items.len);
-        for (ids.items) |id| try self.appendInteger(out, id);
+        while (objects.next()) |id| try scratch.integers.append(allocator, id.*);
+        if (scratch.integers.items.len > 1) std.mem.sortUnstable(usize, scratch.integers.items, {}, std.sort.asc(usize));
+        try self.appendInteger(out, scratch.integers.items.len);
+        for (scratch.integers.items) |id| try self.appendInteger(out, id);
     }
 
     fn appendLabel(self: *Analyzer, out: *std.ArrayList(u8), label: Label) !void {
@@ -1353,10 +1401,6 @@ fn spanEql(left: ast.Span, right: ast.Span) bool {
 fn spanLessThan(left: ast.Span, right: ast.Span) bool {
     if (left.start != right.start) return left.start < right.start;
     return left.end < right.end;
-}
-
-fn stringLessThan(_: void, lhs: []const u8, rhs: []const u8) bool {
-    return std.mem.lessThan(u8, lhs, rhs);
 }
 
 fn optionalStringEql(left: ?[]const u8, right: ?[]const u8) bool {

@@ -4166,6 +4166,120 @@ test "compiler semantics: record updates replace recursive function fields befor
     , "2");
 }
 
+test "compiler semantics: nested member callbacks retain independent record updates and captures" {
+    try expectObjectContent(
+        \\type Formatter { apply: String -> String }
+        \\type Settings { current: Formatter backup: Formatter }
+        \\fn formatter(suffix: String) -> Formatter
+        \\  return Formatter { apply = (value: String) |-> value ++ suffix }
+        \\end
+        \\fn format(settings: Settings, value: String) -> String
+        \\  let modified = settings with { current.apply = settings.backup.apply }
+        \\  return settings.current.apply(value) ++ modified.current.apply(value)
+        \\end
+        \\page main
+        \\  let settings = Settings { current = formatter("!") backup = formatter("?") }
+        \\  text!(format(settings, "A"))
+        \\end
+    , "A!A?");
+}
+
+test "compiler semantics: nested member callbacks still reject recursion through captures" {
+    try expectDiagnostic(
+        \\type Formatter { apply: Number -> Number }
+        \\type Settings { formatter: Formatter }
+        \\fn invoke(settings: Settings, value: Number) -> Number
+        \\  return settings.formatter.apply(value)
+        \\end
+        \\fn bad(value: Number) -> Number
+        \\  let recurse = bad
+        \\  let settings = Settings { formatter = Formatter { apply = (x: Number) |-> recurse(x) } }
+        \\  return invoke(settings, value)
+        \\end
+        \\page main
+        \\  let result = bad(1)
+        \\end
+    , "case.ss:bytes:", "RecursiveFunction");
+}
+
+test "compiler semantics: branch closures preserve callbacks from shared parameter facts" {
+    try expectObjectContent(
+        \\type Handlers { current: Number -> Number backup: Number -> Number }
+        \\fn inc(value: Number) -> Number = value + 1
+        \\fn twice(value: Number) -> Number = value * 2
+        \\fn choose(handlers: Handlers, modified: Bool) -> Number -> Number
+        \\  if modified
+        \\    let updated = handlers with { current = handlers.backup }
+        \\    return (value: Number) |-> updated.current(value)
+        \\  else
+        \\    return (value: Number) |-> handlers.current(value)
+        \\  end
+        \\end
+        \\page main
+        \\  let handlers = Handlers { current = inc backup = twice }
+        \\  let changed = choose(handlers, true)
+        \\  let original = choose(handlers, false)
+        \\  text!(str(changed(5)) ++ "/" ++ str(original(5)))
+        \\end
+    , "10/6");
+}
+
+test "compiler semantics: updating a borrowed callback parameter retains recursion in the caller" {
+    try expectDiagnostic(
+        \\type Handler { run: Number -> Number }
+        \\fn inc(value: Number) -> Number = value + 1
+        \\fn replaced(handler: Handler) -> Number
+        \\  let updated = handler with { run = inc }
+        \\  return updated.run(1)
+        \\end
+        \\fn bad(value: Number) -> Number
+        \\  let original = Handler { run = bad }
+        \\  let result = replaced(original)
+        \\  return original.run(value)
+        \\end
+        \\page main
+        \\  let result = bad(1)
+        \\end
+    , "case.ss:bytes:", "RecursiveFunction");
+}
+
+test "compiler semantics: nested call keys retain sibling callbacks after scratch growth" {
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(testing.allocator);
+    try source.appendSlice(testing.allocator, "type Callbacks {\n");
+    for (0..16) |index| try source.print(testing.allocator, "  callback{d}: Number -> Number\n", .{index});
+    try source.appendSlice(testing.allocator,
+        \\}
+        \\type Branch { first: Callbacks last: Callbacks }
+        \\type Tree { first: Branch last: Branch }
+        \\fn increment(value: Number) -> Number = value + 1
+        \\fn callbacks(f: Number -> Number) -> Callbacks
+        \\  return Callbacks {
+        \\
+    );
+    for (0..16) |index| try source.print(testing.allocator, "    callback{d} = f\n", .{index});
+    try source.appendSlice(testing.allocator,
+        \\  }
+        \\end
+        \\fn tree(f: Number -> Number) -> Tree
+        \\  let safe = callbacks(increment)
+        \\  return Tree {
+        \\    first = Branch { first = safe last = safe }
+        \\    last = Branch { first = safe last = callbacks(f) }
+        \\  }
+        \\end
+        \\fn invoke(value: Tree, x: Number) -> Number = value.last.last.callback15(x)
+        \\fn bad(value: Number) -> Number
+        \\  let safe = invoke(tree(increment), value)
+        \\  return invoke(tree(bad), value)
+        \\end
+        \\page main
+        \\  let result = bad(1)
+        \\end
+    );
+    try expectDiagnostic(source.items, "case.ss:bytes:", "RecursiveFunction");
+}
+
 test "compiler semantics: cross-module captured record closures remain distinct" {
     try expectObjectContentWithTwoOverlays(
         \\import "./lib/a" as a
@@ -7373,6 +7487,26 @@ test "compiler semantics: fold preserves numeric and record accumulator types" {
         \\page second
         \\end
     , "3/14/10");
+}
+
+test "compiler semantics: fold callbacks capture immutable record accumulators" {
+    try expectObjectContent(
+        \\type Handlers { run: Number -> Number }
+        \\fn inc(value: Number) -> Number = value + 1
+        \\fn twice(value: Number) -> Number = value * 2
+        \\fn step(previous: Handlers, p: Page) -> Handlers
+        \\  let captured = (value: Number) |-> previous.run(value)
+        \\  let checked = captured(3)
+        \\  return previous with { run = twice }
+        \\end
+        \\page first
+        \\  let seed = Handlers { run = inc }
+        \\  let result = fold(pages(docctx()), seed, step)
+        \\  text!(str(result.run(5)) ++ "/" ++ str(seed.run(5)))
+        \\end
+        \\page second
+        \\end
+    , "10/6");
 }
 
 test "compiler semantics: fold on an empty selection returns an independent seed" {

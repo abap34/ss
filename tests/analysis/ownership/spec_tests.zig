@@ -4,46 +4,27 @@ const allocation_testing = @import("allocation_testing");
 const testing = std.testing;
 const core = compiler.core;
 
-const Owned = struct {
-    allocator: std.mem.Allocator,
-    text: []u8,
-
-    fn clone(allocator: std.mem.Allocator, value: Owned) !Owned {
-        return .{ .allocator = allocator, .text = try allocator.dupe(u8, value.text) };
-    }
-
-    fn deinit(value: *Owned) void {
-        value.allocator.free(value.text);
-    }
-};
-const Environment = compiler.analysis_env.CloneEnv(Owned, Owned.clone, Owned.deinit);
+const Environment = compiler.analysis_env.ValueEnv([]const u8);
 
 fn exerciseEnvironment(allocator: std.mem.Allocator) !void {
-    const input = Owned{ .allocator = allocator, .text = @constCast("original") };
+    const input = try allocator.dupe(u8, "original");
+    defer allocator.free(input);
     var env = Environment.init(allocator);
     defer env.deinit();
     try env.bind("first", input);
     try env.bind("second", input);
-    // Replacement may borrow the old entry, so clone before releasing it.
     try env.bind("first", env.lookup("first").?);
     var copied = try env.clone();
     defer copied.deinit();
-    try testing.expectEqualStrings("original", copied.lookup("first").?.text);
-    try testing.expect(copied.lookup("first").?.text.ptr != env.lookup("first").?.text.ptr);
+    try env.bind("first", "replacement");
+    try testing.expectEqualStrings("replacement", env.lookup("first").?);
+    try testing.expectEqualStrings("original", copied.lookup("first").?);
+    try testing.expect(copied.lookup("first").?.ptr == input.ptr);
+    try testing.expect(env.lookup("second").?.ptr == input.ptr);
 }
 
-test "analysis environments release cloned values after every allocation failure" {
+test "analysis environments own binding maps and borrow immutable values at every allocation failure" {
     try allocation_testing.checkAllAllocationFailures(testing.allocator, exerciseEnvironment, .{});
-}
-
-test "failed environment replacement preserves the original binding" {
-    var failing = testing.FailingAllocator.init(testing.allocator, .{});
-    var env = Environment.init(failing.allocator());
-    defer env.deinit();
-    try env.bind("value", .{ .allocator = testing.allocator, .text = @constCast("original") });
-    failing.fail_index = failing.alloc_index;
-    try testing.expectError(error.OutOfMemory, env.bind("value", env.lookup("value").?));
-    try testing.expectEqualStrings("original", env.lookup("value").?.text);
 }
 
 fn recordState() !core.DocumentState {
