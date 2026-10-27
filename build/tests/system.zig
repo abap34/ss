@@ -13,6 +13,34 @@ pub fn register(suite: Suite, modules: project.ProjectModules, build_options: *S
     const ctx = suite.ctx;
     const b = ctx.b;
     const test_step = suite.all;
+    const profile_spec_mod = createModule(ctx, "tests/utils/profile/spec_tests.zig", &.{
+        import("utils", modules.utils),
+    }, true);
+    const run_profile_spec = suite.add(profile_spec_mod, .{});
+    const profile_runtime = steps.node(b, &suite.checks.node.step, "tests/runtime/profile/spec.mjs", exe);
+    const profile_fixture = b.addExecutable(.{
+        .name = "ss-profile-fixture",
+        .root_module = createModule(ctx, "tests/utils/profile/fixture.zig", &.{import("utils", modules.utils)}, true),
+    });
+    profile_runtime.addFileArg(profile_fixture.getEmittedBin());
+    test_step.dependOn(&profile_runtime.step);
+    const profile_step = b.step("test-profile", "Run profiling and CLI/LSP recording tests");
+    profile_step.dependOn(&run_profile_spec.step);
+    profile_step.dependOn(&profile_runtime.step);
+    const sdk_fetch_spec = b.addSystemCommand(&.{"python3"});
+    sdk_fetch_spec.addFileArg(b.path("tests/profiling/sdk/fetch_spec.py"));
+    test_step.dependOn(&sdk_fetch_spec.step);
+    profile_step.dependOn(&sdk_fetch_spec.step);
+    addFocusedTestStep(b, "test-profile-sdk", "Verify optional Perfetto SDK preparation", &sdk_fetch_spec.step);
+    const workload_spec = steps.node(b, &suite.checks.node.step, "tests/profiling/workload_spec.mjs", null);
+    test_step.dependOn(&workload_spec.step);
+    profile_step.dependOn(&workload_spec.step);
+    addFocusedTestStep(b, "test-profile-workload", "Validate profiling workload definitions and inputs", &workload_spec.step);
+    const runner_spec = steps.node(b, &suite.checks.node.step, "tests/profiling/runner_spec.mjs", exe);
+    runner_spec.addArg(compat.optimizeName(ctx.optimize));
+    test_step.dependOn(&runner_spec.step);
+    profile_step.dependOn(&runner_spec.step);
+    addFocusedTestStep(b, "test-profile-runner", "Verify programmable profiling scripts and process cleanup", &runner_spec.step);
     const fs_spec_mod = createModule(ctx, "tests/utils/fs/spec_tests.zig", &.{
         import("utils", modules.utils),
     }, true);

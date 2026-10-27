@@ -92,9 +92,9 @@ pub const Cache = struct {
     }
 
     pub fn get(self: *Cache, request: Request, environment: c.SsFontEnvironment) !*Layout {
-        const profile_start = utils.measure_profile.start();
+        const profile_start = utils.profile.start();
         var hit = false;
-        defer utils.measure_profile.recordTextShape(hit, profile_start);
+        defer utils.profile.recordTextShape(hit, profile_start);
         const key = requestKey(request, environment);
         try self.mutex.lock(self.io);
         const cached = self.getLocked(key);

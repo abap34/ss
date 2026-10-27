@@ -506,8 +506,8 @@ pub fn executeGraph(
         page_states.deinit();
     }
     {
-        const measure_start = utils.measure_profile.start();
-        defer utils.measure_profile.recordWysiwyg(.execute_units, measure_start);
+        const measure_start = utils.profile.start();
+        defer utils.profile.recordWysiwyg(.execute_units, measure_start);
         for (graph.order) |unit_index| {
             evaluation.execution_unit = unit_index;
             try executeUnit(evaluation, &document_states, &page_states, graph.units.items[unit_index]);

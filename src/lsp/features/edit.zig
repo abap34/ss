@@ -24,8 +24,8 @@ pub const Context = struct {
 };
 
 pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
-    const profile_start = utils.measure_profile.start();
-    defer utils.measure_profile.recordGeneratedEdit(.request, profile_start);
+    const profile_start = utils.profile.start();
+    defer utils.profile.recordGeneratedEdit(.request, profile_start);
     const request = params orelse return try statusJson(ctx.allocator, .unsupported, "Missing edit request.");
     if (request != .object) return try statusJson(ctx.allocator, .unsupported, "Invalid edit request.");
     const request_object = &request.object;

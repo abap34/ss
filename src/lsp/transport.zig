@@ -6,6 +6,7 @@ const utils = @import("utils");
 const queue_capacity = 256;
 
 pub const RequestState = struct {
+    profile_task: utils.profile.Task = .{},
     canceled: std.atomic.Value(bool) = .init(false),
 };
 
@@ -23,8 +24,10 @@ pub const Envelope = struct {
     payload: Payload,
     revision: u64,
     request: ?Request,
+    profile_task: utils.profile.Task = .{},
 
     pub fn deinit(self: *Envelope, ingress: *Ingress) void {
+        self.profile_task.discard();
         if (self.request) |request| {
             ingress.requests.unregister(request.key, request.state);
             ingress.allocator.free(request.key);
@@ -73,6 +76,7 @@ const RequestRegistry = struct {
         defer self.mutex.unlock(self.io);
         const state = self.states.get(key) orelse return;
         state.canceled.store(true, .release);
+        state.profile_task.cancel();
     }
 
     fn unregister(self: *RequestRegistry, key: []const u8, state: *RequestState) void {
@@ -197,12 +201,14 @@ pub const Ingress = struct {
                 if (invalidatesAnalysis(name)) self.revision.fetchAdd(1, .acq_rel) + 1 else self.revision.load(.acquire)
             else
                 self.revision.load(.acquire);
+            const profile_task = @import("profile.zig").received(&parsed.value, revision);
+            errdefer profile_task.discard();
             const request = if (parsed.value == .object) if (utils.json.fieldValue(&parsed.value.object, "id")) |id| blk: {
                 const key = try requestKey(self.allocator, id.*);
                 errdefer self.allocator.free(key);
                 const state = try self.allocator.create(RequestState);
                 errdefer self.allocator.destroy(state);
-                state.* = .{};
+                state.* = .{ .profile_task = profile_task };
                 try self.requests.register(key, state);
                 break :blk Request{ .key = key, .state = state };
             } else null else null;
@@ -217,6 +223,7 @@ pub const Ingress = struct {
                 .payload = .{ .message = parsed },
                 .revision = revision,
                 .request = request,
+                .profile_task = profile_task,
             });
             parsed_owned = false;
             // The worker may already have freed the message after enqueueing.

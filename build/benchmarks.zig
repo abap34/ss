@@ -6,6 +6,9 @@ const steps = @import("steps.zig");
 
 pub fn register(ctx: project.Context, exe: std.Build.LazyPath, checks: dependencies.Checks) void {
     const b = ctx.b;
+    const profile = steps.node(b, &checks.node.step, "tests/profiling/run.mjs", exe);
+    profile.addArg(compat.optimizeName(ctx.optimize));
+    steps.focused(b, "profile", "Run a profiling script against a validated workload", &profile.step);
     const render = steps.node(b, &checks.node.step, "tests/benchmark/render/spec.mjs", null);
     render.addArg(compat.optimizeName(ctx.optimize));
     render.addFileArg(exe);

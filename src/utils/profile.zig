@@ -1,4 +1,24 @@
 const std = @import("std");
+const recording = @import("profiling/recording.zig");
+
+pub const Session = recording.Session;
+pub const Operation = recording.Operation;
+pub const Task = recording.Task;
+pub const Outcome = recording.Outcome;
+pub const available = recording.available;
+pub const isRecording = recording.isEnabled;
+pub const default_buffer_kb = recording.default_buffer_kb;
+pub const timestamp = recording.timestamp;
+pub const activate = recording.activate;
+pub const deactivate = recording.deactivate;
+pub const checkpoint = recording.checkpoint;
+pub const identifyInput = recording.identifyInput;
+pub const identifySource = recording.identifySource;
+pub const counter = recording.counter;
+pub const spawn = recording.spawn;
+pub const concurrent = recording.concurrent;
+pub const zone = recording.zone;
+pub const call = recording.call;
 
 const CountTime = struct {
     count: std.atomic.Value(u64) = .init(0),
@@ -111,7 +131,8 @@ pub const GeneratedEditKind = enum {
 var generated_edits: [std.meta.fieldNames(GeneratedEditKind).len]CountTime = @splat(.{});
 
 pub fn recordGeneratedEdit(kind: GeneratedEditKind, start_ns: i128) void {
-    if (start_ns != 0) generated_edits[@intFromEnum(kind)].add(elapsed(start_ns));
+    recording.span("generated_edit", @tagName(kind), start_ns);
+    if (isEnabled() and start_ns != 0) generated_edits[@intFromEnum(kind)].add(elapsed(start_ns));
 }
 
 pub const RenderCompileKind = enum {
@@ -230,19 +251,24 @@ pub fn setEnabled(enabled: bool) void {
 }
 
 pub fn start() i128 {
-    if (!isEnabled()) return 0;
-    return monotonicNowNs();
+    if (!isEnabled() and !recording.isEnabled()) return 0;
+    return if (recording.isEnabled()) recording.timestamp() else monotonicNowNs();
 }
 
 pub fn elapsed(start_ns: i128) u64 {
     if (start_ns == 0) return 0;
-    const delta = monotonicNowNs() - start_ns;
+    const current_ns = if (recording.isEnabled()) recording.timestamp() else monotonicNowNs();
+    const delta = current_ns - start_ns;
     if (delta <= 0) return 0;
     return @intCast(delta);
 }
 
 pub fn recordText(kind: TextKind, hit: bool, start_ns: i128) void {
-    if (start_ns == 0) return;
+    recording.span("text_cache", switch (kind) {
+        .advance => if (hit) "advance.hit" else "advance.miss",
+        .visual => if (hit) "visual.hit" else "visual.miss",
+    }, start_ns);
+    if (!isEnabled() or start_ns == 0) return;
     const duration = elapsed(start_ns);
     switch (kind) {
         .advance => if (hit) text_advance_hits.add(duration) else text_advance_misses.add(duration),
@@ -251,7 +277,8 @@ pub fn recordText(kind: TextKind, hit: bool, start_ns: i128) void {
 }
 
 pub fn recordTextShape(hit: bool, start_ns: i128) void {
-    if (start_ns == 0) return;
+    recording.span("text_cache", if (hit) "shape.hit" else "shape.miss", start_ns);
+    if (!isEnabled() or start_ns == 0) return;
     if (hit)
         text_shape_hits.add(elapsed(start_ns))
     else
@@ -259,31 +286,38 @@ pub fn recordTextShape(hit: bool, start_ns: i128) void {
 }
 
 pub fn recordTextCacheRestore(start_ns: i128) void {
-    if (start_ns != 0) text_cache_restore.add(elapsed(start_ns));
+    recording.span("measurement", "TextCacheRestore", start_ns);
+    if (isEnabled() and start_ns != 0) text_cache_restore.add(elapsed(start_ns));
 }
 
 pub fn recordTextCacheBeginDocument(start_ns: i128) void {
-    if (start_ns != 0) text_cache_begin_document.add(elapsed(start_ns));
+    recording.span("measurement", "TextCacheBeginDocument", start_ns);
+    if (isEnabled() and start_ns != 0) text_cache_begin_document.add(elapsed(start_ns));
 }
 
 pub fn recordTextCacheMaterialize(start_ns: i128) void {
-    if (start_ns != 0) text_cache_materialize.add(elapsed(start_ns));
+    recording.span("measurement", "TextCacheMaterialize", start_ns);
+    if (isEnabled() and start_ns != 0) text_cache_materialize.add(elapsed(start_ns));
 }
 
 pub fn recordTextCacheShare(start_ns: i128) void {
-    if (start_ns != 0) text_cache_share.add(elapsed(start_ns));
+    recording.span("measurement", "TextCacheShare", start_ns);
+    if (isEnabled() and start_ns != 0) text_cache_share.add(elapsed(start_ns));
 }
 
 pub fn recordTextCacheClone(start_ns: i128) void {
-    if (start_ns != 0) text_cache_clone.add(elapsed(start_ns));
+    recording.span("measurement", "TextCacheClone", start_ns);
+    if (isEnabled() and start_ns != 0) text_cache_clone.add(elapsed(start_ns));
 }
 
 pub fn recordTextCachePersist(start_ns: i128) void {
-    if (start_ns != 0) text_cache_persist.add(elapsed(start_ns));
+    recording.span("measurement", "TextCachePersist", start_ns);
+    if (isEnabled() and start_ns != 0) text_cache_persist.add(elapsed(start_ns));
 }
 
 pub fn recordRenderPage(hit: bool, start_ns: i128) void {
-    if (start_ns == 0) return;
+    recording.span("page_cache", if (hit) "hit" else "miss", start_ns);
+    if (!isEnabled() or start_ns == 0) return;
     if (hit)
         render_page_hits.add(elapsed(start_ns))
     else
@@ -291,8 +325,9 @@ pub fn recordRenderPage(hit: bool, start_ns: i128) void {
 }
 
 pub fn recordRenderCompile(kind: RenderCompileKind, start_ns: i128) void {
-    if (start_ns == 0) return;
-    const counter = switch (kind) {
+    recording.span("render_compile", @tagName(kind), start_ns);
+    if (!isEnabled() or start_ns == 0) return;
+    const metric = switch (kind) {
         .prepare_fonts => &render_compile_prepare_fonts,
         .font_environment => &render_compile_font_environment,
         .text_cache_begin => &render_compile_text_cache_begin,
@@ -304,27 +339,32 @@ pub fn recordRenderCompile(kind: RenderCompileKind, start_ns: i128) void {
         .finish_catalogs => &render_compile_finish_catalogs,
         .finish_validation => &render_compile_finish_validation,
     };
-    counter.add(elapsed(start_ns));
+    metric.add(elapsed(start_ns));
 }
 
 pub fn recordLayoutMeasurementTotal(start_ns: i128) void {
-    if (start_ns != 0) layout_measure_total.add(elapsed(start_ns));
+    recording.span("measurement", "LayoutMeasurementTotal", start_ns);
+    if (isEnabled() and start_ns != 0) layout_measure_total.add(elapsed(start_ns));
 }
 
 pub fn recordLayoutMeasurementLockWait(start_ns: i128) void {
-    if (start_ns != 0) layout_measure_lock_wait.add(elapsed(start_ns));
+    recording.span("measurement", "LayoutMeasurementLockWait", start_ns);
+    if (isEnabled() and start_ns != 0) layout_measure_lock_wait.add(elapsed(start_ns));
 }
 
 pub fn recordLayoutMeasurementObjectCommand(start_ns: i128) void {
-    if (start_ns != 0) layout_measure_object_command.add(elapsed(start_ns));
+    recording.span("measurement", "LayoutMeasurementObjectCommand", start_ns);
+    if (isEnabled() and start_ns != 0) layout_measure_object_command.add(elapsed(start_ns));
 }
 
 pub fn recordLayoutMeasurementCacheKey(start_ns: i128) void {
-    if (start_ns != 0) layout_measure_cache_key.add(elapsed(start_ns));
+    recording.span("measurement", "LayoutMeasurementCacheKey", start_ns);
+    if (isEnabled() and start_ns != 0) layout_measure_cache_key.add(elapsed(start_ns));
 }
 
 pub fn recordLayoutMeasurementCache(kind: LayoutMeasurementCacheKind, start_ns: i128) void {
-    if (start_ns == 0) return;
+    recording.span("layout_cache", @tagName(kind), start_ns);
+    if (!isEnabled() or start_ns == 0) return;
     const duration = elapsed(start_ns);
     switch (kind) {
         .memory_hit => layout_measure_memory_hits.add(duration),
@@ -335,45 +375,55 @@ pub fn recordLayoutMeasurementCache(kind: LayoutMeasurementCacheKind, start_ns: 
 }
 
 pub fn recordRenderIntrinsic(kind: RenderMeasureKind, start_ns: i128) void {
-    if (start_ns == 0) return;
+    recording.span("intrinsic", @tagName(kind), start_ns);
+    if (!isEnabled() or start_ns == 0) return;
     renderIntrinsicCounter(kind).add(elapsed(start_ns));
 }
 
 pub fn recordArtifactScan(kind: ArtifactKind, hit: bool, start_ns: i128) void {
-    if (start_ns == 0) return;
+    recording.span(if (hit) "artifact_cache_hit" else "artifact_cache_miss", @tagName(kind), start_ns);
+    if (!isEnabled() or start_ns == 0) return;
     artifactScanCounter(kind, hit).add(elapsed(start_ns));
 }
 
 pub fn recordArtifactBuild(kind: ArtifactKind, start_ns: i128) void {
-    if (start_ns == 0) return;
+    recording.span("artifact_build", @tagName(kind), start_ns);
+    if (!isEnabled() or start_ns == 0) return;
     artifactBuildCounter(kind).add(elapsed(start_ns));
 }
 
 pub fn recordArtifactBuildMany(kind: ArtifactKind, count: usize, start_ns: i128) void {
-    if (start_ns == 0 or count == 0) return;
+    recording.span("artifact_build", @tagName(kind), start_ns);
+    if (start_ns != 0) recording.counter(@tagName(kind), count);
+    if (!isEnabled() or start_ns == 0 or count == 0) return;
     artifactBuildCounter(kind).addCount(@intCast(count), elapsed(start_ns));
 }
 
 pub fn recordArtifactBuildWall(miss_count: usize, start_ns: i128) void {
-    if (start_ns == 0) return;
+    recording.span("artifact_build", "wall", start_ns);
+    if (start_ns != 0) recording.counter("artifacts.miss_count", miss_count);
+    if (!isEnabled() or start_ns == 0) return;
     artifact_build_wall.addCount(@intCast(miss_count), elapsed(start_ns));
 }
 
 pub fn recordCommand(argv0: []const u8, failed: bool, start_ns: i128) void {
-    if (start_ns == 0) return;
+    recording.span("command", @tagName(commandKind(argv0)), start_ns);
+    if (!isEnabled() or start_ns == 0) return;
     const duration = elapsed(start_ns);
     commandCounter(commandKind(argv0)).add(duration);
     if (failed) command_failures.add(duration);
 }
 
 pub fn recordAnalysis(kind: AnalysisKind, start_ns: i128) void {
-    if (start_ns == 0) return;
+    recording.span("analysis", @tagName(kind), start_ns);
+    if (!isEnabled() or start_ns == 0) return;
     analysisCounter(kind).add(elapsed(start_ns));
 }
 
 pub fn recordWysiwyg(kind: WysiwygKind, start_ns: i128) void {
-    if (start_ns == 0) return;
-    const counter = switch (kind) {
+    recording.span("wysiwyg", @tagName(kind), start_ns);
+    if (!isEnabled() or start_ns == 0) return;
+    const metric = switch (kind) {
         .evaluate_solve => &wysiwyg_evaluate_solve,
         .evaluate => &wysiwyg_evaluate,
         .execute_units => &wysiwyg_execute_units,
@@ -382,7 +432,7 @@ pub fn recordWysiwyg(kind: WysiwygKind, start_ns: i128) void {
         .render_compile => &wysiwyg_render_compile,
         .snapshot => &wysiwyg_snapshot,
     };
-    counter.add(elapsed(start_ns));
+    metric.add(elapsed(start_ns));
 }
 
 pub fn printIfEnabled() void {
@@ -548,8 +598,8 @@ fn commandCounter(kind: CommandKind) *CountTime {
     };
 }
 
-fn printCounter(label: []const u8, counter: *const CountTime) void {
-    const snap = counter.snapshot();
+fn printCounter(label: []const u8, metric: *const CountTime) void {
+    const snap = metric.snapshot();
     if (snap.count == 0) return;
     std.debug.print("  {s}: {d} calls, {d:.6}s aggregate\n", .{
         label,

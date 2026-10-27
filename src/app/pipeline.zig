@@ -71,6 +71,8 @@ pub fn analyzeFile(
     progress: ?*Progress,
     mode: analysis.AnalysisMode,
 ) !AnalyzedProject {
+    const profile_zone = utils.profile.zone(@src());
+    defer profile_zone.end();
     if (progress) |p| p.begin("Read inputs");
     errdefer if (progress) |p| p.abort();
     var source = readSource(io, allocator, request) catch |err| {
@@ -170,6 +172,8 @@ pub fn analyzeFile(
 }
 
 pub fn evaluateDocument(io: std.Io, state: *core.DocumentState, graph: *const analysis.execution.ExecutionGraph, progress: ?*Progress) !void {
+    const profile_zone = utils.profile.zone(@src());
+    defer profile_zone.end();
     if (progress) |p| p.begin("Evaluate document");
     errdefer if (progress) |p| p.abort();
     lowering.evaluateDocument(state, graph, .{ .io = io }) catch |err| {
@@ -196,6 +200,8 @@ pub fn evaluateDocument(io: std.Io, state: *core.DocumentState, graph: *const an
 }
 
 pub fn preparePages(state: *core.DocumentState, progress: ?*Progress) !core.prepared.PreparedPages {
+    const profile_zone = utils.profile.zone(@src());
+    defer profile_zone.end();
     if (progress) |p| p.begin("Prepare pages");
     errdefer if (progress) |p| p.abort();
     var pages = core.prepared.prepare(state.allocator, state) catch |err| {
@@ -229,6 +235,8 @@ pub fn solveLayouts(
     progress: ?*Progress,
     options: render_layout.Options,
 ) !core.layout.Document {
+    const profile_zone = utils.profile.zone(@src());
+    defer profile_zone.end();
     const layout_progress = if (progress) |p| app_progress.layout(p) else null;
     if (progress) |p| p.begin("Solve layouts");
     errdefer if (progress) |p| p.abort();
@@ -258,6 +266,8 @@ pub fn solveLayoutsWithTracePath(
     jobs: ?usize,
     highlight_languages: []const utils.highlight.Language,
 ) !core.layout.Document {
+    const profile_zone = utils.profile.zone(@src());
+    defer profile_zone.end();
     const layout_progress = if (progress) |p| app_progress.layout(p) else null;
     if (progress) |p| p.begin("Solve layouts");
     errdefer if (progress) |p| p.abort();
@@ -307,6 +317,8 @@ fn preloadLayoutArtifacts(
 }
 
 fn readSource(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest) ![]u8 {
+    const profile_zone = utils.profile.zone(@src());
+    defer profile_zone.end();
     if (request.overlay) |source_overlay| {
         if (try source_overlay.get(request.input_path)) |text| return try allocator.dupe(u8, text);
     }

@@ -584,10 +584,10 @@ pub fn cachedSvgAsset(ctx: Context, path: []const u8) !?Size {
 }
 
 fn runChecked(ctx: Context, argv: []const []const u8, cwd: std.process.Child.Cwd) !void {
-    const profile_command = utils.measure_profile.start();
+    const profile_command = utils.profile.start();
     const result = external_process.run(ctx.allocator, ctx.io, argv, cwd) catch |err| {
         if (err == error.Canceled or err == error.OutOfMemory) return err;
-        if (argv.len > 0) utils.measure_profile.recordCommand(argv[0], true, profile_command);
+        if (argv.len > 0) utils.profile.recordCommand(argv[0], true, profile_command);
         const message = try commandSpawnFailureMessage(ctx.allocator, argv, err);
         defer ctx.allocator.free(message);
         if (ctx.failure) |target| try target.record(message);
@@ -599,7 +599,7 @@ fn runChecked(ctx: Context, argv: []const []const u8, cwd: std.process.Child.Cwd
         .exited => |code| code != 0,
         else => true,
     };
-    if (argv.len > 0) utils.measure_profile.recordCommand(argv[0], failed, profile_command);
+    if (argv.len > 0) utils.profile.recordCommand(argv[0], failed, profile_command);
     if (!failed) return;
     const message = try commandTermFailureMessage(ctx.allocator, argv, result.term, result.stdout, result.stderr);
     defer ctx.allocator.free(message);

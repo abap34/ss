@@ -62,6 +62,7 @@ fn version() void {
         render_compiler.native_artifact_cache_version,
     }) catch return;
     utils.io.writeStdoutAll(text) catch {};
+    utils.io.writeStdoutAll(if (utils.profile.available) "profiling: Perfetto\n" else "profiling: disabled\n") catch {};
 }
 
 fn printCacheStats(stats: utils.render_cache.Stats) void {
@@ -267,7 +268,7 @@ fn parseRenderCommandOptions(args: []const []const u8, presenting: bool) !Comman
         }
         positional_index += 1;
     }
-    utils.measure_profile.setEnabled(options.measure_profile);
+    utils.profile.setEnabled(options.measure_profile);
     return options;
 }
 
@@ -771,6 +772,7 @@ fn resolveProjectOrUsage(
     };
     errdefer resolved.deinit(allocator);
     try validateResolvedEntryPath(allocator, io, options, &resolved);
+    utils.profile.identifyInput(io, allocator, resolved.entry_path);
     return resolved;
 }
 
@@ -1341,6 +1343,56 @@ fn run(init: std.process.Init) !void {
     const io = init.io;
     const environ = init.minimal.environ;
     const args = try init.minimal.args.toSlice(allocator);
+    var filtered = std.ArrayList([]const u8).empty;
+    var directory: ?[]const u8 = null;
+    var limit: usize = utils.profile.default_buffer_kb;
+    var limit_supplied = false;
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (i >= 2 and std.mem.eql(u8, arg, "--profile")) {
+            if (directory != null) return failUsage("--profile may only be specified once", .{});
+            i += 1;
+            if (i == args.len or args[i].len == 0 or std.mem.startsWith(u8, args[i], "--")) return failUsage("missing directory for --profile", .{});
+            directory = args[i];
+        } else if (i >= 2 and std.mem.eql(u8, arg, "--profile-buffer-kb")) {
+            if (limit_supplied) return failUsage("--profile-buffer-kb may only be specified once", .{});
+            limit_supplied = true;
+            i += 1;
+            if (i == args.len) return failUsage("missing value for --profile-buffer-kb", .{});
+            limit = std.fmt.parseUnsigned(usize, args[i], 10) catch return failUsage("invalid --profile-buffer-kb", .{});
+            if (limit < 64 or limit > 1024 * 1024) return failUsage("--profile-buffer-kb must be between 64 and 1048576", .{});
+        } else try filtered.append(allocator, arg);
+    }
+    if (limit_supplied and directory == null) return failUsage("--profile-buffer-kb requires --profile", .{});
+    if (directory == null or wantsCommandHelp(filtered.items[2..])) return runCommand(io, allocator, environ, filtered.items);
+    const cmd = args[1];
+    const supported = for ([_][]const u8{ "check", "dump", "render", "present", "debug", "watch", "lsp" }) |name| {
+        if (std.mem.eql(u8, cmd, name)) break true;
+    } else false;
+    if (!supported) return failUsage("--profile is not supported for {s}", .{cmd});
+    if (!utils.profile.available) return failCli("profiling is not included in this build; rebuild with -Dprofiling=true", .{});
+    var session = utils.profile.Session.init(std.heap.smp_allocator, io, directory.?, limit, .{
+        .version = build_options.version,
+        .commit = build_options.commit,
+        .dirty = build_options.uncommitted_changes,
+        .command = cmd,
+    }) catch |err| return failCli("cannot create profile directory '{s}': {s}", .{ directory.?, @errorName(err) });
+    defer session.deinit();
+    utils.profile.activate(&session);
+    defer utils.profile.deactivate();
+    var operation = utils.profile.Operation.begin(cmd, .{});
+    runCommand(io, allocator, environ, filtered.items) catch |err| {
+        operation.outcome = .failed;
+        operation.finish();
+        session.write(true) catch |write_err| std.debug.print("profile export failed: {s}\n", .{@errorName(write_err)});
+        return err;
+    };
+    operation.finish();
+    try session.write(true);
+}
+
+fn runCommand(io: std.Io, allocator: std.mem.Allocator, environ: std.process.Environ, args: []const []const u8) !void {
     try applyColorArgs(args);
 
     if (args.len < 2) {
@@ -1523,7 +1575,7 @@ fn run(init: std.process.Init) !void {
             return;
         }
         for (args[2..]) |arg| {
-            if (std.mem.eql(u8, arg, "--measure-profile")) utils.measure_profile.setEnabled(true);
+            if (std.mem.eql(u8, arg, "--measure-profile")) utils.profile.setEnabled(true);
         }
         try lsp.run(io, std.heap.smp_allocator);
         return;
@@ -1571,8 +1623,8 @@ fn run(init: std.process.Init) !void {
 pub fn main(init: std.process.Init) void {
     run(init) catch |err| {
         if (!error_report.isExpectedCliError(err)) error_report.printUnexpectedCliError(err);
-        utils.measure_profile.printIfEnabled();
+        utils.profile.printIfEnabled();
         std.process.exit(1);
     };
-    utils.measure_profile.printIfEnabled();
+    utils.profile.printIfEnabled();
 }

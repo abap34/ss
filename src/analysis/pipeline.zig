@@ -70,13 +70,13 @@ fn checkFunctionDefinitionsWithEnv(
     sema: *const SemanticEnv,
 ) !void {
     {
-        const measure_start = utils.measure_profile.start();
-        defer utils.measure_profile.recordAnalysis(.semantics_call_graph, measure_start);
+        const measure_start = utils.profile.start();
+        defer utils.profile.recordAnalysis(.semantics_call_graph, measure_start);
         try calls.checkFunctionCallGraphBeforeTypes(allocator, state, sema);
     }
 
-    const bodies_start = utils.measure_profile.start();
-    defer utils.measure_profile.recordAnalysis(.semantics_function_bodies, bodies_start);
+    const bodies_start = utils.profile.start();
+    defer utils.profile.recordAnalysis(.semantics_function_bodies, bodies_start);
     var had_diagnostics = false;
     var const_it = state.constants.declarations.iterator();
     while (const_it.next()) |entry| {
@@ -136,19 +136,19 @@ pub fn analyzeDocumentStateWithMode(
     defer state.diagnostics.deduplicateValidationUserReports(state.allocator);
     var declaration_index: *const declarations.DeclarationIndex = undefined;
     {
-        const measure_start = utils.measure_profile.start();
-        defer utils.measure_profile.recordAnalysis(.static_semantics, measure_start);
+        const measure_start = utils.profile.start();
+        defer utils.profile.recordAnalysis(.static_semantics, measure_start);
         declaration_index = try analyzeDocumentStateSemantics(allocator, state);
     }
-    const measure_start = utils.measure_profile.start();
-    defer utils.measure_profile.recordAnalysis(.execution_graph, measure_start);
+    const measure_start = utils.profile.start();
+    defer utils.profile.recordAnalysis(.execution_graph, measure_start);
     var graph = try execution.ExecutionGraph.build(allocator, state, declaration_index, .{
         .page_id_mode = if (mode == .evaluation) .create else .synthetic,
     });
     errdefer graph.deinit();
     {
-        const query_start = utils.measure_profile.start();
-        defer utils.measure_profile.recordAnalysis(.semantics_dependency_queries, query_start);
+        const query_start = utils.profile.start();
+        defer utils.profile.recordAnalysis(.semantics_dependency_queries, query_start);
         const sema = SemanticEnv.init(state, declaration_index, &state.functions);
         try addDependencyQueryDiagnostics(allocator, state, &sema, &graph);
     }
@@ -177,20 +177,20 @@ fn analyzeDocumentStateSemantics(
 
 fn checkDocumentDeclarations(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) !void {
     {
-        const measure_start = utils.measure_profile.start();
-        defer utils.measure_profile.recordAnalysis(.semantics_types, measure_start);
+        const measure_start = utils.profile.start();
+        defer utils.profile.recordAnalysis(.semantics_types, measure_start);
         try semantics.checkSelectedImports(state, sema);
         try semantics.checkTypeDeclarations(allocator, state);
     }
     {
-        const measure_start = utils.measure_profile.start();
-        defer utils.measure_profile.recordAnalysis(.semantics_fields, measure_start);
+        const measure_start = utils.profile.start();
+        defer utils.profile.recordAnalysis(.semantics_fields, measure_start);
         try semantics.checkDuplicateValueDeclarations(allocator, state);
         try semantics.checkTypeAnnotations(allocator, state, sema);
         try semantics.checkDisplayDeclarations(allocator, state);
         {
-            const type_fields_start = utils.measure_profile.start();
-            defer utils.measure_profile.recordAnalysis(.semantics_type_fields, type_fields_start);
+            const type_fields_start = utils.profile.start();
+            defer utils.profile.recordAnalysis(.semantics_type_fields, type_fields_start);
             try fields.checkTypeFields(allocator, state, sema);
         }
         try checker.checkPageNamesUnique(allocator, state);
@@ -200,16 +200,16 @@ fn checkDocumentDeclarations(allocator: std.mem.Allocator, state: *core.Document
 fn checkDocumentBodies(inference_context: *infer.Context, allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) !void {
     var had_body_diagnostics = false;
     {
-        const measure_start = utils.measure_profile.start();
-        defer utils.measure_profile.recordAnalysis(.semantics_functions, measure_start);
+        const measure_start = utils.profile.start();
+        defer utils.profile.recordAnalysis(.semantics_functions, measure_start);
         checkFunctionDefinitionsWithEnv(inference_context, allocator, state, sema) catch |err| {
             if (err != error.DiagnosticsFailed) return err;
             had_body_diagnostics = true;
         };
     }
     {
-        const measure_start = utils.measure_profile.start();
-        defer utils.measure_profile.recordAnalysis(.semantics_pages, measure_start);
+        const measure_start = utils.profile.start();
+        defer utils.profile.recordAnalysis(.semantics_pages, measure_start);
         for (state.modules.order.items) |module_id| {
             try state.checkAnalysisCanceled();
             const module = state.moduleById(module_id) orelse continue;
@@ -377,8 +377,8 @@ pub fn buildDocumentStateWithOptions(
     index: *module_index.Index,
     options: BuildDocumentStateOptions,
 ) !core.DocumentState {
-    const measure_start = utils.measure_profile.start();
-    defer utils.measure_profile.recordAnalysis(.document_state, measure_start);
+    const measure_start = utils.profile.start();
+    defer utils.profile.recordAnalysis(.document_state, measure_start);
     const asset_base_dir = try allocator.dupe(u8, asset_base_path);
     var owns_asset_base_dir = true;
     errdefer if (owns_asset_base_dir) allocator.free(asset_base_dir);

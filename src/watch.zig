@@ -316,6 +316,17 @@ fn fingerprintTargetLabel(target: FingerprintTarget) []const u8 {
 }
 
 fn runOnce(io: std.Io, backing_allocator: std.mem.Allocator, mode: Mode, options: Options, embedded_cache: *module_loader.EmbeddedSyntaxCache, baseline: *Fingerprint) void {
+    var completed = false;
+    var profile_operation = utils.profile.Operation.begin(if (mode == .render) "watch.render" else "watch.check", .{});
+    defer {
+        profile_operation.outcome = if (completed) .success else .failed;
+        profile_operation.finish();
+        _ = utils.profile.checkpoint() catch |err| blk: {
+            std.log.warn("profile checkpoint failed: {s}", .{@errorName(err)});
+            break :blk false;
+        };
+    }
+    utils.profile.identifyInput(io, backing_allocator, options.input_path);
     var arena = std.heap.ArenaAllocator.init(backing_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -323,7 +334,6 @@ fn runOnce(io: std.Io, backing_allocator: std.mem.Allocator, mode: Mode, options
     var inputs = utils.FileInputs.init(backing_allocator);
     inputs.observer = observer.observer();
     defer inputs.deinit();
-    var completed = false;
     defer if (options.file_inputs) |destination| {
         if (completed or inputs.paths.count() != 0) {
             inputs.observer = null;

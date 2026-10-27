@@ -1,6 +1,7 @@
 const DocumentState = @import("../core/document_state.zig").DocumentState;
 const Workspace = @import("workspace.zig").Workspace;
 const std = @import("std");
+const utils = @import("utils");
 const model = @import("model");
 const diagnostics = @import("diagnostics.zig");
 const document = @import("document.zig");
@@ -153,6 +154,7 @@ fn runPageJobs(
     out: *std.ArrayList(document.Page),
 ) !void {
     const worker_count = layoutWorkerCount(jobs.len, options, parallel_allowed);
+    utils.profile.counter("workers.layout", worker_count);
     if (worker_count <= 1) return try runPageJobsSequential(state, jobs, trace_session, options, out);
     return try runPageJobsParallel(state, jobs, options, worker_count, out);
 }
@@ -201,7 +203,7 @@ fn runPageJobsParallel(state: *DocumentState, jobs: []const PageJob, options: So
     }
 
     while (started < worker_count) : (started += 1) {
-        threads[started] = try std.Thread.spawn(.{}, layoutJobWorker, .{ ContextPtr, &work });
+        threads[started] = try utils.profile.spawn(.{}, layoutJobWorker, .{ ContextPtr, &work });
     }
 
     for (threads[0..started]) |thread| thread.join();

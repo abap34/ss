@@ -82,8 +82,8 @@ pub const EmbeddedSyntaxCache = struct {
         while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
         defer self.mutex.unlock();
         if (self.modules[index] == null) {
-            const parse_start = utils.measure_profile.start();
-            defer utils.measure_profile.recordAnalysis(.embedded_parse, parse_start);
+            const parse_start = utils.profile.start();
+            defer utils.profile.recordAnalysis(.embedded_parse, parse_start);
             self.modules[index] = try syntax.parseWithSourceNameAndFailure(
                 self.arena.allocator(),
                 embedded_modules[index].source,
@@ -91,8 +91,8 @@ pub const EmbeddedSyntaxCache = struct {
                 failure,
             );
         }
-        const clone_start = utils.measure_profile.start();
-        defer utils.measure_profile.recordAnalysis(.embedded_clone, clone_start);
+        const clone_start = utils.profile.start();
+        defer utils.profile.recordAnalysis(.embedded_clone, clone_start);
         return try self.modules[index].?.clone(allocator);
     }
 };
@@ -162,8 +162,8 @@ pub fn loadGraphWithOptions(
     project_module: ast.Module,
     options: LoadOptions,
 ) !ModuleGraph {
-    const measure_start = utils.measure_profile.start();
-    defer utils.measure_profile.recordAnalysis(.module_graph, measure_start);
+    const measure_start = utils.profile.start();
+    defer utils.profile.recordAnalysis(.module_graph, measure_start);
     var builder = Builder{
         .allocator = allocator,
         .io = io,
@@ -479,8 +479,8 @@ const Builder = struct {
             try self.addParseFailureDiagnostic(parse_path, text, err, parse_failure.diagnostic);
             return error.DiagnosticsFailed;
         } else blk: {
-            const parse_start = utils.measure_profile.start();
-            defer utils.measure_profile.recordAnalysis(if (embeddedModuleIndex(resolved.spec) != null) .embedded_parse else .module_parse, parse_start);
+            const parse_start = utils.profile.start();
+            defer utils.profile.recordAnalysis(if (embeddedModuleIndex(resolved.spec) != null) .embedded_parse else .module_parse, parse_start);
             break :blk if (self.recovering) recover: {
                 var result = syntax.parseRecoveringWithOptions(self.allocator, text, parse_path, .{ .failure = &parse_failure, .cancellation = self.cancellation }) catch |err| {
                     if (err == error.OutOfMemory or err == error.Canceled) return err;

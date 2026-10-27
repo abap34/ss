@@ -59,13 +59,13 @@ pub const Context = struct {
 /// A failed solve discards the retained state so the caller can rebuild from source.
 pub fn apply(ctx: Context, snapshot: *analysis.snapshot.AnalysisSnapshot, path: []const u8, generated: *const generated_edit.Edit, generation: u64) !bool {
     if (ctx.cancellation) |cancellation| try cancellation.check();
-    const validation_start = utils.measure_profile.start();
+    const validation_start = utils.profile.start();
     if (!source.canApply(snapshot, path, generated, generation)) return false;
     const retained = &snapshot.retained_layout_state.?;
     const state = &retained.state;
 
-    utils.measure_profile.recordGeneratedEdit(.validation, validation_start);
-    const prepare_start = utils.measure_profile.start();
+    utils.profile.recordGeneratedEdit(.validation, validation_start);
+    const prepare_start = utils.profile.start();
     var discard_retained_state = false;
     defer if (discard_retained_state) {
         if (snapshot.retained_layout_state) |*value| value.deinit();
@@ -78,17 +78,17 @@ pub fn apply(ctx: Context, snapshot: *analysis.snapshot.AnalysisSnapshot, path: 
     const pages = &reuse_inputs.pages;
     const external_inputs = if (reuse_inputs.external_inputs) |*value| value else return false;
     const cache = ctx.resource_cache orelse return false;
-    const inputs_start = utils.measure_profile.start();
+    const inputs_start = utils.profile.start();
     if (!try inputs.matches(external_inputs, cache)) return false;
-    utils.measure_profile.recordGeneratedEdit(.inputs, inputs_start);
-    utils.measure_profile.recordGeneratedEdit(.prepare, prepare_start);
+    utils.profile.recordGeneratedEdit(.inputs, inputs_start);
+    utils.profile.recordGeneratedEdit(.prepare, prepare_start);
 
     for (generated.replacements) |replacement| {
         state.constraints.active.items[replacement.index].offset = replacement.new_offset;
         source.syncConstraintUpdate(state, replacement);
     }
     discard_retained_state = true;
-    const solve_start = utils.measure_profile.start();
+    const solve_start = utils.profile.start();
     var results = render_layout.solvePreparedPages(ctx.io, state, pages, .{
         .page_id = generated.page_id,
         .font_environment = reuse_inputs.font_environment,
@@ -103,24 +103,24 @@ pub fn apply(ctx: Context, snapshot: *analysis.snapshot.AnalysisSnapshot, path: 
         else => return false,
     };
     defer results.deinit(state.allocator);
-    utils.measure_profile.recordGeneratedEdit(.solve, solve_start);
+    utils.profile.recordGeneratedEdit(.solve, solve_start);
     results.validate() catch return false;
     for (results.pages) |page| if (page.diagnostics.len != 0) return false;
     try reuse_inputs.layouts.replacePages(state.allocator, &results);
-    const verify_inputs_start = utils.measure_profile.start();
+    const verify_inputs_start = utils.profile.start();
     if (!try inputs.matches(external_inputs, cache)) return false;
-    utils.measure_profile.recordGeneratedEdit(.inputs, verify_inputs_start);
+    utils.profile.recordGeneratedEdit(.inputs, verify_inputs_start);
 
-    const syntax_start = utils.measure_profile.start();
+    const syntax_start = utils.profile.start();
     try snapshot.updateSyntax(path, generated.source, ctx.cancellation);
     const syntax = snapshot.syntaxForSource(path, generated.source) orelse return false;
     rebase.stateSource(state, pages, &reuse_inputs.layouts, generated, syntax) catch |err| switch (err) {
         error.OutOfMemory, error.Canceled => return err,
         else => return false,
     };
-    utils.measure_profile.recordGeneratedEdit(.syntax, syntax_start);
+    utils.profile.recordGeneratedEdit(.syntax, syntax_start);
 
-    const translations_start = utils.measure_profile.start();
+    const translations_start = utils.profile.start();
     const previous_layout = &snapshot.layout_output.?;
     const previous_editor = &previous_layout.editor.?;
     var collected = try collectTranslations(ctx.allocator, state, &reuse_inputs.layouts, &previous_layout.report) orelse
@@ -130,9 +130,9 @@ pub fn apply(ctx: Context, snapshot: *analysis.snapshot.AnalysisSnapshot, path: 
         pages,
         collected.translations,
     )) return false;
-    utils.measure_profile.recordGeneratedEdit(.translations, translations_start);
+    utils.profile.recordGeneratedEdit(.translations, translations_start);
 
-    const snapshot_start = utils.measure_profile.start();
+    const snapshot_start = utils.profile.start();
     const conflicts_json = try core.layout.conflicts.toJson(ctx.allocator, state, &reuse_inputs.layouts);
     const editor = editor_snapshot.buildTranslationPatch(
         ctx.allocator,
@@ -156,7 +156,7 @@ pub fn apply(ctx: Context, snapshot: *analysis.snapshot.AnalysisSnapshot, path: 
 
     var next_layout_owned = true;
     errdefer if (next_layout_owned) next_layout.deinit(ctx.allocator);
-    utils.measure_profile.recordGeneratedEdit(.snapshot, snapshot_start);
+    utils.profile.recordGeneratedEdit(.snapshot, snapshot_start);
     previous_layout.deinit(ctx.allocator);
     snapshot.layout_output = next_layout;
     next_layout_owned = false;
@@ -164,6 +164,6 @@ pub fn apply(ctx: Context, snapshot: *analysis.snapshot.AnalysisSnapshot, path: 
     snapshot.generation = generation;
     discard_retained_state = false;
 
-    utils.measure_profile.recordGeneratedEdit(.applied, validation_start);
+    utils.profile.recordGeneratedEdit(.applied, validation_start);
     return true;
 }

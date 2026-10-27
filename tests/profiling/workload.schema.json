@@ -1,0 +1,184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ss profiling workload version 1",
+  "description": "Immutable project inputs and deterministic entry-file edits. Runtime validation also checks file inventory, hashes, edit references, and unique source matches.",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "entry": {
+      "$ref": "#/$defs/path"
+    },
+    "inputs": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/path"
+          },
+          {
+            "not": {
+              "const": "workload.json"
+            }
+          }
+        ]
+      },
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$",
+        "minLength": 64,
+        "maxLength": 64
+      }
+    },
+    "assets": {
+      "type": "object",
+      "properties": {
+        "recipe": {
+          "$ref": "#/$defs/path"
+        }
+      },
+      "required": [
+        "recipe"
+      ],
+      "additionalProperties": false
+    },
+    "requires": {
+      "type": "object",
+      "properties": {
+        "fonts": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "tex": {
+          "type": "object",
+          "properties": {
+            "packages": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "not": {
+                  "pattern": "[^A-Za-z0-9_-]"
+                }
+              },
+              "minItems": 0,
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "packages"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "fonts"
+      ],
+      "additionalProperties": false
+    },
+    "expect": {
+      "type": "object",
+      "properties": {
+        "pages": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "pages"
+      ],
+      "additionalProperties": false
+    },
+    "editor": {
+      "type": "object",
+      "properties": {
+        "edits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/identifier"
+              },
+              "before": {
+                "type": "string",
+                "minLength": 1
+              },
+              "after": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "id",
+              "before",
+              "after"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 30
+        },
+        "burst": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/identifier"
+          },
+          "minItems": 2,
+          "maxItems": 30
+        }
+      },
+      "required": [
+        "edits",
+        "burst"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "entry",
+    "inputs",
+    "requires",
+    "expect"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "not": {
+        "pattern": "[^a-z0-9-]"
+      }
+    },
+    "path": {
+      "type": "string",
+      "allOf": [
+        {
+          "pattern": "^[^/\\\\:\\u0000]+(?:/[^/\\\\:\\u0000]+)*$"
+        },
+        {
+          "not": {
+            "pattern": "(^|/)(\\.\\.?|\\.ss-cache|\\.agent-artifacts)(/|$)"
+          }
+        }
+      ]
+    }
+  }
+}
