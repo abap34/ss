@@ -13,12 +13,18 @@ fn pathFor(temporary: *const testing.TmpDir, name: []const u8) ![]u8 {
 
 var read_count: usize = 0;
 var cancel_reads = false;
+var short_reads = false;
 var replacement: ?struct { from: []const u8, to: []const u8 } = null;
 
 fn countedRead(_: ?*anyopaque, file: std.Io.File, buffers: []const []u8, offset: u64) std.Io.File.ReadPositionalError!usize {
     read_count += 1;
     if (cancel_reads) return error.Canceled;
-    const count = try testing.io.vtable.fileReadPositional(testing.io.userdata, file, buffers, offset);
+    var limited: [1][]u8 = undefined;
+    const target = if (short_reads and buffers.len > 0 and buffers[0].len > 7) block: {
+        limited[0] = buffers[0][0..7];
+        break :block &limited;
+    } else buffers;
+    const count = try testing.io.vtable.fileReadPositional(testing.io.userdata, file, target, offset);
     if (replacement) |value| {
         replacement = null;
         std.Io.Dir.cwd().rename(value.from, std.Io.Dir.cwd(), value.to, testing.io) catch return error.Unexpected;
@@ -44,7 +50,7 @@ test "latex references: unchanged files avoid reads and identical manifests shar
     var initial = try references.read(testing.allocator, io, path, &cache);
     defer initial.deinit();
     const initial_reads = read_count;
-    try testing.expect(initial_reads > 0);
+    try testing.expectEqual(@as(usize, 1), initial_reads);
     var repeated = try references.read(testing.allocator, io, path, &cache);
     defer repeated.deinit();
     try testing.expectEqual(initial_reads, read_count);
@@ -53,6 +59,24 @@ test "latex references: unchanged files avoid reads and identical manifests shar
     try testing.expectEqual(initial.inputs.ptr, repeated.inputs.ptr);
     try testing.expectEqual(initial.inputs.ptr, shared.inputs.ptr);
     try testing.expectEqual(@as(usize, 1), cache.manifests.count());
+}
+
+test "latex references: short reads fill the known file size" {
+    var temporary = testing.tmpDir(.{});
+    defer temporary.cleanup();
+    const path = try pathFor(&temporary, "value.ref");
+    defer testing.allocator.free(path);
+    try utils.fs.writeFile(testing.io, path, first);
+    var vtable = testing.io.vtable.*;
+    vtable.fileReadPositional = countedRead;
+    short_reads = true;
+    defer short_reads = false;
+    read_count = 0;
+    var value = try references.read(testing.allocator, .{ .userdata = testing.io.userdata, .vtable = &vtable }, path, null);
+    defer value.deinit();
+    try testing.expect(read_count > 1);
+    try testing.expectEqual(@as(u64, 42), value.inputs[0].fingerprint.digest);
+    try testing.expectEqualStrings("batch.pdf", value.value.pdf_name);
 }
 
 test "latex references: updates preserve older borrowers and missing or corrupt files can recover" {

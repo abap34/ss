@@ -136,6 +136,7 @@ pub fn register(suite: Suite, modules: project.ProjectModules, build_options: *S
     const artifacts_spec_mod = createModule(ctx, "tests/render/artifacts/spec_tests.zig", &.{
         import("artifacts", artifacts_mod),
         import("render_resources", modules.render_resources),
+        import("utils", modules.utils),
     }, null);
     _ = suite.add(artifacts_spec_mod, .{ .name = "test-render-artifacts", .description = "Run focused artifact production tests", .link_qpdf = true });
     const table_mod = createModule(ctx, "src/render/compile/table.zig", &.{

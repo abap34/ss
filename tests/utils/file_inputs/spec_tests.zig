@@ -75,3 +75,44 @@ test "file inputs: failed observations leave no partial path" {
     try testing.expectEqual(@as(usize, 0), inputs.paths.count());
     try testing.expectEqual(@as(usize, 0), inputs.items().len);
 }
+
+test "file inputs: repeated canonical paths need no allocation" {
+    var failing = testing.FailingAllocator.init(testing.allocator, .{});
+    var inputs = FileInputs.init(failing.allocator());
+    defer inputs.deinit();
+    try inputs.record("/project", "input.tex", .file);
+    failing.fail_index = failing.alloc_index;
+    try inputs.record("/elsewhere", "/project/input.tex", .file);
+    try testing.expectEqual(@as(usize, 1), inputs.items().len);
+    try testing.expect(!failing.has_induced_failure);
+}
+
+test "file inputs: relative paths are resolved against each base" {
+    var inputs = FileInputs.init(testing.allocator);
+    defer inputs.deinit();
+    try inputs.record(".", "input.tex", .file);
+    try inputs.record("nested", "input.tex", .file);
+    const recorded = inputs.items();
+    try testing.expectEqual(@as(usize, 2), recorded.len);
+    try testing.expectEqualStrings("input.tex", recorded[0].path);
+    try testing.expectEqualStrings("nested/input.tex", recorded[1].path);
+}
+
+test "file inputs: discarding appended paths preserves earlier inputs" {
+    var inputs = FileInputs.init(testing.allocator);
+    defer inputs.deinit();
+    try inputs.record("/project", "original.data", .file);
+    const length = inputs.ordered.items.len;
+    try inputs.record("/project", "./original.data", .file);
+    try inputs.record("/project", "discarded.data", .file);
+    inputs.truncate(length);
+    try testing.expectEqual(@as(usize, 1), inputs.paths.count());
+    try testing.expect(inputs.paths.contains("/project/original.data"));
+    try testing.expect(!inputs.paths.contains("/project/discarded.data"));
+    try inputs.record("/project", "discarded.data", .directory);
+    try testing.expectEqual(@as(usize, 2), inputs.items().len);
+    try testing.expectEqual(.directory, inputs.items()[0].kind);
+    inputs.truncate(0);
+    try testing.expectEqual(@as(usize, 0), inputs.paths.count());
+    try testing.expectEqual(@as(usize, 0), inputs.items().len);
+}

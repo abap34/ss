@@ -159,18 +159,15 @@ fn readStable(allocator: Allocator, io: std.Io, path: []const u8, identity: *Ide
         var file = try std.Io.Dir.cwd().openFile(io, path, .{});
         defer file.close(io);
         const before = try file.stat(io);
-        var buffer: [4096]u8 = undefined;
-        var reader = std.Io.File.Reader.init(file, io, &buffer);
-        const contents = reader.interface.allocRemaining(allocator, .limited(Header.read_limit)) catch |err| switch (err) {
-            error.ReadFailed => return reader.err.?,
-            else => return err,
-        };
+        if (before.size > Header.read_limit) return error.StreamTooLong;
+        const contents = try allocator.alloc(u8, @intCast(before.size));
         var contents_owned = true;
         defer if (contents_owned) allocator.free(contents);
+        const read_len = try file.readPositionalAll(io, contents, 0);
         const after = try file.stat(io);
         const current = try std.Io.Dir.cwd().statFile(io, path, .{});
         const candidate = Identity.fromStat(before);
-        if (!candidate.matches(after) or !candidate.matches(current) or after.size != contents.len) continue;
+        if (!candidate.matches(after) or !candidate.matches(current) or read_len != contents.len) continue;
         identity.* = candidate;
         contents_owned = false;
         return contents;

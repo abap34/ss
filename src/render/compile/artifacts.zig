@@ -339,7 +339,6 @@ fn recordQpdfFailure(ctx: Context, operation: []const u8) !void {
 }
 
 pub fn cachedLatexReference(ctx: Context, reference_path: []const u8) !?LatexAsset {
-    if (!fileExists(reference_path)) return null;
     return readLatexReference(ctx, reference_path) catch |err| switch (err) {
         // Retain a stale manifest until replacement so failed TeX runs can
         // continue watching previously resolved inputs, including missing files.
@@ -355,13 +354,15 @@ fn readLatexReference(ctx: Context, reference_path: []const u8) !LatexAsset {
     };
     defer cached.deinit();
     const reference = cached.value;
-    var inputs_ctx = latexInputContext(ctx);
-    inputs_ctx.observed = null;
-    if (!try latex_inputs.matches(inputs_ctx, cached.inputs)) return NativePdfError.InvalidPdfCache;
-    if (ctx.file_inputs) |observed| {
-        for (cached.inputs) |input| try observed.record(".", input.path, .file);
-        if (!try latex_inputs.matches(inputs_ctx, cached.inputs)) return NativePdfError.InvalidPdfCache;
-    }
+    // Observe before validation, but discard newly observed inputs if this
+    // reference is stale. Failed TeX runs retain old inputs through the recorder.
+    const input_count = if (ctx.file_inputs) |observed| observed.ordered.items.len else 0;
+    var inputs_valid = false;
+    defer if (!inputs_valid) {
+        if (ctx.file_inputs) |observed| observed.truncate(input_count);
+    };
+    if (!try latex_inputs.matches(latexInputContext(ctx), cached.inputs)) return NativePdfError.InvalidPdfCache;
+    inputs_valid = true;
     const directory = std.fs.path.dirname(reference_path) orelse ".";
     const pdf_path = try std.fs.path.join(ctx.allocator, &.{ directory, reference.pdf_name });
     errdefer ctx.allocator.free(pdf_path);

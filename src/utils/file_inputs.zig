@@ -41,6 +41,7 @@ pub const FileInputs = struct {
     }
 
     pub fn record(self: *FileInputs, base: []const u8, path: []const u8, kind: Kind) !void {
+        if (std.fs.path.isAbsolute(path) and self.paths.contains(path)) return;
         const resolved = try std.fs.path.resolve(self.allocator, &.{ base, path });
         errdefer self.allocator.free(resolved);
         if (self.paths.contains(resolved)) {
@@ -52,6 +53,16 @@ pub const FileInputs = struct {
         try self.paths.put(resolved, kind);
         self.ordered.appendAssumeCapacity(.{ .path = resolved, .kind = kind, .observation = observation });
         self.sorted = false;
+    }
+
+    /// Discard inputs appended since `length`, before the next call to items().
+    pub fn truncate(self: *FileInputs, length: usize) void {
+        for (self.ordered.items[length..]) |input| {
+            const removed = self.paths.remove(input.path);
+            std.debug.assert(removed);
+            self.allocator.free(input.path);
+        }
+        self.ordered.shrinkRetainingCapacity(length);
     }
 
     pub fn items(self: *FileInputs) []const Input {
