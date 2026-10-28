@@ -2549,3 +2549,34 @@ test "artifact preparation modes produce identical IR without caller text caches
     try automatic_ir.validate();
     try testing.expectEqualDeep(automatic_ir.fingerprint(), prepared_ir.fingerprint());
 }
+
+test "source cache: a valid fingerprint hit bypasses a same-path refresh claim" {
+    const root = ".test-tmp/source-cache-hit-during-refresh";
+    const path = root ++ "/input";
+    std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    try std.Io.Dir.cwd().createDirPath(testing.io, root);
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = path, .data = "current generation" });
+    var cache = render_resources.SourceCache.init(testing.allocator, testing.io);
+    defer cache.deinit();
+    const expected = try cache.fileFingerprint(path);
+    // A refresh claim must not block an already validated cached generation.
+    try cache.in_flight.put(testing.allocator, .{ .kind = null, .path = path }, {});
+    var work = SourceCacheWork{ .cache = &cache, .path = path, .fingerprint = true };
+    const thread = try std.Thread.spawn(.{}, SourceCacheWork.run, .{&work});
+    var joined = false;
+    defer if (!joined) {
+        cache.mutex.lockUncancelable(cache.io);
+        _ = cache.in_flight.remove(.{ .kind = null, .path = path });
+        cache.ready.broadcast(cache.io);
+        cache.mutex.unlock(cache.io);
+        thread.join();
+    };
+    try testing.expect(try waitForResourceFlag(&work.finished));
+    thread.join();
+    joined = true;
+    try testing.expect(work.failure == null);
+    try testing.expectEqual(expected.digest, work.digest);
+    try testing.expectEqual(@as(u32, 1), cache.in_flight.count());
+    _ = cache.in_flight.remove(.{ .kind = null, .path = path });
+}

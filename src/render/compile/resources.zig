@@ -121,6 +121,12 @@ pub const SourceCache = struct {
     }
 
     pub fn fileFingerprint(self: *SourceCache, path: []const u8) !FileFingerprint {
+        const initial = statPath(self.io, path) catch |err| switch (err) {
+            error.FileNotFound => return .{ .present = false, .digest = 0 },
+            else => return err,
+        };
+        if (self.cachedFingerprint(path, initial)) |fingerprint| return fingerprint;
+
         const key = SourceKey{ .kind = null, .path = path };
         try self.claim(key);
         defer self.release(key);
@@ -129,17 +135,8 @@ pub const SourceCache = struct {
                 error.FileNotFound => return .{ .present = false, .digest = 0 },
                 else => return err,
             };
-            {
-                self.mutex.lockUncancelable(self.io);
-                defer self.mutex.unlock(self.io);
-                if (self.fingerprint_indexes.get(path)) |index| {
-                    const fingerprint = self.fingerprints.items[index];
-                    if (fingerprint.identity.matchesStat(stat)) {
-                        self.touchFingerprint(index);
-                        return .{ .present = true, .digest = fingerprint.digest };
-                    }
-                }
-            }
+            // Another caller may have refreshed the cache while this one waited.
+            if (self.cachedFingerprint(path, stat)) |fingerprint| return fingerprint;
 
             const hashed = (try hashFileGeneration(self.io, path)) orelse continue;
             const confirmed = statPath(self.io, path) catch |err| switch (err) {
@@ -151,6 +148,16 @@ pub const SourceCache = struct {
             return .{ .present = true, .digest = hashed.digest };
         }
         return error.ResourceChangedDuringRead;
+    }
+
+    fn cachedFingerprint(self: *SourceCache, path: []const u8, stat: std.Io.File.Stat) ?FileFingerprint {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        const index = self.fingerprint_indexes.get(path) orelse return null;
+        const fingerprint = self.fingerprints.items[index];
+        if (!fingerprint.identity.matchesStat(stat)) return null;
+        self.touchFingerprint(index);
+        return .{ .present = true, .digest = fingerprint.digest };
     }
 
     fn resource(
