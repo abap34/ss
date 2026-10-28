@@ -5,7 +5,7 @@ import path from "node:path";
 import { root, ssBin } from "../harness.mjs";
 import { pdfAsset } from "../../support/assets/pdf.mjs";
 
-const scratch = path.join(root, ".ss-cache/tests/asset-constructors");
+const scratch = path.join(root, ".test-tmp/asset-constructors");
 await mkdir(scratch, { recursive: true });
 const project = await mkdtemp(path.join(scratch, "api-"));
 function run(...args) {

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -14,8 +14,15 @@ import {
   withLspClient,
 } from "../runtime/harness.mjs";
 
-const fixture = path.join(root, "tests", "fixtures", "project-basic", "slide.ss");
-const partsFixture = path.join(root, "tests", "fixtures", "project-basic", "parts.ss");
+const project = path.join(root, ".test-tmp", "lsp-smoke", "project");
+await mkdir(path.dirname(project), { recursive: true });
+await rm(project, { recursive: true, force: true });
+await cp(path.join(root, "tests", "fixtures", "project-basic"), project, {
+  recursive: true,
+  filter: (file) => path.basename(file) !== ".ss-cache",
+});
+const fixture = path.join(project, "slide.ss");
+const partsFixture = path.join(project, "parts.ss");
 const textModule = path.join(root, "stdlib", "text.ss");
 const uri = pathToFileURL(fixture).toString();
 const source = await readFile(fixture, "utf8");
@@ -26,7 +33,7 @@ const textModuleSource = await readFile(textModule, "utf8");
 const moduleLabelDefinition = functionDefinitionLocation(partsUri, partsSource, "module_label");
 const textDefinition = functionDefinitionLocation(textModuleUri, textModuleSource, "text");
 
-await withLspClient({ cwd: root }, async (client) => {
+await withLspClient({ cwd: project }, async (client) => {
   const initialize = await client.initialize();
   assert(initialize.capabilities?.completionProvider, "initialize did not advertise completion");
   assert(initialize.capabilities?.textDocumentSync === 2, "initialize did not advertise incremental sync");

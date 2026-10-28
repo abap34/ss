@@ -4,12 +4,12 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { root, ssBin } from "../harness.mjs";
 
-const scratch = path.join(root, ".ss-cache/tests/typed-icon");
+const scratch = path.join(root, ".test-tmp/typed-icon");
 await mkdir(scratch, { recursive: true });
 const output = await mkdtemp(path.join(scratch, "display-"));
 const source = path.join(root, "tests/fixtures/typed-display/icon.ss");
 function run(...args) {
-  const result = spawnSync(ssBin, args, { cwd: root, encoding: "utf8", timeout: 60000 });
+  const result = spawnSync(ssBin, args, { cwd: output, encoding: "utf8", timeout: 60000 });
   assert.ifError(result.error);
   return result;
 }

@@ -111,7 +111,7 @@ fn canceledRead(_: ?*anyopaque, _: std.Io.File, _: []const []u8, _: u64) std.Io.
 }
 
 test "document evaluation propagates read cancellation without a readlines diagnostic" {
-    const root = ".ss-cache/test-evaluation-file-cancellation";
+    const root = ".test-tmp/evaluation-file-cancellation";
     std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
     defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
     try std.Io.Dir.cwd().createDirPath(testing.io, root);
@@ -120,7 +120,7 @@ test "document evaluation propagates read cancellation without a readlines diagn
     defer arena.deinit();
     var evaluation = try prepare(arena.allocator(),
         \\page cancellation
-        \\let contents = readlines(".ss-cache/test-evaluation-file-cancellation/input.txt")
+        \\let contents = readlines(".test-tmp/evaluation-file-cancellation/input.txt")
         \\end
     );
     defer evaluation.deinit();
@@ -133,7 +133,7 @@ test "document evaluation propagates read cancellation without a readlines diagn
 }
 
 test "readlines accepts exactly one MiB and diagnoses larger input" {
-    const root = ".ss-cache/test-evaluation-file-limit";
+    const root = ".test-tmp/evaluation-file-limit";
     const maximum = 1024 * 1024;
     std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
     defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
@@ -147,7 +147,7 @@ test "readlines accepts exactly one MiB and diagnoses larger input" {
         defer arena.deinit();
         var evaluation = try prepare(arena.allocator(),
             \\page limits
-            \\let contents = readlines(".ss-cache/test-evaluation-file-limit/input.txt")
+            \\let contents = readlines(".test-tmp/evaluation-file-limit/input.txt")
             \\end
         );
         defer evaluation.deinit();

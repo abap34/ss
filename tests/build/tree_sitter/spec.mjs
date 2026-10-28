@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const worker = path.resolve(process.argv[2]);
-const output = path.join(root, ".ss-cache", "tree-sitter-build-tests");
+const output = path.join(root, ".test-tmp", "tree-sitter-build-tests");
 mkdirSync(output, { recursive: true });
 const temporary = mkdtempSync(path.join(output, "case-"));
 const active = new Set();

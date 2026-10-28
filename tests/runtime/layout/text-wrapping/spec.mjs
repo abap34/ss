@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import { assert, root, ssBin, withLspClient } from "../../harness.mjs";
 import { editorSnapshot } from "../../editor/support.mjs";
 
-const outputRoot = path.join(root, ".ss-cache", "tests", "text-wrapping");
+const outputRoot = path.join(root, ".test-tmp", "text-wrapping");
 await mkdir(outputRoot, { recursive: true });
 const project = await mkdtemp(path.join(outputRoot, "run-"));
 const slide = path.join(project, "slide.ss");

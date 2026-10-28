@@ -20,7 +20,7 @@ import { exercisePageWindow } from "./viewport.mjs";
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const source = path.join(repository, "editor/vscode/media/editor");
-const output = path.join(repository, ".ss-cache/editor-ui-test");
+const output = path.join(repository, ".test-tmp/editor-ui-test");
 const require = createRequire(import.meta.url);
 const esbuild = require(path.join(repository, "editor/vscode/node_modules/esbuild"));
 

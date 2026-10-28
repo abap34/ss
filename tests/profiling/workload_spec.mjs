@@ -56,7 +56,7 @@ test("unsupported versions, unknown keys, malformed values, and invalid edit ref
     mutate(value);
     assert.throws(() => validateWorkload(value));
   }
-  for (const file of ["../outside.ss", "/absolute.ss", "a/./b.ss", "a//b.ss", "a/../b.ss", "a\\b.ss", "C:/b.ss", ".ss-cache/a.ss", ".agent-artifacts/a.ss", "a\0b.ss", "workload.json"]) {
+  for (const file of ["../outside.ss", "/absolute.ss", "a/./b.ss", "a//b.ss", "a/../b.ss", "a\\b.ss", "C:/b.ss", ".ss-cache/a.ss", ".agent-artifacts/a.ss", ".test-tmp/a.ss", "a\0b.ss", "workload.json"]) {
     const value = definition();
     value.inputs[file] = digest(source);
     assert.throws(() => validateWorkload(value), undefined, file);

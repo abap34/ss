@@ -31,7 +31,7 @@ fn preloadAssets(
     var prepared = [_]core.prepared.PreparedPage{.{ .page_id = 1, .index = 0, .background = null, .objects = &objects }};
     const pages = core.prepared.PreparedPages{ .pages = &prepared };
     try render_compile.preload(allocator, io, state, &pages, .{
-        .cache_dir = ".ss-cache/preload-ownership",
+        .cache_dir = ".test-tmp/preload-ownership",
         .jobs = 1,
     }, null);
 }

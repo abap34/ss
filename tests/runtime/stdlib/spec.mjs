@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { root, ssBin } from '../harness.mjs';
 
-const scratch = path.join(root, '.ss-cache/tests/stdlib');
+const scratch = path.join(root, '.test-tmp/stdlib');
 await mkdir(scratch, { recursive: true });
 const project = await mkdtemp(path.join(scratch, 'api-'));
 async function dump(source) {

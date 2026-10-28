@@ -11,7 +11,7 @@ if (probe.error?.code !== 'ENOENT') {
 }
 
 async function testSizing() {
-  const scratch = path.join(root, '.ss-cache/tests/math-sizing');
+  const scratch = path.join(root, '.test-tmp/math-sizing');
   await mkdir(scratch, { recursive: true });
   const project = await mkdtemp(path.join(scratch, 'project-'));
   const aligned = String.raw`\begin{aligned}x&=\frac{a}{b}\end{aligned}`;

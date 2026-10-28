@@ -111,7 +111,7 @@ test "highlight cache: ss distinguishes current keywords from unsupported syntax
     }
 }
 
-const query_root = ".ss-cache/test-highlight-query-generations";
+const query_root = ".test-tmp/highlight-query-generations";
 const query_path = query_root ++ "/query.scm";
 
 test "highlight cache: changed query bytes and parser identities invalidate results" {

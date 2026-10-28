@@ -156,7 +156,7 @@ async function expectVisiblePdfRendered(page) {
 }
 
 async function runStandalone() {
-  const output = path.join(repository, ".ss-cache/render-navigation");
+  const output = path.join(repository, ".test-tmp/render-navigation");
   const driverArgument = process.argv.slice(2).find((argument) => !argument.startsWith("--"));
   const driver = path.resolve(repository, driverArgument ?? "zig-out/bin/ss-render-parity-driver");
   await rm(output, { recursive: true, force: true });
@@ -168,7 +168,7 @@ async function runStandalone() {
     path.join(fixture, "slide.ss"),
     path.join(output, "navigation.pdf"),
     path.join(output, "navigation.html"),
-  ], { cwd: repository, timeout: 180_000, maxBuffer: 8 * 1024 * 1024 });
+  ], { cwd: output, timeout: 180_000, maxBuffer: 8 * 1024 * 1024 });
   await withBrowser(output, async (browser, baseUrl) => {
     await inspectStandaloneNavigation(browser, baseUrl);
     const fileRoot = pathToFileURL(output).href.replace(/\/$/, "");

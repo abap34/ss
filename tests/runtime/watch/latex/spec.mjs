@@ -12,14 +12,14 @@ if (probe.code !== 0) {
   process.exit(0);
 }
 const realPdflatex = probe.stdout.trim();
-const scratch = path.join(root, ".ss-cache", "tests", "watch-latex");
+const scratch = path.join(root, ".test-tmp", "watch-latex");
 await mkdir(scratch, { recursive: true });
 const directory = await mkdtemp(path.join(scratch, "project-"));
 const project = path.join(directory, "project with spaces");
 const outside = path.join(directory, "outside");
 const bin = path.join(directory, "bin");
 await mkdir(project);
-await mkdir(path.join(project, ".ss-cache"));
+await mkdir(path.join(project, ".test-tmp"));
 await mkdir(outside);
 await mkdir(bin);
 const callsFile = path.join(directory, "tex-calls");
@@ -93,7 +93,7 @@ exec ${quote(realPdflatex)} "$@"
   for (let index = 0; index < originalPdfNames.length; index++) {
     assert.deepEqual(await readFile(path.join(artifactDirectory, originalPdfNames[index])), originalPdfBytes[index], "Replacing a reference mutated a retained PDF");
   }
-  await run(ssBin, ["render", "--quiet", "slide.ss", ".ss-cache/final.pdf"], project);
+  await run(ssBin, ["render", "--quiet", "slide.ss", ".test-tmp/final.pdf"], project);
   const beforeWatch = await calls();
   watch = new WatchProcess(project, ["check", "--quiet", "slide.ss"]);
   await watch.waitFor(() => checks() === 1, "warm watch initialization");
@@ -150,8 +150,8 @@ function checks() { return watch.occurrences("ok "); }
 function quote(text) { return `'${text.replaceAll("'", "'\\''")}'`; }
 async function calls() { return (await readFile(callsFile, "utf8")).trim().split("\n").length; }
 async function dump(name) {
-  await run(ssBin, ["dump", "--quiet", "slide.ss", `.ss-cache/${name}`], project);
-  return JSON.parse(await readFile(path.join(project, ".ss-cache", name), "utf8"));
+  await run(ssBin, ["dump", "--quiet", "slide.ss", `.test-tmp/${name}`], project);
+  return JSON.parse(await readFile(path.join(project, ".test-tmp", name), "utf8"));
 }
 async function readReferences() {
   const names = (await readdir(artifactDirectory)).filter((name) => name.endsWith(".ref"));

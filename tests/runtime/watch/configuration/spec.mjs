@@ -4,7 +4,7 @@ import path from "node:path";
 import { root } from "../../harness.mjs";
 import { WatchProcess, settle } from "../harness.mjs";
 
-const scratch = path.join(root, ".ss-cache", "tests", "watch-configuration");
+const scratch = path.join(root, ".test-tmp", "watch-configuration");
 await mkdir(scratch, { recursive: true });
 await testReloadAndRecovery();
 await testExplicitOverrides();

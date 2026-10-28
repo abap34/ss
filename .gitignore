@@ -16,3 +16,4 @@ coverage.xml
 .DS_Store
 /site/doc_build
 /zig-pkg
+/.test-tmp/

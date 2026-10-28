@@ -45,7 +45,7 @@ discarded before computing the median, while maximum RSS uses the largest
 remaining sample. Set `SS_RENDER_BENCHMARK_WRITE_BASELINE` to create a local
 JSON baseline, then set `SS_RENDER_BENCHMARK_BASELINE` to enforce the `1.05`
 time and `1.10` memory limits. Benchmark files remain under
-`.ss-cache/render-benchmark/`.
+`.test-tmp/render-benchmark/`.
 
 WYSIWYG initial snapshots, full snapshots after body-text changes, and delta
 snapshots after generated position-constraint rewrites are measured with the
@@ -62,21 +62,21 @@ Each initial-snapshot sample initializes a fresh language server. Body-text and
 position-edit samples each run as a continuous series against one language
 server. Every metric retains 30 samples after five warmup samples and records
 the median, 95th percentile, minimum, and maximum in
-`.ss-cache/wysiwyg-benchmark/result.json`.
+`.test-tmp/wysiwyg-benchmark/result.json`.
 
 Record the baseline from the unchanged source on the same machine,
 with the same ReleaseSafe configuration and fixture, before modifying the
 working tree:
 
 ```sh
-SS_WYSIWYG_BENCHMARK_WRITE_BASELINE=.ss-cache/wysiwyg-baseline.json \
+SS_WYSIWYG_BENCHMARK_WRITE_BASELINE=.test-tmp/wysiwyg-baseline.json \
   zig build -Doptimize=ReleaseSafe benchmark-wysiwyg
 ```
 
 Compare the current source against that baseline on the same machine:
 
 ```sh
-SS_WYSIWYG_BENCHMARK_BASELINE=.ss-cache/wysiwyg-baseline.json \
+SS_WYSIWYG_BENCHMARK_BASELINE=.test-tmp/wysiwyg-baseline.json \
   zig build -Doptimize=ReleaseSafe benchmark-wysiwyg
 ```
 

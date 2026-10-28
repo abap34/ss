@@ -5,7 +5,7 @@ const testing = std.testing;
 test "tree-sitter cache: leases protect active sources and their working directories" {
     const io = testing.io;
     const allocator = testing.allocator;
-    const root = ".ss-cache/test-tree-sitter-leases";
+    const root = ".test-tmp/tree-sitter-leases";
     const cwd = std.Io.Dir.cwd();
     try cwd.deleteTree(io, root);
     defer cwd.deleteTree(io, root) catch {};

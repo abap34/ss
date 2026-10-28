@@ -12,6 +12,7 @@ const render_resources = @import("render_resources");
 const render_text = @import("render_text");
 
 const testing = std.testing;
+const test_cache_dir = ".test-tmp/render/compile/cache";
 
 test "final-width measurements retain ink origins and baselines through the file cache" {
     var state = try initEmptyDocumentState();
@@ -32,7 +33,7 @@ test "final-width measurements retain ink origins and baselines through the file
     const font_environment = try render_compile.acquireFontEnvironment();
 
     const measured = blk: {
-        var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .font_environment = font_environment });
+        var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .cache_dir = test_cache_dir, .font_environment = font_environment });
         defer scope.deinit();
         scope.measurements.persistent.clearRetainingCapacity();
         const provider = scope.provider();
@@ -43,7 +44,7 @@ test "final-width measurements retain ink origins and baselines through the file
     try testing.expect(measured.first_baseline.? > 0);
     try testing.expectEqual((try state_layout.frame(object_id)).*.width, measured.measured_width.?);
 
-    var warm_scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .font_environment = font_environment });
+    var warm_scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .cache_dir = test_cache_dir, .font_environment = font_environment });
     defer warm_scope.deinit();
     const persisted = warm_scope.measurements.persistent.get(measured.cache_key.?) orelse return error.MissingPersistedMeasurement;
     try testing.expectEqualDeep(measured, persisted);
@@ -51,7 +52,7 @@ test "final-width measurements retain ink origins and baselines through the file
     const warm = (try provider.measure(provider.context, try state_layout.work(), object, (try state_layout.frame(object_id)).*.width, .width_constrained)).?;
     try testing.expectEqualDeep(measured, warm);
 
-    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .jobs = 1 });
+    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .cache_dir = test_cache_dir, .jobs = 1 });
     defer ir.deinit(testing.allocator);
     var ink: ?render.Rect = null;
     var first_baseline: ?f64 = null;
@@ -86,7 +87,7 @@ test "code measurement includes empty logical lines and keeps its ink offset" {
     text.font_size = 24;
     text.line_height = 36;
     const font_environment = try render_compile.acquireFontEnvironment();
-    var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .font_environment = font_environment });
+    var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .cache_dir = test_cache_dir, .font_environment = font_environment });
     defer {
         scope.measurements.dirty = false;
         scope.deinit();
@@ -119,7 +120,7 @@ test "natural measurement includes tables beside ordinary paragraphs" {
     defer prepared.deinit(testing.allocator);
     try testing.expect(prepared.pages[0].objects[0].markdownDocument() != null);
     const font_environment = try render_compile.acquireFontEnvironment();
-    var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .font_environment = font_environment });
+    var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .cache_dir = test_cache_dir, .font_environment = font_environment });
     defer {
         scope.measurements.dirty = false;
         scope.deinit();
@@ -175,7 +176,7 @@ fn markdownGeometry(content: []const u8, family: []const u8, width: f32) !Markdo
     heading.line_height = 47;
     paint.markdown_headings[1] = heading;
     const environment = try render_compile.acquireFontEnvironment();
-    var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .font_environment = environment });
+    var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .cache_dir = test_cache_dir, .font_environment = environment });
     defer {
         scope.measurements.dirty = false;
         scope.deinit();
@@ -183,7 +184,7 @@ fn markdownGeometry(content: []const u8, family: []const u8, width: f32) !Markdo
     scope.measurements.persistent.clearRetainingCapacity();
     const provider = scope.provider();
     var result = MarkdownGeometry{ .measurement = (try provider.measure(provider.context, try state_layout.work(), object, width, .width_constrained)).? };
-    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .jobs = 1, .font_environment = environment });
+    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .cache_dir = test_cache_dir, .jobs = 1, .font_environment = environment });
     defer ir.deinit(testing.allocator);
     var ink: ?render.Rect = null;
     for (ir.pages[0].items.items) |item| {
@@ -455,7 +456,7 @@ test "captured measurement items keep page order and annotations" {
         &state,
         &prepared,
         try state_layout.document(),
-        .{ .jobs = 1 },
+        .{ .cache_dir = test_cache_dir, .jobs = 1 },
     );
     defer result.deinit(testing.allocator);
 
@@ -490,6 +491,7 @@ test "render compiler shares highlight work across objects and compilations" {
 
     for (0..2) |_| {
         var result = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{
+            .cache_dir = test_cache_dir,
             .jobs = 1,
             .highlight_cache = &cache,
             .highlight_languages = &.{.{
@@ -506,7 +508,7 @@ test "render compiler shares highlight work across objects and compilations" {
 }
 
 test "measurement cache observes changed highlight query contents" {
-    const root = ".ss-cache/test-measure-highlight-inputs";
+    const root = ".test-tmp/measure-highlight-inputs";
     const query_path = root ++ "/query.scm";
     try std.Io.Dir.cwd().createDirPath(testing.io, root);
     defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
@@ -525,6 +527,7 @@ test "measurement cache observes changed highlight query contents" {
     prepared.pages[0].objects[0].render.text.?.code_font.family = "DejaVu Serif";
     const font_environment = try render_compile.acquireFontEnvironment();
     var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{
+        .cache_dir = test_cache_dir,
         .highlight_languages = &.{.{
             .name = @constCast("python"),
             .parser = @constCast("python"),
@@ -583,7 +586,7 @@ test "measurement cache observes the inline math engine with an empty preamble" 
     defer prepared.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 0), prepared.pages[0].objects[0].latex_preamble.len);
     const font_environment = try render_compile.acquireFontEnvironment();
-    var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .font_environment = font_environment });
+    var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .cache_dir = test_cache_dir, .font_environment = font_environment });
     defer {
         scope.measurements.dirty = false;
         scope.deinit();
@@ -605,7 +608,7 @@ test "measurement cache observes the inline math engine with an empty preamble" 
 
 test "measurement and page caches observe transitive TeX inputs" {
     if (!try latexEngineAvailable(.pdflatex)) return error.SkipZigTest;
-    const root = ".ss-cache/test-measure-latex-inputs";
+    const root = ".test-tmp/measure-latex-inputs";
     const input_path = root ++ "/fragment.tex";
     try std.Io.Dir.cwd().createDirPath(testing.io, root);
     defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
@@ -621,7 +624,7 @@ test "measurement and page caches observe transitive TeX inputs" {
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
     const font_environment = try render_compile.acquireFontEnvironment();
-    var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .font_environment = font_environment });
+    var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .cache_dir = test_cache_dir, .font_environment = font_environment });
     defer {
         scope.measurements.dirty = false;
         scope.deinit();
@@ -633,14 +636,14 @@ test "measurement and page caches observe transitive TeX inputs" {
     try testing.expectEqual(initial.cache_key, warm.cache_key);
     var page_cache = render_compile.PageCache.init(testing.allocator, testing.io);
     defer page_cache.deinit();
-    var initial_ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .jobs = 1, .page_cache = &page_cache });
+    var initial_ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .cache_dir = test_cache_dir, .jobs = 1, .page_cache = &page_cache });
     defer initial_ir.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 1), page_cache.entries.count());
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = input_path, .data = "\\rule{44pt}{10pt}" });
     const changed = (try provider.measure(provider.context, try state_layout.work(), object, 400, .natural)).?;
     try testing.expect(initial.cache_key != changed.cache_key);
     try testing.expect(changed.width > initial.width * 2);
-    var changed_ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .jobs = 1, .page_cache = &page_cache });
+    var changed_ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .cache_dir = test_cache_dir, .jobs = 1, .page_cache = &page_cache });
     defer changed_ir.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 2), page_cache.entries.count());
     scope.measurements.clearMemory();
@@ -650,7 +653,7 @@ test "measurement and page caches observe transitive TeX inputs" {
 }
 
 test "render compiler rejects unavailable PDF pages" {
-    const root = ".ss-cache/test-render-invalid-pdf-page";
+    const root = ".test-tmp/render-invalid-pdf-page";
     const pdf_path = root ++ "/page.pdf";
     std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
     defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
@@ -914,7 +917,7 @@ test "text layout append failure consumes one shared reference" {
 }
 
 test "text shape cache persists across compiler processes and rejects corrupt data" {
-    const root = ".ss-cache/test-render-persistent-text-shapes";
+    const root = ".test-tmp/render-persistent-text-shapes";
     const cache_path = root ++ "/text-shapes-v5/shapes.bin";
     std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
     defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
@@ -1226,7 +1229,7 @@ test "markdown underline paint controls color opacity width offset and dash" {
 }
 
 test "resource compiler records deterministic raster SVG and PDF metadata" {
-    const root = ".ss-cache/test-render-resources";
+    const root = ".test-tmp/render-resources";
     const png_path = root ++ "/pixel.png";
     const svg_path = root ++ "/shape.svg";
     const pdf_path = root ++ "/page.pdf";
@@ -1296,7 +1299,7 @@ test "resource compiler records deterministic raster SVG and PDF metadata" {
 }
 
 test "resource compiler shares one in-flight load across workers" {
-    const root = ".ss-cache/test-render-resources-concurrent";
+    const root = ".test-tmp/render-resources-concurrent";
     const svg_path = root ++ "/shape.svg";
     std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
     defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
@@ -1326,7 +1329,7 @@ test "resource compiler shares one in-flight load across workers" {
 }
 
 test "font source cache reloads changed files across builders" {
-    const root = ".ss-cache/test-render-font-source-cache";
+    const root = ".test-tmp/render-font-source-cache";
     const font_path = root ++ "/font.otf";
     std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
     defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
@@ -1358,7 +1361,7 @@ test "font source cache reloads changed files across builders" {
 }
 
 test "source cache teardown keeps builder resources alive" {
-    const root = ".ss-cache/test-render-source-cache-lifetime";
+    const root = ".test-tmp/render-source-cache-lifetime";
     const svg_path = root ++ "/shape.svg";
     const svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"40\"><rect width=\"80\" height=\"40\"/></svg>";
     std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
@@ -1381,7 +1384,7 @@ test "source cache teardown keeps builder resources alive" {
 }
 
 test "source cache invalidates an atomic replacement with preserved size and mtime" {
-    const root = ".ss-cache/test-render-source-cache-atomic-replacement";
+    const root = ".test-tmp/render-source-cache-atomic-replacement";
     const font_path = root ++ "/font.ttf";
     const replacement_path = root ++ "/replacement.ttf";
     std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
@@ -1424,7 +1427,7 @@ test "source cache invalidates an atomic replacement with preserved size and mti
 }
 
 test "page cache misses when a dependent resource changes under the same page key" {
-    const root = ".ss-cache/test-render-page-cache-resource-change";
+    const root = ".test-tmp/render-page-cache-resource-change";
     const svg_path = root ++ "/shape.svg";
     const replacement_path = root ++ "/replacement.svg";
     const first_svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"4\"><rect fill=\"red\"/></svg>";
@@ -1475,7 +1478,7 @@ test "page cache misses when a dependent resource changes under the same page ke
 }
 
 test "source cache bounds paths without invalidating builder resources" {
-    const root = ".ss-cache/test-render-source-cache-bound";
+    const root = ".test-tmp/render-source-cache-bound";
     const font = "synthetic font bytes";
     std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
     defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
@@ -1603,7 +1606,7 @@ fn waitForResourceFlag(flag: *const std.atomic.Value(bool)) !bool {
 }
 
 test "source cache: unrelated loads proceed while same-path callers share a blocked read" {
-    const root = ".ss-cache/test-source-cache-independent-loads";
+    const root = ".test-tmp/source-cache-independent-loads";
     std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
     defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
     try std.Io.Dir.cwd().createDirPath(testing.io, root);
@@ -1648,7 +1651,7 @@ test "source cache: unrelated loads proceed while same-path callers share a bloc
 }
 
 test "source cache: fingerprints evict the least recently used path without flushing hot entries" {
-    const root = ".ss-cache/test-source-cache-fingerprint-capacity";
+    const root = ".test-tmp/source-cache-fingerprint-capacity";
     std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
     defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
     try std.Io.Dir.cwd().createDirPath(testing.io, root);
@@ -1684,7 +1687,7 @@ test "source cache: fingerprints evict the least recently used path without flus
 }
 
 test "source cache: atomic replacement during a read publishes the current generation" {
-    const root = ".ss-cache/test-source-cache-replacement-during-read";
+    const root = ".test-tmp/source-cache-replacement-during-read";
     const path = root ++ "/font.ttf";
     const replacement = root ++ "/replacement.ttf";
     std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
@@ -1730,7 +1733,7 @@ fn inspectSourceCacheAllocations(allocator: std.mem.Allocator, path: []const u8)
 }
 
 test "source cache: failed publication releases in-flight claims and partial storage" {
-    const root = ".ss-cache/test-source-cache-allocation-failure";
+    const root = ".test-tmp/source-cache-allocation-failure";
     const path = root ++ "/font.ttf";
     std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
     defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
@@ -1999,7 +2002,7 @@ test "document font environment rejects changes between layout and compilation" 
             testing.io,
             &state,
             &prepared_pages,
-            .{ .font_environment = font_environment },
+            .{ .cache_dir = test_cache_dir, .font_environment = font_environment },
         ),
     );
     try testing.expectError(
@@ -2010,7 +2013,7 @@ test "document font environment rejects changes between layout and compilation" 
             &state,
             &prepared_pages,
             try state_layout.document(),
-            .{ .artifact_preparation = .already_preloaded, .font_environment = font_environment },
+            .{ .cache_dir = test_cache_dir, .artifact_preparation = .already_preloaded, .font_environment = font_environment },
         ),
     );
     try testing.expectError(
@@ -2021,7 +2024,7 @@ test "document font environment rejects changes between layout and compilation" 
             &state,
             &prepared_pages,
             try state_layout.document(),
-            .{ .font_environment = font_environment },
+            .{ .cache_dir = test_cache_dir, .font_environment = font_environment },
         ),
     );
     try testing.expectEqual(@as(usize, 1), state.diagnostics.entries.items.len);
@@ -2114,14 +2117,14 @@ test "paragraph measurement and emission retain the same final-width glyph layou
         var cache = render_text.Cache.init(testing.allocator, testing.io);
         defer cache.deinit();
         const environment = try render_compile.acquireFontEnvironment();
-        var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .font_environment = environment, .text_cache = &cache });
+        var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .cache_dir = test_cache_dir, .font_environment = environment, .text_cache = &cache });
         defer scope.deinit();
         scope.measurements.persistent.clearRetainingCapacity();
         const provider = scope.provider();
         const measured = (try provider.measure(provider.context, try state_layout.work(), object, 100, .width_constrained)).?;
         try testing.expect(cache.paragraphs.entries.count() > 0);
         const retained_count = cache.paragraphs.entries.count();
-        var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .jobs = 1, .text_cache = &cache, .font_environment = environment });
+        var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .cache_dir = test_cache_dir, .jobs = 1, .text_cache = &cache, .font_environment = environment });
         defer ir.deinit(testing.allocator);
         try ir.validate();
         try testing.expectEqual(retained_count, cache.paragraphs.entries.count());
@@ -2158,7 +2161,7 @@ test "paint boundaries preserve contextual glyphs and visual positions" {
         object.render.text.?.font.family = "DejaVu Sans";
         object.render.text.?.font_size = 24;
     }
-    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .jobs = 1 });
+    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .cache_dir = test_cache_dir, .jobs = 1 });
     defer ir.deinit(testing.allocator);
     try ir.validate();
     const PositionedGlyph = struct { id: u32, x: f64, y: f64, advance: f64 };
@@ -2220,12 +2223,12 @@ test "Markdown highlight backgrounds wrap behind glyphs and inline icons without
         const plain_id = prepared.pages[0].objects[0].node_id;
         const marked_id = prepared.pages[0].objects[1].node_id;
         const environment = try render_compile.acquireFontEnvironment();
-        var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .font_environment = environment });
+        var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .cache_dir = test_cache_dir, .font_environment = environment });
         defer scope.deinit();
         scope.measurements.persistent.clearRetainingCapacity();
         const provider = scope.provider();
         const measured = (try provider.measure(provider.context, try fixture.work(), state.getNode(marked_id).?, 180, .width_constrained)).?;
-        var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try fixture.document(), .{ .jobs = 1, .font_environment = environment });
+        var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try fixture.document(), .{ .cache_dir = test_cache_dir, .jobs = 1, .font_environment = environment });
         defer ir.deinit(testing.allocator);
         try ir.validate();
         const Glyph = struct { id: u32, x: f64, y: f64, advance: f64 };
@@ -2274,7 +2277,7 @@ test "Markdown highlight backgrounds wrap behind glyphs and inline icons without
         const without_background = (try provider.measure(provider.context, try fixture.work(), state.getNode(marked_id).?, 180, .width_constrained)).?;
         try testing.expect(measured.cache_key != without_background.cache_key);
         try testing.expectEqual(measured.logicalBounds(), without_background.logicalBounds());
-        var disabled = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try fixture.document(), .{ .jobs = 1, .font_environment = environment });
+        var disabled = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try fixture.document(), .{ .cache_dir = test_cache_dir, .jobs = 1, .font_environment = environment });
         defer disabled.deinit(testing.allocator);
         for (disabled.pages[0].items.items) |item| {
             if (item.header().node_id == marked_id) try testing.expect(item != .fill_rect);
@@ -2321,7 +2324,7 @@ test "Markdown code line backgrounds cover source rows without changing glyphs o
         const plain_id = prepared.pages[0].objects[0].node_id;
         const marked_id = prepared.pages[0].objects[1].node_id;
         const environment = try render_compile.acquireFontEnvironment();
-        var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .font_environment = environment });
+        var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .cache_dir = test_cache_dir, .font_environment = environment });
         defer scope.deinit();
         scope.measurements.persistent.clearRetainingCapacity();
         const provider = scope.provider();
@@ -2329,7 +2332,7 @@ test "Markdown code line backgrounds cover source rows without changing glyphs o
         const unmarked = (try provider.measure(provider.context, try fixture.work(), state.getNode(plain_id).?, 180, .width_constrained)).?;
         try testing.expectEqual(unmarked.logicalBounds(), measured.logicalBounds());
         try testing.expectApproxEqAbs(@as(f32, 5 * 26 + 2 * 8), measured.height, 0.001);
-        var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try fixture.document(), .{ .jobs = 1, .font_environment = environment });
+        var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try fixture.document(), .{ .cache_dir = test_cache_dir, .jobs = 1, .font_environment = environment });
         defer ir.deinit(testing.allocator);
         try ir.validate();
         const Glyph = struct { id: u32, x: f64, y: f64, advance: f64, color: core.render_policy.Color };
@@ -2386,7 +2389,7 @@ test "Markdown code line backgrounds cover source rows without changing glyphs o
         const disabled_measurement = (try provider.measure(provider.context, try fixture.work(), state.getNode(marked_id).?, 180, .width_constrained)).?;
         try testing.expect(measured.cache_key != disabled_measurement.cache_key);
         try testing.expectEqual(measured.logicalBounds(), disabled_measurement.logicalBounds());
-        var disabled = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try fixture.document(), .{ .jobs = 1, .font_environment = environment });
+        var disabled = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try fixture.document(), .{ .cache_dir = test_cache_dir, .jobs = 1, .font_environment = environment });
         defer disabled.deinit(testing.allocator);
         for (disabled.pages[0].items.items) |item| {
             if (item.header().node_id == marked_id) try testing.expect(item != .fill_rect);
@@ -2410,13 +2413,13 @@ test "inline math shares measured paragraph baselines with bidirectional text" {
     var cache = render_text.Cache.init(testing.allocator, testing.io);
     defer cache.deinit();
     const environment = try render_compile.acquireFontEnvironment();
-    var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .font_environment = environment, .text_cache = &cache });
+    var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .cache_dir = test_cache_dir, .font_environment = environment, .text_cache = &cache });
     defer scope.deinit();
     scope.measurements.persistent.clearRetainingCapacity();
     const provider = scope.provider();
     const measured = (try provider.measure(provider.context, try state_layout.work(), object, (try state_layout.frame(object_id)).*.width, .width_constrained)).?;
     const retained_count = cache.paragraphs.entries.count();
-    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .jobs = 1, .text_cache = &cache, .font_environment = environment });
+    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .cache_dir = test_cache_dir, .jobs = 1, .text_cache = &cache, .font_environment = environment });
     defer ir.deinit(testing.allocator);
     try ir.validate();
     try testing.expectEqual(retained_count, cache.paragraphs.entries.count());
@@ -2478,10 +2481,10 @@ fn verifyTableGeometry(source: []const u8) !void {
     const environment = try render_compile.acquireFontEnvironment();
     var cache = render_text.Cache.init(testing.allocator, testing.io);
     defer cache.deinit();
-    var table = try render_compile.table.prepare(.{ .assets = .{ .allocator = testing.allocator, .io = testing.io, .asset_base_dir = ".", .cache_dir = ".ss-cache/render/artifacts/native" }, .text_cache = &cache, .latex_preamble = prepared.latex_preamble, .latex_engine = prepared.latex_engine }, prepared.markdownDocument().?.blocks.items[0].table.?, text.*, (try state_layout.frame(object_id)).*.width);
+    var table = try render_compile.table.prepare(.{ .assets = .{ .allocator = testing.allocator, .io = testing.io, .asset_base_dir = ".", .cache_dir = test_cache_dir ++ "/artifacts/native" }, .text_cache = &cache, .latex_preamble = prepared.latex_preamble, .latex_engine = prepared.latex_engine }, prepared.markdownDocument().?.blocks.items[0].table.?, text.*, (try state_layout.frame(object_id)).*.width);
     defer table.deinit(testing.allocator);
     const shaped = cache.paragraphs.entries.count();
-    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &pages, try state_layout.document(), .{ .jobs = 1, .text_cache = &cache, .font_environment = environment });
+    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &pages, try state_layout.document(), .{ .cache_dir = test_cache_dir, .jobs = 1, .text_cache = &cache, .font_environment = environment });
     defer ir.deinit(testing.allocator);
     try testing.expectEqual(shaped, cache.paragraphs.entries.count());
     var rectangles: usize = 0;
@@ -2526,14 +2529,18 @@ test "artifact preparation modes produce identical IR without caller text caches
     var pages = try core.prepared.prepare(testing.allocator, &state);
     defer pages.deinit(testing.allocator);
     const environment = try render_compile.acquireFontEnvironment();
-    try render_compile.preload(testing.allocator, testing.io, &state, &pages, .{}, null);
+    try render_compile.preload(testing.allocator, testing.io, &state, &pages, .{
+        .cache_dir = test_cache_dir,
+    }, null);
     var prepared_ir = try render_compile.compile(testing.allocator, testing.io, &state, &pages, try state_layout.document(), .{
+        .cache_dir = test_cache_dir,
         .artifact_preparation = .already_preloaded,
         .font_environment = environment,
         .jobs = 1,
     });
     defer prepared_ir.deinit(testing.allocator);
     var automatic_ir = try render_compile.compile(testing.allocator, testing.io, &state, &pages, try state_layout.document(), .{
+        .cache_dir = test_cache_dir,
         .font_environment = environment,
         .jobs = 1,
     });

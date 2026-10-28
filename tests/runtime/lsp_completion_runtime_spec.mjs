@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -17,9 +17,14 @@ import {
   withLspClient,
 } from "./harness.mjs";
 
-const fixture = path.join(root, "tests", "fixtures", "project-basic", "slide.ss");
-const partsFixture = path.join(root, "tests", "fixtures", "project-basic", "parts.ss");
-const themeTempFixture = path.join(root, "tests", "fixtures", "project-basic", "theme-temp.ss");
+const fixtureDirectory = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-completion-"));
+await cp(path.join(root, "tests", "fixtures", "project-basic"), fixtureDirectory, {
+  recursive: true,
+  filter: (file) => path.basename(file) !== ".ss-cache",
+});
+const fixture = path.join(fixtureDirectory, "slide.ss");
+const partsFixture = path.join(fixtureDirectory, "parts.ss");
+const themeTempFixture = path.join(fixtureDirectory, "theme-temp.ss");
 const defaultTheme = path.join(root, "stdlib", "text.ss");
 const baseTheme = path.join(root, "stdlib", "theme", "types.ss");
 const classes = path.join(root, "stdlib", "text", "types.ss");
@@ -42,16 +47,20 @@ const classesTextStyleSizeDefinition = recordFieldDefinitionLocation(classesUri,
 const layoutTypes = path.join(root, "stdlib", "layout", "types.ss");
 const alignCenterDefinition = enumCaseDefinitionLocation(pathToFileURL(layoutTypes).toString(), await readFile(layoutTypes, "utf8"), "Align", "center");
 
-await testProjectCompletionLifecycle();
-await testQualifiedModuleCompletion();
-await testDefinitionNameResolution();
-await testTypeAndImportDefinition();
-await testBrokenTypeNameCompletion();
-await testColdBrokenEntryCompletion();
-await testMultilineEntryCompletion();
+try {
+  await testProjectCompletionLifecycle();
+  await testQualifiedModuleCompletion();
+  await testDefinitionNameResolution();
+  await testTypeAndImportDefinition();
+  await testBrokenTypeNameCompletion();
+  await testColdBrokenEntryCompletion();
+  await testMultilineEntryCompletion();
+} finally {
+  await rm(fixtureDirectory, { recursive: true, force: true });
+}
 
 async function testProjectCompletionLifecycle() {
-  await withLspClient({ cwd: root }, async (client) => {
+  await withLspClient({ cwd: fixtureDirectory }, async (client) => {
     await client.initialize();
 
     const diagnosticsPromise = client.waitForDiagnostics(uri);

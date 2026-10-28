@@ -166,13 +166,13 @@ if [[ "$version" =~ -patch\.[1-9][0-9]*$ ]]; then
 fi
 commit="$(git rev-parse HEAD)"
 short_commit="$(git rev-parse --short HEAD)"
-cache_dir="$root/.ss-cache/pre-release-check/$tag"
-notes_path="$cache_dir/release-notes.md"
-archive_path="$cache_dir/ss-$version.tar.gz"
-formula_path="$cache_dir/${formula_name}.rb"
-vsix_path="$cache_dir/ss-language-support-$tag.vsix"
+workspace_dir="$root/.test-tmp/pre-release-check/$tag"
+notes_path="$workspace_dir/release-notes.md"
+archive_path="$workspace_dir/ss-$version.tar.gz"
+formula_path="$workspace_dir/${formula_name}.rb"
+vsix_path="$workspace_dir/ss-language-support-$tag.vsix"
 
-mkdir -p "$cache_dir"
+mkdir -p "$workspace_dir"
 
 if [[ "$allow_dirty" != true ]]; then
   git update-index -q --refresh
@@ -279,9 +279,9 @@ release/tools/render-homebrew-formula.py \
 ruby -c "$formula_path"
 
 step "release binary CLI"
-render_workspace="$cache_dir/render-workspace"
+render_workspace="$workspace_dir/render-workspace"
 rm -rf "$render_workspace"
-mkdir -p "$render_workspace/slides" "$render_workspace/.ss-cache"
+mkdir -p "$render_workspace/slides" "$render_workspace/output"
 cat > "$render_workspace/slides/release-check.ss" <<'SS'
 import std:themes/default as *
 
@@ -293,18 +293,18 @@ pageno!()
 end
 SS
 
-zig-out/bin/ss render \
+(cd "$render_workspace" && "$root/zig-out/bin/ss" render \
   "$render_workspace/slides/release-check.ss" \
-  "$render_workspace/.ss-cache/direct-render.pdf"
+  "$render_workspace/output/direct-render.pdf")
 
-test -s "$render_workspace/.ss-cache/direct-render.pdf"
-qpdf --check "$render_workspace/.ss-cache/direct-render.pdf" >/dev/null
+test -s "$render_workspace/output/direct-render.pdf"
+qpdf --check "$render_workspace/output/direct-render.pdf" >/dev/null
 
-zig-out/bin/ss dump \
+(cd "$render_workspace" && "$root/zig-out/bin/ss" dump \
   "$render_workspace/slides/release-check.ss" \
-  "$render_workspace/.ss-cache/direct-render.json"
+  "$render_workspace/output/direct-render.json")
 
-test -s "$render_workspace/.ss-cache/direct-render.json"
+test -s "$render_workspace/output/direct-render.json"
 
 if [[ "$allow_dirty" != true ]]; then
   git diff --quiet -- . ':(exclude).ss-cache' || fail "tracked files changed while running pre-release check"

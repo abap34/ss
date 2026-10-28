@@ -10,7 +10,7 @@ import { editorSnapshot } from "../../editor/support.mjs";
 import { assertPractical, close, frame, geometry, item, pageObjects } from "./assertions.mjs";
 
 const exec = promisify(execFile);
-const outputRoot = path.join(root, ".ss-cache/tests/layout/practical");
+const outputRoot = path.join(root, ".test-tmp/layout/practical");
 await mkdir(outputRoot, { recursive: true });
 const project = await mkdtemp(path.join(outputRoot, "run-"));
 await cp(path.join(root, "tests/fixtures/layout/practical"), project, { recursive: true });

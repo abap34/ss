@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 
 const exec = promisify(execFile);
 const grammar = fileURLToPath(new URL("../", import.meta.url));
-const output = path.resolve(grammar, "../../.ss-cache/tests/syntax/tree-sitter-formatting");
+const output = path.resolve(grammar, "../../.test-tmp/syntax/tree-sitter-formatting");
 await mkdir(output, { recursive: true });
 const directory = await mkdtemp(path.join(output, "run-"));
 const file = path.join(directory, "generated.ss");

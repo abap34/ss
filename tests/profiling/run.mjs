@@ -18,8 +18,8 @@ const scriptDirectory = path.dirname(scriptPath);
 const scriptInputs = await fingerprints(scriptDirectory);
 const runnerInputs = await fingerprints(path.join(root, "tests/profiling"), false);
 for (const file of ["tests/runtime/harness.mjs", "tests/runtime/process.mjs"]) runnerInputs[file] = digest(await readFile(path.join(root, file)));
-await mkdir(path.join(root, ".agent-artifacts/profiling"), { recursive: true });
-const output = await mkdtemp(path.join(root, ".agent-artifacts/profiling/run-"));
+await mkdir(path.join(root, ".test-tmp/profiling"), { recursive: true });
+const output = await mkdtemp(path.join(root, ".test-tmp/profiling/run-"));
 const project = path.join(output, "project");
 const result = {
   schema: 3,

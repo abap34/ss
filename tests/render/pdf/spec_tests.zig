@@ -342,7 +342,7 @@ test "render PDF spec: Cairo output failures preserve their detail" {
 
 test "render PDF spec: writer classifies invalid input as preparation failure" {
     const allocator = testing.allocator;
-    const output = ".ss-cache/test-render-pdf/invalid-input.pdf";
+    const output = ".test-tmp/render-pdf/invalid-input.pdf";
     var pages = [_]render.Page{.{ .page_id = 1, .index = 1, .width = 32, .height = 18 }};
     defer pages[0].deinit(allocator);
     var semantics = try documentSemantics(allocator, pages.len);

@@ -4,7 +4,7 @@ const core = @import("core");
 const measurements = @import("render_measurements");
 const testing = std.testing;
 
-const root = ".ss-cache/tests/measurement-store";
+const root = ".test-tmp/measurement-store";
 const path = root ++ "/measurements.tsv";
 
 test "measurement storage preserves exact geometry and atomically replaces records" {

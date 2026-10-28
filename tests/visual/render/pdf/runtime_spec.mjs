@@ -10,7 +10,7 @@ const repository = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../../..",
 );
-const output = path.join(repository, ".ss-cache/pdf-runtime-test");
+const output = path.join(repository, ".test-tmp/pdf-runtime-test");
 
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });

@@ -93,7 +93,7 @@ automatic = false
 
 
 async function testLatexInputChange() {
-  const scratch = path.join(root, ".ss-cache", "tests", "generated-latex-inputs");
+  const scratch = path.join(root, ".test-tmp", "generated-latex-inputs");
   await mkdir(scratch, { recursive: true });
   const fixture = await mkdtemp(path.join(scratch, "project-"));
   try {

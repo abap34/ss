@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, copyFile, writeFile } from "node:fs/promi
 import path from "node:path";
 import { root, ssBin } from "../harness.mjs";
 
-const scratch = path.join(root, ".ss-cache/tests/typed-latex");
+const scratch = path.join(root, ".test-tmp/typed-latex");
 await mkdir(scratch, { recursive: true });
 const project = await mkdtemp(path.join(scratch, "display-"));
 function run(...args) {

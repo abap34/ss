@@ -175,7 +175,7 @@
         },
         {
           "not": {
-            "pattern": "(^|/)(\\.\\.?|\\.ss-cache|\\.agent-artifacts)(/|$)"
+            "pattern": "(^|/)(\\.\\.?|\\.ss-cache|\\.agent-artifacts|\\.test-tmp)(/|$)"
           }
         }
       ]

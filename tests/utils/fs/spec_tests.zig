@@ -53,7 +53,7 @@ const FileVisitor = struct {
 };
 
 test "utils fs: shared directory traversal counts nested files and skips directory symlinks" {
-    const root = ".ss-cache/test-fs-directory-stats";
+    const root = ".test-tmp/fs-directory-stats";
     std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
     defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
     try std.Io.Dir.cwd().createDirPath(testing.io, root ++ "/nested/deep");
@@ -80,7 +80,7 @@ fn canceledStat(_: ?*anyopaque, _: std.Io.Dir, _: []const u8, _: std.Io.Dir.Stat
 }
 
 test "utils fs: directory traversal propagates cancellation during leaf inspection" {
-    const root = ".ss-cache/test-fs-directory-cancellation";
+    const root = ".test-tmp/fs-directory-cancellation";
     std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
     defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
     try std.Io.Dir.cwd().createDirPath(testing.io, root);

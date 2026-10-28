@@ -67,7 +67,7 @@ fn pdfItemOpeningTag(document: []const u8, copy_annotations: bool) ![]const u8 {
 }
 
 test "HTML renderer writes deterministic normal elements with escaped text" {
-    const output = ".ss-cache/test-render-html/basic.html";
+    const output = ".test-tmp/render-html/basic.html";
     try prepareOutput(output);
     defer deleteOutput(output);
 
@@ -141,7 +141,7 @@ test "HTML renderer writes deterministic normal elements with escaped text" {
 }
 
 test "HTML renderer leaves a directory destination intact" {
-    const output = ".ss-cache/test-render-html/directory-output";
+    const output = ".test-tmp/render-html/directory-output";
     try prepareOutput(output);
     try std.Io.Dir.cwd().createDirPath(testing.io, output);
     defer deleteOutput(output);
@@ -160,8 +160,8 @@ test "HTML renderer leaves a directory destination intact" {
 }
 
 test "HTML renderer reports a non-directory output path component" {
-    const blocker = ".ss-cache/test-render-html/output-blocker";
-    const output = ".ss-cache/test-render-html/output-blocker/document.html";
+    const blocker = ".test-tmp/render-html/output-blocker";
+    const output = ".test-tmp/render-html/output-blocker/document.html";
     try prepareOutput(blocker);
     defer deleteOutput(blocker);
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = blocker, .data = "blocker" });
@@ -179,7 +179,7 @@ test "HTML renderer reports a non-directory output path component" {
 }
 
 test "HTML renderer distinguishes input materialization from output writes" {
-    const output = ".ss-cache/test-render-html/invalid-input.html";
+    const output = ".test-tmp/render-html/invalid-input.html";
     try prepareOutput(output);
     defer deleteOutput(output);
 
@@ -372,7 +372,7 @@ test "HTML fragment keeps font assets alive across cache eviction" {
 }
 
 test "HTML renderer keeps emoji selectable when the resolved font forbids embedding" {
-    const output = ".ss-cache/test-render-html/emoji.html";
+    const output = ".test-tmp/render-html/emoji.html";
     try prepareOutput(output);
     defer deleteOutput(output);
 
@@ -416,7 +416,7 @@ test "HTML renderer keeps emoji selectable when the resolved font forbids embedd
 }
 
 test "HTML renderer applies page labels transforms clips opacity and blending" {
-    const output = ".ss-cache/test-render-html/effects.html";
+    const output = ".test-tmp/render-html/effects.html";
     try prepareOutput(output);
     defer deleteOutput(output);
 
@@ -464,8 +464,8 @@ test "HTML renderer applies page labels transforms clips opacity and blending" {
 }
 
 test "HTML renderer embeds LaTeX PDF with math semantics" {
-    const output = ".ss-cache/test-render-html/latex.html";
-    const resource_path = ".ss-cache/test-render-html/latex-source.pdf";
+    const output = ".test-tmp/render-html/latex.html";
+    const resource_path = ".test-tmp/render-html/latex-source.pdf";
     try prepareOutput(output);
     defer deleteOutput(output);
     const resource_path_z = try testing.allocator.dupeSentinel(u8, resource_path, 0);
@@ -527,8 +527,8 @@ test "HTML renderer embeds LaTeX PDF with math semantics" {
 }
 
 test "HTML renderer packages PDF.js with explicit page geometry" {
-    const output = ".ss-cache/test-render-html/pdf.html";
-    const resource_path = ".ss-cache/test-render-html/pdf-source.pdf";
+    const output = ".test-tmp/render-html/pdf.html";
+    const resource_path = ".test-tmp/render-html/pdf-source.pdf";
     try prepareOutput(output);
     defer deleteOutput(output);
     const resource_path_z = try testing.allocator.dupeSentinel(u8, resource_path, 0);
@@ -603,7 +603,7 @@ test "HTML renderer packages PDF.js with explicit page geometry" {
 }
 
 test "HTML renderer preserves semantic headings zero-based ordered lists and links" {
-    const output = ".ss-cache/test-render-html/semantics.html";
+    const output = ".test-tmp/render-html/semantics.html";
     try prepareOutput(output);
     defer deleteOutput(output);
 

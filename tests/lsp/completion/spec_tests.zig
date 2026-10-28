@@ -705,7 +705,7 @@ fn checkNominalQueries(imports: []const u8) !void {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
-    const root = ".ss-cache/query-nominal-fixture";
+    const root = ".test-tmp/query-nominal-fixture";
     const path = root ++ "/main.ss";
     const source = try std.mem.concat(allocator, u8, &.{
         imports,
@@ -1158,7 +1158,7 @@ test "selected imports: queries retain canonical declarations and export visibil
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
-    const root = ".ss-cache/query-export-fixture";
+    const root = ".test-tmp/query-export-fixture";
     const path = root ++ "/main.ss";
     const source =
         \\import "facade" as facade

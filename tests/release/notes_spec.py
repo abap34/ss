@@ -131,9 +131,9 @@ class ReleaseNotesTests(unittest.TestCase):
             self.assertEqual(notes.collect_pull_requests(ROOT, []), [])
 
     def test_snapshot_and_unreleased_integration(self):
-        cache = ROOT / ".ss-cache"
-        cache.mkdir(exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=cache) as tmp:
+        scratch = ROOT / ".test-tmp"
+        scratch.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="release-notes-", dir=scratch) as tmp:
             root = pathlib.Path(tmp)
             (root / "release").mkdir()
             changelog = root / "release/CHANGELOG.md"
@@ -161,9 +161,9 @@ class ReleaseNotesTests(unittest.TestCase):
         self.assertIn("Contributed by @alice.", output)
 
     def test_range_excludes_previous_tag_and_later_commits(self):
-        cache = ROOT / ".ss-cache"
-        cache.mkdir(exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=cache) as tmp:
+        scratch = ROOT / ".test-tmp"
+        scratch.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="release-notes-", dir=scratch) as tmp:
             root = pathlib.Path(tmp)
 
             def git(*args):

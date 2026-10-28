@@ -4,12 +4,12 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { root, ssBin } from "../../harness.mjs";
 
-const scratch = path.join(root, ".ss-cache/tests/typed-path");
+const scratch = path.join(root, ".test-tmp/typed-path");
 await mkdir(scratch, { recursive: true });
 const output = await mkdtemp(path.join(scratch, "display-"));
 const source = path.join(root, "tests/fixtures/typed-display/path.ss");
 function run(...args) {
-  const result = spawnSync(ssBin, args, { cwd: root, encoding: "utf8", timeout: 60000 });
+  const result = spawnSync(ssBin, args, { cwd: output, encoding: "utf8", timeout: 60000 });
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr);
 }
@@ -50,7 +50,7 @@ try {
 
   const invalidSource = path.join(output, "invalid.ss");
   await writeFile(invalidSource, (await readFile(source, "utf8")).replace("width = 180", "width = -1"));
-  const invalid = spawnSync(ssBin, ["check", "--quiet", invalidSource], { cwd: root, encoding: "utf8", timeout: 60000 });
+  const invalid = spawnSync(ssBin, ["check", "--quiet", invalidSource], { cwd: output, encoding: "utf8", timeout: 60000 });
   assert.ifError(invalid.error);
   assert.notEqual(invalid.status, 0);
   assert.match(invalid.stderr, /InvalidShapeSize/);

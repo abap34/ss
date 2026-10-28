@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import { root, ssBin, withLspClient } from "../../harness.mjs";
 
 const exec = promisify(execFile);
-const output = path.join(root, ".ss-cache/tests/syntax/blocks");
+const output = path.join(root, ".test-tmp/syntax/blocks");
 await mkdir(output, { recursive: true });
 const project = await mkdtemp(path.join(output, "run-"));
 const slide = path.join(project, "slide.ss");

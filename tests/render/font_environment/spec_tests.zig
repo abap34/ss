@@ -31,7 +31,7 @@ fn expectUnchanged(expected: render_text.FontEnvironment) !void {
 
 // This test has its own process because application font registrations last until exit.
 test "font input reuse detects configuration and font replacements and removals" {
-    const root = ".ss-cache/test-render-font-environment";
+    const root = ".test-tmp/render-font-environment";
     const config_path = root ++ "/fonts.conf";
     const font_path = root ++ "/registered.ttf";
     std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};

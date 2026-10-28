@@ -5,7 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { root, ssBin, withLspClient } from "../../harness.mjs";
 
-const scratch = path.join(root, ".ss-cache", "tests", "cache-pruning");
+const scratch = path.join(root, ".test-tmp", "cache-pruning");
 await mkdir(scratch, { recursive: true });
 await testClearArguments();
 await testActiveLease();

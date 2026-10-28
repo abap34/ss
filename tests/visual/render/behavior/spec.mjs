@@ -12,7 +12,7 @@ const exec = promisify(execFile);
 const testRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const repository = path.resolve(testRoot, "../..");
 const ss = path.resolve(repository, process.argv[2] ?? "zig-out/bin/ss");
-const output = path.join(repository, ".ss-cache/render-behavior");
+const output = path.join(repository, ".test-tmp/render-behavior");
 const projects = path.join(output, "projects");
 const hasPdflatex = await commandAvailable("pdflatex", ["--version"]);
 

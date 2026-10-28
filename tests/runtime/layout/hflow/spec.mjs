@@ -6,7 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { root, ssBin, withLspClient } from "../../harness.mjs";
 
-const outputRoot = path.join(root, ".ss-cache/tests/layout/hflow");
+const outputRoot = path.join(root, ".test-tmp/layout/hflow");
 await mkdir(outputRoot, { recursive: true });
 const output = await mkdtemp(path.join(outputRoot, "run-"));
 const prelude = `import std:prelude as *

@@ -4,13 +4,13 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { root, ssBin } from "../harness.mjs";
 
-const scratch = path.join(root, ".ss-cache/tests/typed-document");
+const scratch = path.join(root, ".test-tmp/typed-document");
 await mkdir(scratch, { recursive: true });
 const output = await mkdtemp(path.join(scratch, "pages-"));
 const source = path.join(root, "tests/fixtures/typed-document/slide.ss");
 
 function run(...args) {
-  const result = spawnSync(ssBin, args, { cwd: root, encoding: "utf8", timeout: 60000 });
+  const result = spawnSync(ssBin, args, { cwd: output, encoding: "utf8", timeout: 60000 });
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr);
 }

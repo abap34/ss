@@ -12,7 +12,7 @@ import { editorSnapshot, testDocument } from "../editor/fixture.mjs";
 const exec = promisify(execFile);
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const ss = path.resolve(process.argv[2] ?? "zig-out/bin/ss");
-const output = path.join(repository, ".ss-cache/presentation-test");
+const output = path.join(repository, ".test-tmp/presentation-test");
 await mkdir(output, { recursive: true });
 await writeFile(path.join(output, "asset.pdf"), pdfAsset());
 await writeFile(path.join(output, "slide.ss"), `import std:themes/default as *

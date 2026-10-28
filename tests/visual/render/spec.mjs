@@ -15,7 +15,7 @@ const exec = promisify(execFile);
 const testRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repository = path.resolve(testRoot, "../..");
 const practicalOnly = process.argv.includes("--practical");
-const output = path.join(repository, practicalOnly ? ".ss-cache/render-layout-practical" : ".ss-cache/render-parity");
+const output = path.join(repository, practicalOnly ? ".test-tmp/render-layout-practical" : ".test-tmp/render-parity");
 const driver = path.resolve(repository, process.argv.slice(2).find((argument) => !argument.startsWith("--")) ?? "zig-out/bin/ss-render-parity-driver");
 const full = process.argv.includes("--full") && !practicalOnly;
 const textBaselineTolerance = 0.03;
@@ -518,7 +518,7 @@ async function dragSelectedText(page, locator) {
 if (failed) throw new Error(`rendering parity exceeded thresholds; inspect ${output}`);
 
 async function run(file, args) {
-  await exec(file, args, { cwd: repository, timeout: 180_000, maxBuffer: 8 * 1024 * 1024 });
+  await exec(file, args, { cwd: output, timeout: 180_000, maxBuffer: 8 * 1024 * 1024 });
 }
 
 async function commandSucceeds(file, args) {

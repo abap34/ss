@@ -4,7 +4,7 @@ import path from "node:path";
 import { root } from "../../harness.mjs";
 import { WatchProcess, settle } from "../harness.mjs";
 
-const scratch = path.join(root, ".ss-cache", "tests", "watch-inputs");
+const scratch = path.join(root, ".test-tmp", "watch-inputs");
 await mkdir(scratch, { recursive: true });
 const directory = await mkdtemp(path.join(scratch, "project-"));
 const project = path.join(directory, "project");

@@ -145,7 +145,7 @@ console.log("WYSIWYG restart: shutdown timeout, repeated clicks, startup failure
 
 async function testUnresponsiveProcessTermination() {
   if (process.platform === "win32") return;
-  const scratch = path.join(root, ".ss-cache/editor-restart-test");
+  const scratch = path.join(root, ".test-tmp/editor-restart-test");
   await mkdir(scratch, { recursive: true });
   const directory = await mkdtemp(path.join(scratch, "stalled-"));
   const executable = path.join(directory, "server");
@@ -199,7 +199,7 @@ async function waitFor(predicate) {
 
 async function testRestartAfterProcessExit() {
   if (process.platform === "win32") return;
-  const scratch = path.join(root, ".ss-cache/editor-restart-test");
+  const scratch = path.join(root, ".test-tmp/editor-restart-test");
   const directory = await mkdtemp(path.join(scratch, "exited-"));
   const executable = path.join(directory, "server");
   const exits = [];

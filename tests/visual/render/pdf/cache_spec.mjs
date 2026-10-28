@@ -7,7 +7,7 @@ import { pdfAsset } from "../assets.mjs";
 import { withBrowser } from "../capture.mjs";
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
-const output = path.join(repository, ".ss-cache/pdf-cache-test");
+const output = path.join(repository, ".test-tmp/pdf-cache-test");
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 await cp(path.join(repository, "src/render/html/pdf"), path.join(output, "pdf"), { recursive: true });

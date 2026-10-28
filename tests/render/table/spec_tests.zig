@@ -28,7 +28,7 @@ test "table rows contain wrapped cell ink and decoration overhangs" {
         "| Left | Center | Right |\n| :--- | :---: | ---: |\n| _j_ | Several words wrap inside this cell | |\n| last | end | value |",
     );
     defer document.deinit();
-    var layout = try table_layout.prepare(.{ .assets = .{ .allocator = testing.allocator, .io = testing.io, .asset_base_dir = ".", .cache_dir = ".ss-cache/test-table-layout" } }, document.blocks.items[0].table.?, paint(), 302);
+    var layout = try table_layout.prepare(.{ .assets = .{ .allocator = testing.allocator, .io = testing.io, .asset_base_dir = ".", .cache_dir = ".test-tmp/table-layout" } }, document.blocks.items[0].table.?, paint(), 302);
     defer layout.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 3), layout.columns);
     try testing.expectEqualSlices(f32, &.{ 100, 100, 100 }, layout.column_widths);
@@ -55,7 +55,7 @@ test "table layouts retain shared native paragraphs after cache teardown" {
         var cache = render_text.Cache.init(testing.allocator, testing.io);
         defer cache.deinit();
         cache.paragraphs.max_entries = 1;
-        break :blk try table_layout.prepare(.{ .assets = .{ .allocator = testing.allocator, .io = testing.io, .asset_base_dir = ".", .cache_dir = ".ss-cache/test-table-layout" }, .text_cache = &cache }, document.blocks.items[0].table.?, paint(), 302);
+        break :blk try table_layout.prepare(.{ .assets = .{ .allocator = testing.allocator, .io = testing.io, .asset_base_dir = ".", .cache_dir = ".test-tmp/table-layout" }, .text_cache = &cache }, document.blocks.items[0].table.?, paint(), 302);
     };
     defer layout.deinit(testing.allocator);
     for (layout.rows) |row| {
@@ -70,7 +70,7 @@ test "table layouts retain shared native paragraphs after cache teardown" {
 test "fixed and fractional table columns control wrapping and alignment" {
     var document = try core.markdown.parseMarkdownContent(testing.allocator, "| Left | Center | Right |\n| :---{60pt} | :---:{1fr} | ---:{2fr} |\n| Several words wrap here | Short | Longer content has more space |");
     defer document.deinit();
-    var layout = try table_layout.prepare(.{ .assets = .{ .allocator = testing.allocator, .io = testing.io, .asset_base_dir = ".", .cache_dir = ".ss-cache/test-table-layout" } }, document.blocks.items[0].table.?, paint(), 302);
+    var layout = try table_layout.prepare(.{ .assets = .{ .allocator = testing.allocator, .io = testing.io, .asset_base_dir = ".", .cache_dir = ".test-tmp/table-layout" } }, document.blocks.items[0].table.?, paint(), 302);
     defer layout.deinit(testing.allocator);
     try testing.expectEqualSlices(f32, &.{ 60, 80, 160 }, layout.column_widths);
     try testing.expectEqual(@as(f32, 50), layout.contentWidth(0));
@@ -82,7 +82,7 @@ test "fixed and fractional table columns control wrapping and alignment" {
 test "automatic table columns measure headers formatted text and icons before fractions" {
     var document = try core.markdown.parseMarkdownContent(testing.allocator, "| Wide heading | Value |\n| ---{auto} | ---{1fr} |\n| ![star](fa:star) **bold** | Several words wrap in the remaining space |");
     defer document.deinit();
-    const ctx: table_layout.Context = .{ .assets = .{ .allocator = testing.allocator, .io = testing.io, .asset_base_dir = ".", .cache_dir = ".ss-cache/test-table-layout" } };
+    const ctx: table_layout.Context = .{ .assets = .{ .allocator = testing.allocator, .io = testing.io, .asset_base_dir = ".", .cache_dir = ".test-tmp/table-layout" } };
     try std.Io.Dir.cwd().createDirPath(testing.io, ctx.assets.cache_dir);
     var layout = try table_layout.prepare(ctx, document.blocks.items[0].table.?, paint(), 602);
     defer layout.deinit(testing.allocator);
@@ -100,7 +100,7 @@ test "table preparation releases partially prepared rows through allocation fail
 }
 
 fn prepareTable(allocator: std.mem.Allocator, table: core.markdown.TableData) !void {
-    var layout = try table_layout.prepare(.{ .assets = .{ .allocator = allocator, .io = testing.io, .asset_base_dir = ".", .cache_dir = ".ss-cache/test-table-layout" } }, table, paint(), 302);
+    var layout = try table_layout.prepare(.{ .assets = .{ .allocator = allocator, .io = testing.io, .asset_base_dir = ".", .cache_dir = ".test-tmp/table-layout" } }, table, paint(), 302);
     defer layout.deinit(allocator);
     try testing.expectEqual(@as(usize, 2), layout.rows.len);
 }
@@ -121,7 +121,7 @@ test "table preparation releases retained cells at each cancellation boundary" {
     var vtable = testing.io.vtable.*;
     vtable.checkCancel = CancellationProbe.check;
     const io = std.Io{ .userdata = testing.io.userdata, .vtable = &vtable };
-    const ctx: table_layout.Context = .{ .assets = .{ .allocator = testing.allocator, .io = io, .asset_base_dir = ".", .cache_dir = ".ss-cache/test-table-layout" } };
+    const ctx: table_layout.Context = .{ .assets = .{ .allocator = testing.allocator, .io = io, .asset_base_dir = ".", .cache_dir = ".test-tmp/table-layout" } };
     CancellationProbe.checks = 0;
     CancellationProbe.cancel_at = std.math.maxInt(usize);
     var complete = try table_layout.prepare(ctx, document.blocks.items[0].table.?, paint(), 302);

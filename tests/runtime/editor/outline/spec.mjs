@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import { root, withLspClient } from "../../harness.mjs";
 import { editorSnapshot } from "../support.mjs";
 
-const scratch = path.join(root, ".ss-cache/tests/editor/outline");
+const scratch = path.join(root, ".test-tmp/editor/outline");
 await mkdir(scratch, { recursive: true });
 const project = await mkdtemp(path.join(scratch, "run-"));
 const unicode = "é界🙂".repeat(14);

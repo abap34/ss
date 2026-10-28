@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import { assert, positionAt, root, withLspClient } from "../../harness.mjs";
 import { applyProtocolEdits, editingTarget, previewBounds, requestEdit } from "../../editor/support.mjs";
 
-const scratch = path.join(root, ".ss-cache", "tests", "generated-edit-reuse");
+const scratch = path.join(root, ".test-tmp", "generated-edit-reuse");
 await mkdir(scratch, { recursive: true });
 for (const kind of ["text", "module", "readlines", "svg", "raster"]) await testReuse(kind);
 const tex = spawnSync("pdflatex", ["--version"], { encoding: "utf8", timeout: 5000 });

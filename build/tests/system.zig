@@ -63,7 +63,7 @@ pub fn register(suite: Suite, modules: project.ProjectModules, build_options: *S
     const cache_reference_mod = createModule(ctx, "tests/utils/render_cache/reference_spec_tests.zig", &.{
         import("utils", modules.utils),
     }, true);
-    const run_cache_reference_tests = suite.add(cache_reference_mod, .{});
+    const run_cache_reference_tests = suite.add(cache_reference_mod, .{ .working_directory = ".test-tmp/render-cache-references" });
     const cache_pruning_spec = steps.node(b, &suite.checks.node.step, "tests/runtime/cache/pruning/spec.mjs", exe);
     const cache_test_step = b.step("test-render-cache", "Run focused render cache reference and pruning tests");
     cache_test_step.dependOn(&run_cache_reference_tests.step);
@@ -76,7 +76,7 @@ pub fn register(suite: Suite, modules: project.ProjectModules, build_options: *S
         import("editor_resources", editor_resource_mod),
         import("utils", modules.utils),
     }, true);
-    const run_editor_resource_tests = suite.add(editor_resource_spec_mod, .{});
+    const run_editor_resource_tests = suite.add(editor_resource_spec_mod, .{ .working_directory = ".test-tmp/editor-resources" });
     cache_test_step.dependOn(&run_editor_resource_tests.step);
     const progress_spec_mod = createModule(ctx, "tests/utils/progress/spec_tests.zig", &.{
         import("utils", modules.utils),
@@ -101,7 +101,7 @@ pub fn register(suite: Suite, modules: project.ProjectModules, build_options: *S
         import("utils", modules.utils),
     }, true);
     native_pdf.addHeaders(b, app_output_spec_mod);
-    _ = suite.add(app_output_spec_mod, .{ .name = "test-app-output", .description = "Run focused application output safety tests", .link_qpdf = true });
+    _ = suite.add(app_output_spec_mod, .{ .name = "test-app-output", .working_directory = ".test-tmp/app-output", .description = "Run focused application output safety tests", .link_qpdf = true });
     const watch_mod = project.createWatchModule(ctx, modules);
     const watch_spec_mod = createModule(ctx, "tests/watch/fingerprint/spec_tests.zig", &.{
         import("watch", watch_mod),

@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import { root, ssBin, withLspClient } from "../../harness.mjs";
 import { editorSnapshot } from "../../editor/support.mjs";
 
-const outputRoot = path.join(root, ".ss-cache", "tests", "layout-composition");
+const outputRoot = path.join(root, ".test-tmp", "layout-composition");
 await mkdir(outputRoot, { recursive: true });
 const output = await mkdtemp(path.join(outputRoot, "run-"));
 const gap = 32;
@@ -886,9 +886,9 @@ end
 
 async function testFixture() {
   const fixture = path.join(root, "tests", "fixtures", "layout-composition", "slide.ss");
-  expectSuccess(await runSs(["check", "--quiet", fixture], root), "composition fixture check");
+  expectSuccess(await runSs(["check", "--quiet", fixture], output), "composition fixture check");
   const dumpPath = path.join(output, "fixture.json");
-  expectSuccess(await runSs(["dump", "--quiet", fixture, dumpPath], root), "composition fixture dump");
+  expectSuccess(await runSs(["dump", "--quiet", fixture, dumpPath], output), "composition fixture dump");
   const dump = JSON.parse(await readFile(dumpPath, "utf8"));
   assertNoDiagnostic(dump, "UnplacedObject");
   assert(dump.page_order.length === 2, "representative fixture lost a policy example page");

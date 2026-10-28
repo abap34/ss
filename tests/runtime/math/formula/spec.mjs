@@ -4,7 +4,7 @@ import { copyFile, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { root, ssBin } from "../../harness.mjs";
 
-const scratch = path.join(root, ".ss-cache/tests/typed-math");
+const scratch = path.join(root, ".test-tmp/typed-math");
 await mkdir(scratch, { recursive: true });
 const project = await mkdtemp(path.join(scratch, "formula-"));
 function run(...args) {

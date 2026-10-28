@@ -46,12 +46,12 @@ end
 }
 
 async function testTableHeightUsesFinalWidthWithWrappingDisabled() {
-  const output = path.join(root, ".ss-cache", "tests", "layout-final-width");
+  const output = path.join(root, ".test-tmp", "layout-final-width");
   await mkdir(output, { recursive: true });
   const fixture = path.join(root, "tests", "fixtures", "layout", "final-width", "slide.ss");
   const dumpPath = path.join(output, "dump.json");
-  await runSs(["check", "--quiet", fixture], root);
-  await runSs(["dump", "--quiet", fixture, dumpPath], root);
+  await runSs(["check", "--quiet", fixture], output);
+  await runSs(["dump", "--quiet", fixture, dumpPath], output);
   const dump = JSON.parse(await readFile(dumpPath, "utf8"));
   const tables = dump.nodes.filter((node) => node.content?.startsWith("| content | value |"));
   const followers = dump.nodes.filter((node) => node.content === "After table");
@@ -63,16 +63,16 @@ async function testTableHeightUsesFinalWidthWithWrappingDisabled() {
     const after = followers[index];
     assert(close(after.y + after.height, table.y - 20), `The following object overlapped its table: ${frameSummary(after)}`);
   }
-  await runSs(["render", "--quiet", fixture, path.join(output, "fixture.pdf")], root);
+  await runSs(["render", "--quiet", fixture, path.join(output, "fixture.pdf")], output);
 }
 
 async function testSplitTablesReserveTheirFinalHeight() {
-  const output = path.join(root, ".ss-cache", "tests", "layout-measured-splits");
+  const output = path.join(root, ".test-tmp", "layout-measured-splits");
   await mkdir(output, { recursive: true });
   const fixture = path.join(root, "tests", "fixtures", "layout", "composition", "measured-splits.ss");
   const dumpPath = path.join(output, "dump.json");
-  await runSs(["check", "--quiet", fixture], root);
-  await runSs(["dump", "--quiet", fixture, dumpPath], root);
+  await runSs(["check", "--quiet", fixture], output);
+  await runSs(["dump", "--quiet", fixture, dumpPath], output);
   const dump = JSON.parse(await readFile(dumpPath, "utf8"));
   const tables = dump.nodes.filter((node) => node.content?.startsWith("| ああ |"));
   const intro = nodeByContentPrefix(dump, "あああああああああああ");
@@ -86,18 +86,18 @@ async function testSplitTablesReserveTheirFinalHeight() {
   }
   assert(close((intro.y + intro.height + after.y) / 2, 360), "Measured components were not centered together");
   assert(dump.diagnostics.length === 0, `Split fixture diagnostics: ${JSON.stringify(dump.diagnostics)}`);
-  await runSs(["render", "--quiet", fixture, path.join(output, "fixture.pdf")], root);
+  await runSs(["render", "--quiet", fixture, path.join(output, "fixture.pdf")], output);
 }
 
 async function testPageOverflowUsesInkOrigins() {
-  const output = path.join(root, ".ss-cache", "tests", "layout-ink-bounds");
+  const output = path.join(root, ".test-tmp", "layout-ink-bounds");
   await mkdir(output, { recursive: true });
   const fixture = path.join(root, "tests", "fixtures", "layout", "ink-bounds", "slide.ss");
-  await runSs(["check", "--quiet", fixture], root);
+  await runSs(["check", "--quiet", fixture], output);
   const dumps = [];
   for (const generation of ["first", "warm"]) {
     const dumpPath = path.join(output, `${generation}.json`);
-    await runSs(["dump", "--quiet", fixture, dumpPath], root);
+    await runSs(["dump", "--quiet", fixture, dumpPath], output);
     dumps.push(JSON.parse(await readFile(dumpPath, "utf8")));
   }
   const nodes = dumps[0].nodes.filter((node) => node.content === "j" || node.content === "f");
@@ -111,7 +111,7 @@ async function testPageOverflowUsesInkOrigins() {
     const warm = dumps[1].nodes.find((candidate) => candidate.id === node.id);
     assert(JSON.stringify(node.measurement) === JSON.stringify(warm.measurement), "Persistent measurement changed the geometry");
   }
-  await runSs(["render", "--quiet", fixture, path.join(output, "fixture.pdf")], root);
+  await runSs(["render", "--quiet", fixture, path.join(output, "fixture.pdf")], output);
 }
 
 async function testPanelHeightUsesRenderedIconMeasurement() {

@@ -52,7 +52,7 @@ async function installProcessor() {
   const distribution = distributions[platform];
   assert(distribution, `no pinned Trace Processor for ${platform}`);
   const [archive, expected] = distribution;
-  const parent = path.join(root, ".agent-artifacts/profiling/tools", perfettoVersion);
+  const parent = path.join(root, ".test-tmp/profiling/tools", perfettoVersion);
   const destination = path.join(parent, platform);
   const binary = path.join(destination, "trace_processor_shell");
   try {

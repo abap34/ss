@@ -118,7 +118,7 @@ function strings(value, label, minimum) {
 }
 function relativePath(value, label) {
   string(value, label);
-  assert(!value.includes("\\") && !value.includes("\0") && value.split("/").every((part) => part && part !== "." && part !== ".." && part !== ".ss-cache" && part !== ".agent-artifacts" && !part.includes(":")), `${label} must be a normalized project-relative path`);
+  assert(!value.includes("\\") && !value.includes("\0") && value.split("/").every((part) => part && part !== "." && part !== ".." && part !== ".ss-cache" && part !== ".agent-artifacts" && part !== ".test-tmp" && !part.includes(":")), `${label} must be a normalized project-relative path`);
 }
 function canonical(value) {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;

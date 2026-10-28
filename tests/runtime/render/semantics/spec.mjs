@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { root, ssBin } from "../../harness.mjs";
 
-const parent = path.join(root, ".ss-cache/tests/render/semantics");
+const parent = path.join(root, ".test-tmp/render/semantics");
 await mkdir(parent, { recursive: true });
 const project = await mkdtemp(path.join(parent, "run-"));
 const slide = path.join(project, "slide.ss");

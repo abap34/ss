@@ -59,8 +59,8 @@ async function testPageAnchorFixture() {
   try {
     const fixture = path.join(root, "tests", "fixtures", "layout", "page-anchors", "slide.ss");
     const dumpPath = path.join(project, "dump.json");
-    await runSs(["check", "--quiet", fixture], root);
-    await runSs(["dump", "--quiet", fixture, dumpPath], root);
+    await runSs(["check", "--quiet", fixture], project);
+    await runSs(["dump", "--quiet", fixture, dumpPath], project);
     const dump = JSON.parse(await readFile(dumpPath, "utf8"));
     const objectsOnPage = (name) => {
       const page = pageByName(dump, name);
@@ -292,7 +292,7 @@ async function spawnCollect(command, args, cwd) {
 }
 
 async function mkdtempProject(prefix) {
-  const output = path.join(root, ".ss-cache", "tests", "layout", "vflow");
+  const output = path.join(root, ".test-tmp", "layout", "vflow");
   await mkdir(output, { recursive: true });
   return mkdtemp(path.join(output, prefix));
 }

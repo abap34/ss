@@ -9,7 +9,7 @@ const exec = promisify(execFile);
 const sourceGrammar = fileURLToPath(new URL("../../../editor/tree-sitter-ss/", import.meta.url));
 const grammar = path.resolve(process.argv[2] ?? sourceGrammar);
 const cli = path.join(sourceGrammar, "node_modules/.bin/tree-sitter");
-const output = path.resolve(sourceGrammar, "../../.ss-cache/tests/editor/tree-sitter");
+const output = path.resolve(sourceGrammar, "../../.test-tmp/editor/tree-sitter");
 await mkdir(output, { recursive: true });
 const directory = await mkdtemp(path.join(output, "run-"));
 const cases = [

@@ -3,7 +3,7 @@ const allocation_testing = @import("allocation_testing");
 const artifacts = @import("artifacts");
 const resources = @import("render_resources");
 const testing = std.testing;
-const root = ".ss-cache/test-render-artifacts";
+const root = ".test-tmp/render-artifacts";
 
 fn reset() !void {
     try std.Io.Dir.cwd().deleteTree(testing.io, root);

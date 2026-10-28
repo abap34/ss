@@ -335,6 +335,7 @@ pub const LayoutMeasurementScope = struct {
     font_environment: render_text.FontEnvironment,
 
     pub const InitOptions = struct {
+        cache_dir: []const u8 = utils.render_cache.path,
         text_cache: ?*render_text.Cache = null,
         resource_cache: ?*render_resources.SourceCache = null,
         highlight_languages: []const utils.highlight.Language = &.{},
@@ -350,8 +351,7 @@ pub const LayoutMeasurementScope = struct {
         pages: *const core.prepared.PreparedPages,
         options: InitOptions,
     ) !LayoutMeasurementScope {
-        const default_options: Options = .{};
-        const cache_dir = default_options.cache_dir;
+        const cache_dir = options.cache_dir;
         try render_text.validateFontEnvironment(options.font_environment);
         try createRenderCacheDirectory(io, state, cache_dir);
         const asset_cache_dir = try utils.render_cache.nativePath(allocator, cache_dir);

@@ -3,11 +3,15 @@ set -eu
 
 ROOT="$(CDPATH= cd "$(dirname "$0")/../.." && pwd)"
 SS_BIN="${SS_BIN:-$ROOT/zig-out/bin/ss}"
-FIXTURE="$ROOT/tests/fixtures/project-basic"
-CACHE="$ROOT/.ss-cache/project-smoke"
+SOURCE_FIXTURE="$ROOT/tests/fixtures/project-basic"
+CACHE="$ROOT/.test-tmp/project-smoke"
 
 rm -rf "$CACHE"
 mkdir -p "$CACHE"
+FIXTURE="$CACHE/project"
+mkdir -p "$FIXTURE"
+cp "$SOURCE_FIXTURE"/*.ss "$SOURCE_FIXTURE/ss.toml" "$FIXTURE/"
+cd "$CACHE"
 
 "$SS_BIN" --version >"$CACHE/version.out" 2>"$CACHE/version.err"
 test -s "$CACHE/version.out"
@@ -18,7 +22,7 @@ test ! -s "$CACHE/version.err"
 "$SS_BIN" check --project "$FIXTURE/ss.toml"
 (cd "$FIXTURE" && "$SS_BIN" check)
 
-NO_PROJECT="$ROOT/.ss-cache/no-project-smoke"
+NO_PROJECT="$ROOT/.test-tmp/no-project-smoke"
 rm -rf "$NO_PROJECT"
 mkdir -p "$NO_PROJECT"
 if (cd "$NO_PROJECT" && "$SS_BIN" check >/dev/null 2>"$CACHE/no-input.err"); then

@@ -5,7 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { root, withLspClient } from "../../harness.mjs";
 
-const scratch = path.join(root, ".ss-cache/lsp-rapid-edits");
+const scratch = path.join(root, ".test-tmp/lsp-rapid-edits");
 await mkdir(scratch, { recursive: true });
 const project = await mkdtemp(path.join(scratch, "run-"));
 const slide = path.join(project, "slide.ss");

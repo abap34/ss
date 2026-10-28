@@ -5,7 +5,7 @@ import path from "node:path";
 import { root, ssBin } from "../harness.mjs";
 import { pdfAsset } from "../../support/assets/pdf.mjs";
 
-const scratch = path.join(root, ".ss-cache/tests/typed-pdf");
+const scratch = path.join(root, ".test-tmp/typed-pdf");
 await mkdir(scratch, { recursive: true });
 const project = await mkdtemp(path.join(scratch, "display-"));
 const source = await readFile(path.join(root, "tests/fixtures/typed-display/pdf.ss"), "utf8");

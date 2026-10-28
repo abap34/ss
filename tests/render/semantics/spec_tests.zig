@@ -5,6 +5,7 @@ const core = compiler.core;
 const render = @import("render");
 const render_compile = @import("render_compile");
 const testing = std.testing;
+const test_cache_dir = ".test-tmp/render/semantics/cache";
 
 fn document(source: []const u8) !core.DocumentState {
     const allocator = testing.allocator;
@@ -59,7 +60,7 @@ test "typed headings and user displays preserve semantic attributes without role
     for (state.graph.nodes.items) |node| (try state_layout.frame(node.id)).* = .{ .width = 640, .height = 360 };
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
-    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .jobs = 1 });
+    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .cache_dir = test_cache_dir, .jobs = 1 });
     defer ir.deinit(testing.allocator);
     try ir.validate();
     const roles = [_]render.SemanticRole{ .heading, .heading, .code, .figure, .heading, .caption, .heading };
@@ -87,7 +88,7 @@ test "text semantic updates are immutable and preserved through typed groups" {
     for (state.graph.nodes.items) |node| (try state_layout.frame(node.id)).* = .{ .width = 640, .height = 360 };
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
-    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .jobs = 1 });
+    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .cache_dir = test_cache_dir, .jobs = 1 });
     defer ir.deinit(testing.allocator);
     try ir.validate();
     try testing.expectEqual(@as(usize, 3), ir.pages[0].reading_order.len);
@@ -114,7 +115,7 @@ test "semantic meaning comes from display values rather than user type names" {
     for (state.graph.nodes.items) |node| (try state_layout.frame(node.id)).* = .{ .width = 640, .height = 360 };
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
-    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .jobs = 1 });
+    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .cache_dir = test_cache_dir, .jobs = 1 });
     defer ir.deinit(testing.allocator);
     try ir.validate();
     try testing.expectEqual(@as(usize, 2), ir.pages[0].reading_order.len);
@@ -139,12 +140,12 @@ test "semantic-only edits update cached rendering without changing paint" {
     defer prepared.deinit(testing.allocator);
     var cache = render_compile.PageCache.init(testing.allocator, testing.io);
     defer cache.deinit();
-    var first = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .jobs = 1, .page_cache = &cache });
+    var first = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .cache_dir = test_cache_dir, .jobs = 1, .page_cache = &cache });
     defer first.deinit(testing.allocator);
     prepared.pages[0].objects[0].semantics = .caption;
-    var cached = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .jobs = 1, .page_cache = &cache });
+    var cached = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .cache_dir = test_cache_dir, .jobs = 1, .page_cache = &cache });
     defer cached.deinit(testing.allocator);
-    var fresh = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .jobs = 1 });
+    var fresh = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .cache_dir = test_cache_dir, .jobs = 1 });
     defer fresh.deinit(testing.allocator);
     try testing.expectEqual(render.SemanticRole.caption, objectSemantic(&cached, 0).role);
     try testing.expectEqual(fresh.fingerprint(), cached.fingerprint());
