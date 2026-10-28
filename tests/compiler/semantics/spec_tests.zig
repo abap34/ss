@@ -4243,6 +4243,96 @@ test "compiler semantics: updating a borrowed callback parameter retains recursi
     , "case.ss:bytes:", "RecursiveFunction");
 }
 
+test "compiler semantics: joining nested constant facts preserves the original callback tree" {
+    try expectObjectContent(
+        \\type Handler { run: Number -> Number }
+        \\type Settings { primary: Handler backup: Handler }
+        \\fn inc(value: Number) -> Number = value + 1
+        \\const defaults: Settings = Settings { primary = Handler { run = inc } backup = Handler { run = inc } }
+        \\fn choose(first: Settings, second: Settings, flag: Bool) -> Settings
+        \\  if flag
+        \\    return first
+        \\  else
+        \\    return second
+        \\  end
+        \\end
+        \\fn read(value: Number) -> Number
+        \\  let alternative = defaults with { primary.run = again }
+        \\  let merged = choose(defaults, alternative, true)
+        \\  return defaults.primary.run(value) + defaults.backup.run(value)
+        \\end
+        \\fn again(value: Number) -> Number = read(value)
+        \\page main
+        \\  text!(str(read(2)))
+        \\end
+    , "6");
+}
+
+test "compiler semantics: updating cached return facts preserves recursive callbacks in later calls" {
+    try expectDiagnostic(
+        \\type Handler { run: Number -> Number }
+        \\type Settings { handler: Handler }
+        \\fn inc(value: Number) -> Number = value + 1
+        \\fn stored() -> Settings = Settings { handler = Handler { run = bad } }
+        \\fn replaced() -> Number
+        \\  let modified = stored() with { handler.run = inc }
+        \\  return modified.handler.run(1)
+        \\end
+        \\fn bad(value: Number) -> Number
+        \\  let safe = replaced()
+        \\  return stored().handler.run(value)
+        \\end
+        \\page main
+        \\  let result = bad(1)
+        \\end
+    , "case.ss:bytes:", "RecursiveFunction");
+}
+
+test "compiler semantics: coalescing callback facts does not change a captured constant" {
+    try expectObjectContent(
+        \\type Handler { run: Number -> Number }
+        \\fn inc(value: Number) -> Number = value + 1
+        \\const original: Handler = Handler { run = inc }
+        \\fn capture(handler: Handler) -> Number -> Number = (value: Number) |-> handler.run(value)
+        \\fn merge(first: Handler?, second: Handler) -> Handler = first ?? second
+        \\fn read(value: Number) -> Number
+        \\  let saved = capture(original)
+        \\  let merged = merge(original, Handler { run = again })
+        \\  return saved(value)
+        \\end
+        \\fn again(value: Number) -> Number = read(value)
+        \\page main
+        \\  text!(str(read(2)))
+        \\end
+    , "3");
+}
+
+test "compiler semantics: joined display inputs preserve distinct callback dependencies" {
+    try expectObjectContent(
+        \\type Item { read: Document -> Number }
+        \\type Summary {}
+        \\fn left(document: Document) -> Number = document.layout_h_center_offset
+        \\fn right(document: Document) -> Number = document.layout_v_center_offset
+        \\fn display(self: Placed<Item>) -> Text = text(str(self.value.read(self.document)))
+        \\fn display(self: Placed<Summary>) -> Text
+        \\  let items = select<Item>(self.document)
+        \\  let values = fold(items, "", (acc: String, item: Placed<Item>) |-> acc ++ str(item.value.read(self.document)) ++ "/")
+        \\  return text(values)
+        \\end
+        \\page main
+        \\  place!(Summary {})
+        \\end
+        \\page later
+        \\  place!(Item { read = left })
+        \\  place!(Item { read = right })
+        \\end
+        \\document
+        \\  docctx().layout_h_center_offset = 12
+        \\  docctx().layout_v_center_offset = 34
+        \\end
+    , "12/34/");
+}
+
 test "compiler semantics: nested call keys retain sibling callbacks after scratch growth" {
     var source = std.ArrayList(u8).empty;
     defer source.deinit(testing.allocator);

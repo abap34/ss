@@ -100,21 +100,31 @@ const LambdaCaptureMap = std.AutoHashMap(LambdaKey, FunctionEnv);
 // same facts as their present value; none contributes no function candidates.
 // Unknown facts also describe unspecified record fields. Explicit fields can
 // refine them, for example after a record update.
+//
+// Collection storage is immutable and belongs to one analysis pass arena.
+// Copying a value shares its collections; updates publish new storage for the
+// changed collection and retain unchanged subtrees. No value owns its storage
+// independently of that arena, including values saved by closures and caches.
 const ValueFacts = struct {
-    labels: LabelMap,
-    fields: std.StringHashMap(ValueFacts),
-    children: std.ArrayList(ValueFacts) = .empty,
-    objects: std.AutoHashMap(usize, void),
+    const Labels = LabelMap.Unmanaged;
+    const Fields = std.StringHashMapUnmanaged(ValueFacts);
+    const Objects = std.AutoHashMapUnmanaged(usize, void);
+
+    allocator: std.mem.Allocator,
+    labels: *const Labels = &.{},
+    fields: *const Fields = &.{},
+    children: []const ValueFacts = &.{},
+    objects: *const Objects = &.{},
     unknown_objects: bool = false,
     unknown: bool = false,
-    selected_types: std.ArrayList(ast.Type) = .empty,
+    selected_types: []const ast.Type = &.{},
     reference: ?input_facts.Value.Reference = null,
     string_literal: ?[]const u8 = null,
     unknown_string: bool = false,
     unknown_reference: bool = false,
 
     fn init(allocator: std.mem.Allocator) ValueFacts {
-        return .{ .labels = LabelMap.init(allocator), .fields = std.StringHashMap(ValueFacts).init(allocator), .objects = std.AutoHashMap(usize, void).init(allocator) };
+        return .{ .allocator = allocator };
     }
 
     fn unknownValue(allocator: std.mem.Allocator) ValueFacts {
@@ -126,131 +136,146 @@ const ValueFacts = struct {
 
     fn singleton(allocator: std.mem.Allocator, label: Label) !ValueFacts {
         var value = init(allocator);
-        try value.labels.put(label, {});
+        var labels: Labels = .empty;
+        try labels.put(allocator, label, {});
+        value.labels = try value.freeze(labels);
         return value;
     }
 
-    fn deinit(self: *ValueFacts) void {
-        var fields = self.fields.valueIterator();
-        while (fields.next()) |field| field.deinit();
-        for (self.children.items) |*child| child.deinit();
-        self.children.deinit(self.fields.allocator);
-        self.selected_types.deinit(self.fields.allocator);
-        self.fields.deinit();
-        self.labels.deinit();
-        self.objects.deinit();
+    fn freeze(self: ValueFacts, value: anytype) !*const @TypeOf(value) {
+        const stored = try self.allocator.create(@TypeOf(value));
+        stored.* = value;
+        return stored;
     }
 
     fn isEmpty(self: ValueFacts) bool {
         return !self.unknown and !self.unknown_objects and !self.unknown_string and !self.unknown_reference and self.labels.count() == 0 and
-            self.objects.count() == 0 and self.fields.count() == 0 and self.children.items.len == 0 and
-            self.reference == null and self.string_literal == null and self.selected_types.items.len == 0;
+            self.objects.count() == 0 and self.fields.count() == 0 and self.children.len == 0 and
+            self.reference == null and self.string_literal == null and self.selected_types.len == 0;
+    }
+
+    fn sameSnapshot(self: ValueFacts, other: ValueFacts) bool {
+        return self.labels == other.labels and self.fields == other.fields and self.objects == other.objects and
+            self.children.ptr == other.children.ptr and self.children.len == other.children.len and
+            self.selected_types.ptr == other.selected_types.ptr and self.selected_types.len == other.selected_types.len and
+            self.unknown == other.unknown and self.unknown_objects == other.unknown_objects and
+            self.unknown_string == other.unknown_string and self.unknown_reference == other.unknown_reference and
+            referenceEql(self.reference, other.reference) and optionalStringEql(self.string_literal, other.string_literal);
     }
 
     fn unionWith(self: *ValueFacts, other: ValueFacts) anyerror!void {
         _ = try self.join(other);
     }
 
-    // Report growth while joining, without cloning the accumulated fixed point.
+    // Join snapshots without modifying facts retained by another environment.
+    // Unchanged joins allocate nothing; only changed collections are copied.
     fn join(self: *ValueFacts, other: ValueFacts) anyerror!bool {
-        if (other.isEmpty()) return false;
+        if (other.isEmpty() or self.sameSnapshot(other)) return false;
+        if (self.isEmpty()) {
+            self.* = other;
+            return true;
+        }
+        var next = self.*;
         var changed = false;
-        const empty = self.isEmpty();
-        for (other.selected_types.items) |ty| {
-            var found = false;
-            for (self.selected_types.items) |existing| if (ast.Type.eql(ty, existing)) {
-                found = true;
-                break;
-            };
-            if (!found) {
-                try self.selected_types.append(self.fields.allocator, ty);
-                changed = true;
+        for (other.selected_types) |ty| {
+            if (try next.addSelectedType(ty)) changed = true;
+        }
+        next.unknown_reference = self.unknown_reference or other.unknown_reference or !referenceEql(self.reference, other.reference);
+        next.unknown_string = self.unknown_string or other.unknown_string or !optionalStringEql(self.string_literal, other.string_literal);
+        next.reference = if (next.unknown_reference) null else other.reference;
+        next.string_literal = if (next.unknown_string) null else other.string_literal;
+        changed = changed or self.unknown_reference != next.unknown_reference or self.unknown_string != next.unknown_string or
+            !referenceEql(self.reference, next.reference) or !optionalStringEql(self.string_literal, next.string_literal);
+
+        var updated_objects: ?Objects = null;
+        if (self.objects != other.objects) {
+            var objects = other.objects.keyIterator();
+            while (objects.next()) |id| {
+                if (self.objects.contains(id.*)) continue;
+                if (updated_objects == null) updated_objects = try self.objects.clone(self.allocator);
+                try updated_objects.?.put(self.allocator, id.*, {});
             }
         }
-        const unknown_reference = self.unknown_reference or other.unknown_reference or (!empty and !referenceEql(self.reference, other.reference));
-        const unknown_string = self.unknown_string or other.unknown_string or (!empty and !optionalStringEql(self.string_literal, other.string_literal));
-        const reference = if (unknown_reference) null else other.reference;
-        const string_literal = if (unknown_string) null else other.string_literal;
-        changed = changed or self.unknown_reference != unknown_reference or self.unknown_string != unknown_string or
-            !referenceEql(self.reference, reference) or !optionalStringEql(self.string_literal, string_literal);
-        self.unknown_reference = unknown_reference;
-        self.unknown_string = unknown_string;
-        self.reference = reference;
-        self.string_literal = string_literal;
-        var objects = other.objects.keyIterator();
-        while (objects.next()) |id| {
-            const entry = try self.objects.getOrPut(id.*);
-            if (!entry.found_existing) changed = true;
+        if (updated_objects) |objects| {
+            next.objects = try self.freeze(objects);
+            changed = true;
         }
         if (other.unknown_objects and !self.unknown_objects) changed = true;
-        self.unknown_objects = self.unknown_objects or other.unknown_objects;
-        var labels = other.labels.keyIterator();
-        while (labels.next()) |label| {
-            const entry = try self.labels.getOrPut(label.*);
-            if (!entry.found_existing) changed = true;
+        next.unknown_objects = self.unknown_objects or other.unknown_objects;
+
+        var updated_labels: ?Labels = null;
+        if (self.labels != other.labels) {
+            var labels = other.labels.keyIterator();
+            while (labels.next()) |label| {
+                if (self.labels.contains(label.*)) continue;
+                if (updated_labels == null) updated_labels = try self.labels.clone(self.allocator);
+                try updated_labels.?.put(self.allocator, label.*, {});
+            }
         }
+        if (updated_labels) |labels| {
+            next.labels = try self.freeze(labels);
+            changed = true;
+        }
+
+        var updated_fields: ?Fields = null;
         var fields = self.fields.iterator();
         while (fields.next()) |field| {
-            if (other.fields.get(field.key_ptr.*)) |value| {
-                const grew = try field.value_ptr.join(value);
-                changed = changed or grew;
-            } else if (other.unknown) {
-                const grew = try field.value_ptr.join(unknownValue(self.fields.allocator));
-                changed = changed or grew;
-            }
+            const incoming = other.fields.get(field.key_ptr.*) orelse if (other.unknown) unknownValue(self.allocator) else continue;
+            var value = field.value_ptr.*;
+            if (!try value.join(incoming)) continue;
+            if (updated_fields == null) updated_fields = try self.fields.clone(self.allocator);
+            try updated_fields.?.put(self.allocator, field.key_ptr.*, value);
         }
         var other_fields = other.fields.iterator();
         while (other_fields.next()) |field| {
             if (self.fields.contains(field.key_ptr.*)) continue;
-            var value = try field.value_ptr.clone(self.fields.allocator);
-            if (self.unknown) try value.unionWith(unknownValue(self.fields.allocator));
-            try self.fields.put(field.key_ptr.*, value);
+            var value = field.value_ptr.*;
+            if (self.unknown) try value.unionWith(unknownValue(self.allocator));
+            if (updated_fields == null) updated_fields = try self.fields.clone(self.allocator);
+            try updated_fields.?.put(self.allocator, field.key_ptr.*, value);
+        }
+        if (updated_fields) |updated| {
+            next.fields = try self.freeze(updated);
             changed = true;
         }
-        for (self.children.items, 0..) |*child, index| {
-            if (index < other.children.items.len) {
-                const grew = try child.join(other.children.items[index]);
-                changed = changed or grew;
-            } else if (other.unknown) {
-                const grew = try child.join(unknownValue(self.fields.allocator));
-                changed = changed or grew;
+
+        var updated_children: ?[]ValueFacts = null;
+        const child_count = @max(self.children.len, other.children.len);
+        for (0..child_count) |index| {
+            var value = if (index < self.children.len) self.children[index] else other.children[index];
+            const grew = if (index >= self.children.len) blk: {
+                if (self.unknown) try value.unionWith(unknownValue(self.allocator));
+                break :blk true;
+            } else if (index < other.children.len)
+                try value.join(other.children[index])
+            else if (other.unknown)
+                try value.join(unknownValue(self.allocator))
+            else
+                false;
+            if (!grew) continue;
+            if (updated_children == null) {
+                updated_children = try self.allocator.alloc(ValueFacts, child_count);
+                @memcpy(updated_children.?[0..self.children.len], self.children);
             }
+            updated_children.?[index] = value;
         }
-        if (other.children.items.len > self.children.items.len) {
-            try self.children.ensureTotalCapacity(self.fields.allocator, other.children.items.len);
-            for (other.children.items[self.children.items.len..]) |child| {
-                var copy = try child.clone(self.fields.allocator);
-                errdefer copy.deinit();
-                if (self.unknown) try copy.unionWith(unknownValue(self.fields.allocator));
-                self.children.appendAssumeCapacity(copy);
-            }
+        if (updated_children) |children| {
+            next.children = children;
             changed = true;
         }
         if (other.unknown and !self.unknown) changed = true;
-        self.unknown = self.unknown or other.unknown;
+        next.unknown = self.unknown or other.unknown;
+        self.* = next;
         return changed;
     }
 
-    fn clone(self: ValueFacts, allocator: std.mem.Allocator) anyerror!ValueFacts {
-        var out = init(allocator);
-        errdefer out.deinit();
-        out.unknown = self.unknown;
-        out.unknown_objects = self.unknown_objects;
-        out.unknown_string = self.unknown_string;
-        out.unknown_reference = self.unknown_reference;
-        out.reference = self.reference;
-        out.string_literal = self.string_literal;
-        out.labels = try self.labels.cloneWithAllocator(allocator);
-        out.objects = try self.objects.cloneWithAllocator(allocator);
-        try out.selected_types.appendSlice(allocator, self.selected_types.items);
-        try out.fields.ensureTotalCapacity(self.fields.count());
-        var fields = self.fields.iterator();
-        while (fields.next()) |field| {
-            out.fields.putAssumeCapacity(field.key_ptr.*, try field.value_ptr.clone(allocator));
-        }
-        try out.children.ensureTotalCapacity(allocator, self.children.items.len);
-        for (self.children.items) |child| out.children.appendAssumeCapacity(try child.clone(allocator));
-        return out;
+    fn addSelectedType(self: *ValueFacts, ty: ast.Type) !bool {
+        for (self.selected_types) |existing| if (ast.Type.eql(ty, existing)) return false;
+        const types = try self.allocator.alloc(ast.Type, self.selected_types.len + 1);
+        @memcpy(types[0..self.selected_types.len], self.selected_types);
+        types[self.selected_types.len] = ty;
+        self.selected_types = types;
+        return true;
     }
 
     fn collectFunctions(self: ValueFacts, out: *LabelMap) anyerror!void {
@@ -258,53 +283,64 @@ const ValueFacts = struct {
         while (labels.next()) |label| try out.put(label.*, {});
         var fields = self.fields.valueIterator();
         while (fields.next()) |field| try field.collectFunctions(out);
-        for (self.children.items) |child| try child.collectFunctions(out);
+        for (self.children) |child| try child.collectFunctions(out);
     }
 
-    fn forgetFunctions(self: *ValueFacts) void {
-        self.labels.clearRetainingCapacity();
-        self.unknown = true;
-        var fields = self.fields.valueIterator();
-        while (fields.next()) |field| field.forgetFunctions();
-        for (self.children.items) |*child| child.forgetFunctions();
+    fn forgetFunctions(self: *ValueFacts) anyerror!void {
+        var next = self.*;
+        next.labels = &.{};
+        next.unknown = true;
+        var updated_fields: ?Fields = null;
+        var fields = self.fields.iterator();
+        while (fields.next()) |field| {
+            var value = field.value_ptr.*;
+            try value.forgetFunctions();
+            if (value.sameSnapshot(field.value_ptr.*)) continue;
+            if (updated_fields == null) updated_fields = try self.fields.clone(self.allocator);
+            try updated_fields.?.put(self.allocator, field.key_ptr.*, value);
+        }
+        if (updated_fields) |updated| next.fields = try self.freeze(updated);
+        var updated_children: ?[]ValueFacts = null;
+        for (self.children, 0..) |child, index| {
+            var value = child;
+            try value.forgetFunctions();
+            if (value.sameSnapshot(child)) continue;
+            if (updated_children == null) updated_children = try self.allocator.dupe(ValueFacts, self.children);
+            updated_children.?[index] = value;
+        }
+        if (updated_children) |children| next.children = children;
+        self.* = next;
     }
 
-    fn getField(self: ValueFacts, name: []const u8, allocator: std.mem.Allocator) !ValueFacts {
-        if (self.fields.get(name)) |value| return value.clone(allocator);
-        return if (self.unknown) unknownValue(allocator) else init(allocator);
+    fn getField(self: ValueFacts, name: []const u8) ValueFacts {
+        return self.fields.get(name) orelse if (self.unknown) unknownValue(self.allocator) else init(self.allocator);
     }
 
     fn putField(self: *ValueFacts, name: []const u8, value: ValueFacts) !void {
-        if (self.fields.fetchRemove(name)) |entry| {
-            var old = entry.value;
-            old.deinit();
+        // Closed scalar fields carry no call or object facts. An explicit
+        // empty field must still refine an unknown record.
+        const omit = !self.unknown and value.isEmpty();
+        if (omit and !self.fields.contains(name)) return;
+        var fields = try self.fields.clone(self.allocator);
+        if (omit) {
+            _ = fields.remove(name);
+        } else {
+            try fields.put(self.allocator, name, value);
         }
-        // Closed scalar fields carry no call or object facts. Omitting them
-        // avoids copying complete presentation records through every call.
-        // An explicit empty field must still refine an unknown record.
-        if (!self.unknown and !value.unknown and !value.unknown_objects and !value.unknown_string and !value.unknown_reference and
-            value.labels.count() == 0 and value.objects.count() == 0 and value.fields.count() == 0 and value.children.items.len == 0 and
-            value.reference == null and value.string_literal == null and value.selected_types.items.len == 0)
-        {
-            var empty = value;
-            empty.deinit();
-            return;
-        }
-        try self.fields.put(name, value);
+        self.fields = try self.freeze(fields);
     }
 
     fn updatePath(self: *ValueFacts, path: []const ast.RecordPathSegment, value: ValueFacts) !void {
         std.debug.assert(path.len != 0);
         if (path.len == 1) return self.putField(path[0].name, value);
-        var nested = try self.getField(path[0].name, self.fields.allocator);
+        var nested = self.getField(path[0].name);
         try nested.updatePath(path[1..], value);
         try self.putField(path[0].name, nested);
     }
 };
 
-// Bound facts are immutable and live in the analysis pass arena. Copy the
-// binding map for branches and captures; expressions clone facts before any
-// update or independent destruction, so bindings can share their value trees.
+// Binding maps are copied for branches and captures. Their values share
+// immutable collections in the analysis pass arena.
 const FunctionEnv = analysis_env.ValueEnv(ValueFacts);
 
 const Activation = struct {
@@ -392,12 +428,11 @@ const Analyzer = struct {
     fn checkDeclarations(self: *Analyzer) !void {
         var const_it = self.state.constants.declarations.iterator();
         while (const_it.next()) |entry| {
-            var labels = try self.constFacts(.{
+            _ = try self.constFacts(.{
                 .key = entry.key_ptr.*,
                 .module_id = entry.key_ptr.module_id,
                 .decl = entry.value_ptr.*,
             });
-            labels.deinit();
         }
         var it = self.sema.functions.iterator();
         while (it.next()) |entry| {
@@ -466,13 +501,12 @@ const Analyzer = struct {
             if (try entry.receiver.join(receiver)) self.inputs_changed = true;
             return;
         }
-        try self.typed_inputs.append(self.allocator, .{ .input = input, .receiver = try receiver.clone(self.allocator) });
+        try self.typed_inputs.append(self.allocator, .{ .input = input, .receiver = receiver });
         self.inputs_changed = true;
     }
 
     fn selectedInput(self: *Analyzer, input: ast.Type) !ValueFacts {
         var result = ValueFacts.init(self.allocator);
-        errdefer result.deinit();
         for (self.typed_inputs.items) |entry| if (ast.Type.accepts(input, entry.input) or ast.Type.accepts(entry.input, input)) try result.unionWith(entry.receiver);
         return result;
     }
@@ -541,7 +575,7 @@ const Analyzer = struct {
                     defer self.effect_frames.items[frame_index].forwarding_depth -= 1;
                     try self.recordPlacement();
                 }
-                return try cached.value.clone(self.allocator);
+                return cached.value;
             }
             return ValueFacts.init(self.allocator);
         }
@@ -572,7 +606,7 @@ const Analyzer = struct {
         }
         if (memoize) {
             try self.states.put(stored_key, 2);
-            try self.returns.put(stored_key, .{ .value = try result.clone(self.allocator), .places_objects = self.effect_frames.items[frame_index].places_objects });
+            try self.returns.put(stored_key, .{ .value = result, .places_objects = self.effect_frames.items[frame_index].places_objects });
         }
         return result;
     }
@@ -631,7 +665,7 @@ const Analyzer = struct {
             .ident => |ident| {
                 const name = ident.name;
                 switch (try self.sema.resolveValue(ValueFacts, ident.reference(), env.get(name))) {
-                    .local => |labels| return try labels.clone(self.allocator),
+                    .local => |labels| return labels,
                     .constant => |resolved| return try self.constFacts(resolved),
                     .function => |resolved| return try ValueFacts.singleton(self.allocator, self.namedLabel(resolved.key)),
                     .primitive, .unknown => return ValueFacts.unknownValue(self.allocator),
@@ -649,6 +683,9 @@ const Analyzer = struct {
             },
             .record => |record| {
                 var value = ValueFacts.init(self.allocator);
+                // Build the unpublished field table once. Persistent updates
+                // are needed only after a value has been shared.
+                var fields: ValueFacts.Fields = .empty;
                 const resolved = self.sema.recordConstruction(record) orelse return ValueFacts.unknownValue(self.allocator);
                 const previous = self.sema;
                 {
@@ -659,13 +696,20 @@ const Analyzer = struct {
                         if (resolved.decl.type_params.items.len != 0) continue;
                         if (record.hasField(field.name)) continue;
                         if (field.default_value) |expr_value| {
-                            try value.putField(field.name, try self.exprFacts(expr_value.*, &default_env, owner));
+                            const default = try self.exprFacts(expr_value.*, &default_env, owner);
+                            if (!default.isEmpty()) try fields.put(self.allocator, field.name, default);
                         }
                     }
                 }
                 for (record.fields.items) |field| {
-                    try value.putField(field.name, try self.exprFacts(field.value, env, owner));
+                    const provided = try self.exprFacts(field.value, env, owner);
+                    if (provided.isEmpty()) {
+                        _ = fields.remove(field.name);
+                    } else {
+                        try fields.put(self.allocator, field.name, provided);
+                    }
                 }
+                if (fields.count() != 0) value.fields = try value.freeze(fields);
                 return value;
             },
             .record_update => |update| {
@@ -685,8 +729,7 @@ const Analyzer = struct {
                 // Immutable local records can be inspected without copying
                 // every sibling field at each step of a member path.
                 if (borrowLocalFacts(env, member.target.*)) |target| return self.memberFacts(target, member.name);
-                var value = try self.exprFacts(member.target.*, env, owner);
-                defer value.deinit();
+                const value = try self.exprFacts(member.target.*, env, owner);
                 return self.memberFacts(value, member.name);
             },
             .optional_check => |check| {
@@ -695,9 +738,7 @@ const Analyzer = struct {
             },
             .coalesce => |coalesce| {
                 var target = try self.exprFacts(coalesce.target.*, env, owner);
-                errdefer target.deinit();
-                var fallback = try self.exprFacts(coalesce.fallback.*, env, owner);
-                defer fallback.deinit();
+                const fallback = try self.exprFacts(coalesce.fallback.*, env, owner);
                 try target.unionWith(fallback);
                 return target;
             },
@@ -743,7 +784,7 @@ const Analyzer = struct {
                 if (primitive.callback) |callback_spec| {
                     if (arg_labels.items.len <= callback_spec.function_arg_index) return ValueFacts.unknownValue(self.allocator);
                     const callback = arg_labels.items[callback_spec.function_arg_index];
-                    var accumulator = if (primitive.op == .fold) try arg_labels.items[1].clone(self.allocator) else ValueFacts.init(self.allocator);
+                    var accumulator = if (primitive.op == .fold) arg_labels.items[1] else ValueFacts.init(self.allocator);
                     for (0..max_call_analysis_depth) |_| {
                         var callback_args = std.ArrayList(ValueFacts).empty;
                         for (0..callback_spec.supplied_arg_count) |index| {
@@ -760,7 +801,7 @@ const Analyzer = struct {
                         if (primitive.op != .fold) break;
                         // A callback can capture its parameter facts. Keep
                         // that snapshot immutable while growing the next one.
-                        var next = try accumulator.clone(self.allocator);
+                        var next = accumulator;
                         if (!try next.join(returned)) return next;
                         accumulator = next;
                     } else {
@@ -778,38 +819,33 @@ const Analyzer = struct {
     fn primitiveFacts(self: *Analyzer, primitive: registry.PrimitiveDescriptor, call: ast.CallExpr, args: []const ValueFacts) !ValueFacts {
         if (primitive.op == .group_placed or (primitive.op == .group and call.callee.call_id != null and self.state.displays.adoptions.contains(call.callee.call_id.?))) {
             var receiver = ValueFacts.init(self.allocator);
-            errdefer receiver.deinit();
             if (call.callee.call_id) |id| receiver.reference = .{ .placement = .{ .call = id, .path = &.{} } };
             var input = ValueFacts.init(self.allocator);
-            var owns_input = true;
-            defer if (owns_input) input.deinit();
             const group_type = if (call.callee.call_id) |id| self.state.displays.adoptions.get(id) else null;
             if (group_type != null and group_type.?.arguments.len == 0) {
                 // A dynamic selection does not define a child tuple. Expanding
                 // its membership here would recursively embed a group's own
                 // collection facts before the execution graph can reject it.
                 input.unknown = true;
-                try receiver.children.ensureTotalCapacity(self.allocator, args.len);
-                for (args) |arg| {
+                const children = try self.allocator.alloc(ValueFacts, args.len);
+                receiver.children = children;
+                for (args, children) |arg, *output| {
                     // Retain the original registration, without recursively
                     // embedding the selected group's own child/input facts.
                     var child = ValueFacts.init(self.allocator);
                     child.reference = arg.reference;
                     child.unknown_reference = arg.unknown_reference;
                     child.unknown = arg.unknown;
-                    receiver.children.appendAssumeCapacity(child);
+                    output.* = child;
                 }
             } else {
-                try receiver.children.ensureTotalCapacity(self.allocator, args.len);
-                try input.children.ensureTotalCapacity(self.allocator, args.len);
-                for (args) |arg| {
-                    receiver.children.appendAssumeCapacity(try arg.clone(self.allocator));
-                    input.children.appendAssumeCapacity(try arg.getField("value", self.allocator));
-                }
+                receiver.children = try self.allocator.dupe(ValueFacts, args);
+                const children = try self.allocator.alloc(ValueFacts, args.len);
+                for (args, children) |arg, *child| child.* = arg.getField("value");
+                input.children = children;
             }
             try receiver.putField("value", input);
-            owns_input = false;
-            if (args.len != 0) try receiver.putField("page", try args[0].getField("page", self.allocator));
+            if (args.len != 0) try receiver.putField("page", args[0].getField("page"));
             var document = ValueFacts.init(self.allocator);
             document.reference = .document;
             try receiver.putField("document", document);
@@ -818,9 +854,7 @@ const Analyzer = struct {
         }
         if (primitive.op == .group) {
             var value = ValueFacts.init(self.allocator);
-            errdefer value.deinit();
-            try value.children.ensureTotalCapacity(self.allocator, args.len);
-            for (args) |arg| value.children.appendAssumeCapacity(try arg.clone(self.allocator));
+            value.children = try self.allocator.dupe(ValueFacts, args);
             return value;
         }
         switch (primitive.op) {
@@ -833,19 +867,19 @@ const Analyzer = struct {
                 if (!self.types_checked) return ValueFacts.unknownValue(self.allocator);
                 if (call.type_args.items.len == 1) {
                     var result = try self.selectedInput(call.type_args.items[0]);
-                    try result.selected_types.append(self.allocator, call.type_args.items[0]);
+                    _ = try result.addSelectedType(call.type_args.items[0]);
                     return result;
                 }
                 if (args.len > 1) if (args[1].string_literal) |name| {
-                    if (registry.lookupQueryOp(name)) |query| if (query.op == .self_placement) return args[0].clone(self.allocator);
+                    if (registry.lookupQueryOp(name)) |query| if (query.op == .self_placement) return args[0];
                 };
             },
             .selection_union, .selection_intersection => if (args.len == 2) {
-                var combined = try args[0].clone(self.allocator);
+                var combined = args[0];
                 try combined.unionWith(args[1]);
                 return combined;
             },
-            .selection_difference, .sub => if (args.len > 0) return args[0].clone(self.allocator),
+            .selection_difference, .sub => if (args.len > 0) return args[0],
             else => {},
         }
         switch (primitive.result_policy) {
@@ -853,22 +887,22 @@ const Analyzer = struct {
                 if (call.callee.call_id) |id| if (self.state.displays.call_targets.get(id)) |plan| {
                     var receiver = ValueFacts.init(self.allocator);
                     receiver.reference = .{ .placement = .{ .call = id, .path = &.{} } };
-                    try receiver.putField("value", try args[primitive.result_arg_index].clone(self.allocator));
-                    try receiver.putField("page", try args[0].clone(self.allocator));
+                    try receiver.putField("value", args[primitive.result_arg_index]);
+                    try receiver.putField("page", args[0]);
                     var document = ValueFacts.init(self.allocator);
                     document.reference = .document;
                     try receiver.putField("document", document);
-                    if (self.collecting_inputs or self.require_known_calls) try self.typed_displays.append(self.allocator, .{ .plan = plan, .receiver = try receiver.clone(self.allocator), .origin = self.current_origin });
+                    if (self.collecting_inputs or self.require_known_calls) try self.typed_displays.append(self.allocator, .{ .plan = plan, .receiver = receiver, .origin = self.current_origin });
                     return receiver;
                 };
-                if (args.len > primitive.result_arg_index) return args[primitive.result_arg_index].clone(self.allocator);
+                if (args.len > primitive.result_arg_index) return args[primitive.result_arg_index];
             },
             .first_selection_item => if (args.len >= 1) {
-                var result = try args[0].clone(self.allocator);
-                result.selected_types.clearRetainingCapacity();
+                var result = args[0];
+                result.selected_types = &.{};
                 return result;
             },
-            .first_arg => if (args.len >= 1) return args[0].clone(self.allocator),
+            .first_arg => if (args.len >= 1) return args[0],
             else => {},
         }
         return ValueFacts.unknownValue(self.allocator);
@@ -879,7 +913,7 @@ const Analyzer = struct {
         // Property definitions in alternative branches are joined. References
         // point into this store, so later definitions are visible to displays.
         var written = ValueFacts.init(self.allocator);
-        try written.updatePath(path, try value.clone(self.allocator));
+        try written.updatePath(path, value);
         try self.mergeProperties(target, written);
     }
 
@@ -891,9 +925,9 @@ const Analyzer = struct {
 
     fn memberFacts(self: *Analyzer, target: ValueFacts, name: []const u8) !ValueFacts {
         // Explicit record updates refine even an otherwise unknown record.
-        if (target.fields.get(name)) |field| return field.clone(self.allocator);
+        if (target.fields.get(name)) |field| return field;
         if (target.unknown_objects) return ValueFacts.unknownValue(self.allocator);
-        if (target.objects.count() == 0) return target.getField(name, self.allocator);
+        if (target.objects.count() == 0) return target.getField(name);
         // Construction units are scheduled independently of source order. Only
         // display checking can read the completed store as a fixed set of facts.
         if (!self.checking_display) return ValueFacts.unknownValue(self.allocator);
@@ -911,7 +945,7 @@ const Analyzer = struct {
         }
         // This store refines object references only. Property-based function
         // calls still require a separate lifetime and storage contract.
-        result.forgetFunctions();
+        try result.forgetFunctions();
         return result;
     }
 
@@ -933,17 +967,17 @@ const Analyzer = struct {
                 switch (step.target) {
                     .native => {},
                     .group => {
-                        const input = try receivers[index].getField("value", self.allocator);
+                        const input = receivers[index].getField("value");
                         for (step.children.items, 0..) |child_index, position| {
                             var receiver = ValueFacts.init(self.allocator);
-                            const value = if (position < input.children.items.len) try input.children.items[position].clone(self.allocator) else ValueFacts.unknownValue(self.allocator);
+                            const value = if (position < input.children.len) input.children[position] else ValueFacts.unknownValue(self.allocator);
                             receiver.reference = if (registration.receiver.reference) |reference| switch (reference) {
                                 .placement => |placement| .{ .placement = .{ .call = placement.call, .path = plan.steps.items[child_index].path } },
                                 else => null,
                             } else null;
                             try receiver.putField("value", value);
-                            try receiver.putField("page", try registration.receiver.getField("page", self.allocator));
-                            try receiver.putField("document", try registration.receiver.getField("document", self.allocator));
+                            try receiver.putField("page", registration.receiver.getField("page"));
+                            try receiver.putField("document", registration.receiver.getField("document"));
                             receivers[child_index] = receiver;
                         }
                     },
@@ -955,8 +989,8 @@ const Analyzer = struct {
                             else => null,
                         } else null;
                         try receiver.putField("value", output);
-                        try receiver.putField("page", try registration.receiver.getField("page", self.allocator));
-                        try receiver.putField("document", try registration.receiver.getField("document", self.allocator));
+                        try receiver.putField("page", registration.receiver.getField("page"));
+                        try receiver.putField("document", registration.receiver.getField("document"));
                         std.debug.assert(step.children.items.len == 1);
                         receivers[step.children.items[0]] = receiver;
                     },
@@ -1114,7 +1148,7 @@ const Analyzer = struct {
         if (!self.checking_display) {
             if (self.const_values.get(resolved.key)) |summary| {
                 if (summary.places_objects) try self.recordPlacement();
-                return summary.value.clone(self.allocator);
+                return summary.value;
             }
         }
         if (self.const_visiting.contains(resolved.key)) return ValueFacts.init(self.allocator);
@@ -1130,7 +1164,7 @@ const Analyzer = struct {
         try self.effect_frames.append(self.allocator, .{});
         defer _ = self.effect_frames.pop();
         const value = try self.exprFacts(resolved.decl.value, &env, null);
-        if (!self.checking_display) try self.const_values.put(resolved.key, .{ .value = try value.clone(self.allocator), .places_objects = self.effect_frames.items[frame_index].places_objects });
+        if (!self.checking_display) try self.const_values.put(resolved.key, .{ .value = value, .places_objects = self.effect_frames.items[frame_index].places_objects });
         return value;
     }
 
@@ -1199,14 +1233,14 @@ const Analyzer = struct {
             .name = try allocator.dupe(u8, field.key_ptr.*),
             .value = try self.exportInput(field.value_ptr.*, allocator, closures),
         };
-        const children = try allocator.alloc(input_facts.Value, value.children.items.len);
-        for (value.children.items, children) |child, *output| output.* = try self.exportInput(child, allocator, closures);
+        const children = try allocator.alloc(input_facts.Value, value.children.len);
+        for (value.children, children) |child, *output| output.* = try self.exportInput(child, allocator, closures);
         const reference: ?input_facts.Value.Reference = if (value.unknown_reference or value.unknown_objects or value.objects.count() != 0) .unknown else if (value.reference) |reference| switch (reference) {
             .placement => |placement| .{ .placement = .{ .call = placement.call, .path = try allocator.dupe(usize, placement.path) } },
             else => reference,
         } else null;
-        const selected_types = try allocator.alloc(ast.Type, value.selected_types.items.len);
-        for (value.selected_types.items, selected_types) |ty, *output| output.* = try ty.clone(allocator);
+        const selected_types = try allocator.alloc(ast.Type, value.selected_types.len);
+        for (value.selected_types, selected_types) |ty, *output| output.* = try ty.clone(allocator);
         return .{ .selected_types = selected_types, .unknown = value.unknown, .candidates = candidates, .fields = fields, .children = children, .reference = reference, .string_literal = if (value.string_literal) |literal| try allocator.dupe(u8, literal) else null };
     }
 
@@ -1222,7 +1256,7 @@ const Analyzer = struct {
         return try out.toOwnedSlice(self.key_allocator);
     }
 
-    fn appendBindings(self: *Analyzer, out: *std.ArrayList(u8), scratch: *KeyScratch, bindings: *const std.StringHashMap(ValueFacts)) anyerror!void {
+    fn appendBindings(self: *Analyzer, out: *std.ArrayList(u8), scratch: *KeyScratch, bindings: anytype) anyerror!void {
         const start = scratch.bindings.items.len;
         defer scratch.bindings.shrinkRetainingCapacity(start);
         const count = bindings.count();
@@ -1274,7 +1308,7 @@ const Analyzer = struct {
         // Intern exact types, including defining modules and type arguments.
         // Sort sets so insertion order does not change closure identity.
         scratch.integers.clearRetainingCapacity();
-        for (value.selected_types.items) |ty| {
+        for (value.selected_types) |ty| {
             const key = for (self.input_type_keys.items, 0..) |existing, index| {
                 if (ast.Type.eql(ty, existing)) break index;
             } else blk: {
@@ -1293,9 +1327,9 @@ const Analyzer = struct {
         if (scratch.labels.items.len > 1) std.mem.sortUnstable(Label, scratch.labels.items, {}, Label.lessThan);
         try self.appendInteger(out, scratch.labels.items.len);
         for (scratch.labels.items) |label| try self.appendLabel(out, label);
-        try self.appendBindings(out, scratch, &value.fields);
-        try self.appendInteger(out, value.children.items.len);
-        for (value.children.items) |*child| try self.appendValue(out, scratch, child);
+        try self.appendBindings(out, scratch, value.fields);
+        try self.appendInteger(out, value.children.len);
+        for (value.children) |*child| try self.appendValue(out, scratch, child);
         scratch.integers.clearRetainingCapacity();
         var objects = value.objects.keyIterator();
         while (objects.next()) |id| try scratch.integers.append(allocator, id.*);
