@@ -36,6 +36,8 @@ static FcConfig *ss_font_config;
 static GMutex ss_font_source_cache_mutex;
 static GHashTable *ss_font_source_cache;
 static GHashTable *ss_real_fallback_cache;
+static GHashTable *ss_real_fallback_in_flight;
+static GCond ss_real_fallback_ready;
 static GPtrArray *ss_registered_font_paths;
 static _Thread_local uint64_t ss_thread_font_config_generation;
 static _Thread_local int ss_thread_font_config_valid;
@@ -459,6 +461,8 @@ static void ss_font_source_cache_clear(void) {
     g_mutex_lock(&ss_font_source_cache_mutex);
     if (ss_font_source_cache != NULL) g_hash_table_remove_all(ss_font_source_cache);
     if (ss_real_fallback_cache != NULL) g_hash_table_remove_all(ss_real_fallback_cache);
+    // The font-configuration writer lock excludes active shaping operations.
+    g_assert(ss_real_fallback_in_flight == NULL || g_hash_table_size(ss_real_fallback_in_flight) == 0);
     g_mutex_unlock(&ss_font_source_cache_mutex);
 }
 
@@ -1668,16 +1672,26 @@ static PangoFontDescription *ss_real_fallback_description(
             ss_font_pattern_hash, ss_font_pattern_equal, ss_font_pattern_destroy, g_free
         );
     }
-    gpointer cached_family = NULL;
-    if (g_hash_table_lookup_extended(ss_real_fallback_cache, query, NULL, &cached_family)) {
-        PangoFontDescription *cached = ss_fallback_with_family(requested, (const char *)cached_family);
-        g_mutex_unlock(&ss_font_source_cache_mutex);
-        FcPatternDestroy(query);
-        FcCharSetDestroy(charset);
-        return cached;
+    if (ss_real_fallback_in_flight == NULL) {
+        ss_real_fallback_in_flight = g_hash_table_new_full(
+            ss_font_pattern_hash, ss_font_pattern_equal, ss_font_pattern_destroy, NULL
+        );
     }
-    g_mutex_unlock(&ss_font_source_cache_mutex);
+    for (;;) {
+        gpointer cached_family = NULL;
+        if (g_hash_table_lookup_extended(ss_real_fallback_cache, query, NULL, &cached_family)) {
+            PangoFontDescription *cached = ss_fallback_with_family(requested, (const char *)cached_family);
+            g_mutex_unlock(&ss_font_source_cache_mutex);
+            FcPatternDestroy(query);
+            FcCharSetDestroy(charset);
+            return cached;
+        }
+        if (!g_hash_table_contains(ss_real_fallback_in_flight, query)) break;
+        g_cond_wait(&ss_real_fallback_ready, &ss_font_source_cache_mutex);
+    }
     FcPattern *cache_key = FcPatternDuplicate(query);
+    if (cache_key != NULL) g_hash_table_add(ss_real_fallback_in_flight, cache_key);
+    g_mutex_unlock(&ss_font_source_cache_mutex);
     FcConfigSubstitute(ss_font_config, query, FcMatchPattern);
     FcDefaultSubstitute(query);
 
@@ -1706,11 +1720,15 @@ static PangoFontDescription *ss_real_fallback_description(
     }
     if (cache_key != NULL) {
         g_mutex_lock(&ss_font_source_cache_mutex);
+        // Transfer the original, unsubstituted key to the completed cache.
+        // Waiters retain no entry pointers, so eviction cannot invalidate them.
+        g_hash_table_steal(ss_real_fallback_in_flight, cache_key);
         if (g_hash_table_size(ss_real_fallback_cache) >= SS_FONT_SOURCE_CACHE_MAX_ENTRIES) {
             g_hash_table_remove_all(ss_real_fallback_cache);
         }
         g_hash_table_replace(ss_real_fallback_cache, cache_key,
             fallback != NULL ? g_strdup(pango_font_description_get_family(fallback)) : NULL);
+        g_cond_broadcast(&ss_real_fallback_ready);
         g_mutex_unlock(&ss_font_source_cache_mutex);
     }
     FcPatternDestroy(query);

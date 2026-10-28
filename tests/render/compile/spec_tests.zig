@@ -2580,3 +2580,65 @@ test "source cache: a valid fingerprint hit bypasses a same-path refresh claim" 
     try testing.expectEqual(@as(u32, 1), cache.in_flight.count());
     _ = cache.in_flight.remove(.{ .kind = null, .path = path });
 }
+
+const ConcurrentFallbackShape = struct {
+    ready: std.atomic.Value(usize) = .init(0),
+    released: std.atomic.Value(bool) = .init(false),
+    digests: [8]u64 = @splat(0),
+    failures: [8]?anyerror = @splat(null),
+    weight: c_int,
+
+    fn run(self: *ConcurrentFallbackShape, index: usize) void {
+        _ = c.ss_text_measure_text("Initialize thread font map", "Sans", 400, 0, 4, 12);
+        _ = self.ready.fetchAdd(1, .release);
+        while (!self.released.load(.acquire)) std.atomic.spinLoopHint();
+        self.digests[index] = self.shape() catch |err| {
+            self.failures[index] = err;
+            return;
+        };
+    }
+
+    fn shape(self: *const ConcurrentFallbackShape) !u64 {
+        var shape_result = std.mem.zeroes(c.SsTextShape);
+        if (c.ss_text_shape("Concurrent fallback \xe6\xbc\xa2\xe5\xad\x97", "Droid Sans Fallback", self.weight, 0, 4, 48, 640, 0, &shape_result) != 0) return error.ShapeFailed;
+        defer c.ss_text_shape_free(&shape_result);
+        if (shape_result.run_count == 0) return error.MissingGlyphRuns;
+        var hash = std.hash.Wyhash.init(0);
+        for (shape_result.runs[0..shape_result.run_count]) |glyph_run| {
+            if (glyph_run.font_family == null or glyph_run.font_path == null) return error.MissingFont;
+            hash.update(std.mem.span(glyph_run.font_family));
+            hash.update(std.mem.span(glyph_run.font_path));
+        }
+        return hash.final();
+    }
+};
+
+test "text shaping keeps concurrent fallback results consistent across requested weights" {
+    for ([_]c_int{ 700, 1000 }) |weight| {
+        var work = ConcurrentFallbackShape{ .weight = weight };
+        var threads: [8]std.Thread = undefined;
+        var started: usize = 0;
+        var joined = false;
+        defer if (!joined) {
+            work.released.store(true, .release);
+            for (threads[0..started]) |thread| thread.join();
+        };
+        for (&threads, 0..) |*thread, index| {
+            thread.* = try std.Thread.spawn(.{}, ConcurrentFallbackShape.run, .{ &work, index });
+            started += 1;
+        }
+        for (0..1000) |_| {
+            if (work.ready.load(.acquire) == threads.len) break;
+            try std.Io.sleep(testing.io, .fromMilliseconds(1), .awake);
+        }
+        try testing.expectEqual(threads.len, work.ready.load(.acquire));
+        work.released.store(true, .release);
+        for (threads) |thread| thread.join();
+        joined = true;
+        for (work.failures, work.digests) |failure, digest| {
+            try testing.expect(failure == null);
+            try testing.expectEqual(work.digests[0], digest);
+        }
+        try testing.expectEqual(work.digests[0], try work.shape());
+    }
+}
