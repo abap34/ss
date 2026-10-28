@@ -7956,3 +7956,61 @@ test "compiler semantics: variable dumps preserve generic values and placement t
         .{ .name = "selected", .scope_kind = "page", .scope_name = "main", .type_label = "Selection<Placed<Box<Number>>>" },
     });
 }
+
+test "compiler semantics: constant field arguments preserve nested updates and optional values" {
+    try expectObjectContent(
+        \\type Leaf { label: String }
+        \\type NestedSettings { body: Leaf missing: Leaf? = none }
+        \\const theme: NestedSettings = NestedSettings { body = Leaf { label = "original" } }
+        \\fn changed(value: Leaf, same: Leaf = value) -> Leaf = same with { label = "changed" }
+        \\fn shadow(theme: NestedSettings) -> String = theme.body.label
+        \\page main
+        \\  let copy = changed(theme.body)
+        \\  let local = theme with { body.label = "local" }
+        \\  text!(theme.body.label ++ ":" ++ copy.label ++ ":" ++ shadow(local) ++ ":" ++ (theme.missing?.label ?? "absent"))
+        \\end
+    , "original:changed:local:absent");
+}
+
+test "compiler semantics: qualified nested constant fields keep defining modules and local shadowing" {
+    try expectObjectContentWithTwoOverlays(
+        \\import ./lib/a as config
+        \\const label: String = "wrong"
+        \\fn read(theme: String) -> String = theme ++ ":" ++ config::theme.body.label
+        \\page main
+        \\  let theme = "local"
+        \\  text!(read(theme))
+        \\end
+    ,
+        \\import ./b as { NestedSettings, Leaf }
+        \\const label: String = "remote"
+        \\const theme: NestedSettings = NestedSettings { body = Leaf { label = label } }
+    ,
+        \\type Leaf { label: String }
+        \\type NestedSettings { body: Leaf }
+    , "local:remote");
+}
+
+test "compiler semantics: borrowed constant arguments survive growth of the constant cache" {
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(testing.allocator);
+    try source.appendSlice(testing.allocator,
+        \\type Box { label: String }
+        \\const first: Box = Box { label = "retained" }
+        \\fn choose(first: Box, rest: String) -> String = first.label
+        \\
+    );
+    for (0..64) |index| {
+        const declaration = try std.fmt.allocPrint(testing.allocator, "const item{d}: Box = Box {{ label = \"unused\" }}\n", .{index});
+        defer testing.allocator.free(declaration);
+        try source.appendSlice(testing.allocator, declaration);
+    }
+    try source.appendSlice(testing.allocator, "page main\n  text!(choose(first, ");
+    for (0..64) |index| {
+        const argument = try std.fmt.allocPrint(testing.allocator, "{s}item{d}.label", .{ if (index == 0) "" else " ++ ", index });
+        defer testing.allocator.free(argument);
+        try source.appendSlice(testing.allocator, argument);
+    }
+    try source.appendSlice(testing.allocator, "))\nend\n");
+    try expectObjectContent(source.items, "retained");
+}

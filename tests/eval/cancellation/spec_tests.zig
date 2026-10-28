@@ -64,6 +64,8 @@ test "document evaluation cooperatively cancels without adding a diagnostic" {
 test "evaluation cancellation releases nested calls closures records and placed groups at every check" {
     const source =
         \\type Label { content: String }
+        \\type NestedSettings { label: Label }
+        \\const theme: NestedSettings = NestedSettings { label = Label { content = "first" } }
         \\fn display(self: Placed<Label>) -> Text
         \\  return Text { content = self.value.content }
         \\end
@@ -78,7 +80,7 @@ test "evaluation cancellation releases nested calls closures records and placed 
         \\page sample
         \\  let suffix = " suffix"
         \\  let callback = (value: String) |-> value ++ suffix
-        \\  let first = decorate("first", callback)
+        \\  let first = decorate(theme.label.content, callback)
         \\  let second = decorate("second", callback)
         \\  let placed = place!(first |=| (second /=/ first))
         \\  ~ placed.width == 600

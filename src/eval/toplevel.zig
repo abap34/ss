@@ -708,8 +708,22 @@ fn evalConstValue(
     current_origin: core.SourceOrigin,
     resolved: semantic_env.ResolvedConst,
 ) anyerror!core.Value {
+    const value = try borrowConstValue(evaluation, page_id, scope, current_origin, resolved);
+    return value.clone(evaluation.state.allocator);
+}
+
+// Constants own their cached values until DocumentState is released. Return a
+// shallow value, not a pointer into the map: evaluating later arguments may
+// grow that map, while the cached aggregate's backing storage stays valid.
+fn borrowConstValue(
+    evaluation: *EvalContext,
+    page_id: core.NodeId,
+    scope: EvalScope,
+    current_origin: core.SourceOrigin,
+    resolved: semantic_env.ResolvedConst,
+) anyerror!core.Value {
     const state = evaluation.state;
-    if (state.constants.values.get(resolved.key)) |value| return try value.clone(state.allocator);
+    if (state.constants.values.get(resolved.key)) |value| return value;
     if (state.constants.eval_states.get(resolved.key)) |eval_state| {
         if (eval_state == 1) return error.RecursiveConst;
     }
@@ -736,7 +750,7 @@ fn evalConstValue(
     value_moved = true;
     try state.constants.eval_states.put(resolved.key, 2);
     state_committed = true;
-    return try state.constants.values.get(resolved.key).?.clone(state.allocator);
+    return state.constants.values.get(resolved.key).?;
 }
 
 fn evalMember(
@@ -749,8 +763,9 @@ fn evalMember(
 ) !core.Value {
     const state = evaluation.state;
     const functions = evaluation.functions;
-    if (borrowLocalValue(env, member.target.*)) |target| {
-        if (target == .record or target == .group) return evalMemberValue(state, functions, target, member.name);
+    if (try borrowValue(evaluation, page_id, scope, env, current_origin, member.target.*)) |target| {
+        if (member.optional and target == .none) return .{ .none = {} };
+        return evalMemberValue(state, functions, target, member.name);
     }
     var target = try evalExpr(evaluation, page_id, scope, env, current_origin, member.target.*);
     defer target.deinit(state.allocator);
@@ -758,13 +773,28 @@ fn evalMember(
     return evalMemberValue(state, functions, target, member.name);
 }
 
-fn borrowLocalValue(env: *const Environment, expr: Expr) ?core.Value {
+fn borrowValue(
+    evaluation: *EvalContext,
+    page_id: core.NodeId,
+    scope: EvalScope,
+    env: *const Environment,
+    current_origin: core.SourceOrigin,
+    expr: Expr,
+) anyerror!?core.Value {
     return switch (expr) {
-        .ident => |ident| if (env.get(ident.name)) |value| value else null,
+        .ident => |ident| blk: {
+            const sema = SemanticEnv.init(evaluation.state, evaluation.declarations, evaluation.functions).forModule(evaluation.module_id);
+            break :blk switch (try evaluation.name_resolution_cache.resolveValue(&sema, core.Value, ident.reference(), env.get(ident.name))) {
+                .local => |value| value,
+                .constant => |resolved| try borrowConstValue(evaluation, page_id, scope, current_origin, resolved),
+                else => null,
+            };
+        },
         .member => |member| blk: {
-            const target = borrowLocalValue(env, member.target.*) orelse break :blk null;
+            const target = (try borrowValue(evaluation, page_id, scope, env, current_origin, member.target.*)) orelse break :blk null;
+            if (member.optional and target == .none) break :blk .{ .none = {} };
             if (target != .record) break :blk null;
-            break :blk target.record.field(member.name);
+            break :blk target.record.field(member.name) orelse .{ .none = {} };
         },
         else => null,
     };
@@ -1145,7 +1175,7 @@ fn evalArgument(
     expr: Expr,
 ) !Binding {
     try checkCancellation(evaluation);
-    if (borrowLocalValue(env, expr)) |value| return .{ .value = value, .owned = false };
+    if (try borrowValue(evaluation, page_id, scope, env, current_origin, expr)) |value| return .{ .value = value, .owned = false };
     return .{ .value = try evalExpr(evaluation, page_id, scope, env, current_origin, expr), .owned = true };
 }
 
