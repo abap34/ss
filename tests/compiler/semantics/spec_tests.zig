@@ -8014,3 +8014,42 @@ test "compiler semantics: borrowed constant arguments survive growth of the cons
     try source.appendSlice(testing.allocator, "))\nend\n");
     try expectObjectContent(source.items, "retained");
 }
+
+test "compiler semantics: combined call facts preserve returned closures default effects and page scopes" {
+    try expectObjectContent(
+        \\type Action { read: () -> Number }
+        \\fn action(target: Page, seed: Number = target.layout_h_center_offset) -> Action
+        \\  let captured = seed
+        \\  if true
+        \\    return Action { read = () |-> captured }
+        \\  else
+        \\    return Action { read = () |-> target.layout_h_center_offset }
+        \\  end
+        \\end
+        \\page first
+        \\  let value = action(pagectx())
+        \\  text!(str(value.read()))
+        \\  pagectx().layout_h_center_offset = 42
+        \\end
+        \\page second
+        \\  let value = action(pagectx())
+        \\  text!(str(value.read()))
+        \\  pagectx().layout_h_center_offset = 24
+        \\end
+    , "42");
+}
+
+test "compiler semantics: combined call facts keep effects of ignored defaults" {
+    try expectObjectContent(
+        \\type Result { label: String }
+        \\fn prepare(target: Page) -> Number
+        \\  target.layout_h_center_offset = 42
+        \\  return 0
+        \\end
+        \\fn result(target: Page, ignored: Number = prepare(target)) -> Result = Result { label = "ready" }
+        \\page main
+        \\  text!(str(pagectx().layout_h_center_offset))
+        \\  let value = result(pagectx())
+        \\end
+    , "42");
+}

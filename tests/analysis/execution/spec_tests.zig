@@ -575,3 +575,57 @@ test "execution graph owns typed display summaries after temporary analysis stor
         try testing.expect(found);
     }
 }
+
+test "combined dependency and return facts release defaults records and closures on allocation failure" {
+    var state = try document(
+        \\type Action { target: Document read: () -> Number }
+        \\fn make(argument: Document, seed: Number = argument.layout_h_center_offset) -> Action
+        \\  let reader = () |-> seed
+        \\  if true
+        \\    return Action { target = argument, read = reader }
+        \\  else
+        \\    return Action { target = argument, read = () |-> argument.layout_h_center_offset }
+        \\  end
+        \\end
+        \\fn invoke(action: Action) -> Number = action.read()
+        \\document
+        \\  let action = make(docctx())
+        \\  let value = invoke(action)
+        \\end
+    );
+    defer state.deinit();
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, analyzeCachedTypeFacts, .{&state});
+}
+
+test "combined dependency and return facts restore captured bindings after cancellation" {
+    var state = try document(
+        \\type Action { read: () -> Number }
+        \\fn make(argument: Document, seed: Number = argument.layout_h_center_offset) -> Action
+        \\  return Action { read = () |-> seed }
+        \\end
+        \\document
+        \\  let action = make(docctx())
+        \\  let value = action.read()
+        \\end
+    );
+    defer state.deinit();
+    const dependencies = compiler.analysis.dependencies;
+    const sema = compiler.semantic_env.SemanticEnv.init(&state, state.declaration_index, &state.functions);
+    var analyzer = dependencies.Analyzer.init(testing.allocator, &sema);
+    defer analyzer.deinit();
+    var cancellation = CancelFunctionAnalysis{ .analyzer = &analyzer };
+    state.runtime.analysis_cancellation = .{ .context = &cancellation, .is_canceled = CancelFunctionAnalysis.canceled };
+    defer state.runtime.analysis_cancellation = null;
+    const statements = state.projectSyntax().document_statements.items;
+    try testing.expectError(error.Canceled, analyzer.documentStatements(statements));
+    try testing.expect(cancellation.triggered);
+    state.runtime.analysis_cancellation = null;
+    var recovered = try analyzer.documentStatements(statements);
+    defer recovered.deinit();
+    var fresh = dependencies.Analyzer.init(testing.allocator, &sema);
+    defer fresh.deinit();
+    var expected = try fresh.documentStatements(statements);
+    defer expected.deinit();
+    try testing.expectEqualDeep(expected.reads.items, recovered.reads.items);
+    try testing.expectEqualDeep(expected.writes.items, recovered.writes.items);
+}
