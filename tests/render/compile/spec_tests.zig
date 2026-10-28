@@ -1135,7 +1135,8 @@ test "text shaping replaces synthesized faces with an actual fallback" {
     try testing.expect(used_fallback);
 
     // Reuse the same character set in a different order and at a different
-    // point size. The selected family is reusable, but geometry is not.
+    // point size. Compare with the resolved face requested directly: missing
+    // glyphs and hinted advances need not scale linearly with point size.
     var repeated = std.mem.zeroes(c.SsTextShape);
     try testing.expectEqual(@as(c_int, 0), c.ss_text_shape(
         "\u{5b57}\u{6f22}",
@@ -1150,7 +1151,26 @@ test "text shaping replaces synthesized faces with an actual fallback" {
     ));
     defer c.ss_text_shape_free(&repeated);
     try testing.expect(repeated.run_count != 0);
-    try testing.expectApproxEqAbs(shape.logical_bounds.width / 2, repeated.logical_bounds.width, 1);
+
+    var direct = std.mem.zeroes(c.SsTextShape);
+    try testing.expectEqual(@as(c_int, 0), c.ss_text_shape(
+        "\u{5b57}\u{6f22}",
+        shape.runs[0].font_family,
+        700,
+        0,
+        4,
+        24,
+        640,
+        0,
+        &direct,
+    ));
+    defer c.ss_text_shape_free(&direct);
+    try testing.expect(direct.run_count != 0);
+    try testing.expectEqualDeep(direct.logical_bounds, repeated.logical_bounds);
+    try testing.expectEqualDeep(direct.ink_bounds, repeated.ink_bounds);
+    try testing.expectEqualDeep(direct.glyphs[0..direct.glyph_count], repeated.glyphs[0..repeated.glyph_count]);
+    try testing.expectEqualDeep(direct.clusters[0..direct.cluster_count], repeated.clusters[0..repeated.cluster_count]);
+    try testing.expectEqualDeep(direct.lines[0..direct.line_count], repeated.lines[0..repeated.line_count]);
     for (repeated.runs[0..repeated.run_count]) |run| {
         try testing.expectEqual(@as(c_int, 0), run.synthetic_bold);
         try testing.expectEqual(@as(c_int, 0), run.synthetic_italic);
