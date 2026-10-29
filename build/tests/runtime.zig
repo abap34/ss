@@ -26,16 +26,6 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
         .{ .path = "tests/runtime/graphics/path/typed_spec.mjs", .name = "test-typed-path", .description = "Check immutable vector paths, dimensions, composition, and rendering" },
         .{ .path = "tests/runtime/math/formula/spec.mjs", .name = "test-typed-math", .description = "Check typed formula construction, composition, and rendering" },
         .{ .path = "tests/runtime/document/typed_page_numbers_spec.mjs", .name = "test-typed-document", .description = "Check typed page numbers, contents, and references in a multi-page document" },
-        .{ .path = "tests/editor/build-status/spec.mjs" },
-        .{ .path = "tests/editor/component-width/spec.mjs" },
-        .{ .path = "tests/editor/deletion/spec.mjs" },
-        .{ .path = "tests/editor/locks/spec.mjs" },
-        .{ .path = "tests/editor/navigation/spec.mjs" },
-        .{ .path = "tests/editor/shapes/spec.mjs" },
-        .{ .path = "tests/editor/snapping/spec.mjs", .name = "test-editor-snapping", .description = "Check object alignment snapping and hysteresis" },
-        .{ .path = "tests/editor/icons/webview_spec.mjs" },
-        .{ .path = "tests/editor/edit_queue/spec.mjs" },
-        .{ .path = "tests/editor/translation/spec.mjs" },
         .{ .path = "tests/runtime/cli_diagnostics_runtime_spec.mjs" },
         .{ .path = "tests/runtime/completion_runtime_spec.mjs" },
         .{ .path = "tests/runtime/debug_runtime_spec.mjs" },
@@ -89,14 +79,16 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
         test_step.dependOn(&run.step);
         if (spec.name) |name| steps.focused(b, name, spec.description, &run.step);
     }
+    addWebviewSpecs(suite);
     addManualWysiwygSpec(suite, exe);
 
-    const vscode_tests = b.addSystemCommand(&.{ "npm", "test" });
-    vscode_tests.setName("npm test (editor/vscode)");
+    const vscode_tests = b.addSystemCommand(&.{ "npm", "run", "test:compiled" });
+    vscode_tests.setName("npm run test:compiled (editor/vscode)");
     vscode_tests.setCwd(b.path("editor/vscode"));
     vscode_tests.stdio = .inherit;
-    vscode_tests.step.dependOn(&suite.checks.vscode_packages.step);
+    vscode_tests.step.dependOn(suite.editor_build);
     test_step.dependOn(&vscode_tests.step);
+    addFocusedTestStep(b, "test-vscode", "Run VS Code extension tests", &vscode_tests.step);
 
     const project_settings_tests = steps.node(b, &suite.checks.node.step, "tests/editor/vscode/project_config/spec.mjs", null);
     project_settings_tests.step.dependOn(&suite.checks.vscode_packages.step);
@@ -106,6 +98,29 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
     editor_view_tests.step.dependOn(&suite.checks.vscode_packages.step);
     addFocusedTestStep(b, "test-editor-view", "Run focused editor view resource tests", &editor_view_tests.step);
     addStdlibChecks(b, test_step, exe);
+}
+
+fn addWebviewSpecs(suite: Suite) void {
+    const b = suite.ctx.b;
+    const webview_step = b.step("test-editor-webview", "Run editor webview unit tests after building shared render assets");
+    suite.all.dependOn(webview_step);
+    const specs = [_]Spec{
+        .{ .path = "tests/editor/build-status/spec.mjs" },
+        .{ .path = "tests/editor/component-width/spec.mjs" },
+        .{ .path = "tests/editor/deletion/spec.mjs" },
+        .{ .path = "tests/editor/locks/spec.mjs" },
+        .{ .path = "tests/editor/navigation/spec.mjs" },
+        .{ .path = "tests/editor/shapes/spec.mjs" },
+        .{ .path = "tests/editor/snapping/spec.mjs", .name = "test-editor-snapping", .description = "Check object alignment snapping and hysteresis" },
+        .{ .path = "tests/editor/icons/webview_spec.mjs" },
+        .{ .path = "tests/editor/edit_queue/spec.mjs" },
+        .{ .path = "tests/editor/translation/spec.mjs" },
+    };
+    for (specs) |spec| {
+        const run = steps.node(b, suite.editor_build, spec.path, null);
+        webview_step.dependOn(&run.step);
+        if (spec.name) |name| steps.focused(b, name, spec.description, &run.step);
+    }
 }
 
 fn addManualWysiwygSpec(suite: Suite, exe: std.Build.LazyPath) void {

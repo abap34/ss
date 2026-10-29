@@ -7,7 +7,7 @@ const steps = @import("../steps.zig");
 const Suite = @import("support.zig").Suite;
 const Step = std.Build.Step;
 
-pub fn register(ctx: project.Context, modules: project.ProjectModules, build_options: *Step.Options, exe: std.Build.LazyPath, parser_check: *Step, checks: dependencies.Checks, bridge: qpdf.Bridge) void {
+pub fn register(ctx: project.Context, modules: project.ProjectModules, build_options: *Step.Options, exe: std.Build.LazyPath, parser_check: *Step, checks: dependencies.Checks, bridge: qpdf.Bridge, editor_build: *Step) void {
     const b = ctx.b;
     const all = b.step("test", "Run ss test targets");
     all.dependOn(parser_check);
@@ -15,6 +15,7 @@ pub fn register(ctx: project.Context, modules: project.ProjectModules, build_opt
         .ctx = ctx,
         .all = all,
         .checks = checks,
+        .editor_build = editor_build,
         .bridge = bridge,
         .document_testing = project.createModule(ctx, "tests/support/document.zig", &.{ project.import("core", modules.core), project.import("ast", modules.ast) }, null),
         .allocation_testing = project.createModule(ctx, "tests/support/allocation.zig", &.{}, null),

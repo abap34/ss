@@ -10,7 +10,7 @@ const addFocusedTestStep = steps.focused;
 const dependencies = @import("../dependencies.zig");
 const qpdf = @import("../qpdf.zig");
 
-pub fn register(ctx: project.Context, modules: project.ProjectModules, build_options: *Step.Options, exe: std.Build.LazyPath, checks: dependencies.Checks, bridge: qpdf.Bridge) void {
+pub fn register(ctx: project.Context, modules: project.ProjectModules, build_options: *Step.Options, exe: std.Build.LazyPath, checks: dependencies.Checks, bridge: qpdf.Bridge, editor_build: *Step) void {
     const b = ctx.b;
     const app_mod = project.createAppModule(ctx, modules, build_options);
     const driver_mod = createModule(ctx, "tests/visual/render/driver.zig", &.{
@@ -58,10 +58,8 @@ pub fn register(ctx: project.Context, modules: project.ProjectModules, build_opt
     const behavior_step = b.step("test-render-behavior", "Inspect rendered PDF behavior locally with Chromium");
     behavior_step.dependOn(&behavior.step);
 
-    const presentation_build = steps.node(b, &checks.node.step, "editor/vscode/scripts/build.js", null);
-    presentation_build.step.dependOn(&checks.vscode_packages.step);
     const presentation = steps.node(b, &checks.node.step, "tests/visual/presentation/spec.mjs", exe);
-    presentation.step.dependOn(&presentation_build.step);
+    presentation.step.dependOn(editor_build);
     presentation.step.dependOn(&checks.visual_test_packages.step);
     addFocusedTestStep(b, "test-presentation", "Exercise the CLI and shared presentation controls", &presentation.step);
 

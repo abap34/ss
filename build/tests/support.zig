@@ -11,6 +11,7 @@ pub const Suite = struct {
     ctx: project.Context,
     all: *Step,
     checks: dependencies.Checks,
+    editor_build: *Step,
     bridge: qpdf.Bridge,
     document_testing: *Module,
     allocation_testing: *Module,

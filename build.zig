@@ -67,7 +67,9 @@ pub fn build(b: *std.Build) void {
     } else if (b.args) |args| run.addArgs(args);
     b.step("run", "Run the ss CLI").dependOn(&run.step);
 
-    tests.register(ctx, modules, build_options, exe, parser_check, checks, bridge);
-    visual.register(ctx, modules, build_options, exe, checks, bridge);
+    const editor_build = steps.node(b, &checks.node.step, "editor/vscode/scripts/build.js", null);
+    editor_build.step.dependOn(&checks.vscode_packages.step);
+    tests.register(ctx, modules, build_options, exe, parser_check, checks, bridge, &editor_build.step);
+    visual.register(ctx, modules, build_options, exe, checks, bridge, &editor_build.step);
     benchmarks.register(ctx, exe, checks);
 }
