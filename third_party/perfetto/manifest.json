@@ -8,5 +8,11 @@
   "files": {
     "perfetto.cc": "cfd4d552272f37da310d43c96c418788567d12174017e2fce061797297391e4c",
     "perfetto.h": "df97880d56c765a4c51ffe7fd2c71ce4fbb3164677d81185e8488c1516e87470"
+  },
+  "trace_processor": {
+    "linux-x64": ["linux-amd64.zip", "32c739f71b2d39721afd294c0b038f2499a44a71b5b6bcdd85b83faca0b240b9"],
+    "linux-arm64": ["linux-arm64.zip", "a82bf4111a340a7ea8577bcfd62e014e8e81b9e6a35a3190f5415fb800051ab0"],
+    "darwin-x64": ["mac-amd64.zip", "1ec01f5de30fbf3b4e91c2b96508e3f537f0f57d1d1ce4bdf0892c98c4de039c"],
+    "darwin-arm64": ["mac-arm64.zip", "9dbd484a32c9833c95cf58ca5ef86d2c9ad4767149054ad4eaa52bdf027d1507"]
   }
 }

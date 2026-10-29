@@ -32,6 +32,16 @@ pub fn register(suite: Suite, modules: project.ProjectModules, build_options: *S
     test_step.dependOn(&sdk_fetch_spec.step);
     profile_step.dependOn(&sdk_fetch_spec.step);
     addFocusedTestStep(b, "test-profile-sdk", "Verify optional Perfetto SDK preparation", &sdk_fetch_spec.step);
+    const processor_spec = b.addSystemCommand(&.{"python3"});
+    processor_spec.addFileArg(b.path("tests/profiling/tools/processor_spec.py"));
+    test_step.dependOn(&processor_spec.step);
+    profile_step.dependOn(&processor_spec.step);
+    const processor_client_spec = steps.node(b, &suite.checks.node.step, "tests/profiling/tools/spec.mjs", null);
+    test_step.dependOn(&processor_client_spec.step);
+    profile_step.dependOn(&processor_client_spec.step);
+    const tools_step = b.step("test-profile-tools", "Verify concurrent Trace Processor installation and recovery");
+    tools_step.dependOn(&processor_spec.step);
+    tools_step.dependOn(&processor_client_spec.step);
     const workload_spec = steps.node(b, &suite.checks.node.step, "tests/profiling/workload_spec.mjs", null);
     test_step.dependOn(&workload_spec.step);
     profile_step.dependOn(&workload_spec.step);
