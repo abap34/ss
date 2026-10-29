@@ -182,16 +182,29 @@ async function expectProtocolExit(label, bytes) {
 
 // A failed response must cancel the stdin reader even when the peer keeps its
 // input open with an incomplete next frame.
-{
+for (const writeAfterExit of [false, true]) {
   const client = new LspClient();
+  const inputErrors = [];
+  // This case deliberately closes the server's output. Its input may close
+  // before either write finishes; other protocol tests still reject pipe errors.
+  client.child.stdin.on("error", (error) => inputErrors.push(error));
   try {
     await client.initialize();
     client.child.stdout.destroy();
     client.send({ jsonrpc: "2.0", id: 9002, method: "shutdown", params: null });
-    client.child.stdin.write("Content-Length: 100\r\n\r\n{");
-    const error = await client.waitForExit().then(() => null, (failure) => failure);
+    const exited = client.waitForExit().then(() => null, (failure) => failure);
+    if (writeAfterExit) await exited;
+    await new Promise((resolve) => client.child.stdin.write("Content-Length: 100\r\n\r\n{", (error) => {
+      if (error) inputErrors.push(error);
+      resolve();
+    }));
+    const error = await exited;
     assert(error instanceof Error && client.exitStatus?.code === 1 && client.stderr.includes("output writer could not write"),
       `failed worker left the server running: ${error}; ${client.stderr}`);
+    for (const inputError of inputErrors) {
+      assert(["EPIPE", "ERR_STREAM_DESTROYED"].includes(inputError.code),
+        `unexpected input failure after closing server output: ${inputError}`);
+    }
   } finally {
     if (!client.exitStatus) client.child.kill();
   }

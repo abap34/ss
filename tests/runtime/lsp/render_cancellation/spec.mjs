@@ -20,8 +20,9 @@ try {
   await writeFile(
     fakePdflatex,
     `#!/bin/sh
-: > ${shellQuote(marker)}
+set -eu
 printf '%s\n' "$$" > ${shellQuote(pidFile)}
+: > ${shellQuote(marker)}
 if [ "$(cat ${shellQuote(mode)})" = "closed-pipes" ]; then
   trap '' TERM
   exec >/dev/null 2>/dev/null
@@ -58,38 +59,43 @@ end
     client.openDocument({ uri, text: source, version: 1 });
     await diagnostics;
 
-    await cancelRenderSnapshot(client, uri, marker, pidFile, "open-pipe render");
+    await interruptRenderSnapshot(client, uri, marker, pidFile, "open-pipe render");
 
-    await rm(marker, { force: true });
-    await rm(pidFile, { force: true });
     await writeFile(mode, "closed-pipes\n", "utf8");
-    await cancelRenderSnapshot(client, uri, marker, pidFile, "closed-pipe render");
+    await interruptRenderSnapshot(client, uri, marker, pidFile, "closed-pipe render");
 
-    await rm(marker, { force: true });
-    await rm(pidFile, { force: true });
     await writeFile(mode, "open-pipes\n", "utf8");
-    const superseded = client.startRequest("ss/editorSnapshot", {
-      textDocument: { uri },
-      baseSnapshotId: "",
+    await interruptRenderSnapshot(client, uri, marker, pidFile, "superseded render", {
+      interrupt: () => client.changeDocument({ uri, text: `${source};; latest revision\n`, version: 2 }),
+      errorCode: -32801,
     });
-    await waitForFile(marker, 3_000);
-    const supersededPid = Number.parseInt(await readFile(pidFile, "utf8"), 10);
-    const changedAt = performance.now();
-    client.changeDocument({ uri, text: `${source};; latest revision\n`, version: 2 });
-    const contentModifiedError = await superseded.promise.then(
-      () => null,
-      (error) => error,
-    );
-    const contentModifiedMs = performance.now() - changedAt;
-    assert(
-      contentModifiedError instanceof Error && contentModifiedError.message.includes("-32801"),
-      `superseded render returned the wrong result: ${contentModifiedError}`,
-    );
-    assert(
-      contentModifiedMs < 3_000,
-      `superseded render took ${Math.round(contentModifiedMs)} ms to stop`,
-    );
-    await waitForProcessExit(supersededPid, 2_000, "superseded render");
+
+    const auxiliary = path.join(project, "auxiliary.ss");
+    const auxiliaryUri = pathToFileURL(auxiliary).toString();
+    const auxiliarySource = "page auxiliary\nend\n";
+    await writeFile(auxiliary, auxiliarySource);
+    for (const notification of ["open-file-watch", "unrelated-watch", "close-other-document"]) {
+      if (notification === "close-other-document") {
+        const opened = client.waitForDiagnostics(auxiliaryUri);
+        client.openDocument({ uri: auxiliaryUri, text: auxiliarySource, version: 1 });
+        await opened;
+      }
+      // The child-start barrier makes the request genuinely in flight, so
+      // these notifications must interrupt it rather than race its completion.
+      await interruptRenderSnapshot(client, uri, marker, pidFile, notification, {
+        interrupt: () => {
+          if (notification === "close-other-document") {
+            client.notify("textDocument/didClose", { textDocument: { uri: auxiliaryUri } });
+          } else {
+            client.notify("workspace/didChangeWatchedFiles", { changes: [{
+              uri: notification === "open-file-watch" ? uri : pathToFileURL(path.join(project, "unrelated.txt")).toString(),
+              type: 2,
+            }] });
+          }
+        },
+        errorCode: -32801,
+      });
+    }
 
     const completion = await client.request("textDocument/completion", {
       textDocument: { uri },
@@ -119,29 +125,38 @@ function shellQuote(value) {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
-async function cancelRenderSnapshot(client, uri, marker, pidFile, label) {
+async function interruptRenderSnapshot(client, uri, marker, pidFile, label, {
+  interrupt = (request) => client.cancelRequest(request.id), errorCode = -32800,
+} = {}) {
+  await rm(marker, { force: true });
+  await rm(pidFile, { force: true });
   const snapshot = client.startRequest("ss/editorSnapshot", {
     textDocument: { uri },
     baseSnapshotId: "",
   });
-  await waitForFile(marker, 3_000);
-  const pid = Number.parseInt(await readFile(pidFile, "utf8"), 10);
+  const outcome = snapshot.promise.then(() => null, (error) => error);
+  const pid = await waitForRenderStart(marker, pidFile);
   const canceledAt = performance.now();
-  client.cancelRequest(snapshot.id);
-  const cancellationError = await snapshot.promise.then(
-    () => null,
-    (error) => error,
-  );
+  interrupt(snapshot);
+  const cancellationError = await outcome;
   const cancellationMs = performance.now() - canceledAt;
   assert(
-    cancellationError instanceof Error && cancellationError.message.includes("-32800"),
-    `${label} snapshot was not cancelled: ${cancellationError}`,
+    cancellationError instanceof Error && cancellationError.message.startsWith(`${errorCode}:`),
+    `${label} snapshot returned an unexpected outcome: ${cancellationError}`,
   );
   assert(
     cancellationMs < 3_000,
     `${label} cancellation took ${Math.round(cancellationMs)} ms`,
   );
   await waitForProcessExit(pid, 2_000, label);
+}
+
+async function waitForRenderStart(marker, pidFile) {
+  await waitForFile(marker, 3_000);
+  const text = (await readFile(pidFile, "utf8")).trim();
+  const pid = Number(text);
+  assert(/^[1-9][0-9]*$/.test(text) && Number.isSafeInteger(pid), `invalid render process id: ${text}`);
+  return pid;
 }
 
 async function waitForProcessExit(pid, timeoutMs, label) {

@@ -34,18 +34,9 @@ end
       textDocument: { uri },
       position: { line: 0, character: 0 },
     });
-    const canceledOutcome = canceledRequest.promise.then(
-      () => null,
-      (error) => error,
-    );
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    const canceledOutcome = outcome(canceledRequest);
     client.cancelRequest(canceledRequest.id);
-    const cancellationError = await canceledOutcome;
-    assert(cancellationError instanceof Error, "cancelled completion unexpectedly returned a result");
-    assert(
-      cancellationError.message.includes("-32800"),
-      `cancelled completion returned the wrong error: ${cancellationError.message}`,
-    );
+    expectOutcome(await canceledOutcome, -32800, isCompletion, "cancelled completion");
 
     const restoredDiagnostics = client.waitForDiagnostics(
       uri,
@@ -59,10 +50,7 @@ end
     const staleRequest = client.startRequest("textDocument/semanticTokens/full", {
       textDocument: { uri },
     });
-    const staleOutcome = staleRequest.promise.then(
-      () => null,
-      (error) => error,
-    );
+    const staleOutcome = outcome(staleRequest);
     const latestDiagnostics = client.waitForDiagnostics(
       uri,
       (diagnostics, message) => diagnostics.length === 0 && message.params.version === 5,
@@ -70,13 +58,8 @@ end
     );
     client.changeDocument({ uri, version: 5, text: validSource });
 
-    const staleError = await staleOutcome;
-    assert(staleError instanceof Error, "stale semantic-token request unexpectedly returned a result");
-    assert(
-      staleError.message.includes("-32801"),
-      `stale semantic-token request returned the wrong error: ${staleError.message}`,
-    );
-    await latestDiagnostics;
+    const [staleResult] = await Promise.all([staleOutcome, latestDiagnostics]);
+    expectOutcome(staleResult, -32801, (result) => Array.isArray(result?.data), "superseded semantic tokens");
 
     const completion = await client.request("textDocument/completion", {
       textDocument: { uri },
@@ -93,21 +76,9 @@ end
       textDocument: { uri },
       baseSnapshotId: "",
     });
-    const canceledSnapshotOutcome = canceledSnapshot.promise.then(
-      () => null,
-      (error) => error,
-    );
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    const canceledSnapshotOutcome = outcome(canceledSnapshot);
     client.cancelRequest(canceledSnapshot.id);
-    const snapshotCancellationError = await canceledSnapshotOutcome;
-    assert(
-      snapshotCancellationError instanceof Error,
-      "cancelled editor snapshot unexpectedly returned a result",
-    );
-    assert(
-      snapshotCancellationError.message.includes("-32800"),
-      `cancelled editor snapshot returned the wrong error: ${snapshotCancellationError.message}`,
-    );
+    expectOutcome(await canceledSnapshotOutcome, -32800, isSnapshot, "cancelled editor snapshot");
 
     const recoveredSnapshot = await client.request("ss/editorSnapshot", {
       textDocument: { uri },
@@ -131,19 +102,10 @@ end
       textDocument: { uri },
       baseSnapshotId: recoveredSnapshot.snapshot_id,
     });
-    const canceledInvalidOutcome = canceledInvalidSnapshot.promise.then(
-      () => null,
-      (error) => error,
-    );
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    const canceledInvalidOutcome = outcome(canceledInvalidSnapshot);
     client.cancelRequest(canceledInvalidSnapshot.id);
-    const invalidCancellationError = await canceledInvalidOutcome;
-    assert(
-      invalidCancellationError instanceof Error &&
-        invalidCancellationError.message.includes("-32800"),
-      `invalid editor snapshot was not cancelled: ${invalidCancellationError}`,
-    );
-    await canceledBuildDiagnostics;
+    const [invalidResult] = await Promise.all([canceledInvalidOutcome, canceledBuildDiagnostics]);
+    expectOutcome(invalidResult, -32800, isSnapshot, "cancelled invalid editor snapshot");
 
     const finalDiagnostics = client.waitForDiagnostics(
       uri,
@@ -187,8 +149,7 @@ end
       const request = client.startRequest("textDocument/completion", {
         textDocument: { uri }, position: { line: 0, character: 0 },
       });
-      const outcome = request.promise.then(() => null, error => error);
-      await new Promise(resolve => setTimeout(resolve, 10));
+      const interruptedOutcome = outcome(request);
       if (notification === "close-other-document") {
         client.notify("textDocument/didClose", { textDocument: { uri: auxiliaryUri } });
       } else {
@@ -197,12 +158,42 @@ end
           type: 2,
         }] });
       }
-      const interrupted = await outcome;
-      assert(interrupted instanceof Error && interrupted.message.includes("-32801"),
-        `${notification} did not interrupt the active build: ${interrupted}`);
-      await restored;
+      const [interrupted] = await Promise.all([interruptedOutcome, restored]);
+      expectOutcome(interrupted, -32801, isCompletion, `completion during ${notification}`);
     }
+
+    // Also exercise notifications after a request has certainly completed.
+    // Late cancellation must not poison the next request or document revision.
+    const completed = client.startRequest("textDocument/completion", {
+      textDocument: { uri }, position: { line: 0, character: 0 },
+    });
+    assert(isCompletion(await completed.promise), "completion before late cancellation was invalid");
+    client.cancelRequest(completed.id);
+    const afterLateCancel = await client.request("textDocument/completion", {
+      textDocument: { uri }, position: { line: 0, character: 0 },
+    });
+    assert(isCompletion(afterLateCancel), "late cancellation affected the next request");
   });
 } finally {
   await rm(project, { recursive: true, force: true });
 }
+
+// A request may finish before the ingress thread receives a later cancellation
+// or invalidation. Both outcomes are valid; malformed results and other errors
+// must still fail. In-flight cancellation itself is covered by query unit tests
+// and render_cancellation, whose tool-start marker provides a real barrier.
+function outcome(request) {
+  return request.promise.then((result) => ({ result }), (error) => ({ error }));
+}
+
+function expectOutcome(value, errorCode, validResult, label) {
+  if (value.error) {
+    assert(value.error instanceof Error && value.error.message.startsWith(`${errorCode}:`),
+      `${label} returned an unexpected error: ${value.error}`);
+  } else {
+    assert(validResult(value.result), `${label} returned an invalid result: ${JSON.stringify(value.result)}`);
+  }
+}
+
+function isCompletion(result) { return Array.isArray(result?.items); }
+function isSnapshot(result) { return result?.kind === "ss-editor-snapshot"; }
