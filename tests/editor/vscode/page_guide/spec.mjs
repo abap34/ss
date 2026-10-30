@@ -51,28 +51,28 @@ const editor = {
 let cases = 0;
 try {
   const nested = [
-    "page _", "let count = 3", "if true",
-    "  if true", "    if true", '      text! "Body"',
+    "page _", "stages s { first second third }", "show s >= s.first",
+    "  if true", "    show s >= s.second", '      text! "Body"',
     "    end", "  else", '    text! "Alternative"', "  end", "end", "end ;; page",
     "", "page _", "end",
   ];
   expectPages(await paint(nested), [[0, 11], [13, 14]]);
 
   for (const suffix of ["", ")", ") |=| text(\"Other\")", " || text! \"Other\"", "//other", "/=/ other", " # text", " ;; comment"]) {
-    const lines = ["page _", "if true", "let item = text(<< ;; content", "page fake", "if false", "end", `  >>${suffix}`, "end", "end", "page _", "end"];
+    const lines = ["page _", "show true", "let item = text(<< ;; content", "page fake", "show false", "end", `  >>${suffix}`, "end", "end", "page _", "end"];
     expectPages(await paint(lines), [[0, 8], [9, 10]]);
   }
 
   const composed = [
-    "page _", "if true", "text! <<", "page fake", "end",
-    ">> || text! << ;; second block", "page another_fake", "if false", "end", ">>)",
+    "page _", "show true", "text! <<", "page fake", "end",
+    ">> || text! << ;; second block", "page another_fake", "show false", "end", ">>)",
     "end", "end", "page _", "end",
   ];
   expectPages(await paint(composed), [[0, 11], [12, 13]]);
   expectPages(await paint(composed.join("\r\n")), [[0, 11], [12, 13]]);
 
   const quoted = [
-    "page _", 'text! "Multiline', "page fake", "if false", "end", '<< >> ;; quoted"',
+    "page _", 'text! "Multiline', "page fake", "show false", "end", '<< >> ;; quoted"',
     'text! "A literal backslash\\"', "end", ";; page fake", "page _", "end",
   ];
   expectPages(await paint(quoted), [[0, 7], [9, 10]]);
@@ -82,7 +82,7 @@ try {
     expectPages(await paint(lines), [[0, marker === ";;" ? 1 : null, 1], [2, 3]]);
   }
 
-  const unfinished = ["page _", "if true", 'text! "First"', "end", "page _", "end", "page _", "if true"];
+  const unfinished = ["page _", "show true", 'text! "First"', "end", "page _", "end", "page _", "show true"];
   const before = await paint(unfinished);
   expectPages(before, [[0, null, 3], [4, 5], [6, null, 7]]);
   const repaired = [...unfinished.slice(0, 4), "end", ...unfinished.slice(4), "end", "end"];
