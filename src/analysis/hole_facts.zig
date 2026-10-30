@@ -73,7 +73,7 @@ fn statementExpectedTypes(
             if (constraint.offset) |offset| try exprExpectedTypes(allocator, sema, offset, holes);
         },
         .expr_stmt => |expr| try exprExpectedTypes(allocator, sema, expr, holes),
-        .if_stmt => |if_stmt| {
+        .if_stmt, .drawing => |if_stmt| {
             try expectExpr(allocator, holes, if_stmt.condition, ast.Type.boolean);
             try exprExpectedTypes(allocator, sema, if_stmt.condition, holes);
             for (if_stmt.then_statements.items) |nested| try statementExpectedTypes(allocator, sema, nested, holes, function_result);

@@ -108,7 +108,7 @@ pub const Generator = struct {
                 try self.reserveExpr(property_set.target);
                 try self.reserveExpr(property_set.value);
             },
-            .if_stmt => |conditional| {
+            .if_stmt, .drawing => |conditional| {
                 try self.reserveExpr(conditional.condition);
                 try self.reserveStatements(conditional.then_statements.items);
                 try self.reserveStatements(conditional.else_statements.items);

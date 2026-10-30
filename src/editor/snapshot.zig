@@ -1109,7 +1109,7 @@ fn collectEditingTargets(allocator: std.mem.Allocator, state: *core.DocumentStat
                 .node_id = node.id,
                 .page_id = object_source.page_id,
                 .page_index = page_index,
-                .page_name = page_decl.name,
+                .page_name = state.getNode(object_source.page_id).?.name,
                 .binding = binding,
                 .binding_required = binding_required,
                 .binding_introduction = if (binding_required) bindingIntroduction(module.source, statement) else null,

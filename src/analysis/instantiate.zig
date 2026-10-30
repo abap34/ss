@@ -54,7 +54,7 @@ pub const Transform = struct {
                 try self.expr(&binding.expr);
             },
             .return_expr, .expr_stmt => |*value| try self.expr(value),
-            .if_stmt => |*branch| {
+            .if_stmt, .drawing => |*branch| {
                 try self.expr(&branch.condition);
                 try self.statements(branch.then_statements.items);
                 try self.statements(branch.else_statements.items);

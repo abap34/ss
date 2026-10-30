@@ -158,6 +158,9 @@ fn writeModuleSyntax(allocator: std.mem.Allocator, object: *json.Object, program
     for (program.pages.items) |page| {
         var item = try pages.objectItem();
         try item.stringField("name", page.name);
+        try item.optionalStringField("sourceName", page.source_name);
+        try item.optionalIntField("stageIndex", page.stage_index);
+        try item.optionalStringField("stageName", if (page.stage_index) |index| page.stages.?.entries.items[index].name else null);
         try writeSpan(&item, page.span);
         var statements = try item.arrayField("statements");
         for (page.statements.items) |stmt| try writeStatement(allocator, &statements, stmt);
@@ -350,8 +353,8 @@ fn writeStatement(allocator: std.mem.Allocator, statements: *json.Array, stmt: a
             try item.stringField("property_path", property_path);
             try writeExpr(allocator, &item, "value", property_set.value);
         },
-        .if_stmt => |if_stmt| {
-            try item.stringField("kind", "if_stmt");
+        .if_stmt, .drawing => |if_stmt| {
+            try item.stringField("kind", if (stmt.kind == .drawing) "show" else "if_stmt");
             try writeExpr(allocator, &item, "condition", if_stmt.condition);
             var then_items = try item.arrayField("then");
             for (if_stmt.then_statements.items) |nested| try writeStatement(allocator, &then_items, nested);

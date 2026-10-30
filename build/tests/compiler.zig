@@ -18,6 +18,11 @@ pub fn register(suite: Suite, modules: project.ProjectModules, compiler_mod: *Mo
     }, true);
     _ = suite.add(display_spec_mod, .{ .name = "test-display", .description = "Check typed display instantiation and evaluation" });
 
+    const staging_spec_mod = createModule(ctx, "tests/eval/staging/spec_tests.zig", &.{
+        import("compiler", compiler_mod),
+    }, true);
+    _ = suite.add(staging_spec_mod, .{ .name = "test-staging", .description = "Check stage expansion and deferred drawing predicates" });
+
     const dump_spec_mod = createModule(ctx, "tests/compiler/dump/spec_tests.zig", &.{
         import("compiler", compiler_mod),
         import("utils", modules.utils),

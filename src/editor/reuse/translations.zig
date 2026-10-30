@@ -50,7 +50,7 @@ pub fn collectTranslations(
     defer translations.deinit(allocator);
     for (current.objects) |object| {
         const old = previous.objectById(object.id) orelse return null;
-        if (object.page_id != old.page_id or
+        if (object.page_id != old.page_id or object.drawn != old.drawn or
             @abs(object.width - old.width) > tolerance or
             @abs(object.height - old.height) > tolerance)
         {

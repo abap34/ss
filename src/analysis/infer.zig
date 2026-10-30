@@ -1211,7 +1211,7 @@ fn inferReturnInfoFromStatements(
             .property_set => |property_set| {
                 try validatePropertySetStatementWithOptions(allocator, state, sema, env, property_set.target, property_set.path.items, property_set.value, origin, options);
             },
-            .if_stmt => |if_stmt| {
+            .if_stmt, .drawing => |if_stmt| {
                 _ = try exprInfoWithOptions(allocator, state, sema, env, if_stmt.condition, origin, options);
                 var then_env = try env.clone();
                 defer then_env.deinit();
@@ -1219,7 +1219,7 @@ fn inferReturnInfoFromStatements(
                 var else_env = try env.clone();
                 defer else_env.deinit();
                 const else_continues = try inferReturnInfoFromStatements(allocator, state, sema, origin_path, options, &else_env, if_stmt.else_statements.items, result);
-                if (!then_continues and !else_continues) return false;
+                if (!then_continues and (stmt.kind == .drawing or !else_continues)) return false;
             },
             .expr_stmt => |expr| {
                 _ = try exprInfoWithOptions(allocator, state, sema, env, expr, origin, options);

@@ -4,6 +4,7 @@ const ast = @import("ast");
 const diagnostics = @import("diagnostics.zig");
 const hole = @import("hole.zig");
 const scanner = @import("scanner.zig");
+const staging = @import("staging.zig");
 const names = @import("../language/names.zig");
 const utils = @import("utils");
 const source = utils.source;
@@ -24,6 +25,7 @@ const AnchorRef = ast.AnchorRef;
 pub const ParseDiagnostic = diagnostics.ParseDiagnostic;
 
 pub const ParseOptions = struct {
+    expand_stages: bool = true,
     failure: ?*ParseFailure = null,
     cancellation: ?utils.Cancellation = null,
 };
@@ -99,11 +101,21 @@ pub fn parseRecoveringWithOptions(allocator: Allocator, text: []const u8, source
 
     var parser = initParser(allocator, text, source_name);
     parser.cancellation = options.cancellation;
+    parser.expand_stages = options.expand_stages;
     parser.recovering = true;
     parser.reject_empty_args = true;
     parser.holes = &builder;
 
-    var module = try parser.parseModule();
+    var module = parser.parseModule() catch |err| {
+        if (options.failure) |out| out.diagnostic = .{
+            .err = err,
+            .span = parser.error_span orelse .{ .start = @min(parser.error_pos, text.len), .end = @min(parser.error_pos + 1, text.len) },
+            .expected = parser.error_expected orelse diagnostics.expected(err),
+            .found = diagnostics.foundToken(text, @min(parser.error_pos, text.len)),
+            .detail = parser.error_detail,
+        };
+        return err;
+    };
     errdefer module.deinit(allocator);
     const holes = try builder.finish();
     return .{ .module = module, .holes = holes };
@@ -139,6 +151,7 @@ const Parser = struct {
     reject_empty_args: bool,
     holes: ?*hole.Builder,
     cancellation: ?utils.Cancellation = null,
+    expand_stages: bool = true,
 
     fn checkCanceled(self: *const Parser) !void {
         if (self.cancellation) |cancellation| try cancellation.check();
@@ -158,6 +171,15 @@ const Parser = struct {
                 self.synchronizeTopLevelItem(item_start);
             };
             source.skipTriviaFrom(self.source, &self.pos);
+        }
+        if (self.expand_stages) {
+            var failure: staging.Failure = .{};
+            staging.expand(self.allocator, &module, &failure, self.cancellation) catch |err| {
+                self.error_span = failure.span;
+                self.error_pos = if (failure.span) |span| span.start else self.pos;
+                self.error_detail = failure.detail;
+                return err;
+            };
         }
         return module;
     }
@@ -928,7 +950,13 @@ const Parser = struct {
         try self.expectKeyword("page");
         const name = try self.parsePageNameWithSpan();
         errdefer self.allocator.free(name.text);
-        var statements = try self.parseBodyStatements();
+        source.skipInlineSpaces(self.source, &self.pos);
+        try self.expectLineBreakAfterHeader();
+        source.skipTriviaFrom(self.source, &self.pos);
+        var stages: ?ast.StagesDecl = null;
+        errdefer if (stages) |*decl| decl.deinit(self.allocator);
+        if (self.peekKeyword("stages")) stages = try self.parseStages();
+        var statements = try self.parseStatementsUntilEnd();
         errdefer {
             for (statements.items) |*statement| statement.deinit(self.allocator);
             statements.deinit(self.allocator);
@@ -937,8 +965,32 @@ const Parser = struct {
             .name = name.text,
             .name_span = name.span,
             .statements = statements,
+            .stages = stages,
             .span = .{ .start = start, .end = self.pos },
         };
+    }
+
+    fn parseStages(self: *Parser) !ast.StagesDecl {
+        const start = self.pos;
+        try self.expectKeyword("stages");
+        const name = try self.parseIdentifierWithSpan();
+        var result = ast.StagesDecl{ .name = name.text, .name_span = name.span, .entries = .empty, .span = undefined };
+        errdefer result.deinit(self.allocator);
+        source.skipTriviaFrom(self.source, &self.pos);
+        try self.expectChar('{');
+        source.skipTriviaFrom(self.source, &self.pos);
+        while (!self.eof() and !self.peekChar('}')) {
+            const entry = try self.parseIdentifierWithSpan();
+            var moved = false;
+            errdefer if (!moved) self.allocator.free(entry.text);
+            try result.entries.append(self.allocator, .{ .name = entry.text, .name_span = entry.span });
+            moved = true;
+            source.skipTriviaFrom(self.source, &self.pos);
+        }
+        try self.expectChar('}');
+        try self.consumeStatementTerminator();
+        result.span = .{ .start = start, .end = self.pos };
+        return result;
     }
 
     fn parsePageNameWithSpan(self: *Parser) !ParsedName {
@@ -1190,6 +1242,26 @@ const Parser = struct {
         source.skipTriviaFrom(self.source, &self.pos);
         const start = self.pos;
 
+        if (self.peekKeyword("stages")) return self.failAt(start, error.InvalidStagesLocation);
+        if (try self.consumeKeyword("show")) {
+            source.skipInlineSpaces(self.source, &self.pos);
+            const condition_start = self.pos;
+            var condition = try self.parseExpr();
+            errdefer condition.deinit(self.allocator);
+            const condition_span = ast.Span{ .start = condition_start, .end = self.pos };
+            source.skipInlineSpaces(self.source, &self.pos);
+            try self.expectLineBreakAfterHeader();
+            var statements = try self.parseStatementsUntilEnd();
+            errdefer {
+                for (statements.items) |*statement| statement.deinit(self.allocator);
+                statements.deinit(self.allocator);
+            }
+            return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .drawing = .{
+                .condition = condition,
+                .condition_span = condition_span,
+                .then_statements = statements,
+            } } };
+        }
         if (try self.consumeKeyword("if")) {
             var condition = try self.parseExpr();
             errdefer condition.deinit(self.allocator);
@@ -2809,6 +2881,12 @@ const Parser = struct {
         return true;
     }
 
+    fn peekKeyword(self: *Parser, keyword: []const u8) bool {
+        var probe = self.pos;
+        source.skipTriviaFrom(self.source, &probe);
+        return scanner.consumeKeywordNoTrivia(self.source, &probe, keyword);
+    }
+
     fn peekStandaloneKeyword(self: *Parser, keyword: []const u8) bool {
         var probe = self.pos;
         source.skipTriviaFrom(self.source, &probe);
@@ -2910,6 +2988,7 @@ fn statementReturns(stmt: Statement) bool {
     return switch (stmt.kind) {
         .return_expr => true,
         .if_stmt => |if_stmt| functionBodyReturns(if_stmt.then_statements.items) and functionBodyReturns(if_stmt.else_statements.items),
+        .drawing => |block| functionBodyReturns(block.then_statements.items),
         else => false,
     };
 }

@@ -666,6 +666,21 @@ pub const DocumentState = struct {
         return page_id;
     }
 
+    /// Drawing permission follows the final containment chain, including
+    /// children materialized after their display function has run.
+    pub fn isDrawn(self: *DocumentState, id: NodeId) bool {
+        var current: ?NodeId = id;
+        var remaining = self.graph.nodes.items.len + 1;
+        while (current) |node_id| {
+            if (remaining == 0) return false;
+            remaining -= 1;
+            const node = self.getNode(node_id) orelse return false;
+            if (!node.draw_enabled) return false;
+            current = if (node.placement) |placement| placement.parent_id else null;
+        }
+        return true;
+    }
+
     /// Register a fresh placement without evaluating its display. The caller
     /// has checked the input's display contract and keeps borrowed Value data
     /// alive for the document. No rendering kind is inferred.
@@ -1050,6 +1065,16 @@ pub const DocumentState = struct {
 
     pub fn addLayoutError(self: *DocumentState, page_id: NodeId, node_id: ?NodeId, data: Diagnostic.Data) !void {
         try self.addLayoutDiagnostic(.@"error", page_id, node_id, data);
+    }
+
+    pub fn labelDiagnostics(self: *DocumentState, start: usize, label: []const u8) !void {
+        for (self.diagnostics.entries.items[start..]) |*entry| {
+            const owned = try self.allocator.dupe(u8, label);
+            if (entry.origin) |*origin| {
+                if (origin.label) |previous| self.allocator.free(previous);
+                origin.label = owned;
+            } else entry.origin = .{ .label = owned };
+        }
     }
 
     pub fn addValidationDiagnostic(

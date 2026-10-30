@@ -882,7 +882,7 @@ fn buildObjectCommands(
     try commands.ensureTotalCapacity(allocator, page_unit.objects.len);
     for (page_unit.objects) |*object| {
         const node = state.getNode(object.node_id) orelse continue;
-        if (node.kind != .object or !object.attached) continue;
+        if (node.kind != .object or !object.attached or !state.isDrawn(node.id)) continue;
         if ((state.parentPageOf(node.id) orelse continue) != page_unit.page_id) continue;
         commands.appendAssumeCapacity(initObjectCommand(page_unit.page_id, node, object, layout.frameOf(node.id) orelse return error.MissingObjectLayout));
     }

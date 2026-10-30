@@ -29,10 +29,19 @@ pub const AccessSummary = struct {
     selection_reads: std.ArrayList(Resource),
     escaped_objects: std.ArrayList(ObjectIdentity) = .empty,
     placements: std.ArrayList(PlacementDefinition) = .empty,
+    drawings: std.ArrayList(DrawingDefinition) = .empty,
+
     reads_layout: bool = false,
     writes_layout_input: bool = false,
     places_objects: bool = false,
     invalid_selection_mutation: ?InvalidSelectionMutation = null,
+    invalid_drawing_condition: ?core.SourceOrigin = null,
+
+    pub const DrawingDefinition = struct {
+        key: u64,
+        origin: core.SourceOrigin,
+        condition: *AccessSummary,
+    };
 
     pub const PlacementDefinition = struct {
         call_id: u64,
@@ -55,6 +64,11 @@ pub const AccessSummary = struct {
     }
 
     pub fn deinit(self: *AccessSummary) void {
+        for (self.drawings.items) |drawing| {
+            drawing.condition.deinit();
+            self.allocator.destroy(drawing.condition);
+        }
+        self.drawings.deinit(self.allocator);
         for (self.placements.items) |*placement| {
             for (placement.steps.items) |*step| step.deinit();
             placement.steps.deinit(self.allocator);
@@ -84,7 +98,20 @@ pub const AccessSummary = struct {
         try self.escaped_objects.append(self.allocator, identity);
     }
 
+    pub fn addDrawing(self: *AccessSummary, key: u64, origin: core.SourceOrigin, condition: AccessSummary) std.mem.Allocator.Error!void {
+        for (self.drawings.items) |*existing| if (existing.key == key) {
+            try existing.condition.merge(condition);
+            return;
+        };
+        const copy = try self.allocator.create(AccessSummary);
+        errdefer self.allocator.destroy(copy);
+        copy.* = try condition.clone(self.allocator);
+        errdefer copy.deinit();
+        try self.drawings.append(self.allocator, .{ .key = key, .origin = origin, .condition = copy });
+    }
+
     pub fn merge(self: *AccessSummary, other: AccessSummary) !void {
+        for (other.drawings.items) |drawing| try self.addDrawing(drawing.key, drawing.origin, drawing.condition.*);
         for (other.placements.items) |placement| try self.addPlacement(placement);
         for (other.escaped_objects.items) |identity| try self.addEscapedObject(identity);
         try self.reads.ensureUnusedCapacity(self.allocator, other.reads.items.len);
@@ -97,6 +124,7 @@ pub const AccessSummary = struct {
         self.writes_layout_input = self.writes_layout_input or other.writes_layout_input;
         self.places_objects = self.places_objects or other.places_objects;
         if (self.invalid_selection_mutation == null) self.invalid_selection_mutation = other.invalid_selection_mutation;
+        if (self.invalid_drawing_condition == null) self.invalid_drawing_condition = other.invalid_drawing_condition;
     }
 
     fn hasConcreteMembershipScope(self: AccessSummary) bool {
@@ -105,6 +133,7 @@ pub const AccessSummary = struct {
                 if (resource == .objects and (resource.objects.page_scope != .any or !resource.objects.placement.eql(.{}))) return true;
             }
         }
+        for (self.drawings.items) |drawing| if (drawing.condition.hasConcreteMembershipScope()) return true;
         for (self.placements.items) |placement| {
             if (placement.page_scope != .any) return true;
             for (placement.steps.items) |step| if (step.hasConcreteMembershipScope()) return true;
@@ -115,6 +144,7 @@ pub const AccessSummary = struct {
     pub fn clone(self: AccessSummary, allocator: std.mem.Allocator) std.mem.Allocator.Error!AccessSummary {
         var copied = AccessSummary.init(allocator);
         errdefer copied.deinit();
+        for (self.drawings.items) |drawing| try copied.addDrawing(drawing.key, drawing.origin, drawing.condition.*);
         for (self.placements.items) |placement| try copied.addPlacement(placement);
         try copied.reads.ensureTotalCapacity(allocator, @intCast(self.reads.items.len));
         try copied.writes.ensureTotalCapacity(allocator, @intCast(self.writes.items.len));
@@ -127,6 +157,7 @@ pub const AccessSummary = struct {
         copied.writes_layout_input = self.writes_layout_input;
         copied.places_objects = self.places_objects;
         copied.invalid_selection_mutation = self.invalid_selection_mutation;
+        copied.invalid_drawing_condition = self.invalid_drawing_condition;
         return copied;
     }
 
@@ -914,6 +945,20 @@ pub const Analyzer = struct {
                 try summary.addWrite(Resource.makeProperty((target orelse PropertyTarget.any()).owner, property_name));
                 summary.writes_layout_input = true;
             },
+            .drawing => |block| {
+                var condition = try self.analyzeExpr(block.condition);
+                defer condition.deinit();
+                if (condition.places_objects or condition.writes_layout_input or condition.writes.items.len != 0 or condition.drawings.items.len != 0) {
+                    summary.invalid_drawing_condition = if (self.sema.state) |state| state.sourceOrigin(self.sema.module_id, block.condition_span orelse stmt.span) else .{};
+                }
+                // Capturing lexical values happens now; reading document resources
+                // from the predicate happens in its own scheduled unit.
+                for (condition.reads.items) |read| if (read == .variable) try summary.addRead(read);
+                var body = try self.withLocalSnapshot(block.then_statements.items, returned);
+                defer body.deinit();
+                try summary.merge(body);
+                try summary.addDrawing(ast.drawingKey(self.sema.module_id, stmt.span), if (self.sema.state) |state| state.sourceOrigin(self.sema.module_id, block.condition_span orelse stmt.span) else .{}, condition);
+            },
             .if_stmt => |if_stmt| {
                 var condition = try self.analyzeExpr(if_stmt.condition);
                 defer condition.deinit();
@@ -1606,7 +1651,7 @@ pub const Analyzer = struct {
                 return false;
             },
             .return_void => return false,
-            .if_stmt => |branch| {
+            .if_stmt, .drawing => |branch| {
                 const then_continues = blk: {
                     var facts = try self.pushLocalFacts();
                     defer facts.restore();
@@ -1617,7 +1662,7 @@ pub const Analyzer = struct {
                     defer facts.restore();
                     break :blk try self.collectValueReturns(branch.else_statements.items, result);
                 };
-                if (!then_continues and !else_continues) return false;
+                if (!then_continues and (stmt.kind == .drawing or !else_continues)) return false;
             },
             .let_binding => |binding| {
                 const values = try self.valueFacts(binding.expr);
@@ -2701,7 +2746,7 @@ pub const Analyzer = struct {
                     result.* = .{ .value = null };
                     return false;
                 },
-                .if_stmt => |branch| {
+                .if_stmt, .drawing => |branch| {
                     const then_continues = blk: {
                         var snapshot = try self.pushLocalFacts();
                         defer snapshot.restore();
@@ -2712,7 +2757,7 @@ pub const Analyzer = struct {
                         defer snapshot.restore();
                         break :blk try self.collectReturnFacts(kind, branch.else_statements.items, result);
                     };
-                    if (!then_continues and !else_continues) return false;
+                    if (!then_continues and (stmt.kind == .drawing or !else_continues)) return false;
                 },
                 .let_binding => |binding| {
                     if (names.isDiscardBindingName(binding.name)) continue;

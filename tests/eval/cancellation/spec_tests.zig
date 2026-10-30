@@ -77,6 +77,9 @@ test "evaluation cancellation releases nested calls closures records and placed 
         \\    return Label { content = value }
         \\  end
         \\end
+        \\fn include_note(value: String) -> Bool
+        \\  return true
+        \\end
         \\page sample
         \\  let suffix = " suffix"
         \\  let callback = (value: String) |-> value ++ suffix
@@ -84,6 +87,11 @@ test "evaluation cancellation releases nested calls closures records and placed 
         \\  let second = decorate("second", callback)
         \\  let placed = place!(first |=| (second /=/ first))
         \\  ~ placed.width == 600
+        \\  show include_note(callback(suffix))
+        \\    show include_note(theme.label.content)
+        \\      place!(Label { content = suffix })
+        \\    end
+        \\  end
         \\end
     ;
     var counter = CancellationCounter{ .cancel_after = std.math.maxInt(usize) };

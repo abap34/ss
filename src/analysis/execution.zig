@@ -29,9 +29,11 @@ pub const ExecutionUnit = struct {
     source_order: usize,
     span: ast.Span,
     summary: dependencies.AccessSummary,
+    stage_label: ?[]const u8 = null,
     kind: Kind,
 
     pub const Kind = union(enum) {
+        drawing: struct { producer: usize, key: u64 },
         display: struct {
             producer: usize,
             call_id: u64,
@@ -114,6 +116,7 @@ pub const ExecutionGraph = struct {
         };
         try builder.collectExecutionUnits(state.projectModule());
         try graph.appendDisplayUnits(state);
+        try graph.appendDrawingUnits(state);
         try validateExecutionUnits(state, graph.units.items);
         try buildDependencyEdges(allocator, graph.units.items, &graph.edges);
         var cycle = std.ArrayList(usize).empty;
@@ -175,6 +178,7 @@ pub const ExecutionGraph = struct {
                         .source = module.source,
                         .path = module.path orelse module.spec,
                         .source_order = source.source_order,
+                        .stage_label = source.stage_label,
                         .span = span,
                         .summary = summary,
                         .kind = .{ .display = .{ .producer = producer, .call_id = definition.call_id, .plan = plan_index, .step = index } },
@@ -186,6 +190,33 @@ pub const ExecutionGraph = struct {
                         .reason = .display_input,
                     });
                 }
+            }
+        }
+    }
+
+    fn appendDrawingUnits(self: *ExecutionGraph, state: *const core.DocumentState) !void {
+        const count = self.units.items.len;
+        for (0..count) |producer| {
+            // Appending units can move the backing array; copy the source first.
+            const source = self.units.items[producer];
+            for (source.summary.drawings.items) |drawing| {
+                var summary = try drawing.condition.clone(self.allocator);
+                var moved = false;
+                errdefer if (!moved) summary.deinit();
+                const index = self.units.items.len;
+                const module = if (drawing.origin.path) |path| state.moduleByPathOrSpec(path) else null;
+                try self.units.append(self.allocator, .{
+                    .module_id = if (module) |value| value.id else source.module_id,
+                    .source = if (module) |value| value.source else source.source,
+                    .path = drawing.origin.path orelse source.path,
+                    .source_order = source.source_order,
+                    .stage_label = source.stage_label,
+                    .span = drawing.origin.span orelse source.span,
+                    .summary = summary,
+                    .kind = .{ .drawing = .{ .producer = producer, .key = drawing.key } },
+                });
+                moved = true;
+                try self.edges.append(self.allocator, .{ .from = producer, .to = index });
             }
         }
     }
@@ -300,6 +331,7 @@ const GraphBuilder = struct {
                 .source_order = self.source_order,
                 .span = stmt.span,
                 .summary = summary,
+                .stage_label = if (page.stage_index != null) page.name else null,
                 .kind = .{ .page_statement = .{
                     .stmt = stmt,
                     .page_id = page_id,
@@ -350,6 +382,14 @@ const GraphBuilder = struct {
 
 fn validateExecutionUnits(state: *core.DocumentState, units: []const ExecutionUnit) !void {
     for (units) |unit| {
+        if (unit.summary.invalid_drawing_condition) |source_origin| {
+            var origin = source_origin;
+            origin.label = unit.stage_label;
+            try state.addValidationDiagnostic(.@"error", null, null, origin, .{
+                .user_report = .{ .code = "DrawingConditionHasEffects", .message = try state.allocator.dupe(u8, "A show condition must only read values. Move placement creation, property changes, and constraints into the show body.") },
+            });
+            return error.DrawingConditionHasEffects;
+        }
         if (unit.summary.invalid_selection_mutation) |invalid| {
             const message = "primitive callbacks must not add objects or pages to the selection being iterated";
             try addUnitErrorDiagnostic(state, unit, "InvalidSelectionMutation", message);
@@ -706,6 +746,10 @@ pub fn executionGraphJson(allocator: std.mem.Allocator, state: *const core.Docum
         try item.stringField("path", unit.path);
         try writeScheduleSpan(&item, unit.span);
         switch (unit.kind) {
+            .drawing => |data| {
+                try item.stringField("kind", "drawing_condition");
+                try item.intField("producer", data.producer);
+            },
             .display => |data| {
                 try item.stringField("kind", "display");
                 try item.intField("producer", data.producer);
@@ -760,7 +804,8 @@ fn executionUnitSource(unit: ExecutionUnit) []const u8 {
 }
 
 fn addUnitErrorDiagnostic(state: *core.DocumentState, unit: ExecutionUnit, code: []const u8, message: []const u8) !void {
-    const origin = core.SourceOrigin.at(unit.path, unit.span);
+    var origin = core.SourceOrigin.at(unit.path, unit.span);
+    origin.label = unit.stage_label;
 
     try state.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{ .code = code, .message = try state.allocator.dupe(u8, message) },

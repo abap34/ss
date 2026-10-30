@@ -249,11 +249,11 @@ fn addDependencyQueryDiagnostics(allocator: std.mem.Allocator, state: *core.Docu
             defer summary.deinit();
             var scheduled = false;
             for (graph.units.items) |unit| {
-                if (unit.kind == .display) continue;
+                if (unit.kind == .display or unit.kind == .drawing) continue;
                 if (unit.module_id != module_id or unit.span.start != target.stmt.span.start or unit.span.end != target.stmt.span.end) continue;
                 summary = try unit.summary.clone(allocator);
                 scope = switch (unit.kind) {
-                    .display => unreachable,
+                    .display, .drawing => unreachable,
                     .document_statement => .{ .document = module_id },
                     .page_statement => |page| .{ .page = page.page_id },
                 };
@@ -349,7 +349,7 @@ fn updateDependencyQueryTarget(
         best_end.* = stmt.span.end;
     }
     switch (stmt.kind) {
-        .if_stmt => |if_stmt| {
+        .if_stmt, .drawing => |if_stmt| {
             for (if_stmt.then_statements.items) |nested| updateDependencyQueryTarget(best, best_end, nested, context, scope, scope_display, query_start);
             for (if_stmt.else_statements.items) |nested| updateDependencyQueryTarget(best, best_end, nested, context, scope, scope_display, query_start);
         },

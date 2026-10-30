@@ -421,7 +421,7 @@ fn visibleLetBindingInStatements(budget: ?QueryBudget, statements: []const ast.S
                     best = .{ .expr = binding.expr };
                 }
             },
-            .if_stmt => |if_stmt| {
+            .if_stmt, .drawing => |if_stmt| {
                 if (spanContainsOffset(stmt.span, offset)) {
                     if (visibleLetBindingInStatements(budget, if_stmt.then_statements.items, offset, name)) |target| best = target;
                     if (visibleLetBindingInStatements(budget, if_stmt.else_statements.items, offset, name)) |target| best = target;
@@ -445,7 +445,7 @@ fn callableInStatement(budget: ?QueryBudget, stmt: ast.Statement, offset: usize)
             if (callableInExpr(budget, property_set.target, offset)) |target| break :blk target;
             break :blk callableInExpr(budget, property_set.value, offset);
         },
-        .if_stmt => |if_stmt| blk: {
+        .if_stmt, .drawing => |if_stmt| blk: {
             if (callableInExpr(budget, if_stmt.condition, offset)) |target| break :blk target;
             if (callableInStatements(budget, if_stmt.then_statements.items, offset)) |target| break :blk target;
             break :blk callableInStatements(budget, if_stmt.else_statements.items, offset);
@@ -479,7 +479,7 @@ fn sourceNameInStatement(budget: ?QueryBudget, stmt: ast.Statement, offset: usiz
             };
             break :blk sourceNameInExpr(budget, property_set.value, offset);
         },
-        .if_stmt => |if_stmt| blk: {
+        .if_stmt, .drawing => |if_stmt| blk: {
             if (sourceNameInExpr(budget, if_stmt.condition, offset)) |target| break :blk target;
             if (sourceNameInStatements(budget, if_stmt.then_statements.items, offset)) |target| break :blk target;
             break :blk sourceNameInStatements(budget, if_stmt.else_statements.items, offset);
@@ -499,7 +499,7 @@ fn recordUpdatePathInStatement(budget: ?QueryBudget, stmt: ast.Statement, offset
             if (recordUpdatePathInExpr(budget, property_set.target, offset)) |target| break :blk target;
             break :blk recordUpdatePathInExpr(budget, property_set.value, offset);
         },
-        .if_stmt => |if_stmt| blk: {
+        .if_stmt, .drawing => |if_stmt| blk: {
             if (recordUpdatePathInExpr(budget, if_stmt.condition, offset)) |target| break :blk target;
             if (recordUpdatePathInStatements(budget, if_stmt.then_statements.items, offset)) |target| break :blk target;
             break :blk recordUpdatePathInStatements(budget, if_stmt.else_statements.items, offset);
@@ -519,7 +519,7 @@ fn recordUpdateCompletionInStatement(budget: ?QueryBudget, stmt: ast.Statement, 
             if (recordUpdateCompletionInExpr(budget, property_set.target, offset)) |target| break :blk target;
             break :blk recordUpdateCompletionInExpr(budget, property_set.value, offset);
         },
-        .if_stmt => |if_stmt| blk: {
+        .if_stmt, .drawing => |if_stmt| blk: {
             if (recordUpdateCompletionInExpr(budget, if_stmt.condition, offset)) |target| break :blk target;
             if (recordUpdateCompletionInStatements(budget, if_stmt.then_statements.items, offset)) |target| break :blk target;
             break :blk recordUpdateCompletionInStatements(budget, if_stmt.else_statements.items, offset);
@@ -544,7 +544,7 @@ fn memberInStatement(budget: ?QueryBudget, stmt: ast.Statement, offset: usize) ?
             };
             break :blk memberInExpr(budget, property_set.value, offset);
         },
-        .if_stmt => |if_stmt| blk: {
+        .if_stmt, .drawing => |if_stmt| blk: {
             if (memberInExpr(budget, if_stmt.condition, offset)) |target| break :blk target;
             if (memberInStatements(budget, if_stmt.then_statements.items, offset)) |target| break :blk target;
             break :blk memberInStatements(budget, if_stmt.else_statements.items, offset);
