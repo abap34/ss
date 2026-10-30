@@ -38,6 +38,7 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
         .{ .path = "tests/runtime/editor/outline/spec.mjs", .name = "test-editor-outline", .description = "Check source names, input types, and text excerpts in editor outlines" },
         .{ .path = "tests/runtime/editor/relations/spec.mjs" },
         .{ .path = "tests/runtime/editor/shapes/spec.mjs" },
+        .{ .path = "tests/runtime/editor/staging/spec.mjs", .name = "test-editor-staging", .description = "Check staged previews, shared source edits, and diagnostics" },
         .{ .path = "tests/runtime/editor/spec.mjs" },
         .{ .path = "tests/runtime/layout/composition/spec.mjs", .name = "test-layout-composition", .description = "Run focused layout composition semantics tests" },
         .{ .path = "tests/runtime/layout/frame_too_small_spec.mjs" },
@@ -71,6 +72,7 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
         .{ .path = "tests/runtime/render/vector_shapes/spec.mjs" },
         .{ .path = "tests/runtime/stdlib_wrappers_runtime_spec.mjs" },
         .{ .path = "tests/runtime/syntax/blocks/spec.mjs", .name = "test-block-syntax", .description = "Check block string expressions and CLI/LSP diagnostics" },
+        .{ .path = "tests/runtime/syntax/staging/spec.mjs", .name = "test-staging-diagnostics", .description = "Check stage declaration and drawing condition CLI diagnostics" },
         .{ .path = "tests/runtime/syntax/formatting/spec.mjs", .name = "test-syntax-formatting", .description = "Compare generated formatting variants through evaluation and layout" },
         .{ .path = "tests/runtime/theme/spec.mjs" },
     };

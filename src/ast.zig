@@ -282,14 +282,45 @@ pub const RecordDecl = struct {
     }
 };
 
+pub const StagesDecl = struct {
+    name: []const u8,
+    name_span: Span,
+    entries: std.ArrayList(EnumCaseDecl),
+    span: Span,
+
+    pub fn deinit(self: *StagesDecl, allocator: Allocator) void {
+        allocator.free(self.name);
+        for (self.entries.items) |*entry| entry.deinit(allocator);
+        self.entries.deinit(allocator);
+    }
+
+    pub fn clone(self: StagesDecl, allocator: Allocator) !StagesDecl {
+        var result = StagesDecl{
+            .name = try allocator.dupe(u8, self.name),
+            .name_span = self.name_span,
+            .entries = .empty,
+            .span = self.span,
+        };
+        errdefer result.deinit(allocator);
+        try result.entries.ensureTotalCapacity(allocator, self.entries.items.len);
+        for (self.entries.items) |entry| result.entries.appendAssumeCapacity(try entry.clone(allocator));
+        return result;
+    }
+};
+
 pub const PageDecl = struct {
     name: []const u8,
     name_span: ?Span = null,
     statements: std.ArrayList(Statement),
+    stages: ?StagesDecl = null,
+    stage_index: ?usize = null,
+    source_name: ?[]const u8 = null,
     span: Span,
 
     pub fn deinit(self: *PageDecl, allocator: Allocator) void {
         allocator.free(self.name);
+        if (self.source_name) |name| allocator.free(name);
+        if (self.stages) |*stages| stages.deinit(allocator);
         for (self.statements.items) |*statement| statement.deinit(allocator);
         self.statements.deinit(allocator);
     }
@@ -302,10 +333,17 @@ pub const PageDecl = struct {
         }
         try statements.ensureTotalCapacity(allocator, self.statements.items.len);
         for (self.statements.items) |value| statements.appendAssumeCapacity(try value.clone(allocator));
+        const name = try allocator.dupe(u8, self.name);
+        errdefer allocator.free(name);
+        var stages = if (self.stages) |value| try value.clone(allocator) else null;
+        errdefer if (stages) |*value| value.deinit(allocator);
         return .{
-            .name = try allocator.dupe(u8, self.name),
+            .name = name,
             .name_span = self.name_span,
             .statements = statements,
+            .stages = stages,
+            .source_name = if (self.source_name) |source_name| try allocator.dupe(u8, source_name) else null,
+            .stage_index = self.stage_index,
             .span = self.span,
         };
     }
@@ -1082,6 +1120,13 @@ pub const ConstraintDecl = struct {
     }
 };
 
+pub const ControlBlock = struct {
+    condition: Expr,
+    condition_span: ?Span = null,
+    then_statements: std.ArrayList(Statement),
+    else_statements: std.ArrayList(Statement) = .empty,
+};
+
 pub const Statement = struct {
     span: Span,
     kind: Kind,
@@ -1102,11 +1147,9 @@ pub const Statement = struct {
             path: std.ArrayList(RecordPathSegment),
             value: Expr,
         },
-        if_stmt: struct {
-            condition: Expr,
-            then_statements: std.ArrayList(Statement),
-            else_statements: std.ArrayList(Statement),
-        },
+        if_stmt: ControlBlock,
+        // Core drawing operation: execute the body and schedule its predicate separately.
+        drawing: ControlBlock,
         expr_stmt: Expr,
     };
 
@@ -1127,7 +1170,7 @@ pub const Statement = struct {
                 property_set.path.deinit(allocator);
                 property_set.value.deinit(allocator);
             },
-            .if_stmt => |*if_stmt| {
+            .if_stmt, .drawing => |*if_stmt| {
                 if_stmt.condition.deinit(allocator);
                 for (if_stmt.then_statements.items) |*stmt| stmt.deinit(allocator);
                 if_stmt.then_statements.deinit(allocator);
@@ -1174,7 +1217,7 @@ pub const Statement = struct {
                         .value = try value.value.clone(allocator),
                     } };
                 },
-                .if_stmt => |value| blk: {
+                .if_stmt, .drawing => |value| blk: {
                     var condition = try value.condition.clone(allocator);
                     errdefer condition.deinit(allocator);
                     var then_statements = std.ArrayList(Statement).empty;
@@ -1191,14 +1234,23 @@ pub const Statement = struct {
                     }
                     try else_statements.ensureTotalCapacity(allocator, value.else_statements.items.len);
                     for (value.else_statements.items) |statement| else_statements.appendAssumeCapacity(try statement.clone(allocator));
-                    break :blk .{ .if_stmt = .{
+                    const block = ControlBlock{
                         .condition = condition,
+                        .condition_span = value.condition_span,
                         .then_statements = then_statements,
                         .else_statements = else_statements,
-                    } };
+                    };
+                    break :blk if (self.kind == .drawing) .{ .drawing = block } else .{ .if_stmt = block };
                 },
                 .expr_stmt => |value| .{ .expr_stmt = try value.clone(allocator) },
             },
         };
     }
 };
+
+pub fn drawingKey(module_id: u32, span: Span) u64 {
+    var hash = std.hash.Wyhash.init(module_id);
+    hash.update(std.mem.asBytes(&span.start));
+    hash.update(std.mem.asBytes(&span.end));
+    return hash.final();
+}

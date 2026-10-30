@@ -57,7 +57,7 @@ pub const Index = struct {
                     try self.expr(property.target, null);
                     try self.expr(property.value, null);
                 },
-                .if_stmt => |branch| {
+                .if_stmt, .drawing => |branch| {
                     try self.expr(branch.condition, null);
                     try self.statements(branch.then_statements.items);
                     try self.statements(branch.else_statements.items);

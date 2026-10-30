@@ -159,7 +159,7 @@ fn statementReferences(statement: ast.Statement, binding: []const u8) bool {
         .constrain => |constraint| constraintReferences(constraint, binding),
         .property_set => |property_set| exprReferences(property_set.target, binding) or
             exprReferences(property_set.value, binding),
-        .if_stmt => |conditional| blk: {
+        .if_stmt, .drawing => |conditional| blk: {
             if (exprReferences(conditional.condition, binding)) break :blk true;
             for (conditional.then_statements.items) |nested| {
                 if (statementReferences(nested, binding)) break :blk true;

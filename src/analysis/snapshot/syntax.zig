@@ -12,6 +12,7 @@ const Tree = struct {
     module: *const ast.Module,
 
     fn capture(allocator: std.mem.Allocator, path: []const u8, source: []const u8, module: ast.Module) !Tree {
+        for (module.pages.items) |page| if (page.stages != null) return parse(allocator, path, source, null);
         var arena = std.heap.ArenaAllocator.init(allocator);
         errdefer arena.deinit();
         const owned = arena.allocator();
@@ -33,7 +34,7 @@ const Tree = struct {
         const owned = arena.allocator();
         const owned_path = try owned.dupe(u8, path);
         const owned_source = try owned.dupe(u8, source);
-        const parsed = try syntax.parseRecoveringWithOptions(owned, owned_source, owned_path, .{ .cancellation = cancellation });
+        const parsed = try syntax.parseRecoveringWithOptions(owned, owned_source, owned_path, .{ .cancellation = cancellation, .expand_stages = false });
         const module = try owned.create(ast.Module);
         module.* = parsed.module;
         return .{ .arena = arena, .path = owned_path, .source = owned_source, .module = module };

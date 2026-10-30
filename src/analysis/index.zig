@@ -78,7 +78,7 @@ fn collectDefinitionsFromStatement(
                 try putDefinitionAtSpan(allocator, definitions, source, binding.name, binding.name_span, stmt.span.end, visible_end, .variable, module_id, null, scope.kind, scope.name);
             }
         },
-        .if_stmt => |if_stmt| {
+        .if_stmt, .drawing => |if_stmt| {
             try collectLambdaDefinitions(allocator, state, source, module_id, if_stmt.condition, definitions, scope);
             const then_end = analysis_scope.statementsVisibleEnd(if_stmt.then_statements.items, stmt.span.end);
             for (if_stmt.then_statements.items) |nested| try collectDefinitionsFromStatement(allocator, state, source, module_id, nested, definitions, scope, then_end);
@@ -174,8 +174,14 @@ fn putDefinition(
     scope_kind: core.DefinitionScopeKind,
     scope_name: ?[]const u8,
 ) !void {
+    const owned_name = try allocator.dupe(u8, name);
+    errdefer allocator.free(owned_name);
+    const owned_file = if (file) |path| try allocator.dupe(u8, path) else null;
+    errdefer if (owned_file) |path| allocator.free(path);
+    const owned_scope = if (scope_name) |scope| try allocator.dupe(u8, scope) else null;
+    errdefer if (owned_scope) |scope| allocator.free(scope);
     try definitions.append(allocator, .{
-        .name = try allocator.dupe(u8, name),
+        .name = owned_name,
         .line = line,
         .column = column,
         .length = length,
@@ -185,9 +191,9 @@ fn putDefinition(
         .visible_end = visible_end,
         .kind = kind,
         .module_id = module_id,
-        .file = if (file) |path| try allocator.dupe(u8, path) else null,
+        .file = owned_file,
         .scope_kind = scope_kind,
-        .scope_name = if (scope_name) |scope| try allocator.dupe(u8, scope) else null,
+        .scope_name = owned_scope,
     });
 }
 

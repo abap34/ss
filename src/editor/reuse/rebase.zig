@@ -209,9 +209,12 @@ fn findStatement(module: *const ast.Module, start: usize) ?*ast.Statement {
 fn findInStatements(statements: []ast.Statement, start: usize) ?*ast.Statement {
     for (statements) |*statement| {
         if (statement.span.start == start) return statement;
-        if (statement.kind == .if_stmt) {
-            if (findInStatements(statement.kind.if_stmt.then_statements.items, start)) |value| return value;
-            if (findInStatements(statement.kind.if_stmt.else_statements.items, start)) |value| return value;
+        switch (statement.kind) {
+            .if_stmt, .drawing => |block| {
+                if (findInStatements(block.then_statements.items, start)) |value| return value;
+                if (findInStatements(block.else_statements.items, start)) |value| return value;
+            },
+            else => {},
         }
     }
     return null;
