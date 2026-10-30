@@ -319,7 +319,7 @@ function blockStartKind(lineText: string): BlockKind | undefined {
   if (startsFunctionBlock(trimmed)) {
     return "other";
   }
-  if (startsBlockKeyword(trimmed, "if")) {
+  if (startsBlockKeyword(trimmed, "if") || startsBlockKeyword(trimmed, "show")) {
     return "other";
   }
   return undefined;
