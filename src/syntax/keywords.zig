@@ -11,7 +11,6 @@ const keywords = [_][]const u8{
     "fn",
     "fn/!",
     "let",
-    "bind",
     "return",
     "end",
     "type",

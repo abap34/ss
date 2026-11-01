@@ -36,7 +36,6 @@ pub fn expected(err: anyerror) ?[]const u8 {
         error.ExpectedTypeAnnotation => "type annotation",
         error.DuplicateTypeParameter => "unique type parameter name",
         error.AssignmentRequiresLet => "'let name = expr' for variable bindings",
-        error.BindRemoved => "'let name = expr' for lexical bindings; 'bind' was removed",
         error.ZeroArgCallRequiresParens => "a call with parentheses or a value passed to a placing function",
         error.RequiredParameterAfterDefault => "defaulted parameters must trail required parameters",
         error.ExpectedReturn => "return statement",
