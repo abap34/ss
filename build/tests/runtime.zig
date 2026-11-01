@@ -94,6 +94,10 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
     project_settings_tests.step.dependOn(&suite.checks.vscode_packages.step);
     addFocusedTestStep(b, "test-editor-project-settings", "Run focused editor project settings cache tests", &project_settings_tests.step);
 
+    const page_guide_tests = steps.node(b, &suite.checks.node.step, "tests/editor/vscode/page_guide/spec.mjs", null);
+    page_guide_tests.step.dependOn(&suite.checks.vscode_packages.step);
+    addFocusedTestStep(b, "test-editor-page-guide", "Check page guide boundaries and adjacent page colors", &page_guide_tests.step);
+
     const editor_view_tests = steps.node(b, &suite.checks.node.step, "tests/editor/vscode/view/spec.mjs", null);
     editor_view_tests.step.dependOn(&suite.checks.vscode_packages.step);
     addFocusedTestStep(b, "test-editor-view", "Run focused editor view resource tests", &editor_view_tests.step);
