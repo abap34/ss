@@ -11,10 +11,6 @@ export class TranslationController {
     this.nextRequestId = 1;
   }
 
-  canDrag(_nodeId) {
-    return true;
-  }
-
   frame(page, object) {
     const frame = previewFrame(page, object);
     const offset = this.offsetFor(page.id, object.id);

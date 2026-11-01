@@ -24,7 +24,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }).catch((error) => output.appendLine(`Project settings notification failed: ${String(error)}`));
   }));
   pageGuide = new PageGuideDecorations();
-  const restart = () => restartLanguageClient(context);
+  const restart = () => restartLanguageClient();
   editorController = new EditorController(context, output, () => client, restart);
 
   context.subscriptions.push(output, pageGuide, editorController);
@@ -50,11 +50,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       applyTraceSetting(client);
     }
     if (event.affectsConfiguration("ss.cli.path")) {
-      void restartLanguageClient(context);
+      void restartLanguageClient();
     }
   }));
 
-  await restartLanguageClient(context);
+  await restartLanguageClient();
 }
 
 export async function deactivate(): Promise<void> {
@@ -66,10 +66,10 @@ export async function deactivate(): Promise<void> {
   outputChannel = undefined;
 }
 
-function restartLanguageClient(context: vscode.ExtensionContext): Promise<void> {
+function restartLanguageClient(): Promise<void> {
   // Coalesce repeated clicks and configuration changes into one restart.
   if (restartTask) return restartTask;
-  restartTask = restartLanguageClientOnce(context).catch(async (error) => {
+  restartTask = restartLanguageClientOnce().catch(async (error) => {
     outputChannel?.appendLine(`[editor] restart failed: ${String(error)}`);
     editorController?.serverRestartFailed(error);
     await vscode.window.showErrorMessage(`Could not restart ss: ${String(error)}`);
@@ -77,7 +77,7 @@ function restartLanguageClient(context: vscode.ExtensionContext): Promise<void> 
   return restartTask;
 }
 
-async function restartLanguageClientOnce(context: vscode.ExtensionContext): Promise<void> {
+async function restartLanguageClientOnce(): Promise<void> {
   editorController?.serverRestarting();
   await stopLanguageClient();
   if (!outputChannel) {

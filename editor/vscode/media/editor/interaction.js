@@ -387,7 +387,6 @@ export class InteractionController {
   isMovable(nodeId) {
     return Boolean(
       !this.actions.objectLocks.isLocked(nodeId) &&
-        this.actions.translation.canDrag(nodeId) &&
         this.state.snapshot?.editing.some((target) =>
           target.node_id === nodeId
         ),
