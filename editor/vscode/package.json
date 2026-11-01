@@ -68,7 +68,8 @@
       {
         "language": "ss-slide",
         "scopeName": "source.ss",
-        "path": "./syntaxes/ss.tmLanguage.json"
+        "path": "./syntaxes/ss.tmLanguage.json",
+        "unbalancedBracketScopes": ["keyword.operator.compound.ss"]
       }
     ],
     "commands": [
