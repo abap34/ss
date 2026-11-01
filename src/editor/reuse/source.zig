@@ -158,14 +158,6 @@ fn constraintSourceEql(left: core.ConstraintSource, right: core.ConstraintSource
     };
 }
 
-fn optionalStringEql(left: ?[]const u8, right: ?[]const u8) bool {
-    if (left) |left_value| {
-        const right_value = right orelse return false;
-        return std.mem.eql(u8, left_value, right_value);
-    }
-    return right == null;
-}
-
 fn parseGeneratedNumericOffset(text: []const u8) ?f64 {
     var remaining = std.mem.trim(u8, text, " \t\r\n");
     if (remaining.len == 0) return 0;

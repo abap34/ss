@@ -714,7 +714,7 @@ fn evalExpr(
             switch (try evaluation.name_resolution_cache.resolveValue(&sema, core.Value, ident.reference(), env.get(name))) {
                 .local => |value| break :blk try value.clone(state.allocator),
                 .constant => |resolved| break :blk try evalConstValue(evaluation, page_id, scope, current_origin, resolved),
-                .function => |resolved| break :blk .{ .function = try eval_functions.functionRefForInModule(state.allocator, resolved.module_id, resolved.decl) },
+                .function => |resolved| break :blk .{ .function = .{ .name = resolved.decl.name, .module_id = resolved.module_id } },
                 .primitive, .unknown => {},
             }
             try reportUnknownIdentifier(state, name, current_origin);

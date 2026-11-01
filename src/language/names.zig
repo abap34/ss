@@ -22,10 +22,6 @@ pub fn keywordLabels() []const []const u8 {
     return scanner.keywordLabels();
 }
 
-pub fn bangName(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
-    return std.fmt.allocPrint(allocator, "{s}!", .{text});
-}
-
 pub fn importSpecHasFileExtension(spec: []const u8) bool {
     return std.fs.path.extension(spec).len != 0;
 }

@@ -16,10 +16,6 @@ pub const pdf_and_html_progress_steps = commands.pdf_and_html_progress_steps;
 
 const Progress = utils.progress.Progress;
 
-pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, request: SourceRequest, progress: ?*Progress) !@import("app/pipeline.zig").BuiltDocument {
-    return try commands.buildFile(io, allocator, request, progress);
-}
-
 pub fn checkFile(io: std.Io, allocator: std.mem.Allocator, request: SourceRequest, progress: ?*Progress) !void {
     try commands.checkFile(io, allocator, request, progress);
 }

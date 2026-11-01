@@ -1,11 +1,5 @@
 const std = @import("std");
 
-const language_names = @import("../language/names.zig");
-
-pub fn isDiscardBindingName(name: []const u8) bool {
-    return language_names.isDiscardBindingName(name);
-}
-
 pub fn ValueEnv(comptime Value: type) type {
     return struct {
         const Self = @This();
