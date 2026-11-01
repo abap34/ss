@@ -47,11 +47,6 @@ const Snapshot = struct {
     ns: u64,
 };
 
-pub const TextKind = enum {
-    advance,
-    visual,
-};
-
 pub const RenderMeasureKind = enum {
     text,
     code,
@@ -150,10 +145,6 @@ pub const RenderCompileKind = enum {
 
 var enabled_state: std.atomic.Value(bool) = .init(false);
 
-var text_advance_hits = CountTime{};
-var text_advance_misses = CountTime{};
-var text_visual_hits = CountTime{};
-var text_visual_misses = CountTime{};
 var text_shape_hits = CountTime{};
 var text_shape_misses = CountTime{};
 var text_cache_restore = CountTime{};
@@ -261,19 +252,6 @@ pub fn elapsed(start_ns: i128) u64 {
     const delta = current_ns - start_ns;
     if (delta <= 0) return 0;
     return @intCast(delta);
-}
-
-pub fn recordText(kind: TextKind, hit: bool, start_ns: i128) void {
-    recording.span("text_cache", switch (kind) {
-        .advance => if (hit) "advance.hit" else "advance.miss",
-        .visual => if (hit) "visual.hit" else "visual.miss",
-    }, start_ns);
-    if (!isEnabled() or start_ns == 0) return;
-    const duration = elapsed(start_ns);
-    switch (kind) {
-        .advance => if (hit) text_advance_hits.add(duration) else text_advance_misses.add(duration),
-        .visual => if (hit) text_visual_hits.add(duration) else text_visual_misses.add(duration),
-    }
 }
 
 pub fn recordTextShape(hit: bool, start_ns: i128) void {
@@ -439,8 +417,6 @@ pub fn printIfEnabled() void {
     if (!isEnabled()) return;
 
     std.debug.print("\n[measure-profile]\n", .{});
-    printCachePair("text advance", &text_advance_hits, &text_advance_misses);
-    printCachePair("text visual", &text_visual_hits, &text_visual_misses);
     printCachePair("text shape", &text_shape_hits, &text_shape_misses);
     printCounter("text cache restore", &text_cache_restore);
     printCounter("text cache begin document", &text_cache_begin_document);
