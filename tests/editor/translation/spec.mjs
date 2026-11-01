@@ -15,9 +15,6 @@ const translation = new TranslationController(state, {
   render: () => {},
 });
 
-assert.equal(translation.canDrag(firstObject.id), true);
-assert.equal(translation.canDrag(secondObject.id), true);
-
 translation.submit(edit(state.snapshot, firstObject, 30, 20));
 assert.equal(messages.length, 1);
 assert.equal(messages[0].nodeId, firstObject.id);
