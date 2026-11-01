@@ -198,7 +198,7 @@ const PageContextRequirement = struct {
             },
             .constrain => true,
             .expr_stmt => |expr| (try self.exprRequirement(scope, expr)) != null,
-            .if_stmt, .drawing => |if_stmt| blk: {
+            .if_stmt => |if_stmt| blk: {
                 if ((try self.exprRequirement(scope, if_stmt.condition)) != null) break :blk true;
                 var then_scope = try scope.clone();
                 defer then_scope.deinit();
@@ -451,17 +451,10 @@ fn checkTopLevelStatementInner(
             try rejectPageOnlyExpr(state, context, origin, page_context, scope, property_set.value);
             try validatePropertySetStatement(inference_context, allocator, state, sema, env, property_set.target, property_set.path.items, property_set.value, origin);
         },
-        .if_stmt, .drawing => |if_stmt| {
+        .if_stmt => |if_stmt| {
             try rejectPageOnlyExpr(state, context, origin, page_context, scope, if_stmt.condition);
-            const condition_origin = origin.withSpan(if_stmt.condition_span orelse stmt.span);
-            const condition = try inferExprInfo(inference_context, allocator, state, sema, env, if_stmt.condition, condition_origin);
-            if (stmt.kind == .drawing and condition.ty.kind != .boolean and condition.hole == null and !condition.failed) {
-                const actual = try semantic_types.typeInfoLabelAlloc(allocator, condition);
-                defer allocator.free(actual);
-                try addUserReport(state, condition_origin, "DrawingConditionTypeMismatch", "show requires a Bool condition, but this expression has type '{s}'", .{actual});
-                return error.DrawingConditionTypeMismatch;
-            }
-            try ensureType(state, allocator, condition, Type.boolean, condition_origin, .UnmatchedArgumentType);
+            const condition = try inferExprInfo(inference_context, allocator, state, sema, env, if_stmt.condition, origin);
+            try ensureType(state, allocator, condition, Type.boolean, origin, .UnmatchedArgumentType);
             var then_env = try env.clone();
             defer then_env.deinit();
             var then_scope = try scope.clone();
@@ -673,16 +666,9 @@ fn checkStatementInner(
         .property_set => |property_set| {
             try validatePropertySetStatement(inference_context, allocator, state, sema, env, property_set.target, property_set.path.items, property_set.value, origin);
         },
-        .if_stmt, .drawing => |if_stmt| {
-            const condition_origin = origin.withSpan(if_stmt.condition_span orelse stmt.span);
-            const condition = try inferExprInfo(inference_context, allocator, state, sema, env, if_stmt.condition, condition_origin);
-            if (stmt.kind == .drawing and condition.ty.kind != .boolean and condition.hole == null and !condition.failed) {
-                const actual = try semantic_types.typeInfoLabelAlloc(allocator, condition);
-                defer allocator.free(actual);
-                try addUserReport(state, condition_origin, "DrawingConditionTypeMismatch", "show requires a Bool condition, but this expression has type '{s}'", .{actual});
-                return error.DrawingConditionTypeMismatch;
-            }
-            try ensureType(state, allocator, condition, Type.boolean, condition_origin, .UnmatchedArgumentType);
+        .if_stmt => |if_stmt| {
+            const condition = try inferExprInfo(inference_context, allocator, state, sema, env, if_stmt.condition, origin);
+            try ensureType(state, allocator, condition, Type.boolean, origin, .UnmatchedArgumentType);
             var then_env = try env.clone();
             defer then_env.deinit();
             for (if_stmt.then_statements.items) |nested| {

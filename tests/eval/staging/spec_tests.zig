@@ -65,6 +65,107 @@ test "staging: stage variables shadow callable names until rebound" {
     }
 }
 
+test "staging: show expands to ordinary bindings and primitive calls" {
+    var syntax = try compiler.syntax.parseWithSourceName(testing.allocator,
+        \\page Demo
+        \\  show true
+        \\    let item = text! "Body"
+        \\  end
+        \\  item.value.content = "Updated"
+        \\end
+    , "staging-spec.ss");
+    defer syntax.deinit(testing.allocator);
+    const statements = syntax.pages.items[0].statements.items;
+    try testing.expectEqual(@as(usize, 4), statements.len);
+    const predicate = statements[0].kind.let_binding;
+    try testing.expect(predicate.name_span == null);
+    try testing.expect(predicate.expr == .lambda);
+    try testing.expect(predicate.expr.lambda.body.boolean);
+    const binding = statements[2].kind.let_binding;
+    try testing.expectEqualStrings("item", binding.name);
+    try testing.expectEqualStrings("draw_when!", binding.expr.call.callee.name);
+    try testing.expect(binding.expr.call.callee.is_operator);
+    try testing.expectEqualStrings(predicate.name, binding.expr.call.args.items[1].ident.name);
+    try testing.expectEqualStrings("text!", binding.expr.call.args.items[0].call.callee.name);
+    try testing.expect(statements[3].kind == .property_set);
+}
+
+test "staging: bindings from separate show blocks compose outside the blocks" {
+    var state = try document(
+        \\page Demo
+        \\  stages s { first second third }
+        \\  show s >= s.first
+        \\    let t1 = text! "First"
+        \\  end
+        \\  show s >= s.second
+        \\    let t2 = text! "Second"
+        \\  end
+        \\  show s >= s.third
+        \\    let t3 = text! "Third"
+        \\  end
+        \\  (t1 // t2) || t3
+        \\end
+    );
+    defer state.deinit();
+    try evaluate(&state);
+    var layouts = try compiler.lowering.solveDocument(&state, null, .{});
+    defer layouts.deinit(testing.allocator);
+    try layouts.validate();
+    var expected: [3]core.Frame = undefined;
+    for (state.graph.page_order.items, 0..) |page, stage| {
+        var texts: usize = 0;
+        for (state.placementRootsOf(page)) |id| {
+            const node = state.getNode(id).?;
+            const content = core.nodeDisplayContent(node);
+            if (content.len == 0) continue;
+            try testing.expect(texts < 3);
+            try testing.expectEqual(texts <= stage, state.isDrawn(id));
+            const frame = layouts.nodeFrame(id).?;
+            if (stage == 0) expected[texts] = frame else try testing.expectEqualDeep(expected[texts], frame);
+            texts += 1;
+        }
+        try testing.expectEqual(@as(usize, 3), texts);
+    }
+}
+
+test "staging: flattened scopes preserve stage shadowing and predicate captures" {
+    var state = try document(
+        \\fn draw_when!() -> Number = 999
+        \\fn content!(enabled: Bool) -> Placed<Text>
+        \\  show enabled
+        \\    let result = text! "Captured"
+        \\    let local = 42
+        \\  end
+        \\  ~ result.width == local
+        \\  return result
+        \\end
+        \\page Demo
+        \\  stages s { first second }
+        \\  show s == s.second
+        \\    let s = 42
+        \\    text!(str(s))
+        \\  end
+        \\  text!(str(s))
+        \\  content!(false)
+        \\end
+    );
+    defer state.deinit();
+    try evaluate(&state);
+    var layouts = try compiler.lowering.solveDocument(&state, null, .{});
+    defer layouts.deinit(testing.allocator);
+    try layouts.validate();
+    for (state.graph.page_order.items, 0..) |page, stage| {
+        const roots = state.placementRootsOf(page);
+        try testing.expectEqual(@as(usize, 3), roots.len);
+        try testing.expectEqualStrings("42", core.nodeDisplayContent(state.getNode(roots[0]).?));
+        try testing.expectEqualStrings("42", core.nodeDisplayContent(state.getNode(roots[1]).?));
+        try testing.expectEqual(stage == 1, state.isDrawn(roots[0]));
+        try testing.expect(state.isDrawn(roots[1]));
+        try testing.expect(!state.isDrawn(roots[2]));
+        try testing.expectApproxEqAbs(@as(f32, 42), layouts.nodeFrame(roots[2]).?.width, 0.01);
+    }
+}
+
 test "staging: arbitrary expressions and lambda shadowing preserve lexical bindings" {
     var state = try document(
         \\fn advance(value: Number) -> Number = value + 1
@@ -127,6 +228,35 @@ test "staging: nested predicates capture function parameters and hide descendant
         \\page Demo
         \\  notes!(false)
         \\  notes!(true)
+        \\end
+    );
+    defer state.deinit();
+    try evaluate(&state);
+    const roots = state.placementRootsOf(state.graph.page_order.items[0]);
+    try testing.expectEqual(@as(usize, 4), roots.len);
+    for (roots, 0..) |id, index| try testing.expectEqual(index >= 2, state.isDrawn(id));
+}
+
+test "staging: ordinary Void calls retain all placements and return control" {
+    var state = try document(
+        \\fn pair!() -> Void
+        \\  text! "First"
+        \\  text! "Second"
+        \\end
+        \\fn body!(enabled: Bool) -> Void
+        \\  show enabled
+        \\    if true
+        \\      pair!()
+        \\      return
+        \\    end
+        \\    text! "Unreachable"
+        \\  end
+        \\end
+        \\page Demo
+        \\  show selection_count(select<Text>(pagectx())) == 4
+        \\    body!(false)
+        \\    body!(true)
+        \\  end
         \\end
     );
     defer state.deinit();

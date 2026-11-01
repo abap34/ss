@@ -23,9 +23,6 @@ pub fn functionBodyReturns(statements: []const ast.Statement) bool {
         switch (stmt.kind) {
             .return_expr => return true,
             .return_void => return true,
-            .drawing => |block| {
-                if (functionBodyReturns(block.then_statements.items)) return true;
-            },
             .if_stmt => |if_stmt| {
                 if (functionBodyReturns(if_stmt.then_statements.items) and functionBodyReturns(if_stmt.else_statements.items)) return true;
             },

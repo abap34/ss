@@ -210,7 +210,7 @@ fn findInStatements(statements: []ast.Statement, start: usize) ?*ast.Statement {
     for (statements) |*statement| {
         if (statement.span.start == start) return statement;
         switch (statement.kind) {
-            .if_stmt, .drawing => |block| {
+            .if_stmt => |block| {
                 if (findInStatements(block.then_statements.items, start)) |value| return value;
                 if (findInStatements(block.else_statements.items, start)) |value| return value;
             },

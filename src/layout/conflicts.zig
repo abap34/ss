@@ -284,7 +284,7 @@ fn findStatementInList(statements: []const ast.Statement, span: ast.Span) ?*cons
     for (statements) |*statement| {
         if (statement.span.start == span.start and statement.span.end == span.end) return statement;
         switch (statement.kind) {
-            .if_stmt, .drawing => |conditional| {
+            .if_stmt => |conditional| {
                 if (findStatementInList(conditional.then_statements.items, span)) |nested| return nested;
                 if (findStatementInList(conditional.else_statements.items, span)) |nested| return nested;
             },

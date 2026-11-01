@@ -349,7 +349,7 @@ fn updateDependencyQueryTarget(
         best_end.* = stmt.span.end;
     }
     switch (stmt.kind) {
-        .if_stmt, .drawing => |if_stmt| {
+        .if_stmt => |if_stmt| {
             for (if_stmt.then_statements.items) |nested| updateDependencyQueryTarget(best, best_end, nested, context, scope, scope_display, query_start);
             for (if_stmt.else_statements.items) |nested| updateDependencyQueryTarget(best, best_end, nested, context, scope, scope_display, query_start);
         },

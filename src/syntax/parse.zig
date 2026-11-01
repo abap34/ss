@@ -5,6 +5,7 @@ const diagnostics = @import("diagnostics.zig");
 const hole = @import("hole.zig");
 const scanner = @import("scanner.zig");
 const staging = @import("staging.zig");
+const drawing = @import("drawing.zig");
 const names = @import("../language/names.zig");
 const utils = @import("utils");
 const source = utils.source;
@@ -1167,7 +1168,7 @@ const Parser = struct {
                 return statements;
             }
             const statement_start = self.pos;
-            var statement = self.parseStatement() catch |err| {
+            self.appendParsedStatement(&statements) catch |err| {
                 if (!self.recovering or err == error.OutOfMemory or err == error.Canceled) return err;
                 var hole_statement = try self.makeHoleStatementForError(err, statement_start);
                 var hole_statement_moved = false;
@@ -1178,10 +1179,6 @@ const Parser = struct {
                 source.skipTriviaFrom(self.source, &self.pos);
                 continue;
             };
-            var statement_moved = false;
-            errdefer if (!statement_moved) statement.deinit(self.allocator);
-            try statements.append(self.allocator, statement);
-            statement_moved = true;
             source.skipTriviaFrom(self.source, &self.pos);
         }
         if (self.recovering and self.unterminated_block_string) return statements;
@@ -1216,7 +1213,7 @@ const Parser = struct {
                 return .{ .statements = statements, .terminator = .end };
             }
             const statement_start = self.pos;
-            var statement = self.parseStatement() catch |err| {
+            self.appendParsedStatement(&statements) catch |err| {
                 if (!self.recovering or err == error.OutOfMemory or err == error.Canceled) return err;
                 var hole_statement = try self.makeHoleStatementForError(err, statement_start);
                 var hole_statement_moved = false;
@@ -1227,14 +1224,39 @@ const Parser = struct {
                 source.skipTriviaFrom(self.source, &self.pos);
                 continue;
             };
-            var statement_moved = false;
-            errdefer if (!statement_moved) statement.deinit(self.allocator);
-            try statements.append(self.allocator, statement);
-            statement_moved = true;
             source.skipTriviaFrom(self.source, &self.pos);
         }
         if (self.recovering and self.unterminated_block_string) return .{ .statements = statements, .terminator = .end };
         return self.fail(error.ExpectedEnd);
+    }
+
+    fn appendParsedStatement(self: *Parser, statements: *std.ArrayList(Statement)) anyerror!void {
+        try self.checkCanceled();
+        if (try self.consumeKeyword("show")) {
+            source.skipInlineSpaces(self.source, &self.pos);
+            const start = self.pos;
+            var condition = try self.parseExpr();
+            defer condition.deinit(self.allocator);
+            const span = ast.Span{ .start = start, .end = self.pos };
+            source.skipInlineSpaces(self.source, &self.pos);
+            try self.expectLineBreakAfterHeader();
+            var body = try self.parseStatementsUntilEnd();
+            defer {
+                for (body.items) |*statement| statement.deinit(self.allocator);
+                body.deinit(self.allocator);
+            }
+            var expanded = try drawing.expand(self.allocator, &condition, span, &body);
+            defer {
+                for (expanded.items) |*statement| statement.deinit(self.allocator);
+                expanded.deinit(self.allocator);
+            }
+            try statements.appendSlice(self.allocator, expanded.items);
+            expanded.clearRetainingCapacity();
+            return;
+        }
+        var statement = try self.parseStatement();
+        errdefer statement.deinit(self.allocator);
+        try statements.append(self.allocator, statement);
     }
 
     fn parseStatement(self: *Parser) anyerror!Statement {
@@ -1243,25 +1265,6 @@ const Parser = struct {
         const start = self.pos;
 
         if (self.peekKeyword("stages")) return self.failAt(start, error.InvalidStagesLocation);
-        if (try self.consumeKeyword("show")) {
-            source.skipInlineSpaces(self.source, &self.pos);
-            const condition_start = self.pos;
-            var condition = try self.parseExpr();
-            errdefer condition.deinit(self.allocator);
-            const condition_span = ast.Span{ .start = condition_start, .end = self.pos };
-            source.skipInlineSpaces(self.source, &self.pos);
-            try self.expectLineBreakAfterHeader();
-            var statements = try self.parseStatementsUntilEnd();
-            errdefer {
-                for (statements.items) |*statement| statement.deinit(self.allocator);
-                statements.deinit(self.allocator);
-            }
-            return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .drawing = .{
-                .condition = condition,
-                .condition_span = condition_span,
-                .then_statements = statements,
-            } } };
-        }
         if (try self.consumeKeyword("if")) {
             var condition = try self.parseExpr();
             errdefer condition.deinit(self.allocator);
@@ -2988,7 +2991,6 @@ fn statementReturns(stmt: Statement) bool {
     return switch (stmt.kind) {
         .return_expr => true,
         .if_stmt => |if_stmt| functionBodyReturns(if_stmt.then_statements.items) and functionBodyReturns(if_stmt.else_statements.items),
-        .drawing => |block| functionBodyReturns(block.then_statements.items),
         else => false,
     };
 }

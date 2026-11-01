@@ -51,6 +51,7 @@ pub const PrimitiveCall = enum {
     group_placed,
     new_page,
     place_on,
+    draw_when,
     constraints,
     constrain_on,
     report_error,
@@ -65,6 +66,7 @@ pub fn primitiveAllowsDisplayEvaluation(op: PrimitiveCall) bool {
     return switch (op) {
         .new_page,
         .place_on,
+        .draw_when,
         .group_placed,
         .constrain_on,
         .report_error,
@@ -232,6 +234,7 @@ const primitive_descriptors = [_]PrimitiveDescriptor{
 
 // These operations are reached only through elaborated syntax, never value names.
 const syntax_descriptors = [_]PrimitiveDescriptor{
+    .{ .op = .draw_when, .name = "draw_when!", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "operand", "predicate" }, .arg_types = &.{ Type.any, Type.function }, .result_type = null, .result_policy = .first_arg, .callback = .{ .function_arg_index = 1, .supplied_arg_count = 0, .expected_result_type = Type.boolean }, .places_objects = true, .summary = "Evaluate an operand once and defer a read-only drawing predicate for placements created during that evaluation" },
     .{ .op = .num_eq, .name = "num_eq", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.boolean, .summary = "Return whether left is equal to right" },
     .{ .op = .num_ne, .name = "num_ne", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.boolean, .summary = "Return whether left is unequal to right" },
     .{ .op = .num_lt, .name = "num_lt", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.boolean, .summary = "Return whether left is less than right" },

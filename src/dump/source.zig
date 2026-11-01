@@ -353,8 +353,8 @@ fn writeStatement(allocator: std.mem.Allocator, statements: *json.Array, stmt: a
             try item.stringField("property_path", property_path);
             try writeExpr(allocator, &item, "value", property_set.value);
         },
-        .if_stmt, .drawing => |if_stmt| {
-            try item.stringField("kind", if (stmt.kind == .drawing) "show" else "if_stmt");
+        .if_stmt => |if_stmt| {
+            try item.stringField("kind", "if_stmt");
             try writeExpr(allocator, &item, "condition", if_stmt.condition);
             var then_items = try item.arrayField("then");
             for (if_stmt.then_statements.items) |nested| try writeStatement(allocator, &then_items, nested);
