@@ -1318,9 +1318,6 @@ const Parser = struct {
             try self.consumeStatementTerminator();
             return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .let_binding = .{ .name = name.text, .name_span = name.span, .type_annotation = type_annotation, .expr = expr } } };
         }
-        if (try self.consumeKeyword("bind")) {
-            return self.failAt(start, error.BindRemoved);
-        }
         if (self.consumeConstraintUpdateMarker()) {
             var decl = try self.parseMemberConstraintDecl(.update);
             errdefer decl.deinit(self.allocator);
@@ -2756,7 +2753,6 @@ const Parser = struct {
             "end",
             "return",
             "let",
-            "bind",
             "as",
             "with",
         };

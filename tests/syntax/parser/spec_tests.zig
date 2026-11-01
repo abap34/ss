@@ -1002,7 +1002,7 @@ test "syntax spec: recovering blocks propagate every allocation failure" {
         parseRecoveringAndDeinitSource,
         .{
             \\page Recover
-            \\  bind x = 1
+            \\  let = 1
             \\end
             \\
         },
@@ -1013,7 +1013,7 @@ test "syntax spec: recovering blocks propagate every allocation failure" {
         .{
             \\page Recover
             \\  if true
-            \\    bind x = 1
+            \\    let = 1
             \\  end
             \\end
             \\
