@@ -29,9 +29,13 @@ pub fn resolveValue(
     local: ?Local,
 ) !ValueResolution(Local, Constant, Function) {
     if (callee.name_hole != null) return .unknown;
-    if (callee.is_operator) {
+    if (callee.resolution == .intrinsic) {
         const primitive = @import("registry.zig").lookupSyntaxCall(callee.name) orelse return .unknown;
         return .{ .primitive = primitive };
+    }
+    if (callee.resolution == .function) {
+        if (try resolver.function(callee)) |binding| return .{ .function = binding };
+        return .unknown;
     }
     if (!callee.isQualified()) {
         if (local) |binding| return .{ .local = binding };

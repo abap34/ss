@@ -123,7 +123,7 @@ const Rewriter = struct {
             },
             .call => |*call| {
                 for (call.args.items) |*arg| try self.expr(arg, shadowed);
-                if (!shadowed and !call.callee.isQualified() and !call.callee.is_operator and std.mem.eql(u8, call.callee.name, self.stages.name)) {
+                if (!shadowed and !call.callee.isQualified() and call.callee.resolution == .lexical and std.mem.eql(u8, call.callee.name, self.stages.name)) {
                     const callee = try self.allocator.create(ast.Expr);
                     callee.* = .{ .number = @floatFromInt(self.index) };
                     const args = call.args;
