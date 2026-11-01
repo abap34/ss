@@ -327,7 +327,6 @@ fn instantiateRecord(
             .substitutions = bindings,
         };
         try transform.record(&declaration);
-        for (declaration.type_params.items) |*parameter| parameter.deinit(state.allocator);
         declaration.type_params.deinit(state.allocator);
         declaration.type_params = .empty;
         const entry = try state.type_instances.add(ty, declaration);

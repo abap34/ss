@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("ast");
+const build = @import("build.zig");
 
 // A show block introduces no lexical scope. Only expression evaluation is
 // decorated; bindings, branches, and returns remain ordinary statements.
@@ -57,16 +58,7 @@ fn decorate(allocator: std.mem.Allocator, statement: *ast.Statement, name: []con
 }
 
 fn wrap(allocator: std.mem.Allocator, expr: *ast.Expr, name: []const u8, condition_span: ast.Span) !void {
-    var args = std.ArrayList(ast.Expr).empty;
-    errdefer args.deinit(allocator);
-    try args.ensureTotalCapacity(allocator, 2);
-    const operation = try allocator.dupe(u8, "draw_when!");
-    errdefer allocator.free(operation);
-    const reference = try allocator.dupe(u8, name);
-    args.appendAssumeCapacity(expr.*);
-    args.appendAssumeCapacity(.{ .ident = .{ .name = reference } });
-    expr.* = .{ .call = .{
-        .callee = .{ .name = operation, .is_operator = true, .span = condition_span },
-        .args = args,
-    } };
+    var reference: ast.Expr = .{ .ident = .{ .name = try allocator.dupe(u8, name) } };
+    errdefer reference.deinit(allocator);
+    expr.* = try build.call(allocator, "draw_when!", &.{ expr.*, reference }, condition_span);
 }

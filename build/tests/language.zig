@@ -15,6 +15,11 @@ pub fn register(suite: Suite, modules: project.ProjectModules) void {
         import("syntax", syntax_mod),
     }, true);
     _ = suite.add(parser_spec_mod, .{ .name = "test-parser", .description = "Run focused syntax parser tests" });
+    const desugar_spec_mod = createModule(ctx, "tests/syntax/desugar/spec_tests.zig", &.{
+        import("ast", modules.ast),
+        import("syntax", syntax_mod),
+    }, true);
+    _ = suite.add(desugar_spec_mod, .{ .name = "test-desugar", .description = "Run surface syntax expansion and ownership tests" });
     const scanner_mod = createModule(ctx, "src/syntax/scanner.zig", &.{
         import("utils", modules.utils),
     }, null);

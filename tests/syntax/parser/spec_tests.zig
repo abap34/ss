@@ -550,46 +550,6 @@ test "syntax spec: function signatures preserve types and trailing defaults" {
     try testing.expect(choose.params.items[1].default_value != null);
 }
 
-test "syntax spec: functions can use expression bodies" {
-    var parsed = try parse(
-        \\fn square(x: Number) -> Number = x * x
-        \\
-        \\fn remember(action: (Document, String, Number) -> Void) -> Void =
-        \\  action(
-        \\    docctx(),
-        \\    "layout_h_center_offset",
-        \\    42,
-        \\  )
-        \\
-        \\fn/! badge(text_value: String) -> Text = text(text_value)
-        \\
-    );
-    defer parsed.deinit();
-
-    try testing.expectEqual(@as(usize, 4), parsed.module.functions.items.len);
-
-    const square = parsed.module.functions.items[0];
-    try testing.expectEqualStrings("square", square.name);
-    try testing.expectEqual(@as(usize, 1), square.statements.items.len);
-    _ = try expectCall(square.statements.items[0].kind.return_expr, "mul", 2);
-
-    const remember = parsed.module.functions.items[1];
-    try testing.expectEqualStrings("remember", remember.name);
-    try testing.expectEqual(@as(usize, 1), remember.statements.items.len);
-    _ = try expectCall(remember.statements.items[0].kind.expr_stmt, "action", 3);
-
-    const badge = parsed.module.functions.items[2];
-    try testing.expectEqualStrings("badge", badge.name);
-    try testing.expectEqual(@as(usize, 1), badge.statements.items.len);
-    _ = try expectCall(badge.statements.items[0].kind.return_expr, "text", 1);
-
-    const placing = parsed.module.functions.items[3];
-    try testing.expectEqualStrings("badge!", placing.name);
-    const place_on = try expectCall(placing.statements.items[0].kind.return_expr, "place_on!", 2);
-    _ = try expectCall(place_on.args.items[0], "pagectx", 0);
-    _ = try expectCall(place_on.args.items[1], "badge", 1);
-}
-
 test "syntax spec: expression-bodied functions require an expression" {
     try expectParseError(error.ExpectedIdentifier,
         \\fn bad() -> Number =
@@ -612,7 +572,7 @@ test "syntax spec: constants are top-level value declarations" {
     try expectColor(accent.value, "1,0,0");
 }
 
-test "syntax spec: non-host functions must return on at least one complete path" {
+test "syntax spec: non-Void functions must return on every complete path" {
     try expectParseError(error.ExpectedReturn,
         \\fn bad() -> Number
         \\  let x = 1
@@ -788,53 +748,6 @@ test "syntax spec: incomplete function type is not accepted as a surface type" {
         \\end
         \\
     );
-}
-
-test "syntax spec: paired placement functions expand to plain and placing definitions" {
-    var parsed = try parse(
-        \\fn/! note(text_value: String, tone: String = "soft") -> Text
-        \\  return text(text_value)
-        \\end
-        \\
-    );
-    defer parsed.deinit();
-
-    try testing.expectEqual(@as(usize, 2), parsed.module.functions.items.len);
-    const note = parsed.module.functions.items[0];
-    try testing.expectEqualStrings("note", note.name);
-    try testing.expectEqual(@as(usize, 2), note.params.items.len);
-    try testing.expectEqualStrings("tone", note.params.items[1].name);
-    try expectString(note.params.items[1].default_value.?.*, "soft");
-
-    const placing = parsed.module.functions.items[1];
-    try testing.expectEqualStrings("note!", placing.name);
-    try testing.expectEqual(@as(usize, 2), placing.params.items.len);
-    try testing.expectEqualStrings("tone", placing.params.items[1].name);
-    try expectString(placing.params.items[1].default_value.?.*, "soft");
-    try testing.expectEqual(note.span.start, placing.span.start);
-    try testing.expectEqual(note.span.end, placing.span.end);
-
-    const return_expr = placing.statements.items[0].kind.return_expr;
-    const place_call = try expectCall(return_expr, "place_on!", 2);
-    _ = try expectCall(place_call.args.items[0], "pagectx", 0);
-    const inner_call = try expectCall(place_call.args.items[1], "note", 2);
-    switch (inner_call.args.items[0]) {
-        .ident => |ident| try testing.expectEqualStrings("text_value", ident.name),
-        else => return error.ExpectedIdentifier,
-    }
-    switch (inner_call.args.items[1]) {
-        .ident => |ident| try testing.expectEqualStrings("tone", ident.name),
-        else => return error.ExpectedIdentifier,
-    }
-
-    const bad_source =
-        \\fn/! note!() -> Text
-        \\  return text("")
-        \\end
-        \\
-    ;
-    const bang_offset = (std.mem.indexOf(u8, bad_source, "note!") orelse return error.ExpectedIdentifier) + "note".len;
-    try expectParseErrorAt(error.PairedFunctionNameCannotEndWithBang, bad_source, bang_offset);
 }
 
 test "syntax spec: user type annotations retain unresolved names until name resolution" {
@@ -1174,19 +1087,6 @@ test "syntax spec: module cloning survives every allocation failure" {
     );
 }
 
-test "syntax spec: paired functions survive every allocation failure" {
-    try allocation_testing.checkAllAllocationFailures(
-        testing.allocator,
-        parseAndDeinitSource,
-        .{
-            \\fn/! note(text_value: String, tone: String = "soft") -> Text
-            \\  return text(text_value)
-            \\end
-            \\
-        },
-    );
-}
-
 test "syntax spec: qualified type names parse in annotations and type parameters" {
     const source =
         \\import std:text as classes
@@ -1460,42 +1360,10 @@ test "syntax spec: required parameters cannot follow defaulted parameters" {
     );
 }
 
-test "syntax spec: expression parsing lowers operators to named primitive calls" {
-    var parsed = try parse(
-        \\page Expr
-        \\  let value = 1 + 2 * -3
-        \\  let text = "a" ++ "b" ++ "c"
-        \\  let flag = !false
-        \\end
-        \\
-    );
-    defer parsed.deinit();
-    const program = &parsed.module;
-
-    const numeric = program.pages.items[0].statements.items[0].kind.let_binding.expr;
-    const add = try expectCall(numeric, "add", 2);
-    try expectNumber(add.args.items[0], 1);
-    const mul = try expectCall(add.args.items[1], "mul", 2);
-    try expectNumber(mul.args.items[0], 2);
-    const neg = try expectCall(mul.args.items[1], "neg", 1);
-    try expectNumber(neg.args.items[0], 3);
-
-    const text = program.pages.items[0].statements.items[1].kind.let_binding.expr;
-    const outer_concat = try expectCall(text, "concat", 2);
-    const inner_concat = try expectCall(outer_concat.args.items[0], "concat", 2);
-    try expectString(inner_concat.args.items[0], "a");
-    try expectString(inner_concat.args.items[1], "b");
-    try expectString(outer_concat.args.items[1], "c");
-
-    const flag = program.pages.items[0].statements.items[2].kind.let_binding.expr;
-    const logical_not = try expectCall(flag, "not", 1);
-    try expectBoolean(logical_not.args.items[0], false);
-}
-
 fn expectComposition(expr: ast.Expr, mode: ast.GroupComposition) !ast.CallExpr {
     const result = try expectCall(expr, "group", 2);
     try testing.expectEqual(mode, result.callee.composition.?);
-    try testing.expect(result.callee.is_operator);
+    try testing.expect(result.callee.resolution == .intrinsic);
     try testing.expect(result.callee.qualifier == null);
     try testing.expectEqual(@as(usize, 2), result.arg_spans.items.len);
     return result;
@@ -1855,7 +1723,7 @@ test "syntax spec: equal composition chains preserve grouping and spans" {
     for ([_]usize{ 0, 2 }, [_]ast.GroupComposition{ .equal_horizontal, .equal_vertical }) |index, mode| {
         const split = try expectCall(statements[index].kind.let_binding.expr, "group", 3);
         try testing.expectEqual(mode, split.callee.composition.?);
-        try testing.expect(split.callee.is_operator);
+        try testing.expect(split.callee.resolution == .intrinsic);
         try expectSpanText(source_text, split.callee.span.?, if (index == 0) "|=|" else "/=/");
         for (split.args.items, [_][]const u8{ "a", "b", "c" }) |operand, name| try expectIdent(operand, name);
         try expectSpanText(source_text, split.arg_spans.items[2], "c");
@@ -2774,4 +2642,65 @@ test "syntax spec: qualified values parse standalone with members and updates" {
     try testing.expectEqualStrings("library::optional", statements[2].kind.let_binding.expr.coalesce.target.ident.name);
     try testing.expectEqualStrings("library::format", statements[3].kind.let_binding.expr.ident.name);
     try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source});
+}
+
+test "syntax spec: paired declaration names cannot end with a bang" {
+    const bad_source =
+        \\fn/! note!() -> Text
+        \\  return text("")
+        \\end
+        \\
+    ;
+    const bang_offset = (std.mem.indexOf(u8, bad_source, "note!") orelse return error.ExpectedIdentifier) + "note".len;
+    try expectParseErrorAt(error.PairedFunctionNameCannotEndWithBang, bad_source, bang_offset);
+}
+
+test "syntax spec: surface functions retain expression bodies and paired declarations" {
+    var parsed = try syntax.parseSurface(testing.allocator,
+        \\fn square(x: Number) -> Number = x * x
+        \\fn remember() -> Void = action()
+        \\fn/! badge(value: String) -> Text = text(value)
+    );
+    defer parsed.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 3), parsed.functions.items.len);
+    for (parsed.functions.items) |function| {
+        try testing.expect(function.expression_body);
+        try testing.expectEqual(@as(usize, 1), function.statements.items.len);
+        try testing.expect(function.statements.items[0].kind == .expr_stmt);
+    }
+    try testing.expectEqual(syntax.Surface.Operator.mul, parsed.functions.items[0].statements.items[0].kind.expr_stmt.operation.operator);
+    try testing.expect(!parsed.functions.items[0].paired);
+    try testing.expect(!parsed.functions.items[1].paired);
+    try testing.expect(parsed.functions.items[2].paired);
+}
+
+test "syntax spec: surface operators retain precedence and left associativity" {
+    var parsed = try syntax.parseSurface(testing.allocator,
+        \\page Demo
+        \\  let value = 1 + 2 * -3
+        \\  let text = "a" ++ "b" ++ "c"
+        \\  let flag = !false
+        \\end
+    );
+    defer parsed.deinit(testing.allocator);
+    const statements = parsed.pages.items[0].statements.items;
+    const add = statements[0].kind.let_binding.expr.operation;
+    try testing.expectEqual(syntax.Surface.Operator.add, add.operator);
+    try testing.expectEqual(@as(f32, 1), add.args.items[0].number);
+    const mul = add.args.items[1].operation;
+    try testing.expectEqual(syntax.Surface.Operator.mul, mul.operator);
+    try testing.expectEqual(@as(f32, 2), mul.args.items[0].number);
+    const neg = mul.args.items[1].operation;
+    try testing.expectEqual(syntax.Surface.Operator.neg, neg.operator);
+    try testing.expectEqual(@as(f32, 3), neg.args.items[0].number);
+    const outer = statements[1].kind.let_binding.expr.operation;
+    try testing.expectEqual(syntax.Surface.Operator.concat, outer.operator);
+    const inner = outer.args.items[0].operation;
+    try testing.expectEqual(syntax.Surface.Operator.concat, inner.operator);
+    try testing.expectEqualStrings("a", inner.args.items[0].string.text);
+    try testing.expectEqualStrings("b", inner.args.items[1].string.text);
+    try testing.expectEqualStrings("c", outer.args.items[1].string.text);
+    const logical_not = statements[2].kind.let_binding.expr.operation;
+    try testing.expectEqual(syntax.Surface.Operator.logical_not, logical_not.operator);
+    try testing.expectEqual(false, logical_not.args.items[0].boolean);
 }

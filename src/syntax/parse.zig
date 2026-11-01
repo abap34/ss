@@ -1,11 +1,9 @@
 const std = @import("std");
 const core = @import("core");
-const ast = @import("ast");
+const ast = @import("ast").Surface;
 const diagnostics = @import("diagnostics.zig");
 const hole = @import("hole.zig");
 const scanner = @import("scanner.zig");
-const staging = @import("staging.zig");
-const drawing = @import("drawing.zig");
 const names = @import("../language/names.zig");
 const utils = @import("utils");
 const source = utils.source;
@@ -26,7 +24,6 @@ const AnchorRef = ast.AnchorRef;
 pub const ParseDiagnostic = diagnostics.ParseDiagnostic;
 
 pub const ParseOptions = struct {
-    expand_stages: bool = true,
     failure: ?*ParseFailure = null,
     cancellation: ?utils.Cancellation = null,
 };
@@ -82,18 +79,6 @@ fn parseWithSourceNameInner(allocator: Allocator, text: []const u8, source_name:
     };
 }
 
-pub fn parseRecovering(allocator: Allocator, text: []const u8) !ParseResult {
-    return parseRecoveringWithSourceName(allocator, text, "");
-}
-
-pub fn parseRecoveringWithSourceName(allocator: Allocator, text: []const u8, source_name: []const u8) !ParseResult {
-    return parseRecoveringWithOptions(allocator, text, source_name, .{});
-}
-
-pub fn parseRecoveringWithSourceNameAndFailure(allocator: Allocator, text: []const u8, source_name: []const u8, failure: *ParseFailure) !ParseResult {
-    return parseRecoveringWithOptions(allocator, text, source_name, .{ .failure = failure });
-}
-
 pub fn parseRecoveringWithOptions(allocator: Allocator, text: []const u8, source_name: []const u8, options: ParseOptions) !ParseResult {
     if (options.failure) |out| out.* = .{};
     if (options.cancellation) |cancellation| try cancellation.check();
@@ -102,7 +87,6 @@ pub fn parseRecoveringWithOptions(allocator: Allocator, text: []const u8, source
 
     var parser = initParser(allocator, text, source_name);
     parser.cancellation = options.cancellation;
-    parser.expand_stages = options.expand_stages;
     parser.recovering = true;
     parser.reject_empty_args = true;
     parser.holes = &builder;
@@ -152,7 +136,6 @@ const Parser = struct {
     reject_empty_args: bool,
     holes: ?*hole.Builder,
     cancellation: ?utils.Cancellation = null,
-    expand_stages: bool = true,
 
     fn checkCanceled(self: *const Parser) !void {
         if (self.cancellation) |cancellation| try cancellation.check();
@@ -172,15 +155,6 @@ const Parser = struct {
                 self.synchronizeTopLevelItem(item_start);
             };
             source.skipTriviaFrom(self.source, &self.pos);
-        }
-        if (self.expand_stages) {
-            var failure: staging.Failure = .{};
-            staging.expand(self.allocator, &module, &failure, self.cancellation) catch |err| {
-                self.error_span = failure.span;
-                self.error_pos = if (failure.span) |span| span.start else self.pos;
-                self.error_detail = failure.detail;
-                return err;
-            };
         }
         return module;
     }
@@ -217,18 +191,9 @@ const Parser = struct {
             var func = try self.parseFunctionAfterKeyword(item_start, .{ .paired = paired });
             var func_moved = false;
             errdefer if (!func_moved) func.deinit(self.allocator);
-            if (paired) {
-                var placed_func = try self.makePairedPlacementFunction(func);
-                var placed_func_moved = false;
-                errdefer if (!placed_func_moved) placed_func.deinit(self.allocator);
-                try module.functions.append(self.allocator, func);
-                func_moved = true;
-                try module.functions.append(self.allocator, placed_func);
-                placed_func_moved = true;
-            } else {
-                try module.functions.append(self.allocator, func);
-                func_moved = true;
-            }
+            func.paired = paired;
+            try module.functions.append(self.allocator, func);
+            func_moved = true;
         } else if (try self.consumeKeyword("const")) {
             imports_allowed.* = false;
             var constant = try self.parseConstAfterKeyword(item_start);
@@ -387,10 +352,7 @@ const Parser = struct {
             return self.failAt(self.pos - 1, error.PairedFunctionNameCannotEndWithBang);
         }
         var type_params = try self.parseTypeParameters();
-        errdefer {
-            for (type_params.items) |*parameter| parameter.deinit(self.allocator);
-            type_params.deinit(self.allocator);
-        }
+        errdefer type_params.deinit(self.allocator);
         source.skipInlineSpaces(self.source, &self.pos);
         try self.expectChar('(');
 
@@ -452,24 +414,26 @@ const Parser = struct {
         source.skipInlineSpaces(self.source, &self.pos);
         var result_type = try self.parseTypeAnnotation();
         errdefer result_type.deinit(self.allocator);
-        var statements = try self.parseFunctionBody(result_type);
+        var expression_body = false;
+        var statements = try self.parseFunctionBody(&expression_body);
         errdefer {
             for (statements.items) |*statement| statement.deinit(self.allocator);
             statements.deinit(self.allocator);
         }
-        if (result_type.kind != .void and !functionBodyReturns(statements.items) and !(self.recovering and self.unterminated_block_string)) return self.fail(error.ExpectedReturn);
-        return .{ .name = parsed_name.text, .name_span = parsed_name.span, .span = .{ .start = start, .end = self.pos }, .type_params = type_params, .params = params, .result_type = result_type, .statements = statements };
+        if (result_type.kind != .void and !expression_body and !functionBodyReturns(statements.items) and !(self.recovering and self.unterminated_block_string)) return self.fail(error.ExpectedReturn);
+        return .{ .name = parsed_name.text, .name_span = parsed_name.span, .span = .{ .start = start, .end = self.pos }, .type_params = type_params, .params = params, .result_type = result_type, .statements = statements, .expression_body = expression_body };
     }
 
-    fn parseFunctionBody(self: *Parser, result_type: ast.Type) !std.ArrayList(Statement) {
+    fn parseFunctionBody(self: *Parser, expression_body: *bool) !std.ArrayList(Statement) {
         source.skipInlineSpaces(self.source, &self.pos);
         if (!self.eof() and self.source[self.pos] == '=') {
-            return try self.parseInlineFunctionBody(result_type);
+            expression_body.* = true;
+            return try self.parseInlineFunctionBody();
         }
         return try self.parseBodyStatements();
     }
 
-    fn parseInlineFunctionBody(self: *Parser, result_type: ast.Type) !std.ArrayList(Statement) {
+    fn parseInlineFunctionBody(self: *Parser) !std.ArrayList(Statement) {
         var statements = std.ArrayList(Statement).empty;
         errdefer {
             for (statements.items) |*stmt| stmt.deinit(self.allocator);
@@ -485,72 +449,10 @@ const Parser = struct {
         try self.consumeStatementTerminator();
         try statements.append(self.allocator, .{
             .span = .{ .start = start, .end = self.pos },
-            .kind = if (result_type.kind == .void)
-                .{ .expr_stmt = expr }
-            else
-                .{ .return_expr = expr },
+            .kind = .{ .expr_stmt = expr },
         });
         expr_moved = true;
         return statements;
-    }
-
-    fn makePairedPlacementFunction(self: *Parser, func: FunctionDecl) !FunctionDecl {
-        const placed_name = try names.bangName(self.allocator, func.name);
-        defer self.allocator.free(placed_name);
-
-        var placed = try func.cloneSignature(self.allocator, placed_name, func.span);
-        errdefer placed.deinit(self.allocator);
-        const reference = try ast.Type.placedOf(self.allocator, placed.result_type);
-        placed.result_type.deinit(self.allocator);
-        placed.result_type = reference;
-
-        var inner_args = std.ArrayList(Expr).empty;
-        errdefer {
-            for (inner_args.items) |*arg| arg.deinit(self.allocator);
-            inner_args.deinit(self.allocator);
-        }
-        try inner_args.ensureTotalCapacity(self.allocator, func.params.items.len);
-        for (func.params.items) |param| {
-            inner_args.appendAssumeCapacity(.{ .ident = .{ .name = try self.allocator.dupe(u8, param.name) } });
-        }
-
-        var outer_args = std.ArrayList(Expr).empty;
-        errdefer {
-            for (outer_args.items) |*arg| arg.deinit(self.allocator);
-            outer_args.deinit(self.allocator);
-        }
-        try outer_args.ensureTotalCapacity(self.allocator, 2);
-        outer_args.appendAssumeCapacity(.{ .call = .{
-            .callee = .{ .name = try self.allocator.dupe(u8, "pagectx") },
-            .args = .empty,
-        } });
-        var type_args = std.ArrayList(ast.Type).empty;
-        errdefer type_args.deinit(self.allocator);
-        try type_args.ensureTotalCapacity(self.allocator, func.type_params.items.len);
-        for (func.type_params.items) |parameter| {
-            type_args.appendAssumeCapacity(ast.Type.unresolvedNameAt(self.source[parameter.span.start..parameter.span.end], parameter.span));
-        }
-        outer_args.appendAssumeCapacity(.{ .call = .{
-            .callee = .{ .name = try self.allocator.dupe(u8, func.name) },
-            .type_args = type_args,
-            .args = inner_args,
-        } });
-        type_args = .empty;
-        inner_args = .empty;
-
-        const return_expr = Expr{ .call = .{
-            .callee = .{ .name = try self.allocator.dupe(u8, "place_on!") },
-            .args = outer_args,
-        } };
-        outer_args = .empty;
-
-        var return_stmt = Statement{
-            .span = func.span,
-            .kind = .{ .return_expr = return_expr },
-        };
-        errdefer return_stmt.deinit(self.allocator);
-        try placed.statements.append(self.allocator, return_stmt);
-        return placed;
     }
 
     fn parseConstAfterKeyword(self: *Parser, start: usize) !ConstDecl {
@@ -582,10 +484,7 @@ const Parser = struct {
         var name_moved = false;
         errdefer if (!name_moved) self.allocator.free(name.text);
         var parameters = try self.parseTypeParameters();
-        defer {
-            for (parameters.items) |*parameter| parameter.deinit(self.allocator);
-            parameters.deinit(self.allocator);
-        }
+        defer parameters.deinit(self.allocator);
         source.skipTriviaFrom(self.source, &self.pos);
         if (self.peekChar('=')) return self.fail(error.ExpectedTypeAnnotation);
         if (!self.peekChar('{')) return self.fail(error.ExpectedChar);
@@ -866,23 +765,18 @@ const Parser = struct {
 
     fn parseTypeParameters(self: *Parser) !std.ArrayList(ast.TypeParameter) {
         var parameters = std.ArrayList(ast.TypeParameter).empty;
-        errdefer {
-            for (parameters.items) |*parameter| parameter.deinit(self.allocator);
-            parameters.deinit(self.allocator);
-        }
+        errdefer parameters.deinit(self.allocator);
         source.skipInlineSpaces(self.source, &self.pos);
         if (!source.startsWithAt(self.source, self.pos, "<")) return parameters;
         self.pos += 1;
         while (true) {
             source.skipTriviaFrom(self.source, &self.pos);
             const name = try self.parseIdentifierWithSpan();
-            var moved = false;
-            errdefer if (!moved) self.allocator.free(name.text);
+            defer self.allocator.free(name.text);
             for (parameters.items) |parameter| {
                 if (std.mem.eql(u8, parameter.name, name.text)) return self.failSpan(name.span, error.DuplicateTypeParameter);
             }
-            try parameters.append(self.allocator, .{ .name = name.text, .span = name.span });
-            moved = true;
+            try parameters.append(self.allocator, .{ .name = self.source[name.span.start..name.span.end], .span = name.span });
             source.skipTriviaFrom(self.source, &self.pos);
             if (!self.peekChar(',')) break;
             self.pos += 1;
@@ -1232,28 +1126,6 @@ const Parser = struct {
 
     fn appendParsedStatement(self: *Parser, statements: *std.ArrayList(Statement)) anyerror!void {
         try self.checkCanceled();
-        if (try self.consumeKeyword("show")) {
-            source.skipInlineSpaces(self.source, &self.pos);
-            const start = self.pos;
-            var condition = try self.parseExpr();
-            defer condition.deinit(self.allocator);
-            const span = ast.Span{ .start = start, .end = self.pos };
-            source.skipInlineSpaces(self.source, &self.pos);
-            try self.expectLineBreakAfterHeader();
-            var body = try self.parseStatementsUntilEnd();
-            defer {
-                for (body.items) |*statement| statement.deinit(self.allocator);
-                body.deinit(self.allocator);
-            }
-            var expanded = try drawing.expand(self.allocator, &condition, span, &body);
-            defer {
-                for (expanded.items) |*statement| statement.deinit(self.allocator);
-                expanded.deinit(self.allocator);
-            }
-            try statements.appendSlice(self.allocator, expanded.items);
-            expanded.clearRetainingCapacity();
-            return;
-        }
         var statement = try self.parseStatement();
         errdefer statement.deinit(self.allocator);
         try statements.append(self.allocator, statement);
@@ -1264,6 +1136,21 @@ const Parser = struct {
         source.skipTriviaFrom(self.source, &self.pos);
         const start = self.pos;
 
+        if (try self.consumeKeyword("show")) {
+            source.skipInlineSpaces(self.source, &self.pos);
+            const condition_start = self.pos;
+            var condition = try self.parseExpr();
+            errdefer condition.deinit(self.allocator);
+            const condition_span = ast.Span{ .start = condition_start, .end = self.pos };
+            source.skipInlineSpaces(self.source, &self.pos);
+            try self.expectLineBreakAfterHeader();
+            const body = try self.parseStatementsUntilEnd();
+            return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .show = .{
+                .condition = condition,
+                .condition_span = condition_span,
+                .statements = body,
+            } } };
+        }
         if (self.peekKeyword("stages")) return self.failAt(start, error.InvalidStagesLocation);
         if (try self.consumeKeyword("if")) {
             var condition = try self.parseExpr();
@@ -1328,11 +1215,11 @@ const Parser = struct {
             if (!self.startsDirectConstraint()) {
                 var rules = try self.parseConstraintValue();
                 errdefer rules.deinit(self.allocator);
-                var current_page = try self.makeCall0("pagectx");
+                var current_page = try self.makeOperation(.current_page, &.{}, null);
                 errdefer current_page.deinit(self.allocator);
                 try self.consumeStatementTerminator();
-                const call = try self.makeCall2("constrain_on!", .{ .call = current_page }, rules);
-                return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .expr_stmt = .{ .call = call } } };
+                const call = try self.makeOperation(.constrain, &.{ current_page, rules }, .{ .start = start, .end = start + 1 });
+                return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .expr_stmt = call } };
             }
             var decl = try self.parseMemberConstraintDecl(.add);
             errdefer decl.deinit(self.allocator);
@@ -1410,11 +1297,12 @@ const Parser = struct {
         source.skipInlineSpaces(self.source, &self.pos);
         const expression_end = start + std.mem.trimEnd(u8, self.source[start..self.pos], " \t\r\n").len;
         const same_line = std.mem.indexOfScalar(u8, self.source[expression_end..self.pos], '\n') == null;
+        const marker_start = self.pos;
         if (same_line and self.consumeConstraintMarker()) {
             var rules = try self.parseConstraintValue();
             errdefer rules.deinit(self.allocator);
-            const call = try self.makeCall2("constrain_on!", expr, rules);
-            expr = .{ .call = call };
+            const call = try self.makeOperation(.constrain, &.{ expr, rules }, .{ .start = marker_start, .end = marker_start + 1 });
+            expr = call;
         }
         // A missing expression may leave its delimiter for an enclosing parser.
         // At statement level, recovery must consume it before trying again.
@@ -1503,10 +1391,10 @@ const Parser = struct {
             if (operator.equal() and !first) {
                 // Only this unparenthesized chain is extended. Nested input
                 // groups remain separate children, even with the same mode.
-                try left.call.args.ensureUnusedCapacity(self.allocator, 1);
-                try left.call.arg_spans.ensureUnusedCapacity(self.allocator, 1);
-                left.call.args.appendAssumeCapacity(right);
-                left.call.arg_spans.appendAssumeCapacity(self.trimExpressionSpan(right_start, self.pos));
+                try left.operation.args.ensureUnusedCapacity(self.allocator, 1);
+                try left.operation.arg_spans.ensureUnusedCapacity(self.allocator, 1);
+                left.operation.args.appendAssumeCapacity(right);
+                left.operation.arg_spans.appendAssumeCapacity(self.trimExpressionSpan(right_start, self.pos));
             } else {
                 left = try self.makeCompositionCall(operator, operator_span, &.{ left, right }, &.{ left_span, self.trimExpressionSpan(right_start, self.pos) });
             }
@@ -1562,30 +1450,15 @@ const Parser = struct {
     }
 
     fn makeCompositionCall(self: *Parser, operator: CompositionOperator, operator_span: ast.Span, operands: []const Expr, spans: []const ast.Span) !Expr {
-        const name = try self.allocator.dupe(u8, "group");
-        errdefer self.allocator.free(name);
-        var args = std.ArrayList(Expr).empty;
-        errdefer args.deinit(self.allocator);
-        var arg_spans = std.ArrayList(ast.Span).empty;
-        errdefer arg_spans.deinit(self.allocator);
-        try args.appendSlice(self.allocator, operands);
-        try arg_spans.appendSlice(self.allocator, spans);
-        return .{ .call = .{
-            .callee = .{
-                .name = name,
-                .is_operator = true,
-                .composition = switch (operator) {
-                    .horizontal => .horizontal,
-                    .vertical => .vertical,
-                    .equal_horizontal => .equal_horizontal,
-                    .equal_vertical => .equal_vertical,
-                },
-                .name_span = operator_span,
-                .span = operator_span,
-            },
-            .args = args,
-            .arg_spans = arg_spans,
-        } };
+        var result = try self.makeOperation(switch (operator) {
+            .horizontal => .horizontal,
+            .vertical => .vertical,
+            .equal_horizontal => .equal_horizontal,
+            .equal_vertical => .equal_vertical,
+        }, operands, operator_span);
+        errdefer result.operation.args.deinit(self.allocator);
+        try result.operation.arg_spans.appendSlice(self.allocator, spans);
+        return result;
     }
 
     fn peekSelectionOperator(self: *const Parser, operator: u8) bool {
@@ -1595,19 +1468,20 @@ const Parser = struct {
     }
 
     fn parseSelectionUnionExpr(self: *Parser) anyerror!Expr {
-        return self.parseSelectionExpr('|', "selection_union");
+        return self.parseSelectionExpr('|', .selection_union);
     }
 
     fn parseSelectionIntersectionExpr(self: *Parser) anyerror!Expr {
-        return self.parseSelectionExpr('&', "selection_intersection");
+        return self.parseSelectionExpr('&', .selection_intersection);
     }
 
-    fn parseSelectionExpr(self: *Parser, comptime operator: u8, comptime name: []const u8) anyerror!Expr {
+    fn parseSelectionExpr(self: *Parser, comptime operator: u8, comptime operation: ast.Operator) anyerror!Expr {
         var left = if (operator == '|') try self.parseSelectionIntersectionExpr() else try self.parseComparisonExpr();
         errdefer left.deinit(self.allocator);
         while (true) {
             source.skipInlineSpaces(self.source, &self.pos);
             if (!self.peekSelectionOperator(operator)) return left;
+            const operator_start = self.pos;
             self.pos += 1;
             source.skipInlineSpaces(self.source, &self.pos);
             var right = if (self.atStatementBoundary() or source.lineCommentMarkerLength(self.source, self.pos) != null) blk: {
@@ -1615,7 +1489,7 @@ const Parser = struct {
                 break :blk try self.makeHoleExpr(.expr, .expression, pointSpan(self.pos), error.ExpectedExpression, diagnostics.foundToken(self.source, self.pos));
             } else if (operator == '|') try self.parseSelectionIntersectionExpr() else try self.parseComparisonExpr();
             errdefer right.deinit(self.allocator);
-            left = try self.makeBinaryCall(name, left, right);
+            left = try self.makeOperation(operation, &.{ left, right }, .{ .start = operator_start, .end = operator_start + 1 });
         }
     }
 
@@ -1625,10 +1499,11 @@ const Parser = struct {
         while (true) {
             source.skipInlineSpaces(self.source, &self.pos);
             const operators = .{ "==", "!=", "<=", ">=", "<", ">" };
-            const comparison_names = .{ "num_eq", "num_ne", "num_le", "num_ge", "num_lt", "num_gt" };
+            const comparison_ops = .{ ast.Operator.eq, .ne, .le, .ge, .lt, .gt };
             var matched = false;
-            inline for (operators, comparison_names) |operator, name| {
+            inline for (operators, comparison_ops) |operator, operation| {
                 if (!matched and source.startsWithAt(self.source, self.pos, operator)) {
+                    const operator_start = self.pos;
                     self.pos += operator.len;
                     source.skipInlineSpaces(self.source, &self.pos);
                     var right = if (self.atStatementBoundary() or source.lineCommentMarkerLength(self.source, self.pos) != null) blk: {
@@ -1636,7 +1511,7 @@ const Parser = struct {
                         break :blk try self.makeHoleExpr(.expr, .expression, pointSpan(self.pos), error.ExpectedExpression, diagnostics.foundToken(self.source, self.pos));
                     } else try self.parseConcatExpr();
                     errdefer right.deinit(self.allocator);
-                    left = try self.makeBinaryCall(name, left, right);
+                    left = try self.makeOperation(operation, &.{ left, right }, .{ .start = operator_start, .end = operator_start + operator.len });
                     matched = true;
                 }
             }
@@ -1650,10 +1525,11 @@ const Parser = struct {
         while (true) {
             source.skipInlineSpaces(self.source, &self.pos);
             if (!source.startsWithAt(self.source, self.pos, "++")) return left;
+            const operator_start = self.pos;
             self.pos += 2;
             var right = try self.parseAddSubExpr();
             errdefer right.deinit(self.allocator);
-            left = try self.makeBinaryCall("concat", left, right);
+            left = try self.makeOperation(.concat, &.{ left, right }, .{ .start = operator_start, .end = operator_start + 2 });
         }
     }
 
@@ -1666,10 +1542,11 @@ const Parser = struct {
             if (source.startsWithAt(self.source, self.pos, "++")) return left;
             const op = self.source[self.pos];
             if (op != '+' and op != '-') return left;
+            const operator_start = self.pos;
             self.pos += 1;
             var right = try self.parseMulDivExpr();
             errdefer right.deinit(self.allocator);
-            left = try self.makeBinaryCall(if (op == '+') "add" else "sub", left, right);
+            left = try self.makeOperation(if (op == '+') .add else .sub, &.{ left, right }, .{ .start = operator_start, .end = operator_start + 1 });
         }
     }
 
@@ -1682,10 +1559,11 @@ const Parser = struct {
             if (source.startsWithAt(self.source, self.pos, "//") or source.startsWithAt(self.source, self.pos, "/=/")) return left;
             const op = self.source[self.pos];
             if (op != '*' and op != '/') return left;
+            const operator_start = self.pos;
             self.pos += 1;
             var right = try self.parseUnaryExpr();
             errdefer right.deinit(self.allocator);
-            left = try self.makeBinaryCall(if (op == '*') "mul" else "div", left, right);
+            left = try self.makeOperation(if (op == '*') .mul else .div, &.{ left, right }, .{ .start = operator_start, .end = operator_start + 1 });
         }
     }
 
@@ -1693,18 +1571,18 @@ const Parser = struct {
         try self.checkCanceled();
         source.skipInlineSpaces(self.source, &self.pos);
         if (!self.eof() and self.source[self.pos] == '!' and !source.startsWithAt(self.source, self.pos, "!=")) {
+            const operator_start = self.pos;
             self.pos += 1;
             var arg = try self.parseUnaryExpr();
             errdefer arg.deinit(self.allocator);
-            const call = try self.makeCall1("not", arg);
-            return .{ .call = call };
+            return self.makeOperation(.logical_not, &.{arg}, .{ .start = operator_start, .end = operator_start + 1 });
         }
         if (!self.eof() and self.source[self.pos] == '-') {
+            const operator_start = self.pos;
             self.pos += 1;
             var arg = try self.parseUnaryExpr();
             errdefer arg.deinit(self.allocator);
-            const call = try self.makeCall1("neg", arg);
-            return .{ .call = call };
+            return self.makeOperation(.neg, &.{arg}, .{ .start = operator_start, .end = operator_start + 1 });
         }
         return self.parsePostfixExpr();
     }
@@ -2123,11 +2001,6 @@ const Parser = struct {
         } };
     }
 
-    fn makeBinaryCall(self: *Parser, name: []const u8, left: Expr, right: Expr) !Expr {
-        const call = try self.makeCall2(name, left, right);
-        return .{ .call = call };
-    }
-
     fn parseCallAfterName(self: *Parser, name: ast.CallableName) anyerror!ast.CallExpr {
         var callee = name;
         errdefer callee.deinit(self.allocator);
@@ -2362,33 +2235,11 @@ const Parser = struct {
         return .{ .coalesce = .{ .target = target_ptr, .fallback = fallback_ptr } };
     }
 
-    fn makeCall0(self: *Parser, name: []const u8) !ast.CallExpr {
-        return .{ .callee = try self.makeSyntheticCallableName(name), .args = .empty };
-    }
-
-    fn makeCall1(self: *Parser, name: []const u8, arg0: Expr) !ast.CallExpr {
-        var callee = try self.makeSyntheticCallableName(name);
-        errdefer callee.deinit(self.allocator);
+    fn makeOperation(self: *Parser, operator: ast.Operator, operands: []const Expr, span: ?ast.Span) !Expr {
         var args = std.ArrayList(Expr).empty;
         errdefer args.deinit(self.allocator);
-        try args.ensureTotalCapacity(self.allocator, 1);
-        args.appendAssumeCapacity(arg0);
-        return .{ .callee = callee, .args = args };
-    }
-
-    fn makeCall2(self: *Parser, name: []const u8, arg0: Expr, arg1: Expr) !ast.CallExpr {
-        var callee = try self.makeSyntheticCallableName(name);
-        errdefer callee.deinit(self.allocator);
-        var args = std.ArrayList(Expr).empty;
-        errdefer args.deinit(self.allocator);
-        try args.ensureTotalCapacity(self.allocator, 2);
-        args.appendAssumeCapacity(arg0);
-        args.appendAssumeCapacity(arg1);
-        return .{ .callee = callee, .args = args };
-    }
-
-    fn makeSyntheticCallableName(self: *Parser, name: []const u8) !ast.CallableName {
-        return .{ .name = try self.allocator.dupe(u8, name), .is_operator = true };
+        try args.appendSlice(self.allocator, operands);
+        return .{ .operation = .{ .operator = operator, .args = args, .span = span } };
     }
 
     fn parseConstraintValue(self: *Parser) !Expr {
@@ -2525,7 +2376,7 @@ const Parser = struct {
     }
 
     fn makeNegCall(self: *Parser, expr: Expr) !Expr {
-        return .{ .call = try self.makeCall1("neg", expr) };
+        return self.makeOperation(.neg, &.{expr}, null);
     }
 
     fn parseLineTextLiteral(self: *Parser) !ast.StringLiteral {
@@ -2987,6 +2838,7 @@ fn statementReturns(stmt: Statement) bool {
     return switch (stmt.kind) {
         .return_expr => true,
         .if_stmt => |if_stmt| functionBodyReturns(if_stmt.then_statements.items) and functionBodyReturns(if_stmt.else_statements.items),
+        .show => |block| functionBodyReturns(block.statements.items),
         else => false,
     };
 }

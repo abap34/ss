@@ -93,7 +93,7 @@ pub const Index = struct {
                 };
             },
             .call => |call| {
-                if (!call.callee.isQualified() and !call.callee.is_operator) {
+                if (!call.callee.isQualified() and call.callee.resolution == .lexical) {
                     if (references) |refs| try refs.add(call.callee.name);
                 }
                 for (call.args.items) |arg| try self.expr(arg, references);
