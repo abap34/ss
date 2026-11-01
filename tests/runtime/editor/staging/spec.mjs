@@ -17,8 +17,9 @@ page Demo
   ~!~ item.top == page.top - 40
   ~ item.width == 200
   show s >= s.second
-    text! "STAGED_DETAIL"
+    let detail = text! "STAGED_DETAIL"
   end
+  ~ detail.width == 220
 end
 `;
   await writeFile(file, source);
@@ -38,6 +39,14 @@ end
     assert(JSON.stringify(hiddenCounts) === "[1,0,0]", `incorrect preview visibility: ${JSON.stringify(hiddenCounts)}`);
     assert(JSON.stringify(ordered.map((target) => target.page_name)) === JSON.stringify(["Demo / first", "Demo / second", "Demo / third"]), "editing targets lost their stage labels");
     assert((snapshot.display.html.match(/STAGED_DETAIL/g) ?? []).length === 2, "hidden text must not appear in preview HTML");
+    const details = snapshot.editing.filter((item) => item.binding === "detail");
+    assert(details.length === 3, "flattened show bindings must remain editable on every stage");
+    assert(details.every((item) => Math.abs(previewBounds(snapshot, item.node_id).width - 220) < 0.1),
+      "constraints outside show must resolve its bindings");
+
+    const bodyCallLine = source.split("\n").findIndex((line) => line.includes('let detail = text!'));
+    const hover = await client.request("textDocument/hover", { textDocument: { uri }, position: { line: bodyCallLine, character: 19 } });
+    assert(hover && !JSON.stringify(hover).includes("draw_when"), "generated drawing calls must not replace source hover targets");
 
     const target = ordered[1];
     const bounds = previewBounds(snapshot, target.node_id);

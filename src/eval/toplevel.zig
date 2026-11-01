@@ -80,8 +80,7 @@ const PendingDrawing = struct {
     module_id: core.SourceModuleId,
     page_id: core.NodeId,
     scope: EvalScope,
-    env: Environment,
-    condition: Expr,
+    predicate: core.FunctionRef,
     origin: core.SourceOrigin,
     parent: ?usize,
     nodes: std.ArrayList(core.NodeId) = .empty,
@@ -135,7 +134,6 @@ pub const EvalContext = struct {
 
     pub fn deinit(self: *EvalContext) void {
         for (self.pending_drawings.items) |*drawing| {
-            drawing.env.deinit();
             drawing.nodes.deinit(self.allocator);
         }
         self.pending_drawings.deinit(self.allocator);
@@ -596,7 +594,7 @@ fn executeUnitInner(
                 const previous = evaluation.module_id;
                 evaluation.module_id = drawing.module_id;
                 defer evaluation.module_id = previous;
-                var value = evalExpr(evaluation, drawing.page_id, drawing.scope, &drawing.env, drawing.origin, drawing.condition) catch |err| {
+                var value = invokeFunctionRef(evaluation, drawing.page_id, drawing.scope, drawing.predicate, drawing.origin, &.{}) catch |err| {
                     if (err != error.Canceled) try reportLowerError(state, err, drawing.origin);
                     return err;
                 };
@@ -1274,6 +1272,27 @@ const BuiltinContext = struct {
         return try evalSelectCall(self.evaluation, self.page_id, self.scope, self.env, self.current_origin, call);
     }
 
+    pub fn runDrawingCall(self: *BuiltinContext, call: CallExpr) anyerror!core.Value {
+        var predicate = try self.evalExprValue(call.args.items[1]);
+        defer predicate.deinit(self.state.allocator);
+        if (predicate != .function) return error.InvalidValueTag;
+        const index = self.evaluation.pending_drawings.items.len;
+        try self.evaluation.pending_drawings.append(self.state.allocator, .{
+            .producer = self.evaluation.execution_unit orelse return error.InvalidDrawingScope,
+            .key = call.callee.call_id orelse return error.InvalidDrawingScope,
+            .module_id = self.evaluation.module_id,
+            .page_id = self.page_id,
+            .scope = self.scope,
+            .predicate = predicate.function,
+            .origin = if (call.callee.span) |span| self.state.sourceOrigin(self.evaluation.module_id, span) else self.current_origin,
+            .parent = self.evaluation.active_drawing,
+        });
+        const previous = self.evaluation.active_drawing;
+        self.evaluation.active_drawing = index;
+        defer self.evaluation.active_drawing = previous;
+        return self.evalExprValue(call.args.items[0]);
+    }
+
     pub fn evalExprValue(self: *BuiltinContext, expr: Expr) anyerror!core.Value {
         return try evalExpr(self.evaluation, self.page_id, self.scope, self.env, self.current_origin, expr);
     }
@@ -1914,36 +1933,6 @@ fn executeStatement(
             var value = try evalExpr(evaluation, page_id, scope, env, origin, property_set.value);
             defer value.deinit(state.allocator);
             try writePropertyPath(evaluation, page_id, scope, origin, base, property_set.path.items, value);
-        },
-        .drawing => |block| {
-            var capture_index = CaptureIndex.init(state.allocator);
-            defer capture_index.deinit();
-            const references = try capture_index.lambdaNames(.{ .params = .empty, .body = @constCast(&block.condition), .span = stmt.span });
-            var captured = try Environment.capture(state.allocator, env, references);
-            var moved = false;
-            errdefer if (!moved) captured.deinit();
-            const index = evaluation.pending_drawings.items.len;
-            try evaluation.pending_drawings.append(state.allocator, .{
-                .producer = evaluation.execution_unit orelse return error.InvalidDrawingScope,
-                .key = ast.drawingKey(evaluation.module_id, stmt.span),
-                .module_id = evaluation.module_id,
-                .page_id = page_id,
-                .scope = scope,
-                .env = captured,
-                .condition = block.condition,
-                .origin = state.sourceOrigin(evaluation.module_id, block.condition_span orelse stmt.span),
-                .parent = evaluation.active_drawing,
-            });
-            moved = true;
-            const previous = evaluation.active_drawing;
-            evaluation.active_drawing = index;
-            defer evaluation.active_drawing = previous;
-            var body_env = Environment.child(state.allocator, env);
-            defer body_env.deinit();
-            for (block.then_statements.items) |nested| {
-                const flow = try executeStatement(evaluation, page_id, scope, &body_env, nested, null);
-                if (flow == .returned) return flow;
-            }
         },
         .if_stmt => |if_stmt| {
             var value = try evalExpr(evaluation, page_id, scope, env, origin, if_stmt.condition);

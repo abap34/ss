@@ -92,7 +92,7 @@ const Rewriter = struct {
                 try self.expr(&property.value, shadowed);
             },
             .constrain => |*constraint| if (constraint.offset) |*value| try self.expr(value, shadowed),
-            .if_stmt, .drawing => |*block| {
+            .if_stmt => |*block| {
                 try self.expr(&block.condition, shadowed);
                 try self.statements(block.then_statements.items, shadowed);
                 try self.statements(block.else_statements.items, shadowed);

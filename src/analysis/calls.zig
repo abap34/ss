@@ -640,8 +640,7 @@ const Analyzer = struct {
                     const value = try self.exprFacts(property_set.value, env, owner);
                     try self.writeProperty(target, property_set.path.items, value);
                 },
-                .if_stmt, .drawing => |if_stmt| {
-                    if (stmt.kind == .drawing) try self.recordPlacement();
+                .if_stmt => |if_stmt| {
                     _ = try self.exprFacts(if_stmt.condition, env, owner);
                     var then_env = try env.clone();
                     try self.analyzeStatements(if_stmt.then_statements.items, &then_env, returns, owner);

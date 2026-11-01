@@ -1122,7 +1122,6 @@ pub const ConstraintDecl = struct {
 
 pub const ControlBlock = struct {
     condition: Expr,
-    condition_span: ?Span = null,
     then_statements: std.ArrayList(Statement),
     else_statements: std.ArrayList(Statement) = .empty,
 };
@@ -1148,8 +1147,6 @@ pub const Statement = struct {
             value: Expr,
         },
         if_stmt: ControlBlock,
-        // Core drawing operation: execute the body and schedule its predicate separately.
-        drawing: ControlBlock,
         expr_stmt: Expr,
     };
 
@@ -1170,7 +1167,7 @@ pub const Statement = struct {
                 property_set.path.deinit(allocator);
                 property_set.value.deinit(allocator);
             },
-            .if_stmt, .drawing => |*if_stmt| {
+            .if_stmt => |*if_stmt| {
                 if_stmt.condition.deinit(allocator);
                 for (if_stmt.then_statements.items) |*stmt| stmt.deinit(allocator);
                 if_stmt.then_statements.deinit(allocator);
@@ -1217,7 +1214,7 @@ pub const Statement = struct {
                         .value = try value.value.clone(allocator),
                     } };
                 },
-                .if_stmt, .drawing => |value| blk: {
+                .if_stmt => |value| blk: {
                     var condition = try value.condition.clone(allocator);
                     errdefer condition.deinit(allocator);
                     var then_statements = std.ArrayList(Statement).empty;
@@ -1236,21 +1233,13 @@ pub const Statement = struct {
                     for (value.else_statements.items) |statement| else_statements.appendAssumeCapacity(try statement.clone(allocator));
                     const block = ControlBlock{
                         .condition = condition,
-                        .condition_span = value.condition_span,
                         .then_statements = then_statements,
                         .else_statements = else_statements,
                     };
-                    break :blk if (self.kind == .drawing) .{ .drawing = block } else .{ .if_stmt = block };
+                    break :blk .{ .if_stmt = block };
                 },
                 .expr_stmt => |value| .{ .expr_stmt = try value.clone(allocator) },
             },
         };
     }
 };
-
-pub fn drawingKey(module_id: u32, span: Span) u64 {
-    var hash = std.hash.Wyhash.init(module_id);
-    hash.update(std.mem.asBytes(&span.start));
-    hash.update(std.mem.asBytes(&span.end));
-    return hash.final();
-}

@@ -78,7 +78,7 @@ fn collectDefinitionsFromStatement(
                 try putDefinitionAtSpan(allocator, definitions, source, binding.name, binding.name_span, stmt.span.end, visible_end, .variable, module_id, null, scope.kind, scope.name);
             }
         },
-        .if_stmt, .drawing => |if_stmt| {
+        .if_stmt => |if_stmt| {
             try collectLambdaDefinitions(allocator, state, source, module_id, if_stmt.condition, definitions, scope);
             const then_end = analysis_scope.statementsVisibleEnd(if_stmt.then_statements.items, stmt.span.end);
             for (if_stmt.then_statements.items) |nested| try collectDefinitionsFromStatement(allocator, state, source, module_id, nested, definitions, scope, then_end);

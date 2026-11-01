@@ -933,20 +933,6 @@ pub const Analyzer = struct {
                 try summary.addWrite(Resource.makeProperty((target orelse PropertyTarget.any()).owner, property_name));
                 summary.writes_layout_input = true;
             },
-            .drawing => |block| {
-                var condition = try self.analyzeExpr(block.condition);
-                defer condition.deinit();
-                if (condition.places_objects or condition.writes_layout_input or condition.writes.items.len != 0 or condition.drawings.items.len != 0) {
-                    summary.invalid_drawing_condition = if (self.sema.state) |state| state.sourceOrigin(self.sema.module_id, block.condition_span orelse stmt.span) else .{};
-                }
-                // Capturing lexical values happens now; reading document resources
-                // from the predicate happens in its own scheduled unit.
-                for (condition.reads.items) |read| if (read == .variable) try summary.addRead(read);
-                var body = try self.withLocalSnapshot(block.then_statements.items, returned);
-                defer body.deinit();
-                try summary.merge(body);
-                try summary.addDrawing(ast.drawingKey(self.sema.module_id, stmt.span), if (self.sema.state) |state| state.sourceOrigin(self.sema.module_id, block.condition_span orelse stmt.span) else .{}, condition);
-            },
             .if_stmt => |if_stmt| {
                 var condition = try self.analyzeExpr(if_stmt.condition);
                 defer condition.deinit();
@@ -1416,7 +1402,7 @@ pub const Analyzer = struct {
                 }
             },
             .fold => return self.foldValueFacts(call, null),
-            .first, .selection_filter => if (call.args.items.len > 0) {
+            .first, .selection_filter, .draw_when => if (call.args.items.len > 0) {
                 result = try self.callArgumentValue(call, arg_facts, 0);
             },
             .selection_union, .selection_intersection, .sub => if (call.args.items.len == 2) {
@@ -1639,7 +1625,7 @@ pub const Analyzer = struct {
                 return false;
             },
             .return_void => return false,
-            .if_stmt, .drawing => |branch| {
+            .if_stmt => |branch| {
                 const then_continues = blk: {
                     var facts = try self.pushLocalFacts();
                     defer facts.restore();
@@ -1650,7 +1636,7 @@ pub const Analyzer = struct {
                     defer facts.restore();
                     break :blk try self.collectValueReturns(branch.else_statements.items, result);
                 };
-                if (!then_continues and (stmt.kind == .drawing or !else_continues)) return false;
+                if (!then_continues and !else_continues) return false;
             },
             .let_binding => |binding| {
                 const values = try self.valueFacts(binding.expr);
@@ -2295,6 +2281,7 @@ pub const Analyzer = struct {
         descriptor: registry.PrimitiveDescriptor,
         returned: ?*ValueFacts,
     ) anyerror!AccessSummary {
+        if (descriptor.op == .draw_when) return self.drawingCall(call, returned);
         if (descriptor.callback != null) return try self.primitiveCallbackCall(call, descriptor, returned);
         if (primitiveNeedsArgFacts(descriptor.op)) {
             var arg_facts = try self.collectCallArgFacts(call);
@@ -2341,6 +2328,27 @@ pub const Analyzer = struct {
             },
             else => {},
         }
+        return summary;
+    }
+
+    fn drawingCall(self: *Analyzer, call: ast.CallExpr, returned: ?*ValueFacts) anyerror!AccessSummary {
+        var operand = try self.analyzeCallArgFacts(call.args.items[0]);
+        defer operand.deinit();
+        var predicate = try self.analyzeCallArgFacts(call.args.items[1]);
+        defer predicate.deinit();
+        var condition = try self.invokeValueFacts(predicate.values, &.{});
+        defer condition.deinit();
+        var summary = AccessSummary.init(self.allocator);
+        errdefer summary.deinit();
+        try summary.merge(operand.summary);
+        try summary.merge(predicate.summary);
+        summary.places_objects = true;
+        const origin: core.SourceOrigin = if (self.sema.state) |state| state.sourceOrigin(self.sema.module_id, call.callee.span orelse .{ .start = 0, .end = 0 }) else .{};
+        if (condition.places_objects or condition.writes_layout_input or condition.writes.items.len != 0 or condition.drawings.items.len != 0) {
+            summary.invalid_drawing_condition = origin;
+        }
+        if (call.callee.call_id) |id| try summary.addDrawing(id, origin, condition);
+        if (returned) |output| output.* = operand.values;
         return summary;
     }
 
@@ -2623,7 +2631,7 @@ pub const Analyzer = struct {
                 .pagectx, .new_page => PropertyTarget.page(),
                 .group, .group_placed => if (self.isAdoption(call)) PropertyTarget.freshObject() else null,
                 .place_on => PropertyTarget.freshObject(),
-                .foreach, .selection_filter, .foreach_enumerate => if (call.args.items.len > 0)
+                .foreach, .selection_filter, .foreach_enumerate, .draw_when => if (call.args.items.len > 0)
                     try self.propertyTargetExpr(call.args.items[0])
                 else
                     PropertyTarget.any(),
@@ -2727,7 +2735,7 @@ pub const Analyzer = struct {
                     result.* = .{ .value = null };
                     return false;
                 },
-                .if_stmt, .drawing => |branch| {
+                .if_stmt => |branch| {
                     const then_continues = blk: {
                         var snapshot = try self.pushLocalFacts();
                         defer snapshot.restore();
@@ -2738,7 +2746,7 @@ pub const Analyzer = struct {
                         defer snapshot.restore();
                         break :blk try self.collectReturnFacts(kind, branch.else_statements.items, result);
                     };
-                    if (!then_continues and (stmt.kind == .drawing or !else_continues)) return false;
+                    if (!then_continues and !else_continues) return false;
                 },
                 .let_binding => |binding| {
                     if (names.isDiscardBindingName(binding.name)) continue;
@@ -3103,6 +3111,7 @@ fn literalStringCall(self: *Analyzer, call: ast.CallExpr) anyerror!?[]const u8 {
     return switch (descriptor) {
         .primitive => |primitive| switch (primitive.op) {
             .concat => try literalConcat(self, call),
+            .draw_when => try literalStringExpr(self, call.args.items[0]),
             else => null,
         },
         .function => |resolved| try literalStringFunctionCall(self, resolved, call),

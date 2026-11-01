@@ -994,7 +994,7 @@ fn inferPrimitiveCallInfo(
         const actual = try exprInfoWithOptions(allocator, state, sema, env, arg, arg_origin, options);
         argument_infos[index] = actual;
         if (isPrimitiveFunctionArgument(descriptor, index)) continue;
-        if (actual.hole == null and actual.ty.kind == .void) {
+        if (actual.hole == null and actual.ty.kind == .void and descriptor.op != .draw_when) {
             try addUserReport(state, origin, "VoidValue", "Void calls do not produce argument values", .{});
             return error.InvalidType;
         }
@@ -1047,6 +1047,7 @@ fn inferPrimitiveCallInfo(
     }
     for (argument_infos, 0..) |actual, index| {
         if (isPrimitiveFunctionArgument(descriptor, index)) continue;
+        if (descriptor.op == .draw_when and index == 0) continue;
         if (sema.primitiveArgType(descriptor, index)) |expected| {
             try ensureType(state, allocator, actual, expected, origin);
         }
@@ -1205,7 +1206,7 @@ fn inferReturnInfoFromStatements(
             .property_set => |property_set| {
                 try validatePropertySetStatementWithOptions(allocator, state, sema, env, property_set.target, property_set.path.items, property_set.value, origin, options);
             },
-            .if_stmt, .drawing => |if_stmt| {
+            .if_stmt => |if_stmt| {
                 _ = try exprInfoWithOptions(allocator, state, sema, env, if_stmt.condition, origin, options);
                 var then_env = try env.clone();
                 defer then_env.deinit();
@@ -1213,7 +1214,7 @@ fn inferReturnInfoFromStatements(
                 var else_env = try env.clone();
                 defer else_env.deinit();
                 const else_continues = try inferReturnInfoFromStatements(allocator, state, sema, origin_path, options, &else_env, if_stmt.else_statements.items, result);
-                if (!then_continues and (stmt.kind == .drawing or !else_continues)) return false;
+                if (!then_continues and !else_continues) return false;
             },
             .expr_stmt => |expr| {
                 _ = try exprInfoWithOptions(allocator, state, sema, env, expr, origin, options);
@@ -1348,6 +1349,12 @@ fn validateCallbackShape(
         try ensureType(state, allocator, actual, callback_info.ty.fn_params[param_index], origin);
     }
     if (expected_result_type) |result_type| {
+        if (descriptor.op == .draw_when and callback_info.ty.fn_result.?.kind != .boolean) {
+            const actual = try typeLabelAlloc(allocator, callback_info.ty.fn_result.?.*);
+            defer allocator.free(actual);
+            try addUserReport(state, if (call.callee.span) |span| origin.withSpan(span) else origin, "DrawingConditionTypeMismatch", "show requires a Bool condition, but this expression has type '{s}'", .{actual});
+            return error.DrawingConditionTypeMismatch;
+        }
         try ensureType(state, allocator, infoFromType(callback_info.ty.fn_result.?.*), result_type, origin);
     }
 }
