@@ -11,7 +11,7 @@ type BlockFrame = {
 type PageRange = {
   start: vscode.Range;
   body: vscode.Range[];
-  end: vscode.Range;
+  end?: vscode.Range;
 };
 
 type DecorationBuckets = {
@@ -30,7 +30,6 @@ type PaletteEntry = {
 
 type ScanState = {
   inChevronBlock: boolean;
-  inTripleString: boolean;
   inDoubleString: boolean;
 };
 
@@ -213,7 +212,7 @@ function computePageDecorationBuckets(document: vscode.TextDocument, colorCount:
     const bucket = index % colorCount;
     buckets.bodies[bucket].push(...page.body);
     buckets.starts[bucket].push(page.start);
-    buckets.ends[bucket].push(page.end);
+    if (page.end) buckets.ends[bucket].push(page.end);
   });
 
   return buckets;
@@ -222,11 +221,18 @@ function computePageDecorationBuckets(document: vscode.TextDocument, colorCount:
 function computePageRanges(document: vscode.TextDocument): PageRange[] {
   const pages: PageRange[] = [];
   const stack: BlockFrame[] = [];
-  const scan: ScanState = { inChevronBlock: false, inTripleString: false, inDoubleString: false };
+  const scan: ScanState = { inChevronBlock: false, inDoubleString: false };
 
   for (let line = 0; line < document.lineCount; line += 1) {
     const visibleText = codeTextForBlockScan(document.lineAt(line).text, scan);
     const blockStart = blockStartKind(visibleText);
+    if (blockStart === "page") {
+      // Pages are top-level declarations. Recover at the next page while an
+      // earlier block is incomplete, keeping every page in the color sequence.
+      const previous = stack.find((block) => block.kind === "page");
+      if (previous) pages.push(pageRange(document, previous.line, line - 1, false));
+      stack.length = 0;
+    }
     if (blockStart) {
       stack.push({ kind: blockStart, line });
       continue;
@@ -244,10 +250,12 @@ function computePageRanges(document: vscode.TextDocument): PageRange[] {
     pages.push(pageRange(document, block.line, line));
   }
 
+  const unfinished = stack.find((block) => block.kind === "page");
+  if (unfinished) pages.push(pageRange(document, unfinished.line, document.lineCount - 1, false));
   return pages;
 }
 
-function pageRange(document: vscode.TextDocument, startLine: number, endLine: number): PageRange {
+function pageRange(document: vscode.TextDocument, startLine: number, endLine: number, closed = true): PageRange {
   const body: vscode.Range[] = [];
   for (let line = startLine; line <= endLine; line += 1) {
     body.push(document.lineAt(line).range);
@@ -256,20 +264,23 @@ function pageRange(document: vscode.TextDocument, startLine: number, endLine: nu
   return {
     start: document.lineAt(startLine).range,
     body,
-    end: document.lineAt(endLine).range,
+    end: closed ? document.lineAt(endLine).range : undefined,
   };
 }
 
 function codeTextForBlockScan(lineText: string, state: ScanState): string {
+  let index = 0;
   if (state.inChevronBlock) {
-    if (/^\s*>>\s*(?:;;.*)?$/.test(lineText)) {
-      state.inChevronBlock = false;
-    }
-    return "";
+    // The delimiter closes at the first non-space characters; its suffix is
+    // ordinary source and can include another block string on the same line.
+    const closing = /^[ \t\r]*>>/.exec(lineText);
+    if (!closing) return "";
+    state.inChevronBlock = false;
+    index = closing[0].length;
   }
 
   let out = "";
-  for (let index = 0; index < lineText.length;) {
+  while (index < lineText.length) {
     if (state.inDoubleString) {
       const closing = lineText.indexOf("\"", index);
       if (closing < 0) {
@@ -279,16 +290,7 @@ function codeTextForBlockScan(lineText: string, state: ScanState): string {
       index = closing + 1;
       continue;
     }
-    if (lineText.startsWith("\"\"\"", index)) {
-      state.inTripleString = !state.inTripleString;
-      index += 3;
-      continue;
-    }
-    if (state.inTripleString) {
-      index += 1;
-      continue;
-    }
-    if (lineText.startsWith("<<", index)) {
+    if (lineText.startsWith("<<", index) && /^<<[ \t\r]*(?:;;.*)?$/.test(lineText.slice(index))) {
       state.inChevronBlock = true;
       break;
     }
