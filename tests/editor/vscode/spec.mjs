@@ -20,6 +20,7 @@ await testPresentationCommand();
 await testRestartCommand();
 await testLineCommentSyntax();
 await testCompositionOperatorSyntax();
+await testCompoundOperatorSyntax();
 await testPairedFunctionKeywordSyntax();
 await testValueUpdateKeywordSyntax();
 await testTypeDeclarationSyntax();
@@ -135,6 +136,35 @@ async function testCompositionOperatorSyntax() {
     assert(query.includes('"|=|"') && query.includes('"/=/"'), `equal composition highlighting is missing: ${queryPath}`);
     assert(query.includes('"|"') && query.includes('"&"'), `selection highlighting is missing: ${queryPath}`);
   }
+}
+
+async function testCompoundOperatorSyntax() {
+  const grammar = JSON.parse(await readFile(path.join(root, "editor/vscode/syntaxes/ss.tmLanguage.json"), "utf8"));
+  const manifest = JSON.parse(await readFile(path.join(root, "editor/vscode/package.json"), "utf8"));
+  const config = JSON.parse(await readFile(path.join(root, "editor/vscode/language-configuration.json"), "utf8"));
+  const contribution = manifest.contributes.grammars.find((entry) => entry.scopeName === grammar.scopeName);
+  const pattern = grammar.repository.operators.patterns[0];
+  const operator = new RegExp(pattern.match, "g");
+  const words = new RegExp(config.wordPattern, "g");
+  const compoundScope = pattern.captures["1"].name;
+  assert(contribution.unbalancedBracketScopes.includes(compoundScope),
+    "bracket matching must not recolor part of a compound operator");
+  for (const token of [">=", "<=", "==", "!=", "->", "|->", "||", "//", "|=|", "/=/", "~!~", "?.", "??", "++", "::"]) {
+    for (const source of [`left${token}right`, `left ${token} right`]) {
+      const matches = [...source.matchAll(operator)];
+      assert(matches.length === 1 && matches[0][0] === token && matches[0][1] === token,
+        `compound operator must have one complete bracket-excluded span: ${source}`);
+      assert(JSON.stringify(source.match(words)) === JSON.stringify(["left", token, "right"]),
+        `word selection must preserve the complete operator: ${source}`);
+    }
+  }
+  for (const source of ["Placed<Text>", "Group<Text, Group<Text, Image>>", "select<Text>(document)"]) {
+    const angles = [...source.matchAll(operator)].filter((match) => match[0] === "<" || match[0] === ">");
+    assert(angles.length >= 2 && angles.every((match) => match[1] === undefined),
+      `generic brackets must remain eligible for bracket matching: ${source}`);
+  }
+  assert(JSON.stringify("s.second item_2 12.5".match(words)) === '["s","second","item_2","12.5"]',
+    "operator word selection must preserve identifiers and decimal numbers");
 }
 
 async function testLineCommentSyntax() {
