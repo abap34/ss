@@ -2274,6 +2274,25 @@ test "syntax spec: recovering parse keeps expression holes in the returned progr
     }
 }
 
+test "syntax spec: recovering page stages preserve the first declaration and later statements" {
+    const text = "page Demo\n  let before = 1\n  stages s { first second }\n  stages t { third }\n  let after = s\nend\n";
+    var parsed = try syntax.parseRecoveringWithOptions(testing.allocator, text, "stages.ss", .{ .expansion = .{ .expand_stages = false } });
+    defer parsed.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), parsed.module.pages.items.len);
+    try testing.expectEqual(@as(usize, 1), parsed.holes.diagnostics.len);
+    const diagnostic = parsed.holes.diagnostics[0];
+    try testing.expectEqual(error.DuplicateStagesDeclaration, diagnostic.err);
+    try testing.expectEqual(std.mem.indexOf(u8, text, "stages t").?, diagnostic.span.start);
+    const page = parsed.module.pages.items[0];
+    try testing.expectEqualStrings("s", page.stages.?.name);
+    try testing.expectEqual(@as(usize, 3), page.statements.items.len);
+    try testing.expectEqualStrings("before", page.statements.items[0].kind.let_binding.name);
+    try testing.expect(page.statements.items[1].kind == .hole);
+    try testing.expectEqualStrings("after", page.statements.items[2].kind.let_binding.name);
+    try testing.expectEqualStrings("s", page.statements.items[2].kind.let_binding.expr.ident.name);
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{text});
+}
+
 test "syntax spec: recovering parse keeps statement holes and continues" {
     var parsed = try parseRecovering(
         \\page Recover

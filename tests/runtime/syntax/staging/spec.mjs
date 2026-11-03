@@ -12,7 +12,8 @@ const cases = [
   ["EmptyStages", "page Demo\nstages s {}\nend\n", "at least one stage name"],
   ["DuplicateStageName", "page Demo\nstages s { first first }\nend\n", "unique name"],
   ["UnknownStage", "page Demo\nstages s { first }\nshow s == s.missing\nend\nend\n", "declared"],
-  ["InvalidStagesLocation", 'page Demo\ntext! "Body"\nstages s { first }\nend\n', "start of a page"],
+  ["DuplicateStagesDeclaration", 'page Demo\nstages s { first }\ntext! "Body"\nstages t { second }\nend\n', "only one stages declaration"],
+  ["InvalidStagesLocation", 'page Demo\nshow true\nstages s { first }\nend\nend\n', "directly inside a page"],
   ["DrawingConditionTypeMismatch", 'page Demo\nstages s { first second }\nshow s\ntext! "Body"\nend\nend\n', "Bool condition"],
   ["DrawingConditionHasEffects", 'fn create!() -> Bool\ntext! "Unexpected"\nreturn true\nend\npage Demo\nshow create!()\nend\nend\n', "only read values"],
   ["DrawingConditionHasEffects", 'fn change!() -> Bool\ndocctx().layout_h_center_offset = 42\nreturn true\nend\npage Demo\nshow change!()\nend\nend\n', "only read values"],
@@ -32,6 +33,10 @@ try {
     assert(failure.stderr.includes(code) && failure.stderr.includes(guidance), `${code}: missing useful diagnosis: ${failure.stderr}`);
     assert.match(failure.stderr, /slide\.ss:\d+:\d+:/, `${code}: missing source location`);
     assert.doesNotMatch(failure.stderr, /unexpected failure|report this as an ss bug/, `${code}: a source mistake was reported as an internal failure`);
+    if (code === "DuplicateStagesDeclaration") {
+      assert(failure.stderr.includes("slide.ss:4:1:"), `duplicate declaration must point to the second stages keyword: ${failure.stderr}`);
+      assert.equal((failure.stderr.match(/^ERROR:/gm) ?? []).length, 1, "duplicate declarations must not produce cascading errors");
+    }
     if (code === "DrawingConditionTypeMismatch") {
       assert(failure.stderr.includes("Demo / first") && failure.stderr.includes("Demo / second"), "expanded page diagnostics must identify their stage");
     }

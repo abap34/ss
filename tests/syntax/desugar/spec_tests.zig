@@ -17,13 +17,13 @@ const source =
     \\  let second = 3
     \\end
     \\page Demo
-    \\  stages s { first second }
     \\  show s >= s.second
     \\    let item = label!("Body")
     \\  end
     \\  ~ item.width == 240
     \\  item // label!("Footer")
     \\  let invalid = s()
+    \\  stages s { first second }
     \\end
 ;
 
@@ -67,6 +67,32 @@ test "desugar: the surface tree retains syntax and expansion produces only core 
     // Expansion borrows rather than consuming or rewriting the input tree.
     try testing.expectEqual(@as(usize, 1), parsed.pages.items.len);
     try testing.expect(parsed.pages.items[0].statements.items[0].kind == .show);
+}
+
+test "desugar: stage declarations apply to the whole page from any body position" {
+    const body = "  let current = s\n  let named = s.second\n";
+    const declaration = "  stages s { first second }\n";
+    for ([_]usize{ 0, "  let current = s\n".len, body.len }) |position| {
+        const text = try std.fmt.allocPrint(testing.allocator, "page Demo\n{s}{s}{s}end\n", .{ body[0..position], declaration, body[position..] });
+        defer testing.allocator.free(text);
+        var parsed = try syntax.parseSurface(testing.allocator, text);
+        defer parsed.deinit(testing.allocator);
+        const stages = parsed.pages.items[0].stages.?;
+        try testing.expectEqualStrings("stages s { first second }", text[stages.span.start..stages.span.end]);
+        try testing.expectEqual(@as(usize, 2), parsed.pages.items[0].statements.items.len);
+        var expanded = try syntax.desugar(testing.allocator, &parsed, .{});
+        defer expanded.deinit(testing.allocator);
+        try testing.expectEqual(@as(usize, 2), expanded.pages.items.len);
+        for (expanded.pages.items, 0..) |page, index| {
+            try testing.expectEqual(@as(usize, 2), page.statements.items.len);
+            const current = page.statements.items[0].kind.let_binding;
+            const named = page.statements.items[1].kind.let_binding;
+            try testing.expectEqualStrings("current", current.name);
+            try testing.expectEqual(@as(f32, @floatFromInt(index)), current.expr.number);
+            try testing.expectEqualStrings("named", named.name);
+            try testing.expectEqual(@as(f32, 1), named.expr.number);
+        }
+    }
 }
 
 test "desugar: document block offsets follow flattened show statements" {

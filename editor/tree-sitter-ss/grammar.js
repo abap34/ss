@@ -126,7 +126,7 @@ module.exports = grammar({
 
     document_block: $ => seq("document", $._body),
 
-    page_declaration: $ => seq("page", field("name", choice($.string, $.identifier)), $._terminator, optional($.stages_declaration), repeat($._statement), "end"),
+    page_declaration: $ => seq("page", field("name", choice($.string, $.identifier)), $._terminator, repeat($._statement), optional(seq($.stages_declaration, repeat($._statement))), "end"),
 
     stages_declaration: $ => seq("stages", field("name", $.identifier), "{", repeat($._terminator), repeat1(seq(field("stage", $.identifier), repeat($._terminator))), "}", $._terminator),
 

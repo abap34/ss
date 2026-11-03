@@ -20,6 +20,7 @@ try {
   end
 end
 page Example
+  text! "Title"
   stages s {
     introduction
     detail
@@ -39,7 +40,15 @@ end
   end
 end
 `);
-  for (const source of [file, inline]) {
+  const trailing = path.join(directory, "trailing.ss");
+  await writeFile(trailing, `page Trailing
+  show s >= s.detail
+    text! "Detail"
+  end
+  stages s { introduction detail }
+end
+`);
+  for (const source of [file, inline, trailing]) {
     // The published-grammar test can leave a different ss parser in the cache.
     const rebuild = source === file ? ["--rebuild"] : [];
     const { stdout } = await exec(cli, ["parse", ...rebuild, source], options);
@@ -51,7 +60,7 @@ end
   assert.match(stdout, /keyword, .*text: `stages`/);
   assert.match(stdout, /keyword, .*text: `show`/);
   await exec(cli, ["query", "queries/folds.scm", file, "--quiet"], options);
-  console.log("Staging grammar: inline and multiline stages, nested predicates, highlighting, and folding passed");
+  console.log("Staging grammar: stages at the start, middle, and end, nested predicates, highlighting, and folding passed");
 } finally {
   await rm(directory, { recursive: true, force: true });
 }

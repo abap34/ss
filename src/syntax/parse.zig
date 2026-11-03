@@ -847,11 +847,9 @@ const Parser = struct {
         errdefer self.allocator.free(name.text);
         source.skipInlineSpaces(self.source, &self.pos);
         try self.expectLineBreakAfterHeader();
-        source.skipTriviaFrom(self.source, &self.pos);
         var stages: ?ast.StagesDecl = null;
         errdefer if (stages) |*decl| decl.deinit(self.allocator);
-        if (self.peekKeyword("stages")) stages = try self.parseStages();
-        var statements = try self.parseStatementsUntilEnd();
+        var statements = try self.parseStatementsUntilEnd(&stages);
         errdefer {
             for (statements.items) |*statement| statement.deinit(self.allocator);
             statements.deinit(self.allocator);
@@ -1045,10 +1043,10 @@ const Parser = struct {
     fn parseBodyStatements(self: *Parser) !std.ArrayList(Statement) {
         source.skipInlineSpaces(self.source, &self.pos);
         try self.expectLineBreakAfterHeader();
-        return try self.parseStatementsUntilEnd();
+        return try self.parseStatementsUntilEnd(null);
     }
 
-    fn parseStatementsUntilEnd(self: *Parser) !std.ArrayList(Statement) {
+    fn parseStatementsUntilEnd(self: *Parser, stages: ?*?ast.StagesDecl) !std.ArrayList(Statement) {
         var statements = std.ArrayList(Statement).empty;
         errdefer {
             for (statements.items) |*stmt| stmt.deinit(self.allocator);
@@ -1062,7 +1060,7 @@ const Parser = struct {
                 return statements;
             }
             const statement_start = self.pos;
-            self.appendParsedStatement(&statements) catch |err| {
+            self.appendParsedStatement(&statements, stages) catch |err| {
                 if (!self.recovering or err == error.OutOfMemory or err == error.Canceled) return err;
                 var hole_statement = try self.makeHoleStatementForError(err, statement_start);
                 var hole_statement_moved = false;
@@ -1107,7 +1105,7 @@ const Parser = struct {
                 return .{ .statements = statements, .terminator = .end };
             }
             const statement_start = self.pos;
-            self.appendParsedStatement(&statements) catch |err| {
+            self.appendParsedStatement(&statements, null) catch |err| {
                 if (!self.recovering or err == error.OutOfMemory or err == error.Canceled) return err;
                 var hole_statement = try self.makeHoleStatementForError(err, statement_start);
                 var hole_statement_moved = false;
@@ -1124,8 +1122,15 @@ const Parser = struct {
         return self.fail(error.ExpectedEnd);
     }
 
-    fn appendParsedStatement(self: *Parser, statements: *std.ArrayList(Statement)) anyerror!void {
+    fn appendParsedStatement(self: *Parser, statements: *std.ArrayList(Statement), stages: ?*?ast.StagesDecl) anyerror!void {
         try self.checkCanceled();
+        if (stages) |declaration| {
+            if (self.peekKeyword("stages")) {
+                if (declaration.* != null) return self.fail(error.DuplicateStagesDeclaration);
+                declaration.* = try self.parseStages();
+                return;
+            }
+        }
         var statement = try self.parseStatement();
         errdefer statement.deinit(self.allocator);
         try statements.append(self.allocator, statement);
@@ -1144,7 +1149,7 @@ const Parser = struct {
             const condition_span = ast.Span{ .start = condition_start, .end = self.pos };
             source.skipInlineSpaces(self.source, &self.pos);
             try self.expectLineBreakAfterHeader();
-            const body = try self.parseStatementsUntilEnd();
+            const body = try self.parseStatementsUntilEnd(null);
             return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .show = .{
                 .condition = condition,
                 .condition_span = condition_span,
