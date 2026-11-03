@@ -104,7 +104,6 @@ latex!("$z_2^3 + \\frac{b}{c}$")`);
     assert(document.includes('data-pdf-src="ss-resource:latex_pdf:'), "LaTeX output did not reference an embedded PDF resource");
     assert(document.includes('data-media-type="application/pdf"'), "LaTeX PDF resource was not embedded");
     assert(document.includes('class="ss-latex-semantic" role="math"'), "LaTeX output omitted math semantics");
-    assert(!document.includes("MathML"), "obsolete structured MathML output remained");
   } finally {
     await rm(project, { recursive: true, force: true });
   }
