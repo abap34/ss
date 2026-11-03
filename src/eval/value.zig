@@ -19,10 +19,6 @@ pub fn string(value: core.Value) ![]const u8 {
     };
 }
 
-pub const propertyString = core.value_text.propertyString;
-pub const propertyStringNeedsFree = core.value_text.propertyStringNeedsFree;
-pub const parsePropertyValue = core.value_text.parsePropertyValue;
-
 pub fn number(value: core.Value) !f32 {
     return switch (value) {
         .number => |number_value| number_value,

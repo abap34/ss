@@ -1,7 +1,5 @@
 const std = @import("std");
-const core = @import("core");
 const analysis_types = @import("analysis").types;
-const syntax_hole = @import("analysis").syntax_hole;
 const Type = @import("language_type").Type;
 
 const testing = std.testing;
@@ -18,7 +16,7 @@ test "analysis type spec: hole type blocks assignability without becoming any" {
     defer testing.allocator.free(label);
     try testing.expectEqualStrings("HoleType", label);
 
-    try analysis_types.ensureType(null, testing.allocator, hole_info, Type.string, .{}, .UnmatchedArgumentType);
+    try analysis_types.ensureType(null, testing.allocator, hole_info, Type.string, .{});
 }
 
 test "analysis type spec: syntax type holes are not accepted as any" {
@@ -37,32 +35,13 @@ test "analysis type spec: syntax type holes are not accepted as any" {
     }
 }
 
-test "analysis type spec: blocked hole records expected type when a table is provided" {
-    var holes = syntax_hole.Result{
-        .holes = try testing.allocator.alloc(syntax_hole.Hole, 1),
-        .diagnostics = try testing.allocator.alloc(syntax_hole.Diagnostic, 0),
-    };
-    holes.holes[0] = .{
-        .id = 0,
-        .kind = .expr,
-        .span = .{ .start = 0, .end = 0 },
-        .expected = .expression,
-    };
-    defer holes.deinit(testing.allocator);
-
-    const hole_info = analysis_types.infoFromHole(0);
-    try analysis_types.ensureTypeWithHoles(null, testing.allocator, hole_info, Type.color, .{}, .UnmatchedArgumentType, &holes);
-    try testing.expect(holes.holes[0].expected_type != null);
-    try testing.expectEqual(Type.Kind.color, holes.holes[0].expected_type.?.kind);
-}
-
 test "analysis type spec: known type mismatch remains a mismatch" {
     const number_info = analysis_types.infoFromType(Type.number);
 
     try testing.expectEqual(analysis_types.Assignability.mismatch, analysis_types.assignability(number_info, Type.string));
     try testing.expectError(
         error.InvalidType,
-        analysis_types.ensureType(null, testing.allocator, number_info, Type.string, .{}, core.TypeMismatchCode.UnmatchedArgumentType),
+        analysis_types.ensureType(null, testing.allocator, number_info, Type.string, .{}),
     );
 }
 

@@ -96,12 +96,6 @@ pub fn appendNumeric(
     try appendNumericOffset(allocator, out, offset);
 }
 
-pub fn isHorizontal(anchor: []const u8) ?bool {
-    if (std.mem.eql(u8, anchor, "left") or std.mem.eql(u8, anchor, "right") or std.mem.eql(u8, anchor, "center_x")) return true;
-    if (std.mem.eql(u8, anchor, "top") or std.mem.eql(u8, anchor, "bottom") or std.mem.eql(u8, anchor, "center_y")) return false;
-    return null;
-}
-
 fn appendEndpoints(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),

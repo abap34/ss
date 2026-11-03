@@ -396,16 +396,6 @@ fn validateExecutionUnits(state: *core.DocumentState, units: []const ExecutionUn
             _ = invalid;
             return error.InvalidSelectionMutation;
         }
-        if (unit.summary.reads_layout and unit.summary.writes_layout_input) {
-            const message = "layout reads cannot feed object creation, content, properties, or constraints because layout is solved once";
-            try addUnitErrorDiagnostic(state, unit, "LayoutDependencyCycle", message);
-            return error.LayoutDependencyCycle;
-        }
-        if (unit.summary.reads_layout) {
-            const message = "layout-reading scheduled computations are not implemented yet";
-            try addUnitErrorDiagnostic(state, unit, "PostLayoutComputationUnsupported", message);
-            return error.PostLayoutComputationUnsupported;
-        }
     }
 }
 

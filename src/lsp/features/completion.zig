@@ -23,7 +23,6 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
             .source = pos.source,
             .line_index = ctx.documents.indexForPath(pos.doc_path),
             .offset = pos.offset,
-            .source_version = snapshot.generation,
         }, ctx.provider.query_options.?);
         defer completion_result.deinit(ctx.allocator);
         return json(ctx.allocator, completion_result);

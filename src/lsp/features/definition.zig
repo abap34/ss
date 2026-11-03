@@ -24,7 +24,6 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
         .source = position.source,
         .line_index = ctx.documents.indexForPath(position.doc_path),
         .offset = position.offset,
-        .source_version = snapshot.generation,
     }, ctx.provider.query_options.?);
     defer ctx.allocator.free(targets);
     return json(ctx.io, ctx.allocator, targets);

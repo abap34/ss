@@ -555,13 +555,6 @@ const ReferenceHash = struct {
         self.state.update(value);
     }
 
-    fn optionalBytes(self: *ReferenceHash, value: ?[]const u8) void {
-        if (value) |bytes_value| {
-            self.boolean(true);
-            self.bytes(bytes_value);
-        } else self.boolean(false);
-    }
-
     fn boolean(self: *ReferenceHash, value: bool) void {
         self.state.update(if (value) &.{1} else &.{0});
     }
@@ -570,27 +563,6 @@ const ReferenceHash = struct {
         var buffer: [8]u8 = undefined;
         std.mem.writeInt(u64, &buffer, @intCast(value), .little);
         self.state.update(&buffer);
-    }
-
-    fn optionalInteger(self: *ReferenceHash, value: anytype) void {
-        if (value) |integer_value| {
-            self.boolean(true);
-            self.integer(integer_value);
-        } else self.boolean(false);
-    }
-
-    fn optionalBoolean(self: *ReferenceHash, value: ?bool) void {
-        if (value) |boolean_value| {
-            self.boolean(true);
-            self.boolean(boolean_value);
-        } else self.boolean(false);
-    }
-
-    fn optionalTag(self: *ReferenceHash, value: anytype) void {
-        if (value) |tag_value| {
-            self.boolean(true);
-            self.tag(tag_value);
-        } else self.boolean(false);
     }
 
     fn float(self: *ReferenceHash, value: anytype) void {

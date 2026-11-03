@@ -828,7 +828,6 @@ const CompletionCase = struct {
             .path = self.path,
             .source = source,
             .offset = offset,
-            .source_version = snapshot.generation,
         }, clock.options());
         errdefer result.deinit(self.allocator);
         try testing.expect(!result.is_incomplete);

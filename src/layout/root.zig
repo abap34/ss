@@ -5,7 +5,6 @@ pub const metrics = @import("metrics.zig");
 pub const fallback = @import("fallback.zig");
 pub const groups = @import("groups.zig");
 pub const graph = @import("graph.zig");
-pub const diagnostics = @import("diagnostics.zig");
 pub const conflicts = @import("conflicts.zig");
 
 pub const Defaults = document.Defaults;
@@ -17,12 +16,5 @@ pub const solveDocument = solver.solveDocument;
 pub const MeasurementProvider = @import("workspace.zig").MeasurementProvider;
 pub const Workspace = @import("workspace.zig").Workspace;
 pub const styleForNode = style.styleForNode;
-pub const intrinsicWidth = metrics.intrinsicWidth;
-pub const intrinsicHeight = metrics.intrinsicHeight;
-pub const shouldWrapNode = metrics.shouldWrapNode;
 pub const contentFrame = metrics.contentFrame;
-pub const lineCount = metrics.lineCount;
-pub const anchorAxis = graph.anchorAxis;
-pub const approxEq = graph.approxEq;
-
 pub const partition = @import("partition.zig");

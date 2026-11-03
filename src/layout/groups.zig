@@ -43,7 +43,7 @@ fn propagateTargetedWidthsWithCache(state: *Workspace, workspace: *const graph.A
     for (workspace.graph.child_ids, workspace.states) |group_id, h_state| {
         const node = state.source.getNode(group_id) orelse return error.UnknownNode;
         if (!isGroupNode(node)) continue;
-        if (!workspace.graph.hasTargetConstraint(state, group_id, .horizontal, workspace.soft_constraints)) continue;
+        if (!workspace.graph.hasTargetConstraint(group_id, .horizontal, workspace.soft_constraints)) continue;
         const group_left = h_state.start orelse continue;
         const group_width = h_state.size orelse continue;
         const group_right = group_left + group_width - metrics.chromePadX(state, node);
@@ -166,7 +166,7 @@ pub fn updateAxisStates(state: *Workspace, workspace: *graph.AxisWorkspace) !boo
     var changed = false;
     for (workspace.graph.group_order) |index| {
         const node_id = workspace.nodeAt(index);
-        if (workspace.graph.hasTargetConstraint(state, node_id, workspace.axis, workspace.soft_constraints)) continue;
+        if (workspace.graph.hasTargetConstraint(node_id, workspace.axis, workspace.soft_constraints)) continue;
         const tight = try computeTightGroupAxisState(state, workspace, node_id);
         const previous = workspace.states[index];
         workspace.states[index] = tight;
@@ -317,7 +317,7 @@ pub fn applyTargetConstraints(
         remaining -= 1;
         const group_index = workspace.graph.group_order[remaining];
         const group_id = workspace.nodeAt(group_index);
-        if (!workspace.graph.hasTargetConstraint(state, group_id, workspace.axis, workspace.soft_constraints)) continue;
+        if (!workspace.graph.hasTargetConstraint(group_id, workspace.axis, workspace.soft_constraints)) continue;
 
         const base = try computeTightGroupAxisState(state, workspace, group_id);
         if (!workspace.graph.hasSplitChildren(group_id) and !axisAllocatedBySplit(workspace, group_id) and

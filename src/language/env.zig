@@ -147,10 +147,6 @@ pub const SemanticEnv = struct {
         return registry.lookupPrimitiveCall(name);
     }
 
-    pub fn call(self: *const SemanticEnv, name: []const u8) ?CallDescriptor {
-        return self.callCallee(ast.CallableName.bare(name));
-    }
-
     pub fn callCallee(self: *const SemanticEnv, callee: ast.CallableName) ?CallDescriptor {
         return switch (self.resolveValue(void, callee, null) catch unreachable) {
             .function => |func| .{ .function = func },
@@ -304,12 +300,6 @@ pub const SemanticEnv = struct {
 
 const FunctionResolver = struct {
     env: *const SemanticEnv,
-
-    pub fn resolveModuleSpec(self: FunctionResolver, spec: []const u8) ?core.SourceModuleId {
-        const state = self.env.state orelse return null;
-        const module = state.moduleByPathOrSpec(spec) orelse return null;
-        return module.id;
-    }
 
     pub fn resolveAlias(self: FunctionResolver, module_id: core.SourceModuleId, alias: []const u8) ?core.SourceModuleId {
         return self.env.resolveAliasInModule(module_id, alias);

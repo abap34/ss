@@ -502,16 +502,6 @@ pub const AnalysisSnapshot = struct {
         return null;
     }
 
-    pub fn typeDefinition(self: *const AnalysisSnapshot, kind: TypeDefinitionKind, name: []const u8, module_id: core.SourceModuleId) ?TypeDefinition {
-        for (self.type_definitions) |definition| {
-            if (definition.kind != kind) continue;
-            if (definition.module_id != module_id) continue;
-            if (!std.mem.eql(u8, definition.name, name)) continue;
-            return definition;
-        }
-        return null;
-    }
-
     pub fn coversPath(self: *const AnalysisSnapshot, path: []const u8) bool {
         if (std.mem.eql(u8, self.project.entry_path, path)) return true;
         for (self.project.module_paths) |module_path| {

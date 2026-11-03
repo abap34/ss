@@ -62,7 +62,7 @@ fn checkedLetBindingInfo(
     origin: core.SourceOrigin,
 ) !TypeInfo {
     const annotation = binding.type_annotation orelse return inferred;
-    try ensureType(state, allocator, inferred, annotation, origin, .UnmatchedReturnType);
+    try ensureType(state, allocator, inferred, annotation, origin);
     return infoFromType(annotation);
 }
 
@@ -288,7 +288,7 @@ fn inferRecordInfo(
     for (record.fields.items, actuals) |field_expr, actual| {
         var expected = (try sema.recordFieldType(allocator, ty, field_expr.name)).?;
         defer expected.deinit(allocator);
-        try ensureType(state, allocator, actual, expected, origin, .UnmatchedArgumentType);
+        try ensureType(state, allocator, actual, expected, origin);
     }
     for (record_decl.decl.fields.items) |field| {
         if (!seen.contains(field.name) and field.default_value == null) {
@@ -359,7 +359,7 @@ fn checkRecordInstanceDefaults(
         const default = field.default_value orelse continue;
         const origin = core.SourceOrigin.at(originPathForModule(sema), field.span);
         const actual = try exprInfoWithOptions(allocator, state, sema, &env, default.*, origin, options);
-        try ensureType(state, allocator, actual, field.value_type, origin, .UnmatchedArgumentType);
+        try ensureType(state, allocator, actual, field.value_type, origin);
     }
 }
 
@@ -433,7 +433,7 @@ fn inferRecordUpdateField(
 
         if (index + 1 == update_field.path.items.len) {
             const actual = try exprInfoWithOptions(allocator, state, sema, env, update_field.value, origin, options);
-            try ensureType(state, allocator, actual, field_type, origin, .UnmatchedArgumentType);
+            try ensureType(state, allocator, actual, field_type, origin);
             return;
         }
         if (field_type.kind != .record and field_type.kind != .group) {
@@ -590,7 +590,7 @@ fn inferCoalesceInfo(
     const fallback_info = try exprInfoWithOptions(allocator, state, sema, env, coalesce.fallback.*, origin, options);
     if (fallback_info.hole != null) return fallback_info;
     const result_type = if (fallback_info.ty.kind == .optional or fallback_info.ty.kind == .none) target_info.ty else child.*;
-    try ensureType(state, allocator, fallback_info, result_type, origin, .UnmatchedArgumentType);
+    try ensureType(state, allocator, fallback_info, result_type, origin);
     return infoFromType(result_type);
 }
 
@@ -859,7 +859,7 @@ fn prepareDisplayFunction(
         };
         break :instantiate try instantiateBoundFunction(allocator, state, sema, definition, bindings, origin, context);
     };
-    try ensureType(state, allocator, infoFromType(receiver), concrete.decl.params.items[0].ty, origin, .UnmatchedArgumentType);
+    try ensureType(state, allocator, infoFromType(receiver), concrete.decl.params.items[0].ty, origin);
     if (concrete.decl.result_type.kind != .record and concrete.decl.result_type.kind != .group) {
         try addUserReport(state, origin, "InvalidDisplayResult", "display must return an unplaced presentation value after instantiation", .{});
         return error.InvalidType;
@@ -922,7 +922,7 @@ fn inferFunctionValueCallInfo(
     }
     for (args, 0..) |arg, index| {
         const actual = try exprInfoWithOptions(allocator, state, sema, env, arg, origin, options);
-        try ensureType(state, allocator, actual, callee_info.ty.fn_params[index], origin, .UnmatchedArgumentType);
+        try ensureType(state, allocator, actual, callee_info.ty.fn_params[index], origin);
     }
     return infoFromType(callee_info.ty.fn_result.?.*);
 }
@@ -954,15 +954,9 @@ fn inferUserCallInfo(
     defer allocator.free(actual_arguments);
     for (call.args.items, 0..) |arg, index| {
         const param = func.params.items[index];
-        const arg_origin = if (call.callee.qualifier != null and
-            std.mem.startsWith(u8, call.callee.qualifier.?, "std:") and
-            origin.span != null and index < call.arg_spans.items.len)
-            origin.withSpan(call.arg_spans.items[index])
-        else
-            origin;
-        const actual = try exprInfoWithOptions(allocator, state, caller_sema, env, arg, arg_origin, options);
+        const actual = try exprInfoWithOptions(allocator, state, caller_sema, env, arg, origin, options);
         if (needs_facts) actual_arguments[index] = actual;
-        try ensureType(state, allocator, actual, param.ty, arg_origin, .UnmatchedArgumentType);
+        try ensureType(state, allocator, actual, param.ty, origin);
     }
     if (options.context.invalid_declarations.contains(core.functionDeclarationKey(callee_sema.module_id, func))) return error.AlreadyDiagnosed;
     if (!needs_facts) return infoFromType(func.result_type);
@@ -1008,7 +1002,7 @@ fn inferPrimitiveCallInfo(
         const left = argument_infos[0].ty.kind;
         const right = argument_infos[1].ty.kind;
         if (descriptor.op == .sub and left == .selection and right == .selection) {
-            return inferSelectionAlgebraInfo(allocator, state, call, .selection_difference, origin, argument_infos);
+            return inferSelectionAlgebraInfo(allocator, state, call, .sub, origin, argument_infos);
         }
         if (descriptor.op == .num_eq and left == .anchor and right == .anchor) return infoFromType(Type.constraints);
         if ((descriptor.op == .add or descriptor.op == .sub) and left == .anchor and right == .number) return infoFromType(Type.anchor);
@@ -1054,7 +1048,7 @@ fn inferPrimitiveCallInfo(
         if (isPrimitiveFunctionArgument(descriptor, index)) continue;
         if (descriptor.op == .draw_when and index == 0) continue;
         if (sema.primitiveArgType(descriptor, index)) |expected| {
-            try ensureType(state, allocator, actual, expected, origin, .UnmatchedArgumentType);
+            try ensureType(state, allocator, actual, expected, origin);
         }
     }
     if (descriptor.result_policy == .placement) {
@@ -1148,7 +1142,7 @@ fn inferUserFunctionReturnInfo(
             if (param.default_value) |default_value| {
                 const default_origin = core.SourceOrigin.at(originPathForModule(sema), param.name_span orelse func.span);
                 const default_info = try exprInfoWithOptions(allocator, state, sema, &env, default_value.*, default_origin, options);
-                try ensureType(state, allocator, default_info, param.ty, default_origin, .UnmatchedArgumentType);
+                try ensureType(state, allocator, default_info, param.ty, default_origin);
                 param_info = semantic_types.refineTypeInfo(param_info, default_info);
             }
         } else {
@@ -1331,18 +1325,18 @@ fn validateCallbackShape(
     }
     if (supplied_arg_count == 1) {
         const item_type = try selectionItemType(state, selection_info, origin);
-        try ensureType(state, allocator, infoFromType(item_type), callback_info.ty.fn_params[0], origin, .UnmatchedArgumentType);
+        try ensureType(state, allocator, infoFromType(item_type), callback_info.ty.fn_params[0], origin);
     } else if (supplied_arg_count == 2) {
         const item_type = try selectionItemType(state, selection_info, origin);
         switch (descriptor.op) {
             .fold => {
-                try ensureType(state, allocator, argument_infos[1], callback_info.ty.fn_params[0], origin, .UnmatchedArgumentType);
-                try ensureType(state, allocator, infoFromType(callback_info.ty.fn_result.?.*), argument_infos[1].ty, origin, .UnmatchedReturnType);
-                try ensureType(state, allocator, infoFromType(item_type), callback_info.ty.fn_params[1], origin, .UnmatchedArgumentType);
+                try ensureType(state, allocator, argument_infos[1], callback_info.ty.fn_params[0], origin);
+                try ensureType(state, allocator, infoFromType(callback_info.ty.fn_result.?.*), argument_infos[1].ty, origin);
+                try ensureType(state, allocator, infoFromType(item_type), callback_info.ty.fn_params[1], origin);
             },
             .foreach_enumerate => {
-                try ensureType(state, allocator, infoFromType(item_type), callback_info.ty.fn_params[0], origin, .UnmatchedArgumentType);
-                try ensureType(state, allocator, infoFromType(Type.number), callback_info.ty.fn_params[1], origin, .UnmatchedArgumentType);
+                try ensureType(state, allocator, infoFromType(item_type), callback_info.ty.fn_params[0], origin);
+                try ensureType(state, allocator, infoFromType(Type.number), callback_info.ty.fn_params[1], origin);
             },
             else => {},
         }
@@ -1351,7 +1345,7 @@ fn validateCallbackShape(
     while (extra_index < extra_count) : (extra_index += 1) {
         const actual = argument_infos[function_arg_index + 1 + extra_index];
         const param_index = supplied_arg_count + extra_index;
-        try ensureType(state, allocator, actual, callback_info.ty.fn_params[param_index], origin, .UnmatchedArgumentType);
+        try ensureType(state, allocator, actual, callback_info.ty.fn_params[param_index], origin);
     }
     if (expected_result_type) |result_type| {
         if (descriptor.op == .draw_when and callback_info.ty.fn_result.?.kind != .boolean) {
@@ -1360,7 +1354,7 @@ fn validateCallbackShape(
             try addUserReport(state, if (call.callee.span) |span| origin.withSpan(span) else origin, "DrawingConditionTypeMismatch", "show requires a Bool condition, but this expression has type '{s}'", .{actual});
             return error.DrawingConditionTypeMismatch;
         }
-        try ensureType(state, allocator, infoFromType(callback_info.ty.fn_result.?.*), result_type, origin, .UnmatchedReturnType);
+        try ensureType(state, allocator, infoFromType(callback_info.ty.fn_result.?.*), result_type, origin);
     }
 }
 
@@ -1375,8 +1369,8 @@ fn inferSelectionAlgebraInfo(
     if (call.args.items.len < 2) return infoFromType(Type.selection(.any));
     const left = argument_infos[0];
     const right = argument_infos[1];
-    try ensureType(state, allocator, left, Type.selection(.any), origin, .UnmatchedArgumentType);
-    try ensureType(state, allocator, right, Type.selection(.any), origin, .UnmatchedArgumentType);
+    try ensureType(state, allocator, left, Type.selection(.any), origin);
+    try ensureType(state, allocator, right, Type.selection(.any), origin);
     if (left.hole != null) return left;
     if (right.hole != null) return right;
     _ = try selectionItemType(state, left, origin);
@@ -1456,12 +1450,12 @@ fn inferSelectCallInfo(
         return error.InvalidArity;
     }
     const base = argument_infos[0];
-    try ensureType(state, allocator, base, registry.queryInputType(query), origin, .UnmatchedInputType);
+    try ensureType(state, allocator, base, registry.queryInputType(query), origin);
     for (query.extra_arg_types, 0..) |expected, extra_index| {
         const arg_index = 2 + extra_index;
         if (arg_index >= call.args.items.len) break;
         const actual = argument_infos[arg_index];
-        try ensureType(state, allocator, actual, expected, origin, .UnmatchedArgumentType);
+        try ensureType(state, allocator, actual, expected, origin);
     }
     if (query.preserves_input_type) return infoFromType(try Type.selectionOf(allocator, base.ty));
     return infoFromType(registry.queryOutputType(query));
@@ -1595,11 +1589,11 @@ fn validateMemberTargetPropertySetPath(
 ) !void {
     if (isPlacedGroup(object_info.ty) and path.len > 0 and std.mem.eql(u8, path[0].name, "layout")) {
         if (path.len == 2 and std.mem.eql(u8, path[1].name, "gap")) {
-            try ensureType(state, allocator, value_info, Type.number, origin, .UnmatchedArgumentType);
+            try ensureType(state, allocator, value_info, Type.number, origin);
             return;
         }
         if (path.len == 1) if (sema.state) |owner| if (core.group_composition.layoutType(owner)) |ty| {
-            try ensureType(state, allocator, value_info, ty, origin, .UnmatchedArgumentType);
+            try ensureType(state, allocator, value_info, ty, origin);
             return;
         };
     }
@@ -1677,8 +1671,4 @@ fn validateNestedPropertySetPath(
         current_type.deinit(allocator);
         current_type = next_type;
     }
-}
-
-pub fn expectedPrimitiveArgType(descriptor: registry.PrimitiveDescriptor, index: usize) ?Type {
-    return registry.primitiveArgType(descriptor, index);
 }

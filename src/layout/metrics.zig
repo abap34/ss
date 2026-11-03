@@ -20,13 +20,6 @@ pub const MeasurementCache = struct {
     values: std.AutoHashMap([32]u8, text_measure.ParagraphMeasurement),
     render_provider: ?@import("workspace.zig").MeasurementProvider = null,
 
-    pub fn init(allocator: std.mem.Allocator) MeasurementCache {
-        return .{
-            .allocator = allocator,
-            .values = std.AutoHashMap([32]u8, text_measure.ParagraphMeasurement).init(allocator),
-        };
-    }
-
     pub fn initWithRenderProvider(allocator: std.mem.Allocator, provider: ?@import("workspace.zig").MeasurementProvider) MeasurementCache {
         return .{
             .allocator = allocator,

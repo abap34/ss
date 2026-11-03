@@ -30,12 +30,6 @@ const DocumentSymbol = struct {
     selection_range: LspRange,
 };
 
-pub fn json(allocator: std.mem.Allocator, text: []const u8, symbols: []const query_symbols.Symbol) ![]const u8 {
-    const index = try LineIndex.init(allocator, text);
-    defer index.deinit(allocator);
-    return jsonWithIndex(allocator, index, symbols);
-}
-
 fn jsonWithIndex(allocator: std.mem.Allocator, text: LineIndex, symbols: []const query_symbols.Symbol) ![]const u8 {
     var out = std.ArrayList(u8).empty;
     try out.append(allocator, '[');

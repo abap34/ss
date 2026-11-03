@@ -112,14 +112,6 @@ pub const Layout = struct {
         self.* = shared;
     }
 
-    pub fn makeUnique(self: *Layout) !void {
-        const storage = self.shared_storage orelse return;
-        if (storage.references.load(.acquire) == 1) return;
-        const unique = try self.deepClone(storage.allocator);
-        storage.release();
-        self.* = unique;
-    }
-
     fn deepClone(self: *const Layout, allocator: std.mem.Allocator) !Layout {
         comptime {
             std.debug.assert(@alignOf(Line) <= @alignOf(u64));

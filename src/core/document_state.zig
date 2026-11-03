@@ -1041,32 +1041,6 @@ pub const DocumentState = struct {
         });
     }
 
-    fn addLayoutDiagnostic(self: *DocumentState, severity: DiagnosticSeverity, page_id: NodeId, node_id: ?NodeId, data: Diagnostic.Data) !void {
-        const origin = if (node_id) |id| blk: {
-            const node = self.getNode(id) orelse break :blk null;
-            break :blk node.origin;
-        } else null;
-        var diagnostic = Diagnostic{
-            .phase = .layout,
-            .severity = severity,
-            .page_id = page_id,
-            .node_id = node_id,
-            .origin = null,
-            .data = data,
-        };
-        errdefer diagnostic.deinit(self.allocator);
-        if (origin) |value| diagnostic.origin = try value.clone(self.allocator);
-        try self.diagnostics.addDiagnostic(self.allocator, diagnostic);
-    }
-
-    pub fn addLayoutWarning(self: *DocumentState, page_id: NodeId, node_id: ?NodeId, data: Diagnostic.Data) !void {
-        try self.addLayoutDiagnostic(.warning, page_id, node_id, data);
-    }
-
-    pub fn addLayoutError(self: *DocumentState, page_id: NodeId, node_id: ?NodeId, data: Diagnostic.Data) !void {
-        try self.addLayoutDiagnostic(.@"error", page_id, node_id, data);
-    }
-
     pub fn labelDiagnostics(self: *DocumentState, start: usize, label: []const u8) !void {
         for (self.diagnostics.entries.items[start..]) |*entry| {
             const owned = try self.allocator.dupe(u8, label);

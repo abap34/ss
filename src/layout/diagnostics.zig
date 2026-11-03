@@ -128,7 +128,7 @@ fn collectPageDiagnosticsWithCache(state: *Workspace, page_id: NodeId, child_ids
 }
 
 fn frameRequirement(state: *Workspace, node: *const Node, measurement_cache: ?*metrics.MeasurementCache) !?FrameRequirement {
-    if (!shouldCheckContentOverflow(state, node)) return null;
+    if (!shouldCheckContentOverflow(node)) return null;
     if (measurement_cache) |cache| {
         if (try metrics.frameConstrainedMeasurementCached(state, node, state.frame(node.id).*, cache)) |measured| {
             if (measured.width > 0 and measured.height > 0) {
@@ -281,10 +281,8 @@ const OverflowPolicy = enum {
     ignore,
 };
 
-fn shouldCheckContentOverflow(state: *Workspace, node: *const Node) bool {
-    _ = state;
-    if (node.kind != .object) return false;
-    return true;
+fn shouldCheckContentOverflow(node: *const Node) bool {
+    return node.kind == .object;
 }
 
 fn overflowPolicy(state: *Workspace, node: *const Node) OverflowPolicy {

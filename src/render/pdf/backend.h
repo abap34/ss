@@ -392,7 +392,6 @@ int ss_pdf_draw_glyph_run(
     int backward
 );
 double ss_text_measure_text(const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size);
-double ss_text_measure_text_visual_width(const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size);
 int ss_text_measure_layout(
     const char *text,
     const char *font_family,
@@ -422,10 +421,8 @@ int ss_text_shape_paragraph(
     SsTextShape *shape,
     SsInlinePosition *positions
 );
-int ss_raster_size(const char *path, double *width, double *height);
 int ss_raster_metadata_bytes(const unsigned char *bytes, size_t length, SsRasterMetadata *metadata);
 int ss_pdf_draw_raster(SsPdf *pdf, const char *path, double x, double y, double width, double height);
-int ss_svg_size(const char *path, double *width, double *height);
 int ss_svg_metadata_bytes(const unsigned char *bytes, size_t length, SsSvgMetadata *metadata);
 int ss_pdf_draw_svg(SsPdf *pdf, const char *path, double x, double y, double width, double height);
 int ss_pdf_draw_svg_tinted(SsPdf *pdf, const char *path, double x, double y, double width, double height, double r, double g, double b);
@@ -455,7 +452,6 @@ SS_QPDF_BRIDGE_API int ss_qpdf_replace_pages(
     size_t replacement_count
 );
 SS_QPDF_BRIDGE_API int ss_qpdf_empty(const char *output);
-SS_QPDF_BRIDGE_API int ss_qpdf_page_size(const char *path, size_t page_index, int box, double *width, double *height);
 SS_QPDF_BRIDGE_API int ss_qpdf_page_sizes(const char *path, int box, double *widths, double *heights, size_t page_count);
 SS_QPDF_BRIDGE_API int ss_qpdf_metadata_bytes(
     const unsigned char *bytes,

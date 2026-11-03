@@ -1308,7 +1308,7 @@ static int ss_layout_replace_synthetic_fonts(
     const PangoFontDescription *requested
 );
 
-static double ss_measure_text_on_cairo(cairo_t *cr, const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size, int visual_width) {
+static double ss_measure_text_on_cairo(cairo_t *cr, const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size) {
     if (cr == NULL) return 0.0;
 
     PangoLayout *layout = pango_cairo_create_layout(cr);
@@ -1330,17 +1330,6 @@ static double ss_measure_text_on_cairo(cairo_t *cr, const char *text, const char
     ss_layout_replace_synthetic_fonts(layout, valid_text, desc);
     g_free(valid_text);
     pango_font_description_free(desc);
-
-    if (visual_width) {
-        PangoRectangle ink = {0};
-        PangoRectangle logical = {0};
-        pango_layout_get_extents(layout, &ink, &logical);
-        g_object_unref(layout);
-
-        const double logical_width = ((double)logical.width) / PANGO_SCALE;
-        const double ink_right = ((double)(ink.x + ink.width)) / PANGO_SCALE;
-        return ink_right > logical_width ? ink_right : logical_width;
-    }
 
     int width = 0;
     int height = 0;
@@ -2394,14 +2383,7 @@ int ss_text_shape_paragraph(
 
 double ss_text_measure_text(const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size) {
     if (ss_lock_stable_pango_font_environment_reader(NULL) != 0) return 0;
-    const double width = ss_measure_text_on_cairo(ss_thread_text_measure_context(), text, font_family, font_weight, font_style, font_stretch, font_size, 0);
-    g_rw_lock_reader_unlock(&ss_font_config_lock);
-    return width;
-}
-
-double ss_text_measure_text_visual_width(const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size) {
-    if (ss_lock_stable_pango_font_environment_reader(NULL) != 0) return 0;
-    const double width = ss_measure_text_on_cairo(ss_thread_text_measure_context(), text, font_family, font_weight, font_style, font_stretch, font_size, 1);
+    const double width = ss_measure_text_on_cairo(ss_thread_text_measure_context(), text, font_family, font_weight, font_style, font_stretch, font_size);
     g_rw_lock_reader_unlock(&ss_font_config_lock);
     return width;
 }

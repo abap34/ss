@@ -13,11 +13,13 @@ test "utils json spec: buffer object writer escapes primitive fields" {
     try object.stringField("text", "quote: \" newline:\n");
     try object.intField("count", @as(i64, 42));
     try object.boolField("enabled", true);
-    var nested = try json.parseValue(allocator, "{\"name\":\"child\"}", .{});
-    defer nested.deinit();
-    try object.valueField("meta", nested.value);
+    var nested = try object.objectField("meta");
+    try nested.stringField("name", "child");
+    try nested.end();
     var items = try object.arrayField("items");
-    try items.valueItem(nested.value);
+    var child = try items.objectItem();
+    try child.stringField("name", "child");
+    try child.end();
     try items.end();
     try object.end();
 
@@ -26,7 +28,7 @@ test "utils json spec: buffer object writer escapes primitive fields" {
     try testing.expect(parsed.value == .object);
     const root = &parsed.value.object;
     try testing.expectEqualStrings("quote: \" newline:\n", json.stringField(root, "text").?);
-    try testing.expectEqual(@as(i64, 42), json.integerField(root, "count").?);
+    try testing.expectEqual(@as(i64, 42), json.intField(root, "count").?);
     try testing.expectEqual(true, json.boolField(root, "enabled").?);
     try testing.expectEqualStrings("child", json.stringField(json.objectFieldObject(root, "meta").?, "name").?);
     try testing.expectEqual(@as(usize, 1), json.arrayFieldObject(root, "items").?.items.len);
@@ -43,7 +45,7 @@ test "utils json spec: field readers expose nested values" {
     const root = &parsed.value.object;
     try testing.expectEqualStrings("deck", json.stringField(root, "name").?);
     try testing.expectEqual(@as(f64, 12.5), json.numberField(root, "size").?);
-    try testing.expect(json.integerField(root, "size") == null);
+    try testing.expect(json.intField(root, "size") == null);
 
     const meta = json.objectFieldObject(root, "meta").?;
     try testing.expectEqual(false, json.boolField(meta, "active").?);
@@ -51,7 +53,7 @@ test "utils json spec: field readers expose nested values" {
     const items = json.arrayFieldObject(root, "items").?;
     try testing.expectEqual(@as(usize, 1), items.items.len);
     try testing.expect(items.items[0] == .object);
-    try testing.expectEqual(@as(i64, 1), json.integerField(&items.items[0].object, "id").?);
+    try testing.expectEqual(@as(i64, 1), json.intField(&items.items[0].object, "id").?);
 }
 
 test "utils json spec: integer readers reject floating-point and negative unsigned values" {

@@ -19,11 +19,11 @@ const cases = [
   },
   {
     name: "ordinary-identifiers",
-    source: "fn property(value: Number) -> Number\n  return value\nend\npage Names\n  let for = 1\n  let in = property(for)\n  let then = in\nend\n",
+    source: "fn compute(value: Number) -> Number\n  return value\nend\npage Names\n  let first = 1\n  let second = compute(first)\n  let third = second\nend\n",
   },
   {
     name: "ordinary-line-call",
-    source: 'page Names\n  property title "data-kind" value\nend\n',
+    source: 'page Names\n  label title "data-kind" value\nend\n',
     node: "line_call_statement",
   },
   {
@@ -37,19 +37,14 @@ const cases = [
     typeNames: ["Document", "Page", "Anchor", "String", "Color", "Number", "Bool", "Constraints", "Path", "None", "Selection", "Page", "Group", "Text", "Image", "Placed", "Text", "Placement", "Void"],
   },
   {
-    name: "former-type-spellings-are-names",
-    source: "fn types(a: document, b: page, c: selection<Page>, d: anchor, e: string, f: number, g: metadata, h: bool, i: boolean, j: constraints, k: void) -> Void\n  return\nend\n",
-    typeNames: ["document", "page", "selection", "Page", "anchor", "string", "number", "metadata", "bool", "boolean", "constraints", "void", "Void"],
-  },
-  {
     name: "lowercase-type-declarations",
-    source: "type number { value: Number }\ntype metadata { name: String }\ntype selection<T> { value: T }\nenum mode { light dark }\nfn read(value: selection<number>, extra: metadata) -> Selection<Page>\n  return pages(document)\nend\n",
-    typeNames: ["number", "Number", "metadata", "String", "selection", "T", "T", "mode", "selection", "number", "metadata", "Selection", "Page"],
+    source: "type widget { value: Number }\ntype details { name: String }\ntype envelope<T> { value: T }\nenum mode { light dark }\nfn read(value: envelope<widget>, extra: details) -> Selection<Page>\n  return pages(docctx())\nend\n",
+    typeNames: ["widget", "Number", "details", "String", "envelope", "T", "T", "mode", "envelope", "widget", "details", "Selection", "Page"],
   },
   {
     name: "qualified-lowercase-type-names",
-    source: "fn read(value: library::number) -> library::metadata\n  return library::metadata { value = value }\nend\npage Calls\n  let wrapped = library::selection<Number> { value = 1 }\n  let result = library::read<Number>(1)\n  let less = library::value < 3\nend\n",
-    typeNames: ["number", "metadata", "metadata", "selection", "Number", "Number"],
+    source: "fn read(value: library::widget) -> library::details\n  return library::details { value = value }\nend\npage Calls\n  let wrapped = library::envelope<Number> { value = 1 }\n  let result = library::read<Number>(1)\n  let less = library::value < 3\nend\n",
+    typeNames: ["widget", "details", "details", "envelope", "Number", "Number"],
   },
 ];
 

@@ -1,14 +1,10 @@
-pub const check = @import("analysis/check.zig");
-pub const cache = @import("analysis/cache.zig");
 pub const captures = @import("analysis/captures.zig");
-pub const contracts = @import("analysis/contracts.zig");
 pub const resource_index = @import("analysis/resource_index.zig");
 pub const dependencies = @import("analysis/dependencies.zig");
 pub const diagnostics = @import("analysis/diagnostics.zig");
 pub const display = @import("analysis/display.zig");
 pub const hole_facts = @import("analysis/hole_facts.zig");
 pub const infer = @import("analysis/infer.zig");
-pub const index = @import("analysis/index.zig");
 pub const module_index = @import("analysis/module_index.zig");
 pub const pipeline = @import("analysis/pipeline.zig");
 pub const query = @import("analysis/query.zig");
@@ -18,15 +14,9 @@ pub const syntax_hole = @import("syntax/hole.zig");
 pub const types = @import("analysis/types.zig");
 
 pub const ModuleIndex = module_index.Index;
-pub const BuildDocumentStateOptions = pipeline.BuildDocumentStateOptions;
 pub const AnalysisMode = pipeline.AnalysisMode;
-pub const ExecutionUnit = execution.ExecutionUnit;
 pub const DependencyEdge = execution.DependencyEdge;
 pub const ExecutionGraph = execution.ExecutionGraph;
-pub const expectedPrimitiveArgType = infer.expectedPrimitiveArgType;
-
-pub const collectFunctionsFromModules = pipeline.collectFunctionsFromModules;
-pub const collectConstantsFromModules = pipeline.collectConstantsFromModules;
 pub const checkFunctionDefinitions = pipeline.checkFunctionDefinitions;
 pub const analyzeDocumentState = pipeline.analyzeDocumentState;
 pub const analyzeDocumentStateWithMode = pipeline.analyzeDocumentStateWithMode;

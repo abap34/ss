@@ -6,12 +6,9 @@ pub const ValueArray = std.json.Array;
 pub const ParseOptions = std.json.ParseOptions;
 pub const ParsedValue = std.json.Parsed(Value);
 
-const Sink = union(enum) {
-    stdout,
-    buffer: struct {
-        value: *std.ArrayList(u8),
-        allocator: std.mem.Allocator,
-    },
+const Sink = struct {
+    value: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
 };
 
 pub const Object = struct {
@@ -19,13 +16,8 @@ pub const Object = struct {
     sink: Sink,
     first: bool = true,
 
-    pub fn begin(allocator: std.mem.Allocator) Object {
-        writeByte(.stdout, '{') catch unreachable;
-        return .{ .allocator = allocator, .sink = .stdout };
-    }
-
     pub fn beginBuffer(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8)) !Object {
-        const sink: Sink = .{ .buffer = .{ .value = buffer, .allocator = allocator } };
+        const sink: Sink = .{ .value = buffer, .allocator = allocator };
         try writeByte(sink, '{');
         return .{ .allocator = allocator, .sink = sink };
     }
@@ -53,11 +45,6 @@ pub const Object = struct {
 
     pub fn enumTagField(self: *Object, key: []const u8, value: anytype) !void {
         try self.stringField(key, @tagName(value));
-    }
-
-    pub fn valueField(self: *Object, key: []const u8, value: Value) !void {
-        try self.fieldName(key);
-        try jsonValue(self.allocator, self.sink, value);
     }
 
     pub fn intField(self: *Object, key: []const u8, value: anytype) !void {
@@ -146,7 +133,7 @@ pub const Array = struct {
     first: bool = true,
 
     pub fn beginBuffer(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8)) !Array {
-        const sink: Sink = .{ .buffer = .{ .value = buffer, .allocator = allocator } };
+        const sink: Sink = .{ .value = buffer, .allocator = allocator };
         try writeByte(sink, '[');
         return .{ .allocator = allocator, .sink = sink };
     }
@@ -172,11 +159,6 @@ pub const Array = struct {
         try string(self.allocator, self.sink, value);
     }
 
-    pub fn valueItem(self: *Array, value: Value) !void {
-        try self.comma();
-        try jsonValue(self.allocator, self.sink, value);
-    }
-
     pub fn intItem(self: *Array, value: anytype) !void {
         try self.comma();
         try int(self.allocator, self.sink, value);
@@ -200,10 +182,6 @@ pub const Array = struct {
         }
     }
 };
-
-pub fn newline() void {
-    std.debug.print("\n", .{});
-}
 
 pub fn appendNewline(buffer: *std.ArrayList(u8), allocator: std.mem.Allocator) !void {
     try buffer.append(allocator, '\n');
@@ -256,11 +234,6 @@ pub fn intField(object: *const ObjectMap, key: []const u8) ?i64 {
     return intValue(value.*);
 }
 
-pub fn integerField(object: *const ObjectMap, key: []const u8) ?i64 {
-    const value = fieldValue(object, key) orelse return null;
-    return integerValue(value.*);
-}
-
 pub fn usizeField(object: *const ObjectMap, key: []const u8) ?usize {
     const value = intField(object, key) orelse return null;
     return std.math.cast(usize, value);
@@ -300,13 +273,6 @@ pub fn intValue(value: Value) ?i64 {
     };
 }
 
-pub fn integerValue(value: Value) ?i64 {
-    return switch (value) {
-        .integer => |integer| integer,
-        else => null,
-    };
-}
-
 pub fn numberValue(value: Value) ?f64 {
     return switch (value) {
         .integer => |integer| @floatFromInt(integer),
@@ -316,7 +282,7 @@ pub fn numberValue(value: Value) ?f64 {
 }
 
 fn bufferSink(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8)) Sink {
-    return .{ .buffer = .{ .value = buffer, .allocator = allocator } };
+    return .{ .value = buffer, .allocator = allocator };
 }
 
 fn string(allocator: std.mem.Allocator, sink: Sink, value: []const u8) !void {
@@ -354,15 +320,9 @@ fn float(allocator: std.mem.Allocator, sink: Sink, value: anytype, comptime fmt:
 }
 
 fn writeByte(sink: Sink, byte: u8) !void {
-    switch (sink) {
-        .stdout => std.debug.print("{c}", .{byte}),
-        .buffer => |buffer| try buffer.value.append(buffer.allocator, byte),
-    }
+    try sink.value.append(sink.allocator, byte);
 }
 
 fn writeBytes(sink: Sink, text: []const u8) !void {
-    switch (sink) {
-        .stdout => std.debug.print("{s}", .{text}),
-        .buffer => |buffer| try buffer.value.appendSlice(buffer.allocator, text),
-    }
+    try sink.value.appendSlice(sink.allocator, text);
 }

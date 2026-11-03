@@ -1010,7 +1010,7 @@ fn applyAxisConstraint(
             return changed;
         }
     }
-    if (!is_soft and canMoveDefaultSizedAnchor(state, workspace, target_index)) {
+    if (!is_soft and canMoveDefaultSizedAnchor(workspace, target_index)) {
         if (try graph.moveDefaultSizedAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint)) {
             try reconcileAppliedAxisState(state, workspace, target_index);
             try recordAnchorConstraintPropagation(state, workspace, target_index, constraint, target_value);
@@ -1019,7 +1019,7 @@ fn applyAxisConstraint(
         }
     }
 
-    if (!is_soft and shouldReplaceDefaultGeometry(state, workspace, target_index, constraint.target_anchor)) {
+    if (!is_soft and shouldReplaceDefaultGeometry(workspace, target_index, constraint.target_anchor)) {
         if (graph.replaceAxisAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint)) {
             try reconcileAppliedAxisState(state, workspace, target_index);
             try recordAnchorConstraintPropagation(state, workspace, target_index, constraint, target_value);
@@ -1029,7 +1029,7 @@ fn applyAxisConstraint(
     }
 
     const applied = graph.setAxisAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint) catch |err| {
-        if (!is_soft and err == error.ConstraintConflict and canMoveDefaultSizedAnchor(state, workspace, target_index)) {
+        if (!is_soft and err == error.ConstraintConflict and canMoveDefaultSizedAnchor(workspace, target_index)) {
             if (try graph.moveDefaultSizedAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint)) {
                 try reconcileAppliedAxisState(state, workspace, target_index);
                 try recordAnchorConstraintPropagation(state, workspace, target_index, constraint, target_value);
@@ -1037,7 +1037,7 @@ fn applyAxisConstraint(
                 return true;
             }
         }
-        if (!is_soft and err == error.ConstraintConflict and canReplaceDuplicateDefaultAnchor(state, workspace, target_index, constraint.target_anchor)) {
+        if (!is_soft and err == error.ConstraintConflict and canReplaceDuplicateDefaultAnchor(workspace, target_index, constraint.target_anchor)) {
             if (try graph.moveDefaultSizedAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint)) {
                 try reconcileAppliedAxisState(state, workspace, target_index);
                 try recordAnchorConstraintPropagation(state, workspace, target_index, constraint, target_value);
@@ -1095,10 +1095,9 @@ fn applyAxisConstraint(
     return applied;
 }
 
-fn canMoveDefaultSizedAnchor(state: *Workspace, workspace: *const graph.AxisWorkspace, target_index: usize) bool {
+fn canMoveDefaultSizedAnchor(workspace: *const graph.AxisWorkspace, target_index: usize) bool {
     const axis_state = workspace.states[target_index];
     if (!axis_state.size_is_default or axis_state.size == null) return false;
-    _ = state;
     if (workspace.graph.hardTargetAnchorCount(workspace.nodeAt(target_index), workspace.axis) > 1) return false;
     const sources = [_]?Constraint{ axis_state.size_source, axis_state.start_source, axis_state.end_source, axis_state.center_source };
     for (sources) |source| {
@@ -1108,19 +1107,17 @@ fn canMoveDefaultSizedAnchor(state: *Workspace, workspace: *const graph.AxisWork
     return true;
 }
 
-fn canReplaceDuplicateDefaultAnchor(state: *Workspace, workspace: *const graph.AxisWorkspace, target_index: usize, target_anchor: model.Anchor) bool {
+fn canReplaceDuplicateDefaultAnchor(workspace: *const graph.AxisWorkspace, target_index: usize, target_anchor: model.Anchor) bool {
     const axis_state = workspace.states[target_index];
     if (!axis_state.size_is_default or axis_state.size == null) return false;
-    _ = state;
     if (workspace.graph.hardTargetAnchorCount(workspace.nodeAt(target_index), workspace.axis) != 1) return false;
     const existing = graph.axisAnchorSource(axis_state, target_anchor) orelse return false;
     return !constraintInSlice(workspace.soft_constraints, existing);
 }
 
-fn shouldReplaceDefaultGeometry(state: *Workspace, workspace: *const graph.AxisWorkspace, target_index: usize, target_anchor: model.Anchor) bool {
+fn shouldReplaceDefaultGeometry(workspace: *const graph.AxisWorkspace, target_index: usize, target_anchor: model.Anchor) bool {
     const axis_state = workspace.states[target_index];
     if (!axis_state.size_is_default) return false;
-    _ = state;
     if (workspace.graph.hardTargetAnchorCount(workspace.nodeAt(target_index), workspace.axis) <= 1) return false;
 
     const existing_source = graph.axisAnchorSource(axis_state, target_anchor);
@@ -1926,7 +1923,7 @@ fn finalConstraintTrace(state: *Workspace, page_id: NodeId, page_graph: *const g
 
 fn finalConstraintSourceTrace(state: *Workspace, page_id: NodeId, page_graph: *const graph.PageLayoutGraph, source: model.ConstraintSource, value: f32, depth: usize) anyerror!graph.PropagationTrace {
     return switch (source) {
-        .page => |anchor| try finalPageAnchorTrace(state, page_id, anchor, value),
+        .page => |anchor| try finalPageAnchorTrace(state, anchor, value),
         .node => |node_source| blk: {
             if (page_graph.constraintTargetingAnchor(node_source.node_id, node_source.anchor)) |source_constraint| {
                 break :blk try finalConstraintTrace(state, page_id, page_graph, source_constraint, value, depth);
@@ -1936,8 +1933,7 @@ fn finalConstraintSourceTrace(state: *Workspace, page_id: NodeId, page_graph: *c
     };
 }
 
-fn finalPageAnchorTrace(state: *Workspace, page_id: NodeId, anchor: model.Anchor, value: f32) !graph.PropagationTrace {
-    _ = page_id;
+fn finalPageAnchorTrace(state: *Workspace, anchor: model.Anchor, value: f32) !graph.PropagationTrace {
     var trace = graph.PropagationTrace{};
     errdefer trace.deinit(state.allocator);
     try trace.appendOwnedLine(state.allocator, try std.fmt.allocPrint(

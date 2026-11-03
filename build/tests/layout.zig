@@ -28,6 +28,11 @@ pub fn register(suite: Suite, modules: project.ProjectModules) void {
         import("ast", modules.ast),
     }, true);
     _ = suite.add(layout_partition_spec_mod, .{ .document_fixture = true, .layout_fixture = true, .name = "test-layout-partition", .description = "Run focused page partition tests" });
+    const layout_workspace_spec_mod = createModule(ctx, "tests/layout/workspace/spec_tests.zig", &.{
+        import("core", modules.core),
+        import("ast", modules.ast),
+    }, true);
+    _ = suite.add(layout_workspace_spec_mod, .{ .name = "test-layout-workspace", .description = "Run focused page workspace ownership tests" });
     const layout_graph_spec_mod = createModule(ctx, "tests/layout/graph/spec_tests.zig", &.{
         import("core", modules.core),
         import("utils", modules.utils),

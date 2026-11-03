@@ -1199,18 +1199,12 @@ test "render PDF spec: manifest fingerprint workers handle empty and single-page
     defer allocator.free(single_path_z);
     var width: f64 = 0;
     var height: f64 = 0;
-    try testing.expectEqual(@as(c_int, 0), c.ss_qpdf_page_size(single_path_z.ptr, 0, 1, &width, &height));
+    try testing.expectEqual(@as(c_int, 0), c.ss_qpdf_page_sizes(single_path_z.ptr, 1, &width, &height, 1));
     try testing.expectApproxEqAbs(@as(f64, 320), width, 0.001);
     try testing.expectApproxEqAbs(@as(f64, 180), height, 0.001);
 }
 
 test "render PDF spec: raster shim decodes and draws without a converted PNG" {
-    var width: f64 = 0;
-    var height: f64 = 0;
-    try testing.expectEqual(@as(c_int, 0), c.ss_raster_size("assets/logo.png", &width, &height));
-    try testing.expect(width > 0);
-    try testing.expect(height > 0);
-
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     const allocator = testing.allocator;
@@ -1350,7 +1344,7 @@ test "render PDF spec: libqpdf composes a selectable page form and copies links"
 
     var source_width: f64 = 0;
     var source_height: f64 = 0;
-    try testing.expectEqual(@as(c_int, 0), c.ss_qpdf_page_size(source_path_z.ptr, 0, 1, &source_width, &source_height));
+    try testing.expectEqual(@as(c_int, 0), c.ss_qpdf_page_sizes(source_path_z.ptr, 1, &source_width, &source_height, 1));
     try testing.expectApproxEqAbs(@as(f64, 320), source_width, 0.001);
     try testing.expectApproxEqAbs(@as(f64, 180), source_height, 0.001);
 

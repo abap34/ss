@@ -100,7 +100,6 @@ pub const EvalContext = struct {
     display_inputs: std.ArrayList(std.ArrayList(core.NodeId)) = .empty,
     display_entries: std.AutoHashMap(struct { producer: usize, call_id: u64 }, usize),
     frames: call_frames.Stack,
-    elaboration_origin: ?core.SourceOrigin = null,
     declarations: *const declarations.DeclarationIndex,
     captures: *const CaptureIndex,
     name_resolution_cache: analysis_cache.NameResolutionCache,
@@ -157,9 +156,7 @@ pub const EvalContext = struct {
         if (!function.isDisplay() or (function.type_params.items.len != 0 and function.instance_id == null)) return error.UnpreparedDisplay;
         const page_id = placement.page_id;
         const origin = node.origin orelse self.state.sourceOrigin(target.module_id, function.span);
-        var env = Environment.init(self.state.allocator);
-        defer env.deinit();
-        return invokeUserFunctionValues(self, page_id, .page, &env, target.module_id, function, origin, &.{.{ .object = id }});
+        return invokeUserFunctionValues(self, page_id, .page, target.module_id, function, origin, &.{.{ .object = id }});
     }
 
     /// Executes one prepared display unit. The returned child is registered but
@@ -469,8 +466,6 @@ fn lowerErrorMessage(err: anyerror) ?[]const u8 {
         error.EmptySelection => "selection is empty",
         error.InvalidSelectionItemType => "selection item kinds do not match",
         error.InvalidSelectionMutation => "primitive callbacks must not add objects or pages to the selection being iterated",
-        error.LayoutDependencyCycle => "layout reads cannot feed object creation, content, properties, or constraints because layout is solved once",
-        error.PostLayoutComputationUnsupported => "layout-reading scheduled computations are not implemented yet",
         error.ExecutionDependencyCycle => "document evaluation dependencies contain a cycle",
         error.DuplicateObjectParent => "object occurs under multiple parents in the placed group",
         error.DuplicatePropertyDefinition => "property is already defined on this target",
@@ -496,7 +491,6 @@ fn lowerErrorMessage(err: anyerror) ?[]const u8 {
         error.NoCurrentPage => "this operation is only valid inside a page block",
         error.UnknownAnchor => "unknown anchor",
         error.PageCannotBeConstraintTarget => "page anchors cannot be constraint targets",
-        error.UnsupportedDocumentEvaluationPrimitive => "this operation is not valid during document evaluation",
         error.FunctionDidNotReturnValue => "function did not return a value",
         error.EvaluationResourceLimit => "evaluation exhausted its call-frame resource limit",
         else => null,
@@ -600,9 +594,7 @@ fn executeUnitInner(
                 const previous = evaluation.module_id;
                 evaluation.module_id = drawing.module_id;
                 defer evaluation.module_id = previous;
-                var env = Environment.init(evaluation.allocator);
-                defer env.deinit();
-                var value = invokeFunctionRef(evaluation, drawing.page_id, drawing.scope, &env, drawing.predicate, drawing.origin, &.{}) catch |err| {
+                var value = invokeFunctionRef(evaluation, drawing.page_id, drawing.scope, drawing.predicate, drawing.origin, &.{}) catch |err| {
                     if (err != error.Canceled) try reportLowerError(state, err, drawing.origin);
                     return err;
                 };
@@ -647,7 +639,7 @@ fn executeDocumentStatement(
 ) !void {
     const state = evaluation.state;
     const error_count = diagnosticErrorCount(state);
-    const flow = executeStatement(evaluation, state.graph.document_id, .document, &execution_state.env, stmt, null) catch |err| {
+    const flow = executeStatement(evaluation, state.graph.document_id, .document, &execution_state.env, stmt) catch |err| {
         if (err == error.Canceled) return err;
         const origin = state.sourceOrigin(evaluation.module_id, stmt.span);
         if (diagnosticErrorCount(state) == error_count) try reportLowerError(state, err, origin);
@@ -671,7 +663,7 @@ fn executePageStatement(
 ) !void {
     const state = evaluation.state;
     const error_count = diagnosticErrorCount(state);
-    const flow = executeStatement(evaluation, page_id, .page, &execution_state.env, stmt, null) catch |err| {
+    const flow = executeStatement(evaluation, page_id, .page, &execution_state.env, stmt) catch |err| {
         if (err == error.Canceled) return err;
         const origin = state.sourceOrigin(evaluation.module_id, stmt.span);
         if (diagnosticErrorCount(state) == error_count) try reportLowerError(state, err, origin);
@@ -826,15 +818,14 @@ fn evalMember(
     member: ast.MemberExpr,
 ) !core.Value {
     const state = evaluation.state;
-    const functions = evaluation.functions;
     if (try borrowValue(evaluation, page_id, scope, env, current_origin, member.target.*)) |target| {
         if (member.optional and target == .none) return .{ .none = {} };
-        return evalMemberValue(state, functions, target, member.name);
+        return evalMemberValue(state, target, member.name);
     }
     var target = try evalExpr(evaluation, page_id, scope, env, current_origin, member.target.*);
     defer target.deinit(state.allocator);
     if (member.optional and target == .none) return .{ .none = {} };
-    return evalMemberValue(state, functions, target, member.name);
+    return evalMemberValue(state, target, member.name);
 }
 
 fn borrowValue(
@@ -866,7 +857,6 @@ fn borrowValue(
 
 fn evalMemberValue(
     state: *core.DocumentState,
-    functions: *const core.FunctionMap,
     target: core.Value,
     name: []const u8,
 ) !core.Value {
@@ -890,7 +880,6 @@ fn evalMemberValue(
         else => return error.InvalidValueTag,
     };
     const node = state.getNode(node_id) orelse return error.UnknownNode;
-    _ = functions;
     var value = (try core.fields.get(state.allocator, state, node, name)) orelse return .{ .none = {} };
     defer value.deinit(state.allocator);
     return try value.value.clone(state.allocator);
@@ -1153,7 +1142,7 @@ fn evalCall(
             };
             var args = try evalCallArgs(evaluation, page_id, scope, env, current_origin, call.args.items);
             defer deinitCallArgs(state.allocator, &args);
-            break :blk try invokeFunctionRef(evaluation, page_id, scope, env, func_ref, current_origin, args.items(.value));
+            break :blk try invokeFunctionRef(evaluation, page_id, scope, func_ref, current_origin, args.items(.value));
         },
         .constant => |resolved| blk: {
             var const_value = try evalConstValue(evaluation, page_id, scope, current_origin, resolved);
@@ -1167,16 +1156,13 @@ fn evalCall(
             };
             var args = try evalCallArgs(evaluation, page_id, scope, env, current_origin, call.args.items);
             defer deinitCallArgs(state.allocator, &args);
-            break :blk try invokeFunctionRef(evaluation, page_id, scope, env, function, current_origin, args.items(.value));
+            break :blk try invokeFunctionRef(evaluation, page_id, scope, function, current_origin, args.items(.value));
         },
         .function => |resolved| blk: {
             try validateUserFunctionArity(state, call.args.items.len, resolved.decl, current_origin);
             var args = try evalCallArgs(evaluation, page_id, scope, env, current_origin, call.args.items);
             defer deinitCallArgs(state.allocator, &args);
-            const previous_origin = evaluation.elaboration_origin;
-            evaluation.elaboration_origin = elaboratedCallOrigin(evaluation, call) orelse previous_origin;
-            defer evaluation.elaboration_origin = previous_origin;
-            break :blk try invokeUserFunctionValues(evaluation, page_id, scope, env, resolved.module_id, resolved.decl, current_origin, args.items(.value));
+            break :blk try invokeUserFunctionValues(evaluation, page_id, scope, resolved.module_id, resolved.decl, current_origin, args.items(.value));
         },
         .primitive => |primitive| try evalPrimitiveCall(evaluation, page_id, scope, env, current_origin, call, primitive),
         .unknown => {
@@ -1218,7 +1204,7 @@ fn evalApply(
     };
     var args = try evalCallArgs(evaluation, page_id, scope, env, current_origin, apply.args.items);
     defer deinitCallArgs(state.allocator, &args);
-    return try invokeFunctionRef(evaluation, page_id, scope, env, function, current_origin, args.items(.value));
+    return try invokeFunctionRef(evaluation, page_id, scope, function, current_origin, args.items(.value));
 }
 
 const CallArguments = std.MultiArrayList(Binding);
@@ -1405,7 +1391,7 @@ const BuiltinContext = struct {
     }
 
     pub fn invokeCallback(self: *BuiltinContext, function: core.FunctionRef, args: []const core.Value) !core.Value {
-        return try invokeFunctionRef(self.evaluation, self.page_id, self.scope, self.env, function, self.current_origin, args);
+        return try invokeFunctionRef(self.evaluation, self.page_id, self.scope, function, self.current_origin, args);
     }
 
     pub fn pageIndex(self: *BuiltinContext, page_id: core.NodeId) usize {
@@ -1414,30 +1400,6 @@ const BuiltinContext = struct {
 
     pub fn pageCount(self: *BuiltinContext) usize {
         return self.state.pageCount();
-    }
-
-    pub fn frameX(self: *BuiltinContext, object_id: core.NodeId) !f32 {
-        _ = self;
-        _ = object_id;
-        return error.UnsupportedDocumentEvaluationPrimitive;
-    }
-
-    pub fn frameY(self: *BuiltinContext, object_id: core.NodeId) !f32 {
-        _ = self;
-        _ = object_id;
-        return error.UnsupportedDocumentEvaluationPrimitive;
-    }
-
-    pub fn frameWidth(self: *BuiltinContext, object_id: core.NodeId) !f32 {
-        _ = self;
-        _ = object_id;
-        return error.UnsupportedDocumentEvaluationPrimitive;
-    }
-
-    pub fn frameHeight(self: *BuiltinContext, object_id: core.NodeId) !f32 {
-        _ = self;
-        _ = object_id;
-        return error.UnsupportedDocumentEvaluationPrimitive;
     }
 
     pub fn equalAnchorConstraintSet(
@@ -1630,7 +1592,6 @@ fn bindUserFunctionValueArgs(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    caller_env: *Environment,
     local_env: *Environment,
     module_id: core.SourceModuleId,
     func: FunctionDecl,
@@ -1650,7 +1611,6 @@ fn bindUserFunctionValueArgs(
         };
         try bindFunctionArgument(state, page_id, local_env, param, current_origin, binding);
     }
-    _ = caller_env;
 }
 
 fn resolveValueString(value: core.Value) ![]const u8 {
@@ -1812,7 +1772,6 @@ fn writePropertyPath(
     value: core.Value,
 ) !void {
     const state = evaluation.state;
-    const functions = evaluation.functions;
     if (path.len == 0) return;
     var current = try base.clone(state.allocator);
     defer current.deinit(state.allocator);
@@ -1820,7 +1779,7 @@ fn writePropertyPath(
     var path_index: usize = 0;
     while (!isPropertyTargetValue(current)) {
         if (path_index >= path.len) return error.ExpectedObject;
-        const next = try evalMemberValue(state, functions, current, path[path_index].name);
+        const next = try evalMemberValue(state, current, path[path_index].name);
         current.deinit(state.allocator);
         current = next;
         path_index += 1;
@@ -1941,11 +1900,10 @@ fn executeStatement(
     scope: EvalScope,
     env: *Environment,
     stmt: Statement,
-    origin_override: ?core.SourceOrigin,
 ) anyerror!ExecFlow {
     const state = evaluation.state;
     try checkCancellation(evaluation);
-    const origin = origin_override orelse evaluation.elaboration_origin orelse state.sourceOrigin(evaluation.module_id, stmt.span);
+    const origin = state.sourceOrigin(evaluation.module_id, stmt.span);
     switch (stmt.kind) {
         .hole => return error.HoleStatement,
         .let_binding => |binding| {
@@ -1984,7 +1942,7 @@ fn executeStatement(
             var branch_env = Environment.child(state.allocator, env);
             defer branch_env.deinit();
             for (branch) |nested| {
-                const flow = try executeStatement(evaluation, page_id, scope, &branch_env, nested, null);
+                const flow = try executeStatement(evaluation, page_id, scope, &branch_env, nested);
                 switch (flow) {
                     .none => {},
                     .returned => return flow,
@@ -2103,7 +2061,6 @@ fn invokeFunctionRef(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    env: *Environment,
     function: core.FunctionRef,
     current_origin: core.SourceOrigin,
     args: []const core.Value,
@@ -2111,21 +2068,20 @@ fn invokeFunctionRef(
     const state = evaluation.state;
     const functions = evaluation.functions;
     if (function.closure_id) |closure_id| {
-        return try invokeClosureValues(evaluation, page_id, scope, env, function.module_id, closure_id, current_origin, args);
+        return try invokeClosureValues(evaluation, page_id, scope, function.module_id, closure_id, current_origin, args);
     }
     const sema = SemanticEnv.init(state, evaluation.declarations, functions).forModule(function.module_id);
     const resolved = (try resolvedFunction(evaluation, &sema, ast.CallableName.bare(function.name))) orelse {
         try reportUnknownFunction(state, function.name, current_origin);
         return error.UnknownFunction;
     };
-    return try invokeUserFunctionValues(evaluation, page_id, scope, env, resolved.module_id, resolved.decl, current_origin, args);
+    return try invokeUserFunctionValues(evaluation, page_id, scope, resolved.module_id, resolved.decl, current_origin, args);
 }
 
 fn invokeClosureValues(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    caller_env: *Environment,
     module_id: core.SourceModuleId,
     closure_id: usize,
     current_origin: core.SourceOrigin,
@@ -2133,7 +2089,6 @@ fn invokeClosureValues(
 ) anyerror!core.Value {
     const state = evaluation.state;
     const closures = &evaluation.closures;
-    _ = caller_env;
     const closure = closures.get(closure_id) orelse {
         try reportUnknownFunction(state, "#lambda", current_origin);
         return error.UnknownFunction;
@@ -2155,17 +2110,10 @@ fn invokeClosureValues(
     return value;
 }
 
-fn elaboratedCallOrigin(evaluation: *EvalContext, call: CallExpr) ?core.SourceOrigin {
-    const qualifier = call.callee.qualifier orelse return null;
-    if (!std.mem.startsWith(u8, qualifier, "std:")) return null;
-    return evaluation.state.sourceOrigin(evaluation.module_id, call.callee.name_span orelse return null);
-}
-
 fn invokeUserFunctionValues(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    env: *Environment,
     module_id: core.SourceModuleId,
     func: FunctionDecl,
     current_origin: core.SourceOrigin,
@@ -2175,18 +2123,18 @@ fn invokeUserFunctionValues(
     const frame = try enterCall(evaluation, module_id, current_origin, null);
     defer leaveCall(evaluation, frame);
     const local_env = &frame.environment;
-    try bindUserFunctionValueArgs(evaluation, page_id, scope, env, local_env, module_id, func, current_origin, args);
+    try bindUserFunctionValueArgs(evaluation, page_id, scope, local_env, module_id, func, current_origin, args);
 
     const start_node_count = state.nodeCount();
     for (func.statements.items) |inner| {
-        const flow = try executeStatement(evaluation, page_id, scope, local_env, inner, evaluation.elaboration_origin);
+        const flow = try executeStatement(evaluation, page_id, scope, local_env, inner);
         switch (flow) {
             .none => {},
             .returned => |result| {
                 var value = result;
                 errdefer value.deinit(state.allocator);
                 try value_contracts.ensureValueConformsToType(state, page_id, value, func.result_type, current_origin, .UnmatchedReturnType);
-                try markReturnedValueOrigins(state, value, start_node_count, evaluation.elaboration_origin orelse current_origin);
+                try markReturnedValueOrigins(state, value, start_node_count, current_origin);
                 return value;
             },
         }

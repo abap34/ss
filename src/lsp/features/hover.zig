@@ -22,7 +22,6 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
         .source = position.source,
         .line_index = ctx.documents.indexForPath(position.doc_path),
         .offset = position.offset,
-        .source_version = snapshot.generation,
     }, ctx.provider.query_options.?) orelse return nullJson(ctx.allocator);
     defer hover.deinit(ctx.allocator);
     return json(ctx.allocator, hover);
