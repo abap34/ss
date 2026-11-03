@@ -40,7 +40,7 @@ python3 third_party/tools/md4c/test.py
 The source-archive check uses committed `HEAD`, so run it again after
 committing changes that affect the archive contents.
 The MD4C runner requires CMake and a C compiler. It creates its build directory
-under `.ss-cache/md4c/`, runs every upstream suite and the pathological-input
+under `.test-tmp/md4c/`, runs every upstream suite and the pathological-input
 tests, and is also registered in ss CI.
 
 ## Table column widths
@@ -81,15 +81,19 @@ equals signs, and unmatched delimiters remain literal. Other inline formatting
 can be nested inside highlights, and highlights can appear inside links.
 
 ss enables highlights in inline and block Markdown, including headings, lists,
-quotes, and table cells. `TextStyle.markdown_highlight_fill` controls the
+quotes, and table cells. `TextStyle.markdown.highlight_fill` controls the
 background color and defaults to pale yellow. Set it to `none` to disable the
 background without changing the parsed text. The same property on a Markdown
 heading's text style controls highlights in that heading.
 
 ```ss
+import std:text as { text, default_text_style }
+
+page _
 text!("An ==important **detail**== and a ==[link](https://example.com)==")
-let note = text!("A ==custom highlight==")
-note.text.markdown_highlight_fill = c"#b9f6ca"
+let style = default_text_style with { text.markdown.highlight_fill = c"#b9f6ca" }
+text!("A ==custom highlight==", style)
+end
 ```
 
 ## Code line highlights
@@ -120,11 +124,13 @@ outside the code body are errors. An empty code body has no selectable lines.
 Without a selection, the block has no line highlights. Code lines retain the
 existing unwrapped display and syntax coloring.
 
-`TextStyle.markdown_code_highlight_fill` controls the line background and
+`TextStyle.markdown.code.highlight_fill` controls the line background and
 defaults to pale yellow. Set it to another color or to `none` to disable the
 background without changing the parsed selection or text geometry. Highlights
 span the code area's width inside the block's horizontal padding, including
-blank lines. See `tests/fixtures/markdown/code-line-highlights.ss` for examples.
+blank lines. The code-line background tests in
+`tests/render/compile/spec_tests.zig` check the generated backgrounds, glyph
+positions, and syntax colors.
 
 ## Importing a fork update
 

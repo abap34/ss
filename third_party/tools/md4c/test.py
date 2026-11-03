@@ -10,7 +10,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 SOURCE = ROOT / "third_party" / "md4c"
-BUILD = ROOT / ".ss-cache" / "md4c"
+BUILD = ROOT / ".test-tmp" / "md4c"
 
 
 def run(args, timeout, cwd=ROOT):
