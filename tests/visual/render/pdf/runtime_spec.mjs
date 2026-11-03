@@ -116,7 +116,8 @@ await withBrowser(output, async (browser, baseUrl) => {
         renders: 0,
         active: 0,
         maximumActive: 0,
-        text: 0,
+        textStreams: 0,
+        textLayers: 0,
         annotations: 0,
         workers: 0,
       };
@@ -146,6 +147,20 @@ await withBrowser(output, async (browser, baseUrl) => {
       );
       const canvasSizes = [...root.querySelectorAll(".ss-pdf > canvas")]
         .map((canvas) => ({ width: canvas.width, height: canvas.height }));
+
+      const selectable = { renders: 0, workers: 0 };
+      const selectableRoot = document.createElement("section");
+      selectableRoot.append(pdfPlacement("selectable.pdf", 10));
+      document.body.append(selectableRoot);
+      const selectableController = await runtime.renderPdfPages(
+        selectableRoot,
+        fakePdfjs(selectable, false),
+        "worker-selectable",
+        { textLayer: true, annotationLayer: false },
+      );
+      const selectableText = selectableRoot.querySelector(".ss-pdf-text").textContent;
+      selectableController.destroy();
+      selectableRoot.remove();
 
       const hiddenRoot = document.createElement("section");
       hiddenRoot.style.display = "none";
@@ -483,6 +498,8 @@ await withBrowser(output, async (browser, baseUrl) => {
       globalThis.fetch = nativeFetch;
       return {
         counters,
+        selectable,
+        selectableText,
         placeholderCanvasCount,
         canvasSizes,
         documentsBeforeReveal,
@@ -523,6 +540,21 @@ await withBrowser(output, async (browser, baseUrl) => {
         return {
           GlobalWorkerOptions: {},
           AnnotationMode: { DISABLE: 0 },
+          TextLayer: class {
+            constructor({ textContentSource, container }) {
+              values.textLayers = (values.textLayers || 0) + 1;
+              this.source = textContentSource;
+              this.container = container;
+            }
+
+            async render() {
+              for await (const content of this.source) {
+                const span = document.createElement("span");
+                span.textContent = content.items.map((item) => item.str).join("");
+                this.container.append(span);
+              }
+            }
+          },
           PDFWorker: class {
             constructor() {
               values.workers += 1;
@@ -592,9 +624,14 @@ await withBrowser(output, async (browser, baseUrl) => {
                   },
                 };
               },
-              async getTextContent() {
-                values.text = (values.text || 0) + 1;
-                return { items: [], styles: {} };
+              streamTextContent() {
+                values.textStreams = (values.textStreams || 0) + 1;
+                return new ReadableStream({
+                  start(controller) {
+                    controller.enqueue({ items: [{ str: "Selectable PDF text" }] });
+                    controller.close();
+                  },
+                });
               },
               async getAnnotations() {
                 values.annotations = (values.annotations || 0) + 1;
@@ -783,7 +820,18 @@ await withBrowser(output, async (browser, baseUrl) => {
       "shared PDF pages reused one placement's crop transform");
     assert(result.counters.annotationModes.every((value) => value === 0),
       "PDF annotations were painted into the canvas layer");
-    assert.equal(result.counters.text, 0, "canvas-only rendering created a text layer");
+    assert.equal(result.counters.textStreams, 0,
+      "canvas-only rendering requested text content");
+    assert.equal(result.counters.textLayers, 0,
+      "canvas-only rendering created a text layer");
+    assert.equal(result.selectable.textStreams, 1,
+      "selectable rendering did not stream text content");
+    assert.equal(result.selectable.textLayers, 1,
+      "selectable rendering did not create a text layer");
+    assert.equal(result.selectableText, "Selectable PDF text",
+      "selectable rendering did not commit its text layer");
+    assert.equal(result.selectable.workerDestroys, 1,
+      "the selectable-rendering worker was not disposed");
     assert.equal(result.counters.annotations, 0, "canvas-only rendering created annotations");
     assert.equal(result.documentsBeforeReveal, 1, "hidden PDF was loaded before it became visible");
     assert.equal(result.forcedCanvasCountAfterRestore, 0,
@@ -877,7 +925,7 @@ await withBrowser(output, async (browser, baseUrl) => {
       "runtime disposal omitted document destruction after draining");
     assert.equal(result.runtimeLifecycle.workerDestroys, 1,
       "runtime disposal omitted worker destruction after draining");
-    assert.deepEqual(result.workerPorts, { created: 9, terminated: 9 },
+    assert.deepEqual(result.workerPorts, { created: 10, terminated: 10 },
       "PDF worker ports were not owned and released by the runtime");
   } finally {
     await page.close();
