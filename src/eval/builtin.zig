@@ -65,7 +65,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             defer right.deinit(ctx.state.allocator);
             const sign: f32 = if (descriptor.op == .add) 1 else -1;
             if (descriptor.op == .sub and left == .selection and right == .selection) {
-                break :blk try selectionAlgebra(ctx, .selection_difference, left, right);
+                break :blk try selectionAlgebra(ctx, .sub, left, right);
             }
             if (left == .anchor) break :blk .{ .anchor = left.anchor.shifted(sign * try eval_value.number(right)) };
             if (descriptor.op == .add and right == .anchor) break :blk .{ .anchor = right.anchor.shifted(try eval_value.number(left)) };
@@ -277,7 +277,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
                 else => return error.ExpectedSelection,
             };
         },
-        .selection_union, .selection_intersection, .selection_difference => blk: {
+        .selection_union, .selection_intersection => blk: {
             var left_value = try ctx.evalExprValue(call.args.items[0]);
             defer left_value.deinit(ctx.state.allocator);
             var right_value = try ctx.evalExprValue(call.args.items[1]);
@@ -291,22 +291,6 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
         .page_count => blk: {
             _ = try evalDocumentArg(ctx, call, 0);
             break :blk .{ .number = @floatFromInt(ctx.pageCount()) };
-        },
-        .frame_x => blk: {
-            const object_id = try ctx.evalObjectArg(call, 0);
-            break :blk .{ .number = try ctx.frameX(object_id) };
-        },
-        .frame_y => blk: {
-            const object_id = try ctx.evalObjectArg(call, 0);
-            break :blk .{ .number = try ctx.frameY(object_id) };
-        },
-        .frame_width => blk: {
-            const object_id = try ctx.evalObjectArg(call, 0);
-            break :blk .{ .number = try ctx.frameWidth(object_id) };
-        },
-        .frame_height => blk: {
-            const object_id = try ctx.evalObjectArg(call, 0);
-            break :blk .{ .number = try ctx.frameHeight(object_id) };
         },
         .selection_empty, .selection_count => blk: {
             var target = try ctx.evalExprValue(call.args.items[0]);
@@ -500,7 +484,7 @@ fn selectionAlgebra(ctx: anytype, op: registry.PrimitiveCall, left_value: core.V
             for (left.ids.items) |id| try result.appendUnique(ctx.state.allocator, id);
             for (right.ids.items) |id| try result.appendUnique(ctx.state.allocator, id);
         },
-        .selection_intersection, .selection_difference => {
+        .selection_intersection, .sub => {
             for (left.ids.items) |id| {
                 if (right.contains(id) == (op == .selection_intersection)) try result.appendUnique(ctx.state.allocator, id);
             }

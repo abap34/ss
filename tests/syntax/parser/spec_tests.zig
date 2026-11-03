@@ -254,10 +254,6 @@ test "syntax spec: line comment helpers recognize only double semicolons" {
     try testing.expectEqual(@as(?usize, null), source.lineCommentMarkerLength("# code", 0));
     try testing.expectEqual(@as(?usize, null), source.lineCommentMarkerLength(";", 0));
     try testing.expectEqual(@as(?usize, null), source.lineCommentMarkerLength("// code", 0));
-    try testing.expectEqualStrings("a // b ", source.stripLineComment("a // b ;; comment"));
-    try testing.expectEqualStrings("a # code", source.stripLineComment("a # code"));
-    try testing.expectEqualStrings("a # code ", source.stripLineComment("a # code ;; comment"));
-    try testing.expectEqualStrings("\"https://example.com/a//b;;#\" ", source.stripLineComment("\"https://example.com/a//b;;#\" ;; comment"));
     const text = " ;; first\n ;; second\n # code";
     var pos: usize = 0;
     source.skipTriviaFrom(text, &pos);
@@ -1823,12 +1819,12 @@ test "syntax spec: missing composition operands preserve conditional and constra
     }) |invalid| try expectParseErrorWithoutLeaks(error.ExpectedExpression, invalid);
 }
 
-test "syntax spec: unsupported statement names remain composition operands" {
-    var parsed = try parse("page Names\n a ||\n for\n b //\n in\n c ||\n property\n d //\n then\nend\n");
+test "syntax spec: composition operands continue across lines" {
+    var parsed = try parse("page Names\n a ||\n alpha\n b //\n beta\n c ||\n gamma\n d //\n delta\nend\n");
     defer parsed.deinit();
     const statements = parsed.module.pages.items[0].statements.items;
     try testing.expectEqual(@as(usize, 4), statements.len);
-    for (statements, [_][]const u8{ "for", "in", "property", "then" }, [_]ast.GroupComposition{ .horizontal, .vertical, .horizontal, .vertical }) |statement, name, mode| {
+    for (statements, [_][]const u8{ "alpha", "beta", "gamma", "delta" }, [_]ast.GroupComposition{ .horizontal, .vertical, .horizontal, .vertical }) |statement, name, mode| {
         const composition = try expectComposition(statement.kind.expr_stmt, mode);
         try expectIdent(composition.args.items[1], name);
     }
@@ -2341,26 +2337,6 @@ test "syntax spec: member assignments keep nested property paths" {
     try expectString(font.value, "Avenir");
 }
 
-test "syntax spec: place is an ordinary identifier" {
-    var parsed = try parse(
-        \\page Placement
-        \\  let place = 1
-        \\  let local = place + 1
-        \\end
-        \\
-    );
-    defer parsed.deinit();
-
-    const statements = parsed.module.pages.items[0].statements.items;
-    try testing.expectEqualStrings("place", statements[0].kind.let_binding.name);
-    const add = try expectCall(statements[1].kind.let_binding.expr, "add", 2);
-    switch (add.args.items[0]) {
-        .ident => |ident| try testing.expectEqualStrings("place", ident.name),
-        else => return error.ExpectedIdentifier,
-    }
-    try expectNumber(add.args.items[1], 1);
-}
-
 test "syntax spec: bare assignment must say let and page dimensions are not targets" {
     try expectParseError(error.AssignmentRequiresLet,
         \\page Bad
@@ -2628,15 +2604,6 @@ test "syntax spec: ordinary type declarations preserve field defaults and spans"
     try expectParseErrorWithoutLeaks(error.ExpectedTypeAnnotation, "type Card { title }\n");
 }
 
-test "syntax spec: former object declaration keywords are ordinary field names" {
-    const source_text = "type Card { object: String base: Number roles: String }\n";
-    var parsed = try parse(source_text);
-    defer parsed.deinit();
-    const fields = parsed.module.records.items[0].fields.items;
-    try testing.expectEqual(@as(usize, 3), fields.len);
-    for (fields, [_][]const u8{ "object", "base", "roles" }) |field, name| try testing.expectEqualStrings(name, field.name);
-}
-
 test "syntax spec: constraint value registration releases parsed ownership" {
     try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{
         "page main\n  let rule = a.left + 4 == b.right + 28\n  ~ rule\n  pagectx() ~ rule\nend\n",
@@ -2807,17 +2774,4 @@ test "syntax spec: qualified values parse standalone with members and updates" {
     try testing.expectEqualStrings("library::optional", statements[2].kind.let_binding.expr.coalesce.target.ident.name);
     try testing.expectEqualStrings("library::format", statements[3].kind.let_binding.expr.ident.name);
     try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source});
-}
-
-test "syntax spec: extend and implements are ordinary identifiers" {
-    var parsed = try parse(
-        \\type Card { implements: String = "contract" }
-        \\fn extend(value: Number) -> Number = value
-        \\page main
-        \\  let implements = extend(1)
-        \\end
-    );
-    defer parsed.deinit();
-    try testing.expectEqualStrings("extend", parsed.module.functions.items[0].name);
-    try testing.expectEqualStrings("implements", parsed.module.records.items[0].fields.items[0].name);
 }

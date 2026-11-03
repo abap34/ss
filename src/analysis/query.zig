@@ -1,12 +1,5 @@
-pub const completion = @import("query/completion.zig");
 pub const context = @import("query/context.zig");
-pub const cursor = @import("query/cursor.zig");
-pub const definition = @import("query/definition.zig");
 pub const fallback = @import("query/fallback.zig");
 pub const folding = @import("query/folding.zig");
-pub const hover = @import("query/hover.zig");
-pub const imports = @import("query/imports.zig");
 pub const resolve = @import("query/resolve.zig");
-pub const signature = @import("query/signature.zig");
-pub const symbols = @import("query/symbols.zig");
 pub const types = @import("query/types.zig");

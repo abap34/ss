@@ -270,8 +270,6 @@ const ObjectCommand = struct {
     latex_kind: LatexFragmentKind = .body,
     origin: ?core.SourceOrigin = null,
     payload_kind: ?core.PayloadKind = null,
-
-    fn deinit(_: *ObjectCommand, _: Allocator) void {}
 };
 
 fn commandUsesLatex(command: ObjectCommand) bool {
@@ -437,10 +435,9 @@ pub const LayoutMeasurementScope = struct {
         if (node.kind != .object) return null;
 
         const profile_object_command = utils.profile.start();
-        var command = try self.objectCommandForNode(state.allocator, node, state.frame(node.id).*, width, mode);
+        var command = try self.objectCommandForNode(node, state.frame(node.id).*, width, mode);
         command.page_id = state.source.layoutPageOf(node.id) orelse return error.UnknownNode;
         utils.profile.recordLayoutMeasurementObjectCommand(profile_object_command);
-        defer command.deinit(state.allocator);
 
         const profile_cache_key = utils.profile.start();
         var target = CommandFailure{ .allocator = state.allocator };
@@ -513,7 +510,7 @@ pub const LayoutMeasurementScope = struct {
         );
     }
 
-    fn objectCommandForNode(self: *LayoutMeasurementScope, _: Allocator, node: *const core.Node, frame: Frame, width: f32, mode: core.LayoutMeasurementMode) !ObjectCommand {
+    fn objectCommandForNode(self: *LayoutMeasurementScope, node: *const core.Node, frame: Frame, width: f32, mode: core.LayoutMeasurementMode) !ObjectCommand {
         const object = self.preparedObject(node.id) orelse return error.MissingPreparedObject;
         return objectCommandForObject(node, object, frame, width, mode);
     }
@@ -737,10 +734,7 @@ pub const Compiler = struct {
         };
 
         const commands = try buildObjectCommands(allocator, state, prepared_page, layout);
-        defer {
-            for (commands) |*command| command.deinit(allocator);
-            allocator.free(commands);
-        }
+        defer allocator.free(commands);
         const compilation = PageCompilation{
             .compiler = self,
             .draw_context = &draw_context,
@@ -831,7 +825,6 @@ const PageCompilation = struct {
             try mergeUncachedPage(
                 allocator,
                 self.compiler.io,
-                &page,
                 &resource_graph,
                 &font_catalog,
                 resources,
@@ -851,7 +844,6 @@ pub const PageCache = page_cache.Cache;
 fn mergeUncachedPage(
     allocator: Allocator,
     io: std.Io,
-    page: *render_ir.Page,
     resource_graph: *const render_ir.ResourceGraph,
     font_catalog: *const render_ir.FontCatalog,
     resources: *render_resources.Builder,
@@ -865,7 +857,6 @@ fn mergeUncachedPage(
         const added = try fonts.add(allocator, io, font.spec());
         if (!std.mem.eql(u8, &added, &font.id)) return error.InvalidRenderPageCache;
     }
-    _ = page;
 }
 
 fn buildObjectCommands(
@@ -875,10 +866,7 @@ fn buildObjectCommands(
     layout: *const core.layout.Page,
 ) ![]ObjectCommand {
     var commands = std.ArrayList(ObjectCommand).empty;
-    errdefer {
-        for (commands.items) |*command| command.deinit(allocator);
-        commands.deinit(allocator);
-    }
+    errdefer commands.deinit(allocator);
     try commands.ensureTotalCapacity(allocator, page_unit.objects.len);
     for (page_unit.objects) |*object| {
         const node = state.getNode(object.node_id) orelse continue;

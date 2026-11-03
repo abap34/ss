@@ -8,7 +8,6 @@ const semantics = @import("ir/semantics.zig");
 const text_ir = @import("ir/text.zig");
 const validation = @import("ir/validation.zig");
 
-pub const CoordinateSpace = geometry.CoordinateSpace;
 pub const Rect = geometry.Rect;
 pub const Point = geometry.Point;
 pub const Transform = geometry.Transform;
@@ -35,10 +34,7 @@ pub const identifyResource = resources.identify;
 pub const ResourceMetadata = resources.Metadata;
 pub const RasterMetadata = resources.RasterMetadata;
 pub const RasterOrientation = resources.RasterOrientation;
-pub const RasterColorSpace = resources.RasterColorSpace;
-pub const RasterInterpolation = resources.RasterInterpolation;
 pub const SvgMetadata = resources.SvgMetadata;
-pub const SvgViewBox = resources.SvgViewBox;
 pub const SvgAlign = resources.SvgAlign;
 pub const SvgScale = resources.SvgScale;
 pub const PdfResourceMetadata = resources.PdfMetadata;
@@ -253,10 +249,6 @@ pub const Text = struct {
 
     fn deinit(self: *Text, allocator: std.mem.Allocator) void {
         self.layout.deinit(allocator);
-    }
-
-    pub fn baselineY(self: *const Text) f64 {
-        return self.y + self.layout.firstBaseline();
     }
 };
 
@@ -846,11 +838,11 @@ fn pathBounds(commands: []const PathCommand) ?Rect {
 fn includeCubicBounds(p0: Point, p1: Point, p2: Point, p3: Point, min_x: *f64, min_y: *f64, max_x: *f64, max_y: *f64) void {
     includePoint(p0, min_x, min_y, max_x, max_y);
     includePoint(p3, min_x, min_y, max_x, max_y);
-    includeCubicAxis(p0.x, p1.x, p2.x, p3.x, true, p0, p1, p2, p3, min_x, min_y, max_x, max_y);
-    includeCubicAxis(p0.y, p1.y, p2.y, p3.y, false, p0, p1, p2, p3, min_x, min_y, max_x, max_y);
+    includeCubicAxis(p0.x, p1.x, p2.x, p3.x, p0, p1, p2, p3, min_x, min_y, max_x, max_y);
+    includeCubicAxis(p0.y, p1.y, p2.y, p3.y, p0, p1, p2, p3, min_x, min_y, max_x, max_y);
 }
 
-fn includeCubicAxis(a0: f64, a1: f64, a2: f64, a3: f64, x_axis: bool, p0: Point, p1: Point, p2: Point, p3: Point, min_x: *f64, min_y: *f64, max_x: *f64, max_y: *f64) void {
+fn includeCubicAxis(a0: f64, a1: f64, a2: f64, a3: f64, p0: Point, p1: Point, p2: Point, p3: Point, min_x: *f64, min_y: *f64, max_x: *f64, max_y: *f64) void {
     const qa = -a0 + 3 * a1 - 3 * a2 + a3;
     const qb = 2 * (a0 - 2 * a1 + a2);
     const qc = a1 - a0;
@@ -863,7 +855,6 @@ fn includeCubicAxis(a0: f64, a1: f64, a2: f64, a3: f64, x_axis: bool, p0: Point,
     const root = @sqrt(discriminant);
     includeCubicAt((-qb + root) / (2 * qa), p0, p1, p2, p3, min_x, min_y, max_x, max_y);
     includeCubicAt((-qb - root) / (2 * qa), p0, p1, p2, p3, min_x, min_y, max_x, max_y);
-    _ = x_axis;
 }
 
 fn includeCubicAt(t: f64, p0: Point, p1: Point, p2: Point, p3: Point, min_x: *f64, min_y: *f64, max_x: *f64, max_y: *f64) void {

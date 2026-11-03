@@ -44,12 +44,6 @@ test "language registry spec: semantic contracts live on primitive descriptors" 
     const page_index = registry.lookupPrimitiveCall("page_index").?;
     try testing.expect(Type.eql(Type.page, registry.primitiveArgType(page_index, 0).?));
 
-    for ([_][]const u8{ "frame_x", "frame_y", "frame_width", "frame_height" }) |name| {
-        const frame = registry.lookupPrimitiveCall(name).?;
-        try testing.expect(Type.eql(Type.placement, registry.primitiveArgType(frame, 0).?));
-        try testing.expect(Type.eql(Type.number, registry.primitiveResultType(frame).?));
-    }
-
     const logical_not = registry.lookupSyntaxCall("not").?;
     try testing.expect(Type.eql(Type.boolean, registry.primitiveArgType(logical_not, 0).?));
     try testing.expect(Type.eql(Type.boolean, registry.primitiveResultType(logical_not).?));

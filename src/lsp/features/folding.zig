@@ -26,12 +26,6 @@ const FoldingRange = struct {
     end_line: usize,
 };
 
-pub fn json(allocator: std.mem.Allocator, text: []const u8, ranges: []const query_folding.Range) ![]const u8 {
-    const index = try LineIndex.init(allocator, text);
-    defer index.deinit(allocator);
-    return jsonWithIndex(allocator, index, ranges);
-}
-
 fn jsonWithIndex(allocator: std.mem.Allocator, text: LineIndex, ranges: []const query_folding.Range) ![]const u8 {
     var out = std.ArrayList(u8).empty;
     try out.append(allocator, '[');

@@ -11,14 +11,6 @@ pub const Generator = struct {
     reserved: std.StringHashMap(void),
     statements: std.AutoHashMap(usize, []u8),
 
-    pub fn init(
-        allocator: std.mem.Allocator,
-        state: *const core.DocumentState,
-        page: *const ast.PageDecl,
-    ) !Generator {
-        return initForModule(allocator, state, state.modules.project_id, page);
-    }
-
     pub fn initForModule(
         allocator: std.mem.Allocator,
         state: *const core.DocumentState,

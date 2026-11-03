@@ -755,11 +755,7 @@ fn resolveTypeReference(
     }
 }
 
-pub fn rebuildConstDeclarations(
-    allocator: std.mem.Allocator,
-    state: *core.DocumentState,
-) !void {
-    _ = allocator;
+pub fn rebuildConstDeclarations(state: *core.DocumentState) !void {
     state.constants.declarations.clearRetainingCapacity();
     for (state.modules.order.items) |module_id| {
         const module = state.moduleById(module_id) orelse continue;
@@ -767,11 +763,7 @@ pub fn rebuildConstDeclarations(
     }
 }
 
-pub fn rebuildFunctionDeclarations(
-    allocator: std.mem.Allocator,
-    state: *core.DocumentState,
-) !void {
-    _ = allocator;
+pub fn rebuildFunctionDeclarations(state: *core.DocumentState) !void {
     state.functions.clearRetainingCapacity();
     for (state.modules.order.items) |module_id| {
         const module = state.moduleById(module_id) orelse continue;

@@ -149,12 +149,6 @@ pub fn completionScript(shell: []const u8) ?[]const u8 {
     return null;
 }
 
-pub fn completion(shell: []const u8) bool {
-    const script = completionScript(shell) orelse return false;
-    writeAll(.stdout, script);
-    return true;
-}
-
 fn help(output: Output) void {
     const s = style(output);
     outputPrint(output,

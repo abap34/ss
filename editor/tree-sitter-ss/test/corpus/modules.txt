@@ -207,31 +207,3 @@ end
                 (number))))
           (identifier))
         (identifier)))))
-
-================================================================================
-Removed extension keywords are ordinary names
-================================================================================
-
-type Card { implements: String = "contract" }
-fn extend(value: Number) -> Number
-  return value
-end
-page main
-  let implements = extend(1)
-end
-
---------------------------------------------------------------------------------
-
-(source_file
-  (type_declaration
-    (type_identifier)
-    (type_body
-      (type_field (identifier) (type (primary_type (type_identifier))) (string))))
-  (function_declaration
-    (bare_callable_identifier (identifier))
-    (parameters (parameter (identifier) (type (primary_type (type_identifier)))))
-    (type (primary_type (type_identifier)))
-    (return_statement (identifier)))
-  (page_declaration
-    (identifier)
-    (let_statement (identifier) (call_expression (callable_identifier (bare_callable_identifier (identifier))) (number)))))

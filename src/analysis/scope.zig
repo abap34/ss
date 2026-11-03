@@ -40,7 +40,3 @@ pub fn pageScope(page: ast.PageDecl) SourceScope {
         .end = page.span.end,
     };
 }
-
-pub fn contains(scope: SourceScope, offset: usize) bool {
-    return offset >= scope.start and offset <= scope.end;
-}

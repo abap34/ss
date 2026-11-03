@@ -115,20 +115,6 @@ pub const Bag = struct {
         std.mem.sort(Diagnostic, self.items.items, {}, diagnosticLessThan);
     }
 
-    pub fn itemsForPath(self: *const Bag, path: []const u8) []const Diagnostic {
-        var start: ?usize = null;
-        var end: usize = 0;
-        for (self.items.items, 0..) |item, index| {
-            if (std.mem.eql(u8, item.path, path)) {
-                if (start == null) start = index;
-                end = index + 1;
-                continue;
-            }
-            if (start != null) break;
-        }
-        return self.items.items[start orelse return &.{} .. end];
-    }
-
     pub fn sourcesMatch(self: *const Bag, path: []const u8, text: []const u8) bool {
         var candidate = self.by_path.get(path);
         while (candidate) |id| {
@@ -137,17 +123,6 @@ pub const Bag = struct {
             candidate = entry.previous;
         }
         return true;
-    }
-
-    /// Position-only edits keep byte lengths and source identities unchanged.
-    pub fn rebaseSource(self: *Bag, path: []const u8, text: []const u8) void {
-        var candidate = self.by_path.get(path);
-        while (candidate) |id| {
-            const entry = self.sources.items[@intFromEnum(id)];
-            std.debug.assert(entry.text.len == text.len);
-            @memcpy(entry.text, text);
-            candidate = entry.previous;
-        }
     }
 };
 

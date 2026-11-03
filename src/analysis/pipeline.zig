@@ -25,32 +25,6 @@ pub const AnalysisMode = enum {
     evaluation,
 };
 
-pub fn collectFunctionsFromModules(
-    allocator: std.mem.Allocator,
-    programs: []const *const ast.Module,
-) !core.FunctionMap {
-    var functions = core.FunctionMap.init(allocator);
-    for (programs, 0..) |program, program_index| {
-        for (program.functions.items) |func| {
-            try functions.put(core.functionDeclarationKey(@intCast(program_index), func), func);
-        }
-    }
-    return functions;
-}
-
-pub fn collectConstantsFromModules(
-    allocator: std.mem.Allocator,
-    programs: []const *const ast.Module,
-) !core.ConstMap {
-    var constants = core.ConstMap.init(allocator);
-    for (programs, 0..) |program, program_index| {
-        for (program.constants.items) |constant_decl| {
-            try constants.put(core.constKey(@intCast(program_index), constant_decl.name), constant_decl);
-        }
-    }
-    return constants;
-}
-
 pub fn checkFunctionDefinitions(
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
@@ -417,8 +391,8 @@ pub fn buildDocumentStateWithOptions(
         try semantics.resolveEnumCaseExpressionsAndDefaults(allocator, &state, &sema);
         var transform = @import("instantiate.zig").Transform{ .allocator = allocator, .next_expression_id = &state.next_expression_id };
         for (state.modules.entries.items) |*module| try transform.module(&module.syntax);
-        try semantics.rebuildConstDeclarations(allocator, &state);
-        try semantics.rebuildFunctionDeclarations(allocator, &state);
+        try semantics.rebuildConstDeclarations(&state);
+        try semantics.rebuildFunctionDeclarations(&state);
     }
     try state.rebuildDeclarationIndex();
     try analysis_index.populateDocumentStateAnalysis(allocator, &state);

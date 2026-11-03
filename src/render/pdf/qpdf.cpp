@@ -586,33 +586,6 @@ extern "C" int ss_qpdf_empty(char const* output) {
     return 1;
 }
 
-extern "C" int ss_qpdf_page_size(
-    char const* path,
-    size_t page_index,
-    int box,
-    double* width,
-    double* height
-) {
-    ss_qpdf_error.clear();
-    try {
-        if (path == nullptr) throw std::runtime_error("null PDF input path");
-        SsQpdfDocument source(path);
-        auto page = ss_qpdf_selected_page(source.pages, page_index, box);
-        auto rectangle = ss_qpdf_visible_form_box(page);
-        const double page_width = rectangle.urx - rectangle.llx;
-        const double page_height = rectangle.ury - rectangle.lly;
-        if (page_width <= 0 || page_height <= 0) throw std::runtime_error("PDF page has an invalid page box");
-        if (width != nullptr) *width = page_width;
-        if (height != nullptr) *height = page_height;
-        return 0;
-    } catch (std::exception const& error) {
-        ss_qpdf_error = error.what();
-    } catch (...) {
-        ss_qpdf_error = "libqpdf failed with an unknown exception";
-    }
-    return 1;
-}
-
 extern "C" int ss_qpdf_page_sizes(
     char const* path,
     int box,

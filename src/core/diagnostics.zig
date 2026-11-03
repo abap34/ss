@@ -89,10 +89,6 @@ pub const DocumentDiagnostics = struct {
         };
     }
 
-    pub fn hasConstraintFailures(self: *const DocumentDiagnostics) bool {
-        return self.constraint_failures.items.len > 0;
-    }
-
     pub fn clearConstraintFailures(self: *DocumentDiagnostics, allocator: Allocator) void {
         for (self.constraint_failures.items) |*failure| failure.deinit(allocator);
         self.constraint_failures.clearRetainingCapacity();

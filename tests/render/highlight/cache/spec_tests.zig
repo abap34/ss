@@ -81,19 +81,19 @@ test "highlight cache: paired function declaration is one complete keyword" {
     try testing.expectEqual(utils.highlight.CaptureRole.keyword, first.role.?);
 }
 
-test "highlight cache: ss distinguishes current keywords from unsupported syntax names" {
+test "highlight cache: ss distinguishes functions variables and keywords" {
     var cache = Cache.init(testing.allocator, testing.io);
     defer cache.deinit();
     const languages = [_]utils.highlight.Language{language("ss", "ss", "builtin:ss")};
-    const content = "fn property(value: Number) -> Number\n  if true\n    return value\n  else\n    return 0\n  end\nend\npage Names\n  let for = 1\n  let in = property(for)\n  let then = in\nend\n";
+    const content = "fn compute(value: Number) -> Number\n  if true\n    return value\n  else\n    return 0\n  end\nend\npage Names\n  let first = 1\n  let second = compute(first)\n  let third = second\nend\n";
     var failure: Failure = .none;
     var result = try cache.highlight(&languages, "ss", content, &failure);
     defer result.deinit();
     inline for (.{
-        .{ "property", utils.highlight.CaptureRole.function },
-        .{ "for", utils.highlight.CaptureRole.variable },
-        .{ "in", utils.highlight.CaptureRole.variable },
-        .{ "then", utils.highlight.CaptureRole.variable },
+        .{ "compute", utils.highlight.CaptureRole.function },
+        .{ "first", utils.highlight.CaptureRole.variable },
+        .{ "second", utils.highlight.CaptureRole.variable },
+        .{ "third", utils.highlight.CaptureRole.variable },
         .{ "if", utils.highlight.CaptureRole.keyword },
         .{ "else", utils.highlight.CaptureRole.keyword },
     }) |case| {

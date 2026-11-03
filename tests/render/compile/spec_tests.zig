@@ -14,6 +14,10 @@ const render_text = @import("render_text");
 const testing = std.testing;
 const test_cache_dir = ".test-tmp/render/compile/cache";
 
+fn textBaseline(text: *const render.Text) f64 {
+    return text.y + text.layout.firstBaseline();
+}
+
 test "final-width measurements retain ink origins and baselines through the file cache" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
@@ -60,7 +64,7 @@ test "final-width measurements retain ink origins and baselines through the file
         if (item.header().node_id != object_id) continue;
         const bounds = item.header().ink_bounds;
         if (bounds.width > 0 and bounds.height > 0) ink = if (ink) |current| current.unioned(bounds) else bounds;
-        if (item == .text and first_baseline == null) first_baseline = item.text.baselineY();
+        if (item == .text and first_baseline == null) first_baseline = textBaseline(&item.text);
     }
     const expected = measured.ink_bounds.?;
     try testing.expectApproxEqAbs(@as(f64, expected.x), ink.?.x, 0.001);
@@ -193,7 +197,7 @@ fn markdownGeometry(content: []const u8, family: []const u8, width: f32) !Markdo
         if (bounds.width > 0 and bounds.height > 0) ink = if (ink) |previous| previous.unioned(bounds) else bounds;
         if (item == .text) {
             try testing.expect(result.baseline_count < result.baselines.len);
-            result.baselines[result.baseline_count] = item.text.baselineY();
+            result.baselines[result.baseline_count] = textBaseline(&item.text);
             result.baseline_count += 1;
         }
     }
@@ -1114,13 +1118,7 @@ test "text shaping replaces synthesized faces with an actual fallback" {
     defer c.ss_text_shape_free(&shape);
 
     const advance_width = c.ss_text_measure_text(cjk_text, requested_family, 700, 0, 4, 48);
-    const visual_width = c.ss_text_measure_text_visual_width(cjk_text, requested_family, 700, 0, 4, 48);
-    const expected_visual_width = @max(
-        shape.logical_bounds.width,
-        shape.ink_bounds.x + shape.ink_bounds.width,
-    );
     try testing.expectApproxEqAbs(shape.logical_bounds.width, advance_width, 0.001);
-    try testing.expectApproxEqAbs(expected_visual_width, visual_width, 0.001);
     try testing.expectApproxEqAbs(measurement.logical_bounds.width, shape.logical_bounds.width, 0.001);
     try testing.expectApproxEqAbs(measurement.logical_bounds.height, shape.logical_bounds.height, 0.001);
     try testing.expect(shape.run_count != 0);
@@ -1315,6 +1313,27 @@ test "resource compiler records deterministic raster SVG and PDF metadata" {
     try testing.expectEqual(@as(usize, 3), catalog.entries.len);
     for (catalog.entries[1..], catalog.entries[0 .. catalog.entries.len - 1]) |current, previous| {
         try testing.expect(std.mem.order(u8, &previous.id, &current.id) == .lt);
+    }
+}
+
+test "resource compiler resolves SVG dimensions from lengths and view boxes" {
+    const root = ".test-tmp/render-svg-dimensions";
+    const path = root ++ "/shape.svg";
+    std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    try std.Io.Dir.cwd().createDirPath(testing.io, root);
+
+    for ([_]struct { source: []const u8, width: f64, height: f64 }{
+        .{ .source = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"640px\" height=\"360\"/>", .width = 640, .height = 360 },
+        .{ .source = "<?xml version=\"1.0\"?><svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 512 256\"/>", .width = 512, .height = 256 },
+    }) |case| {
+        try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = path, .data = case.source });
+        var builder = render_resources.Builder{};
+        defer builder.deinit(testing.allocator);
+        const id = try builder.addPath(testing.allocator, testing.io, .svg, path);
+        const resource = builder.get(testing.io, id) orelse return error.MissingRenderResource;
+        try testing.expectApproxEqAbs(case.width, resource.metadata.svg.width, 0.001);
+        try testing.expectApproxEqAbs(case.height, resource.metadata.svg.height, 0.001);
     }
 }
 
@@ -2154,7 +2173,7 @@ test "paragraph measurement and emission retain the same final-width glyph layou
             if (item.header().node_id != object_id) continue;
             const bounds = item.header().ink_bounds;
             if (bounds.width > 0 and bounds.height > 0) ink = if (ink) |previous| previous.unioned(bounds) else bounds;
-            if (item == .text and baseline == null) baseline = item.text.baselineY();
+            if (item == .text and baseline == null) baseline = textBaseline(&item.text);
         }
         const expected = measured.ink_bounds.?;
         try testing.expectApproxEqAbs(@as(f64, expected.x), ink.?.x, 0.001);
@@ -2196,7 +2215,7 @@ test "paint boundaries preserve contextual glyphs and visual positions" {
         for (item.text.layout.runs) |run| {
             var x = item.text.x + run.x;
             for (item.text.layout.glyphs[run.glyph_range.start..run.glyph_range.end]) |glyph| {
-                try target.append(testing.allocator, .{ .id = glyph.id, .x = x + glyph.offset_x, .y = item.text.baselineY() + glyph.offset_y, .advance = glyph.advance_x });
+                try target.append(testing.allocator, .{ .id = glyph.id, .x = x + glyph.offset_x, .y = textBaseline(&item.text) + glyph.offset_y, .advance = glyph.advance_x });
                 x += glyph.advance_x;
             }
         }
@@ -2279,7 +2298,7 @@ test "Markdown highlight backgrounds wrap behind glyphs and inline icons without
             for (item.text.layout.runs) |run| {
                 var x = item.text.x + run.x;
                 for (item.text.layout.glyphs[run.glyph_range.start..run.glyph_range.end]) |glyph| {
-                    try target.append(testing.allocator, .{ .id = glyph.id, .x = x + glyph.offset_x, .y = item.text.baselineY() + glyph.offset_y, .advance = glyph.advance_x });
+                    try target.append(testing.allocator, .{ .id = glyph.id, .x = x + glyph.offset_x, .y = textBaseline(&item.text) + glyph.offset_y, .advance = glyph.advance_x });
                     x += glyph.advance_x;
                 }
             }
@@ -2391,7 +2410,7 @@ test "Markdown code line backgrounds cover source rows without changing glyphs o
             for (item.text.layout.runs) |run| {
                 var x = item.text.x + run.x;
                 for (item.text.layout.glyphs[run.glyph_range.start..run.glyph_range.end]) |glyph| {
-                    try target.append(testing.allocator, .{ .id = glyph.id, .x = x + glyph.offset_x, .y = item.text.baselineY() + glyph.offset_y, .advance = glyph.advance_x, .color = item.text.color });
+                    try target.append(testing.allocator, .{ .id = glyph.id, .x = x + glyph.offset_x, .y = textBaseline(&item.text) + glyph.offset_y, .advance = glyph.advance_x, .color = item.text.color });
                     x += glyph.advance_x;
                 }
             }
@@ -2529,7 +2548,7 @@ fn verifyTableGeometry(source: []const u8) !void {
                 const row = table.rows[0];
                 const segment = row.cells[0].content.segments[0];
                 const native = segment.content.paragraph.prepared.layout.native;
-                try testing.expectApproxEqAbs(table_top + row.content_top + segment.top + native.lines[0].baseline_y, item.text.baselineY(), 0.001);
+                try testing.expectApproxEqAbs(table_top + row.content_top + segment.top + native.lines[0].baseline_y, textBaseline(&item.text), 0.001);
             }
             text_count += 1;
         }

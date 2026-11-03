@@ -4,7 +4,6 @@ const recording = @import("profiling/recording.zig");
 pub const Session = recording.Session;
 pub const Operation = recording.Operation;
 pub const Task = recording.Task;
-pub const Outcome = recording.Outcome;
 pub const available = recording.available;
 pub const isRecording = recording.isEnabled;
 pub const default_buffer_kb = recording.default_buffer_kb;

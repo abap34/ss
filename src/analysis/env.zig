@@ -73,10 +73,6 @@ pub const NameEnv = struct {
         try self.values.put(name, {});
     }
 
-    pub fn bind(self: *NameEnv, name: []const u8) !void {
-        try self.put(name);
-    }
-
     pub fn contains(self: *const NameEnv, name: []const u8) bool {
         return self.values.contains(name);
     }

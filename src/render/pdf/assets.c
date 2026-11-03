@@ -31,18 +31,6 @@ const char *ss_pdf_gdk_pixbuf_version_string(void) {
     return gdk_pixbuf_version;
 }
 
-static GdkPixbuf *ss_raster_load_oriented(const char *path) {
-    GError *error = NULL;
-    GdkPixbuf *source = gdk_pixbuf_new_from_file(path, &error);
-    if (source == NULL) {
-        if (error != NULL) g_error_free(error);
-        return NULL;
-    }
-    GdkPixbuf *oriented = gdk_pixbuf_apply_embedded_orientation(source);
-    g_object_unref(source);
-    return oriented;
-}
-
 static cairo_surface_t *ss_raster_surface_from_pixbuf(GdkPixbuf *pixbuf) {
     if (pixbuf == NULL || gdk_pixbuf_get_colorspace(pixbuf) != GDK_COLORSPACE_RGB ||
         gdk_pixbuf_get_bits_per_sample(pixbuf) != 8) return NULL;
@@ -77,17 +65,6 @@ static cairo_surface_t *ss_raster_surface_from_pixbuf(GdkPixbuf *pixbuf) {
     }
     cairo_surface_mark_dirty(surface);
     return surface;
-}
-
-int ss_raster_size(const char *path, double *width, double *height) {
-    GdkPixbuf *pixbuf = ss_raster_load_oriented(path);
-    if (pixbuf == NULL) return 1;
-    const int source_width = gdk_pixbuf_get_width(pixbuf);
-    const int source_height = gdk_pixbuf_get_height(pixbuf);
-    if (width != NULL) *width = source_width;
-    if (height != NULL) *height = source_height;
-    g_object_unref(pixbuf);
-    return source_width > 0 && source_height > 0 ? 0 : 1;
 }
 
 static GdkPixbuf *ss_raster_load_bytes(const unsigned char *bytes, size_t length) {
@@ -214,19 +191,6 @@ static int ss_svg_intrinsic_size(RsvgHandle *handle, double *width, double *heig
     if (width != NULL) *width = view_box.width;
     if (height != NULL) *height = view_box.height;
     return 0;
-}
-
-int ss_svg_size(const char *path, double *width, double *height) {
-    GError *error = NULL;
-    RsvgHandle *handle = rsvg_handle_new_from_file(path, &error);
-    if (handle == NULL) {
-        if (error != NULL) g_error_free(error);
-        return 1;
-    }
-
-    const int result = ss_svg_intrinsic_size(handle, width, height);
-    g_object_unref(handle);
-    return result;
 }
 
 int ss_svg_metadata_bytes(const unsigned char *bytes, size_t length, SsSvgMetadata *metadata) {

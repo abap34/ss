@@ -473,8 +473,7 @@ pub const PageLayoutGraph = struct {
         return self.parent_groups.forNode(self.indexOf(child_id) orelse return &.{});
     }
 
-    pub fn hasTargetConstraint(self: *const PageLayoutGraph, state: *Workspace, node_id: NodeId, axis: Axis, extra_constraints: []const Constraint) bool {
-        _ = state;
+    pub fn hasTargetConstraint(self: *const PageLayoutGraph, node_id: NodeId, axis: Axis, extra_constraints: []const Constraint) bool {
         if (self.indexOf(node_id)) |index| {
             switch (axis) {
                 .horizontal => if (self.has_horizontal_target_constraint[index]) return true,
@@ -608,7 +607,7 @@ pub const AxisWorkspace = struct {
             const node = state.source.getNode(child_id) orelse return error.UnknownNode;
             axis_state.* = .{};
             if (isGroupNode(node)) continue;
-            if (page_graph.hasTargetConstraint(state, child_id, axis, &.{})) continue;
+            if (page_graph.hasTargetConstraint(child_id, axis, &.{})) continue;
             switch (axis) {
                 .horizontal => if (state.frame(node.id).*.x_set) {
                     axis_state.size = state.frame(node.id).*.width;
@@ -701,7 +700,7 @@ pub const ComponentSet = struct {
         }
 
         if (policy.include_containment) try set.unionContainment(state);
-        try set.markKnownAnchors(state);
+        set.markKnownAnchors();
         try set.unionConstraintSlice(state, workspace.hard_constraints, policy);
         try set.unionConstraintSlice(state, workspace.soft_constraints, policy);
         const edges = try allocator.alloc(NodeAdjacency.Edge, len);
@@ -808,7 +807,7 @@ pub const ComponentSet = struct {
                 continue;
             }
             if (fallback == null) fallback = index;
-            if (axis_state.start == null and !self.workspace.graph.hasTargetConstraint(state, child_id, self.workspace.axis, self.workspace.soft_constraints)) return index;
+            if (axis_state.start == null and !self.workspace.graph.hasTargetConstraint(child_id, self.workspace.axis, self.workspace.soft_constraints)) return index;
         }
         return split_frame orelse fallback;
     }
@@ -825,8 +824,7 @@ pub const ComponentSet = struct {
         }
     }
 
-    fn markKnownAnchors(self: *ComponentSet, state: *Workspace) !void {
-        _ = state;
+    fn markKnownAnchors(self: *ComponentSet) void {
         for (self.workspace.states, 0..) |axis_state, index| {
             if (axis_state.start != null or axis_state.end != null or axis_state.center != null) {
                 self.markPageDependent(index);

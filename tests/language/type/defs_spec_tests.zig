@@ -26,10 +26,3 @@ test "type defs spec: duplicate enum cases are reported by name" {
     try testing.expect(duplicate != null);
     try testing.expectEqualStrings("left", duplicate.?);
 }
-
-test "type defs spec: enum labels preserve user-facing case order" {
-    const cases = [_]Case{ .{ .name = "String" }, .{ .name = "Number" }, .{ .name = "Done" } };
-    const label = try type_defs.enumCasesLabel(testing.allocator, &cases);
-    defer testing.allocator.free(label);
-    try testing.expectEqualStrings("String | Number | Done", label);
-}

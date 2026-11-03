@@ -257,8 +257,6 @@ fn exerciseTypeSubstitution(allocator: std.mem.Allocator) !void {
     defer callback.deinit(allocator);
     var result = try callback.substitute(allocator, &.{.{ .parameter = id, .replacement = Type.number }});
     defer result.deinit(allocator);
-    try testing.expect(callback.containsParameter());
-    try testing.expect(!result.containsParameter());
     try testing.expectEqual(Type.Kind.number, result.fn_result.?.arguments[0].kind);
     try testing.expectEqual(@as(?u32, 2), result.fn_result.?.nominal_module_id);
     try testing.expectEqual(Type.Kind.number, result.fn_params[0].optional_child.?.selectionItem().arguments[0].kind);

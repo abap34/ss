@@ -66,7 +66,7 @@ fn retainSourceVersions(allocator: std.mem.Allocator) !void {
     try bag.addAt(second, .warning, "Second", "later source", .{ .start = 2, .end = 3 }, null);
     try bag.addAt(first, .@"error", "First", "earlier source", .{ .start = 0, .end = 1 }, null);
     bag.sortByPath();
-    const items = bag.itemsForPath("slide.ss");
+    const items = bag.items.items;
     try testing.expectEqual(@as(usize, 2), items.len);
     try testing.expectEqualStrings("first", items[0].source);
     try testing.expectEqualStrings("second", items[1].source);
@@ -76,22 +76,6 @@ fn retainSourceVersions(allocator: std.mem.Allocator) !void {
 
 test "diagnostics preserve distinct source versions for the same path" {
     try allocation_testing.checkAllAllocationFailures(testing.allocator, retainSourceVersions, .{});
-}
-
-test "position edits rebase shared source storage once" {
-    var bag = analysis.diagnostics.DiagnosticBag.init(testing.allocator);
-    defer bag.deinit();
-    const id = try bag.registerSource("slide.ss", "abc");
-    try bag.addAt(id, .warning, "Example", "first", null, null);
-    try bag.addAt(id, .warning, "Example", "second", null, null);
-    const pointer = bag.items.items[0].source.ptr;
-    try testing.expect(bag.sourcesMatch("slide.ss", "abc"));
-    bag.rebaseSource("slide.ss", "def");
-    try testing.expect(bag.sourcesMatch("slide.ss", "def"));
-    for (bag.items.items) |item| {
-        try testing.expectEqual(@intFromPtr(pointer), @intFromPtr(item.source.ptr));
-        try testing.expectEqualStrings("def", item.source);
-    }
 }
 
 test "syntax hole deduplication includes the source identity" {

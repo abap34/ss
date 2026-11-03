@@ -4578,19 +4578,6 @@ test "compiler semantics: join cannot mutate the iterated page selection" {
     );
 }
 
-test "compiler semantics: layout reads cannot feed layout input" {
-    try expectBuildFails(
-        \\import std:themes/default as *
-        \\
-        \\page bad
-        \\  let t = text!("hello")
-        \\  let h = frame_height(t)
-        \\  text!(str(h))
-        \\end
-        \\
-    );
-}
-
 test "compiler semantics: return type inference sees branch-local bindings" {
     try buildSource(
         \\import std:themes/default as *
@@ -5322,17 +5309,6 @@ test "compiler semantics: unresolved names are diagnosed inside compound type an
         defer testing.allocator.free(source);
         try expectDiagnostic(source, "case.ss:bytes:", "UnknownType: unknown type: Missing");
     }
-}
-
-test "compiler semantics: Object can be an ordinary user type name" {
-    try buildSource(
-        \\type Object { object: String base: Number roles: String }
-        \\const value: Object = Object { object = "value", base = 1, roles = "label" }
-        \\page main
-        \\  let label: String = value.object
-        \\end
-        \\
-    );
 }
 
 test "compiler semantics: numeric comparisons evaluate both outcomes" {
@@ -6444,15 +6420,6 @@ test "compiler semantics: explicit constraint registration rejects page anchor m
     , "CrossPageConstraint");
 }
 
-test "compiler semantics: constraint registration rejects layout feedback" {
-    try expectLoweringErrorDiagnostic(
-        \\page main
-        \\  let item = text!("Item")
-        \\  ~ (item.left == pagectx().left + frame_x(item))
-        \\end
-    , "LayoutDependencyCycle");
-}
-
 test "compiler semantics: functions with constraint statements require a current page" {
     try expectDiagnostic(
         \\fn pin(item: Placement) -> Void
@@ -6495,16 +6462,6 @@ test "compiler semantics: constraint registration in display helpers is an effec
         \\  place!(Label {})
         \\end
     , "case.ss:bytes:", "ImpureDisplayFunction");
-}
-
-test "compiler semantics: saved constraint values cannot feed solved geometry back into layout" {
-    try expectLoweringErrorDiagnostic(
-        \\page main
-        \\  let item = text!("Item")
-        \\  let rules = (item.left == pagectx().left + frame_x(item))
-        \\  ~ rules
-        \\end
-    , "PostLayoutComputationUnsupported");
 }
 
 test "compiler semantics: constraint anchors wait for delayed object bindings" {

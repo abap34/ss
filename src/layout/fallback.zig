@@ -563,7 +563,6 @@ fn buildTopFlowVerticalFallbackConstraints(state: *Workspace, workspace: *const 
 
 const VerticalComponentUnit = struct {
     component_root: usize,
-    root_index: usize,
     bottom_index: usize,
     local_top: f32,
     height: f32,
@@ -828,7 +827,7 @@ fn computeVerticalComponentUnitFromRoot(
         // A split frame owns its placement. Its children follow the frame,
         // while ordinary groups continue to derive bounds from free leaves.
         const placement_candidate = !groups.isGroupNode(node) or index == root_index;
-        if (placement_candidate and (index == root_index or (!workspace.graph.hasTargetConstraint(state, child_id, .vertical, &.{}) and !hasDefaultAlignmentAncestor(workspace, child_id)))) {
+        if (placement_candidate and (index == root_index or (!workspace.graph.hasTargetConstraint(child_id, .vertical, &.{}) and !hasDefaultAlignmentAncestor(workspace, child_id)))) {
             local_tops[index] = end;
         }
         if (local_bottom == null or start < local_bottom.?) {
@@ -843,7 +842,6 @@ fn computeVerticalComponentUnitFromRoot(
     const spacing_source = state.source.getNode(workspace.nodeAt(spacing_source_index)) orelse return error.UnknownNode;
     return .{
         .component_root = component_root,
-        .root_index = root_index,
         .bottom_index = spacing_source_index,
         .local_top = local_top.?,
         .height = local_top.? - local_bottom.?,
@@ -883,7 +881,7 @@ fn centerDirectChildGroupsInComponent(
                 if (!components.contains(component_root, child_index)) continue;
                 const child_node = state.source.getNode(child_id) orelse return error.UnknownNode;
                 if (!groups.isGroupNode(child_node)) continue;
-                if (workspace.graph.hasTargetConstraint(state, child_id, .vertical, &.{})) continue;
+                if (workspace.graph.hasTargetConstraint(child_id, .vertical, &.{})) continue;
                 if (participatesInDefaultAlignment(workspace, child_id)) continue;
                 const child_center = workspace.states[child_index].center orelse continue;
                 const delta = group_center - child_center;
@@ -1105,7 +1103,7 @@ fn flowChildIndex(
     if (scope == .page and directParentGroupIndex(workspace, components, component_root, child_id) != null) return null;
     const axis_state = workspace.states[index];
     if (axis_state.start != null or axis_state.end != null or axis_state.center != null) return null;
-    if (workspace.graph.hasTargetConstraint(state, child_id, .vertical, &.{})) {
+    if (workspace.graph.hasTargetConstraint(child_id, .vertical, &.{})) {
         if (!hasDefaultAlignmentAncestor(workspace, child_id) or hasHardPositionTargetConstraint(workspace, child_id, .vertical)) return null;
     }
     if (hasDefaultAlignmentTarget(workspace, child_id)) return null;

@@ -98,7 +98,7 @@ test "render IR page owns placed text and references stable resources" {
     try testing.expectEqual(@as(?u32, 42), page.items.items[0].nodeId());
 }
 
-test "shared text layouts detach before mutation" {
+test "shared text layouts survive independent releases" {
     var page = render_ir.Page{
         .page_id = 1,
         .index = 0,
@@ -131,11 +131,7 @@ test "shared text layouts detach before mutation" {
     defer if (first_live) first.deinit(testing.allocator);
     var second = try first.clone(testing.allocator);
     defer second.deinit(testing.allocator);
-    const original_glyph = first.glyphs[0].id;
-    try second.makeUnique();
-    second.glyphs[0].id +%= 1;
-    try testing.expectEqual(original_glyph, first.glyphs[0].id);
-    try testing.expect(second.glyphs[0].id != first.glyphs[0].id);
+    try testing.expectEqual(@intFromPtr(first.glyphs.ptr), @intFromPtr(second.glyphs.ptr));
 
     first.deinit(testing.allocator);
     first_live = false;
@@ -171,7 +167,6 @@ test "render IR page preserves PDF placement and annotations" {
     try testing.expect(page.hasPdfPages());
     const pdf = page.items.items[0].pdf_page;
     try testing.expectEqual(@as(usize, 3), pdf.page_index);
-    try testing.expectEqual(render_ir.CoordinateSpace.origin, "page-top-left");
     try testing.expectEqualStrings("section", page.destinations()[0].name);
     try testing.expectEqualStrings("section", page.links()[0].target);
 }

@@ -13,7 +13,6 @@ const SemanticEnv = semantic_env.SemanticEnv;
 const FunctionVisitSet = std.HashMap(core.FunctionKey, void, core.FunctionKeyContext, std.hash_map.default_max_load_percentage);
 
 const resource_model = @import("resources.zig");
-pub const ResourceKind = resource_model.ResourceKind;
 pub const ObjectIdentity = resource_model.ObjectIdentity;
 pub const ObjectOwner = resource_model.ObjectOwner;
 pub const PropertyOwner = resource_model.PropertyOwner;
@@ -29,7 +28,6 @@ pub const AccessSummary = struct {
     selection_reads: std.ArrayList(Resource),
     escaped_objects: std.ArrayList(ObjectIdentity) = .empty,
     placements: std.ArrayList(PlacementDefinition) = .empty,
-    reads_layout: bool = false,
     writes_layout_input: bool = false,
     places_objects: bool = false,
     invalid_selection_mutation: ?InvalidSelectionMutation = null,
@@ -93,7 +91,6 @@ pub const AccessSummary = struct {
         for (other.reads.items) |resource| try self.addRead(resource);
         for (other.writes.items) |resource| try self.addWrite(resource);
         for (other.selection_reads.items) |resource| try self.addSelectionRead(resource);
-        self.reads_layout = self.reads_layout or other.reads_layout;
         self.writes_layout_input = self.writes_layout_input or other.writes_layout_input;
         self.places_objects = self.places_objects or other.places_objects;
         if (self.invalid_selection_mutation == null) self.invalid_selection_mutation = other.invalid_selection_mutation;
@@ -123,7 +120,6 @@ pub const AccessSummary = struct {
         copied.writes.appendSliceAssumeCapacity(self.writes.items);
         copied.selection_reads.appendSliceAssumeCapacity(self.selection_reads.items);
         try copied.escaped_objects.appendSlice(allocator, self.escaped_objects.items);
-        copied.reads_layout = self.reads_layout;
         copied.writes_layout_input = self.writes_layout_input;
         copied.places_objects = self.places_objects;
         copied.invalid_selection_mutation = self.invalid_selection_mutation;
@@ -180,10 +176,6 @@ pub fn formatAccessSummaryWithOptions(
     }
     for (summary.writes.items) |resource| {
         try appendAccessLine(allocator, &out, "write", resource, options);
-        wrote_item = true;
-    }
-    if (summary.reads_layout) {
-        try appendFlagLine(allocator, &out, "reads_layout");
         wrote_item = true;
     }
     if (summary.writes_layout_input) {
@@ -668,10 +660,6 @@ pub const Analyzer = struct {
 
     pub fn documentStatements(self: *Analyzer, items: []const ast.Statement) anyerror!AccessSummary {
         return try self.analyzeStatements(items, .scheduled);
-    }
-
-    pub fn page(self: *Analyzer, page_decl: ast.PageDecl) anyerror!AccessSummary {
-        return try self.analyzeStatements(page_decl.statements.items, .scheduled);
     }
 
     pub fn statement(self: *Analyzer, stmt: ast.Statement) anyerror!AccessSummary {
@@ -1386,10 +1374,10 @@ pub const Analyzer = struct {
             .first, .selection_filter => if (call.args.items.len > 0) {
                 result = try self.callArgumentValue(call, arg_facts, 0);
             },
-            .selection_union, .selection_intersection, .selection_difference, .sub => if (call.args.items.len == 2) {
+            .selection_union, .selection_intersection, .sub => if (call.args.items.len == 2) {
                 const left = try self.callArgumentValue(call, arg_facts, 0);
                 const right = try self.callArgumentValue(call, arg_facts, 1);
-                const combined = if (primitive.op == .selection_difference or primitive.op == .sub) left else try self.joinValueFacts(left, right);
+                const combined = if (primitive.op == .sub) left else try self.joinValueFacts(left, right);
                 result = combined;
             },
             .group, .group_placed => {
@@ -2299,9 +2287,6 @@ pub const Analyzer = struct {
         if (descriptor.places_objects) summary.places_objects = true;
         switch (descriptor.op) {
             .page_index, .page_count => try summary.addRead(Resource.makePages(null)),
-            .frame_x, .frame_y, .frame_width, .frame_height => {
-                summary.reads_layout = true;
-            },
             .new_page => {
                 try summary.addWrite(Resource.makePages(null));
                 summary.writes_layout_input = true;
@@ -2417,9 +2402,6 @@ pub const Analyzer = struct {
         switch (descriptor.op) {
             .select => try self.applySelectSummaryFromFacts(&summary, arg_facts),
             .page_index, .page_count => try summary.addRead(Resource.makePages(null)),
-            .frame_x, .frame_y, .frame_width, .frame_height => {
-                summary.reads_layout = true;
-            },
             .new_page => {
                 try summary.addWrite(Resource.makePages(null));
                 summary.writes_layout_input = true;
@@ -2604,8 +2586,7 @@ pub const Analyzer = struct {
                     (try self.propertyTargetExpr(call.args.items[0])) orelse PropertyTarget.any()
                 else
                     PropertyTarget.any(),
-                .selection_union, .selection_intersection, .selection_difference => try self.propertyTargetSelectionAlgebra(call, primitive.op),
-                .sub => try self.propertyTargetSelectionAlgebra(call, .selection_difference),
+                .selection_union, .selection_intersection, .sub => try self.propertyTargetSelectionAlgebra(call, primitive.op),
                 .select => try self.propertyTargetSelect(call),
                 else => if (primitive.result_type) |ty| self.propertyTargetForType(ty) else null,
             },
@@ -2619,7 +2600,7 @@ pub const Analyzer = struct {
         const right = try self.propertyTargetExpr(call.args.items[1]);
         return switch (op) {
             .selection_union => joinPropertyTargets(left, right),
-            .selection_difference => left,
+            .sub => left,
             .selection_intersection => if (left) |target|
                 if (!target.owner.isUnknown()) target else right
             else

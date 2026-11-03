@@ -17,13 +17,3 @@ pub fn duplicateEnumCase(allocator: std.mem.Allocator, cases: anytype) !?[]const
     }
     return null;
 }
-
-pub fn enumCasesLabel(allocator: std.mem.Allocator, cases: anytype) ![]const u8 {
-    var out = std.ArrayList(u8).empty;
-    errdefer out.deinit(allocator);
-    for (cases) |case_decl| {
-        if (out.items.len != 0) try out.appendSlice(allocator, " | ");
-        try out.appendSlice(allocator, case_decl.name);
-    }
-    return try out.toOwnedSlice(allocator);
-}

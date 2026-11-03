@@ -6,7 +6,6 @@ const import = project.import;
 pub fn register(suite: Suite, modules: project.ProjectModules) void {
     const ctx = suite.ctx;
     const syntax_mod = project.createSyntaxModule(ctx, modules);
-    _ = suite.add(syntax_mod, .{});
     const parser_spec_mod = createModule(ctx, "tests/syntax/parser/spec_tests.zig", &.{
         import("core", modules.core),
         import("utils", modules.utils),
@@ -29,7 +28,6 @@ pub fn register(suite: Suite, modules: project.ProjectModules) void {
     }, null);
     _ = suite.add(language_type_spec_mod, .{ .name = "test-language-type", .description = "Run focused language type tests" });
     const analysis_mod = project.createAnalysisModule(ctx, modules);
-    _ = suite.add(analysis_mod, .{});
     const analysis_types_spec_mod = createModule(ctx, "tests/analysis/types/spec_tests.zig", &.{
         import("core", modules.core),
         import("language_type", modules.language_type),

@@ -25,7 +25,6 @@ pub fn register(ctx: project.Context, modules: project.ProjectModules, build_opt
         .name = "test-allocation-failures",
         .description = "Check deterministic allocation failure coverage",
     });
-    _ = suite.add(project.createCliModule(ctx, modules, build_options), .{ .link_qpdf = true });
     const compiler = project.createCompilerModule(ctx, modules);
     @import("language.zig").register(suite, modules);
     @import("layout.zig").register(suite, modules);

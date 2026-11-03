@@ -286,7 +286,7 @@ pub fn checkFunction(
         try rejectDuplicateBinding(state, &env, param.name, func_origin);
         if (param.default_value) |default_value| {
             const info = try inferExprInfo(inference_context, allocator, state, sema, &env, default_value.*, func_origin);
-            try ensureType(state, allocator, info, param.ty, func_origin, .UnmatchedArgumentType);
+            try ensureType(state, allocator, info, param.ty, func_origin);
         }
         const param_info = infoFromType(param.ty);
         try env.put(param.name, param_info);
@@ -336,7 +336,7 @@ pub fn checkConst(
             had_diagnostics = true;
             return error.DiagnosticsFailed;
         };
-        ensureType(state, allocator, actual, constant_decl.value_type, origin, .UnmatchedReturnType) catch |err| {
+        ensureType(state, allocator, actual, constant_decl.value_type, origin) catch |err| {
             try continueAfterDiagnostic(state, diagnostic_count, err);
             had_diagnostics = true;
         };
@@ -451,7 +451,7 @@ fn checkTopLevelStatementInner(
         .if_stmt => |if_stmt| {
             try rejectPageOnlyExpr(state, context, origin, page_context, scope, if_stmt.condition);
             const condition = try inferExprInfo(inference_context, allocator, state, sema, env, if_stmt.condition, origin);
-            try ensureType(state, allocator, condition, Type.boolean, origin, .UnmatchedArgumentType);
+            try ensureType(state, allocator, condition, Type.boolean, origin);
             var then_env = try env.clone();
             defer then_env.deinit();
             var then_scope = try scope.clone();
@@ -481,7 +481,7 @@ fn checkTopLevelStatementInner(
             if (decl.offset) |expr| {
                 try rejectPageOnlyExpr(state, context, origin, page_context, scope, expr);
                 const actual = try inferExprInfo(inference_context, allocator, state, sema, env, expr, origin);
-                try ensureType(state, allocator, actual, Type.number, origin, .UnmatchedArgumentType);
+                try ensureType(state, allocator, actual, Type.number, origin);
             }
         },
     }
@@ -508,7 +508,7 @@ fn checkedLetBindingInfo(
     origin: core.SourceOrigin,
 ) !semantic_types.TypeInfo {
     const annotation = binding.type_annotation orelse return inferred;
-    try ensureType(state, allocator, inferred, annotation, origin, .UnmatchedReturnType);
+    try ensureType(state, allocator, inferred, annotation, origin);
     return infoFromType(annotation);
 }
 
@@ -546,7 +546,7 @@ fn validateAnchorRef(
             const info = try resolveAnchorPathInfo(state, sema, env, origin, path);
             if (info.hole != null) return;
             if (!isPlacementReference(info) and (is_target or info.ty.kind != .page)) {
-                try ensureType(state, allocator, info, Type.placement, origin, .UnmatchedArgumentType);
+                try ensureType(state, allocator, info, Type.placement, origin);
             }
         },
     }
@@ -653,11 +653,11 @@ fn checkStatementInner(
                 return error.InvalidType;
             }
             const actual = try inferExprInfo(inference_context, allocator, state, sema, env, expr, origin);
-            try ensureType(state, allocator, actual, result_type, origin, .UnmatchedReturnType);
+            try ensureType(state, allocator, actual, result_type, origin);
         },
         .return_void => {
             if (result_type.kind != .void) {
-                try ensureType(state, allocator, infoFromType(.{ .kind = .void }), result_type, origin, .UnmatchedReturnType);
+                try ensureType(state, allocator, infoFromType(.{ .kind = .void }), result_type, origin);
             }
         },
         .property_set => |property_set| {
@@ -665,7 +665,7 @@ fn checkStatementInner(
         },
         .if_stmt => |if_stmt| {
             const condition = try inferExprInfo(inference_context, allocator, state, sema, env, if_stmt.condition, origin);
-            try ensureType(state, allocator, condition, Type.boolean, origin, .UnmatchedArgumentType);
+            try ensureType(state, allocator, condition, Type.boolean, origin);
             var then_env = try env.clone();
             defer then_env.deinit();
             for (if_stmt.then_statements.items) |nested| {
@@ -685,7 +685,7 @@ fn checkStatementInner(
             if (decl.source) |source| try validateAnchorRef(allocator, state, sema, env, origin, source, false);
             if (decl.offset) |expr| {
                 const actual = try inferExprInfo(inference_context, allocator, state, sema, env, expr, origin);
-                try ensureType(state, allocator, actual, Type.number, origin, .UnmatchedArgumentType);
+                try ensureType(state, allocator, actual, Type.number, origin);
             }
         },
     }

@@ -679,7 +679,6 @@ fn enterBlock(
         c.MD_BLOCK_UL => {
             state.endParagraph() catch |err| return callbackFailure(state, err);
             const block = state.newBlock(.bullet_list) catch |err| return callbackFailure(state, err);
-            trySetTightProperty(block, detail);
             state.appendBlock(block) catch |err| return callbackFailure(state, err);
             state.lists.append(state.temp_allocator, &block.list.?) catch |err| return callbackFailure(state, err);
         },
@@ -1071,11 +1070,6 @@ fn duplicateAttribute(allocator: Allocator, attr: c.MD_ATTRIBUTE) ![]const u8 {
     if (attr.size == 0) return allocator.dupe(u8, "");
     const bytes: []const u8 = @as([*]const u8, @ptrCast(attr.text))[0..attr.size];
     return allocator.dupe(u8, bytes);
-}
-
-fn trySetTightProperty(block: *Block, detail: ?*anyopaque) void {
-    _ = block;
-    _ = detail;
 }
 
 fn tableCellAlign(detail: ?*anyopaque) Align {

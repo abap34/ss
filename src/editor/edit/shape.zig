@@ -5,10 +5,6 @@ const relation = @import("../relation.zig");
 
 const default_line_marker_size: f64 = 10;
 
-pub const TextEdit = base.TextEdit;
-pub const Result = base.Result;
-pub const applyEdits = base.applyEdits;
-
 pub const Kind = enum {
     rectangle,
     circle,

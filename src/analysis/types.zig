@@ -160,27 +160,9 @@ pub fn ensureType(
     actual: TypeInfo,
     expected: Type,
     origin: core.SourceOrigin,
-    code: core.TypeMismatchCode,
 ) !void {
-    return ensureTypeWithHoles(state, allocator, actual, expected, origin, code, null);
-}
-
-pub fn ensureTypeWithHoles(
-    state: ?*core.DocumentState,
-    allocator: std.mem.Allocator,
-    actual: TypeInfo,
-    expected: Type,
-    origin: core.SourceOrigin,
-    code: core.TypeMismatchCode,
-    holes: ?*syntax_hole.Result,
-) !void {
-    _ = code;
     switch (assignability(actual, expected)) {
-        .assignable => return,
-        .blocked_by_hole => |hole_id| {
-            if (holes) |table| try table.setExpectedType(allocator, hole_id, expected);
-            return;
-        },
+        .assignable, .blocked_by_hole => return,
         .mismatch => {},
     }
     if (state) |sink| {

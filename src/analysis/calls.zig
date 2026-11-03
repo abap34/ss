@@ -879,7 +879,7 @@ const Analyzer = struct {
                 try combined.unionWith(args[1]);
                 return combined;
             },
-            .selection_difference, .sub => if (args.len > 0) return args[0],
+            .sub => if (args.len > 0) return args[0],
             else => {},
         }
         switch (primitive.result_policy) {

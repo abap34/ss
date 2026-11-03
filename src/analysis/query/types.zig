@@ -3,7 +3,6 @@ const utils = @import("utils");
 
 pub const SourceRequest = struct {
     path: []const u8,
-    source_version: u64 = 0,
     offset: usize,
     source: []const u8,
     line_index: ?utils.source.LineIndex = null,

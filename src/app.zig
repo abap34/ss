@@ -6,7 +6,6 @@ const types = @import("app/types.zig");
 
 pub const RenderOptions = types.RenderOptions;
 pub const RenderFormat = types.RenderFormat;
-pub const WriteOptions = types.WriteOptions;
 pub const SourceRequest = types.SourceRequest;
 pub const PdfWriteRequest = types.PdfWriteRequest;
 pub const HtmlWriteRequest = types.HtmlWriteRequest;

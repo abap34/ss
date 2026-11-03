@@ -394,8 +394,6 @@ test "layout graph spec: hard anchors move default-sized states" {
 test "layout graph spec: page graph indexes direct page children and filters axis constraints" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
-    var state_layout = LayoutFixture.init(&state);
-    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const a = try document_testing.native(&state, page, "a", .text, "A");
@@ -412,9 +410,9 @@ test "layout graph spec: page graph indexes direct page children and filters axi
     try testing.expectEqual(@as(usize, 3), page_graph.len());
     try testing.expect(page_graph.indexOf(a) != null);
     try testing.expect(page_graph.indexOf(b) != null);
-    try testing.expect(page_graph.hasTargetConstraint(try state_layout.work(), a, .horizontal, &.{}));
-    try testing.expect(page_graph.hasTargetConstraint(try state_layout.work(), a, .vertical, &.{}));
-    try testing.expect(!page_graph.hasTargetConstraint(try state_layout.work(), b, .vertical, &.{}));
+    try testing.expect(page_graph.hasTargetConstraint(a, .horizontal, &.{}));
+    try testing.expect(page_graph.hasTargetConstraint(a, .vertical, &.{}));
+    try testing.expect(!page_graph.hasTargetConstraint(b, .vertical, &.{}));
 
     try testing.expectEqual(@as(usize, 2), page_graph.constraintsOnAxis(.horizontal).len);
     try testing.expectEqualSlices(usize, &.{ 0, 1 }, page_graph.targetConstraintIndexes(a));
@@ -1314,7 +1312,7 @@ test "layout graph: row defaults choose the first eligible target candidate and 
     try testing.expectEqual(@as(usize, 1), page_graph.constraints.len);
     try testing.expectEqual(@as(usize, 6), page_graph.default_alignment_constraints.len);
     try testing.expectEqual(@as(usize, 0), page_graph.targetConstraintIndexes(b).len);
-    try testing.expect(!page_graph.hasTargetConstraint(try state_layout.work(), b, .vertical, &.{}));
+    try testing.expect(!page_graph.hasTargetConstraint(b, .vertical, &.{}));
     var workspace = try graph.AxisWorkspace.init(testing.allocator, try state_layout.work(), &page_graph, .vertical);
     defer workspace.deinit();
     var defaults = try core.layout.fallback.buildDefaultAlignmentConstraints(try state_layout.work(), &workspace);

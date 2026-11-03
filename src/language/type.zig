@@ -23,11 +23,6 @@ pub const NominalId = struct {
     module_id: u32,
     name: []const u8,
 
-    pub fn optionalEql(a: ?NominalId, b: ?NominalId) bool {
-        if ((a == null) != (b == null)) return false;
-        return if (a) |id| id.eql(b.?) else true;
-    }
-
     pub fn eql(a: NominalId, b: NominalId) bool {
         return a.module_id == b.module_id and std.mem.eql(u8, a.name, b.name);
     }
@@ -303,15 +298,6 @@ pub const Type = struct {
         for (self.fn_params) |*parameter_type| try parameter_type.substituteOwned(allocator, bindings);
         if (self.fn_result) |result| try result.substituteOwned(allocator, bindings);
         if (self.optional_child) |child| try child.substituteOwned(allocator, bindings);
-    }
-
-    pub fn containsParameter(self: Type) bool {
-        if (self.kind == .parameter) return true;
-        for (self.arguments) |argument| if (argument.containsParameter()) return true;
-        for (self.fn_params) |parameter_type| if (parameter_type.containsParameter()) return true;
-        if (self.fn_result) |result| if (result.containsParameter()) return true;
-        if (self.optional_child) |child| if (child.containsParameter()) return true;
-        return false;
     }
 
     pub fn containsUnresolvedName(self: Type) bool {

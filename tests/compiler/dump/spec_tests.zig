@@ -73,9 +73,9 @@ test "dump preserves generic inputs and distinguishes repeated placements from d
     for ((try field(parsed.value, "functions")).array.items) |function| {
         if (!std.mem.eql(u8, (try field(function, "source")).string, "primitive")) continue;
         for ([_][]const u8{
-            "add",                    "sub",                  "mul",           "div",    "neg",    "concat", "not",
-            "num_eq",                 "num_ne",               "num_lt",        "num_le", "num_gt", "num_ge", "selection_union",
-            "selection_intersection", "selection_difference", "constrain_on!",
+            "add",                    "sub",           "mul",    "div",    "neg",    "concat", "not",
+            "num_eq",                 "num_ne",        "num_lt", "num_le", "num_gt", "num_ge", "selection_union",
+            "selection_intersection", "constrain_on!",
         }) |name| try testing.expect(!std.mem.eql(u8, name, (try field(function, "name")).string));
     }
     const first_page = state.graph.page_order.items[0];

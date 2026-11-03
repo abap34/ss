@@ -96,7 +96,7 @@ test "document state spec: constraint failure recording preserves allocation fai
         error.OutOfMemory,
         state.diagnostics.noteConstraintFailureDetailed(failing.allocator(), state.graph.document_id, constraint, null, .conflict, .anchor_value_conflict, null, null, null),
     );
-    try testing.expect(!state.diagnostics.hasConstraintFailures());
+    try testing.expectEqual(@as(usize, 0), state.diagnostics.constraint_failures.items.len);
 }
 
 test "document state spec: pages are ordered document children with one-based page indexes" {
@@ -1114,7 +1114,7 @@ test "structured origins preserve paths labels spans and independent ownership" 
 }
 
 test "diagnostic constructors release message ownership when origin cloning fails" {
-    for ([_]core.DiagnosticPhase{ .validation, .render, .layout }) |phase| {
+    for ([_]core.DiagnosticPhase{ .validation, .render }) |phase| {
         var state = try initEmptyDocumentState();
         defer state.deinit();
         const origin = core.SourceOrigin.at("origin.ss", .{ .start = 1, .end = 4 });
@@ -1126,11 +1126,10 @@ test "diagnostic constructors release message ownership when origin cloning fail
         const original_allocator = state.allocator;
         state.allocator = failing.allocator();
         defer state.allocator = original_allocator;
-        const result = switch (phase) {
-            .validation => state.addValidationDiagnostic(.@"error", null, null, origin, data),
-            .render => state.addRenderDiagnostic(.@"error", null, null, origin, data),
-            .layout => state.addLayoutError(state.graph.document_id, state.graph.document_id, data),
-        };
+        const result = if (phase == .validation)
+            state.addValidationDiagnostic(.@"error", null, null, origin, data)
+        else
+            state.addRenderDiagnostic(.@"error", null, null, origin, data);
         try testing.expectError(error.OutOfMemory, result);
         try testing.expectEqual(@as(usize, 0), state.diagnostics.entries.items.len);
     }

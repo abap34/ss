@@ -1,12 +1,5 @@
 const std = @import("std");
 
-pub const CoordinateSpace = struct {
-    pub const unit = "pt";
-    pub const origin = "page-top-left";
-    pub const x_axis = "right";
-    pub const y_axis = "down";
-};
-
 pub const Point = struct {
     x: f64,
     y: f64,

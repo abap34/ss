@@ -121,19 +121,6 @@ pub const LineIterator = struct {
     }
 };
 
-pub const SpanView = struct {
-    span: ByteSpan,
-    trimmed: ByteSpan,
-
-    pub fn isEmpty(self: SpanView) bool {
-        return self.trimmed.start >= self.trimmed.end;
-    }
-
-    pub fn text(self: SpanView, source: []const u8) []const u8 {
-        return source[self.trimmed.start..self.trimmed.end];
-    }
-};
-
 pub const CodeByte = struct {
     pos: usize,
     byte: u8,
@@ -348,14 +335,6 @@ pub fn lineCommentMarkerLength(source: []const u8, pos: usize) ?usize {
     if (pos + 1 >= source.len) return null;
     if (source[pos] == ';' and source[pos + 1] == ';') return 2;
     return null;
-}
-
-pub fn stripLineComment(line: []const u8) []const u8 {
-    var bytes = codeBytes(line, 0, line.len);
-    while (bytes.next()) |item| {
-        if (lineCommentMarkerLength(line, item.pos) != null) return line[0..item.pos];
-    }
-    return line;
 }
 
 pub fn skipLineComment(source: []const u8, pos: *usize) void {
