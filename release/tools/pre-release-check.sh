@@ -261,10 +261,10 @@ else
   (
     cd editor/vscode
     npm ci
-    npm run compile
     npm run package -- --out "$vsix_path" --allow-missing-repository --skip-license
   )
   test -s "$vsix_path"
+  run python3 release/tools/check-vscode-package.py "$vsix_path" --version "$version"
 fi
 
 step "source archive and Homebrew formula"

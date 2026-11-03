@@ -31,7 +31,9 @@ jobs:
           fetch-depth: 0
 
       - name: Select tagged release sources and current completion validation
-        run: python3 release/tools/prepare-vscode-publication.py "$RELEASE_TAG"
+        run: |
+          cp release/tools/check-vscode-package.py "$RUNNER_TEMP/check-vscode-package.py"
+          python3 release/tools/prepare-vscode-publication.py "$RELEASE_TAG"
 
       - name: Install system dependencies
         run: |
@@ -109,7 +111,15 @@ jobs:
 
       - name: Package VS Code extension
         working-directory: editor/vscode
-        run: npm run package:prebuilt -- --out "ss-language-support-${RELEASE_TAG}.vsix" --allow-missing-repository --skip-license
+        run: |
+          npm run package -- --out "ss-language-support-${RELEASE_TAG}.vsix" --allow-missing-repository --skip-license
+          python3 "$RUNNER_TEMP/check-vscode-package.py" "ss-language-support-${RELEASE_TAG}.vsix" --extension-root . --version "${RELEASE_TAG#v}"
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ss-language-support-vsix
+          path: editor/vscode/ss-language-support-${{ env.RELEASE_TAG }}.vsix
 
       - name: Publish to Marketplace
         working-directory: editor/vscode
@@ -121,12 +131,6 @@ jobs:
           else
             echo "VSCE_PAT is not configured; skipping Marketplace publish."
           fi
-
-      - name: Upload VSIX artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ss-language-support-vsix
-          path: editor/vscode/ss-language-support-${{ env.RELEASE_TAG }}.vsix
 
       - name: Attach VSIX to GitHub Release
         env:

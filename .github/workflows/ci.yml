@@ -153,6 +153,14 @@ jobs:
       - name: Run tests
         run: zig build test
 
+      - name: Package and validate VS Code extension
+        if: matrix.zig-version == '0.16.0'
+        working-directory: editor/vscode
+        run: |
+          mkdir -p ../../.test-tmp/vscode-package
+          npm run package -- --out ../../.test-tmp/vscode-package/ss-language-support.vsix --allow-missing-repository --skip-license
+          python3 ../../release/tools/check-vscode-package.py ../../.test-tmp/vscode-package/ss-language-support.vsix
+
       - name: Test bundled MD4C fork
         run: python3 third_party/tools/md4c/test.py
 
