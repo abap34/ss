@@ -29,7 +29,6 @@ fn evaluate(state: *core.DocumentState) !void {
 test "staging: bindings from separate show blocks compose outside the blocks" {
     var state = try document(
         \\page Demo
-        \\  stages s { first second third }
         \\  show s >= s.first
         \\    let t1 = text! "First"
         \\  end
@@ -40,6 +39,7 @@ test "staging: bindings from separate show blocks compose outside the blocks" {
         \\    let t3 = text! "Third"
         \\  end
         \\  (t1 // t2) || t3
+        \\  stages s { first second third }
         \\end
     );
     defer state.deinit();
@@ -234,7 +234,10 @@ test "staging: invalid declarations and unknown stage names point to source" {
         .{ .source = "page Demo\nstages s {}\nend\n", .expected = error.EmptyStages, .token = "stages" },
         .{ .source = "page Demo\nstages s { one one }\nend\n", .expected = error.DuplicateStageName, .token = "one" },
         .{ .source = "page Demo\nstages s { one }\nshow s == s.missing\nend\nend\n", .expected = error.UnknownStage, .token = "missing" },
-        .{ .source = "page Demo\ntext! \"First\"\nstages s { one }\nend\n", .expected = error.InvalidStagesLocation, .token = "stages" },
+        .{ .source = "page Demo\nstages s { one }\ntext! \"First\"\nstages t { two }\nend\n", .expected = error.DuplicateStagesDeclaration, .token = "stages" },
+        .{ .source = "page Demo\nshow true\nstages s { one }\nend\nend\n", .expected = error.InvalidStagesLocation, .token = "stages" },
+        .{ .source = "page Demo\nif true\nstages s { one }\nend\nend\n", .expected = error.InvalidStagesLocation, .token = "stages" },
+        .{ .source = "fn content!() -> Void\nstages s { one }\nend\n", .expected = error.InvalidStagesLocation, .token = "stages" },
     };
     for (cases) |case| {
         var failure = compiler.syntax.ParseFailure{};

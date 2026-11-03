@@ -11,7 +11,6 @@ try {
   const uri = pathToFileURL(file).href;
   let source = `import std:themes/default as *
 page Demo
-  stages s { first second third }
   let item = text! "Always drawn"
   ~!~ item.left == page.left + 20
   ~!~ item.top == page.top - 40
@@ -20,6 +19,7 @@ page Demo
     let detail = text! "STAGED_DETAIL"
   end
   ~ detail.width == 220
+  stages s { first second third }
 end
 `;
   await writeFile(file, source);
@@ -70,7 +70,7 @@ end
     client.changeDocument({ uri, version: 3, text: invalid });
     const reports = (await diagnostics).params.diagnostics;
     const unknown = reports.find((entry) => entry.code === "UnknownStage");
-    assert(unknown && unknown.range.start.line === 7 && unknown.range.start.character === 14,
+    assert(unknown && unknown.range.start.line === source.split("\n").findIndex((line) => line.includes("show s >= s.second")) && unknown.range.start.character === 14,
       `unknown stage must point to its source name: ${JSON.stringify(reports)}`);
     diagnostics = client.waitForDiagnostics(uri);
     client.changeDocument({ uri, version: 4, text: source });

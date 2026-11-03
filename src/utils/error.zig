@@ -921,6 +921,7 @@ pub fn isExpectedCliError(err: anyerror) bool {
         error.UnknownIdentifier,
         error.EmptyStages,
         error.DuplicateStageName,
+        error.DuplicateStagesDeclaration,
         error.UnknownStage,
         error.InvalidStagesLocation,
         error.DrawingConditionTypeMismatch,
