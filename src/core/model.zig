@@ -419,6 +419,7 @@ pub const Node = struct {
     name: []const u8,
     attached: bool = false,
     discarded: bool = false,
+    draw_enabled: bool = true,
     placement: ?Placement = null,
     page_index: ?usize = null,
     composition_order: ?CompositionOrder = null,

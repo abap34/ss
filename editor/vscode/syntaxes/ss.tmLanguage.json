@@ -74,7 +74,7 @@
       "patterns": [
         {
           "name": "keyword.control.ss",
-          "match": "\\bfn/!|\\b(?:import|as|const|document|page|fn|let|with|return|end|type|enum|if|else)\\b"
+          "match": "\\bfn/!|\\b(?:import|as|const|document|page|fn|let|with|return|end|type|enum|stages|show|if|else)\\b"
         },
         {
           "name": "storage.type.ss",

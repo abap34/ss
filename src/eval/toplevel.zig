@@ -74,6 +74,19 @@ const ClosureStore = struct {
 
 const call_frames = @import("frames.zig");
 
+const PendingDrawing = struct {
+    producer: usize,
+    key: u64,
+    module_id: core.SourceModuleId,
+    page_id: core.NodeId,
+    scope: EvalScope,
+    predicate: core.FunctionRef,
+    origin: core.SourceOrigin,
+    parent: ?usize,
+    nodes: std.ArrayList(core.NodeId) = .empty,
+    result: ?bool = null,
+};
+
 pub const EvalContext = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -82,6 +95,8 @@ pub const EvalContext = struct {
     closures: ClosureStore,
     module_id: core.SourceModuleId = 0,
     execution_unit: ?usize = null,
+    pending_drawings: std.ArrayList(PendingDrawing) = .empty,
+    active_drawing: ?usize = null,
     display_inputs: std.ArrayList(std.ArrayList(core.NodeId)) = .empty,
     display_entries: std.AutoHashMap(struct { producer: usize, call_id: u64 }, usize),
     frames: call_frames.Stack,
@@ -118,6 +133,10 @@ pub const EvalContext = struct {
     }
 
     pub fn deinit(self: *EvalContext) void {
+        for (self.pending_drawings.items) |*drawing| {
+            drawing.nodes.deinit(self.allocator);
+        }
+        self.pending_drawings.deinit(self.allocator);
         for (self.display_inputs.items) |*inputs| inputs.deinit(self.allocator);
         self.display_inputs.deinit(self.allocator);
         self.display_entries.deinit();
@@ -507,6 +526,20 @@ pub fn executeGraph(
             try executeUnit(evaluation, &document_states, &page_states, graph.units.items[unit_index]);
         }
         evaluation.execution_unit = null;
+        for (evaluation.pending_drawings.items, 0..) |drawing, index| {
+            try checkCancellation(evaluation);
+            var visible = drawing.result orelse return error.UnevaluatedDrawingCondition;
+            var parent = drawing.parent;
+            var remaining = index;
+            while (parent) |parent_index| {
+                if (parent_index >= remaining) return error.InvalidDrawingScope;
+                remaining = parent_index;
+                const outer = evaluation.pending_drawings.items[parent_index];
+                visible = visible and (outer.result orelse return error.UnevaluatedDrawingCondition);
+                parent = outer.parent;
+            }
+            for (drawing.nodes.items) |id| evaluation.state.getNode(id).?.draw_enabled = visible;
+        }
     }
 }
 
@@ -531,6 +564,20 @@ fn executeUnit(
     unit: execution.ExecutionUnit,
 ) !void {
     const state = evaluation.state;
+    const before = state.diagnostics.entries.items.len;
+    executeUnitInner(evaluation, document_states, page_states, unit) catch |err| {
+        if (unit.stage_label) |label| try state.labelDiagnostics(before, label);
+        return err;
+    };
+}
+
+fn executeUnitInner(
+    evaluation: *EvalContext,
+    document_states: *std.AutoHashMap(core.SourceModuleId, DocumentExecutionState),
+    page_states: *std.AutoHashMap(core.NodeId, PageExecutionState),
+    unit: execution.ExecutionUnit,
+) !void {
+    const state = evaluation.state;
     try checkCancellation(evaluation);
     const previous_cursor = state.graph.composition_cursor;
     state.graph.composition_cursor = .{ .source_order = unit.source_order };
@@ -540,6 +587,21 @@ fn executeUnit(
     evaluation.module_id = unit.module_id;
     defer evaluation.module_id = previous_module_id;
     switch (unit.kind) {
+        .drawing => |drawing_unit| {
+            // Predicate evaluation cannot create placements, so this array is stable.
+            for (evaluation.pending_drawings.items) |*drawing| {
+                if (drawing.producer != drawing_unit.producer or drawing.key != drawing_unit.key) continue;
+                const previous = evaluation.module_id;
+                evaluation.module_id = drawing.module_id;
+                defer evaluation.module_id = previous;
+                var value = invokeFunctionRef(evaluation, drawing.page_id, drawing.scope, drawing.predicate, drawing.origin, &.{}) catch |err| {
+                    if (err != error.Canceled) try reportLowerError(state, err, drawing.origin);
+                    return err;
+                };
+                defer value.deinit(evaluation.allocator);
+                drawing.result = try resolveValueBoolean(value);
+            }
+        },
         .display => |display| {
             const plan = state.displays.plans.items[display.plan];
             const step = plan.steps.items[display.step];
@@ -1210,6 +1272,27 @@ const BuiltinContext = struct {
         return try evalSelectCall(self.evaluation, self.page_id, self.scope, self.env, self.current_origin, call);
     }
 
+    pub fn runDrawingCall(self: *BuiltinContext, call: CallExpr) anyerror!core.Value {
+        var predicate = try self.evalExprValue(call.args.items[1]);
+        defer predicate.deinit(self.state.allocator);
+        if (predicate != .function) return error.InvalidValueTag;
+        const index = self.evaluation.pending_drawings.items.len;
+        try self.evaluation.pending_drawings.append(self.state.allocator, .{
+            .producer = self.evaluation.execution_unit orelse return error.InvalidDrawingScope,
+            .key = call.callee.call_id orelse return error.InvalidDrawingScope,
+            .module_id = self.evaluation.module_id,
+            .page_id = self.page_id,
+            .scope = self.scope,
+            .predicate = predicate.function,
+            .origin = if (call.callee.span) |span| self.state.sourceOrigin(self.evaluation.module_id, span) else self.current_origin,
+            .parent = self.evaluation.active_drawing,
+        });
+        const previous = self.evaluation.active_drawing;
+        self.evaluation.active_drawing = index;
+        defer self.evaluation.active_drawing = previous;
+        return self.evalExprValue(call.args.items[0]);
+    }
+
     pub fn evalExprValue(self: *BuiltinContext, expr: Expr) anyerror!core.Value {
         return try evalExpr(self.evaluation, self.page_id, self.scope, self.env, self.current_origin, expr);
     }
@@ -1297,11 +1380,14 @@ const BuiltinContext = struct {
         try inputs.ensureUnusedCapacity(self.evaluation.allocator, 1);
         const id = try self.state.registerPlacement(page_id, input, self.current_origin);
         inputs.appendAssumeCapacity(id);
+        if (self.evaluation.active_drawing) |index| try self.evaluation.pending_drawings.items[index].nodes.append(self.evaluation.allocator, id);
         return id;
     }
 
     pub fn adoptGroup(self: *BuiltinContext, ids: []const core.NodeId, composition: ast.GroupComposition) !core.NodeId {
-        return self.state.adoptGroup(self.page_id, ids, composition, self.current_origin);
+        const id = try self.state.adoptGroup(self.page_id, ids, composition, self.current_origin);
+        if (self.evaluation.active_drawing) |index| try self.evaluation.pending_drawings.items[index].nodes.append(self.evaluation.allocator, id);
+        return id;
     }
 
     pub fn invokeCallback(self: *BuiltinContext, function: core.FunctionRef, args: []const core.Value) !core.Value {
@@ -1849,7 +1935,8 @@ fn executeStatement(
             try writePropertyPath(evaluation, page_id, scope, origin, base, property_set.path.items, value);
         },
         .if_stmt => |if_stmt| {
-            const value = try evalExpr(evaluation, page_id, scope, env, origin, if_stmt.condition);
+            var value = try evalExpr(evaluation, page_id, scope, env, origin, if_stmt.condition);
+            defer value.deinit(state.allocator);
             const condition = try resolveValueBoolean(value);
             const branch = if (condition) if_stmt.then_statements.items else if_stmt.else_statements.items;
             var branch_env = Environment.child(state.allocator, env);

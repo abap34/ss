@@ -327,7 +327,6 @@ fn instantiateRecord(
             .substitutions = bindings,
         };
         try transform.record(&declaration);
-        for (declaration.type_params.items) |*parameter| parameter.deinit(state.allocator);
         declaration.type_params.deinit(state.allocator);
         declaration.type_params = .empty;
         const entry = try state.type_instances.add(ty, declaration);
@@ -994,7 +993,7 @@ fn inferPrimitiveCallInfo(
         const actual = try exprInfoWithOptions(allocator, state, sema, env, arg, arg_origin, options);
         argument_infos[index] = actual;
         if (isPrimitiveFunctionArgument(descriptor, index)) continue;
-        if (actual.hole == null and actual.ty.kind == .void) {
+        if (actual.hole == null and actual.ty.kind == .void and descriptor.op != .draw_when) {
             try addUserReport(state, origin, "VoidValue", "Void calls do not produce argument values", .{});
             return error.InvalidType;
         }
@@ -1047,6 +1046,7 @@ fn inferPrimitiveCallInfo(
     }
     for (argument_infos, 0..) |actual, index| {
         if (isPrimitiveFunctionArgument(descriptor, index)) continue;
+        if (descriptor.op == .draw_when and index == 0) continue;
         if (sema.primitiveArgType(descriptor, index)) |expected| {
             try ensureType(state, allocator, actual, expected, origin);
         }
@@ -1348,6 +1348,12 @@ fn validateCallbackShape(
         try ensureType(state, allocator, actual, callback_info.ty.fn_params[param_index], origin);
     }
     if (expected_result_type) |result_type| {
+        if (descriptor.op == .draw_when and callback_info.ty.fn_result.?.kind != .boolean) {
+            const actual = try typeLabelAlloc(allocator, callback_info.ty.fn_result.?.*);
+            defer allocator.free(actual);
+            try addUserReport(state, if (call.callee.span) |span| origin.withSpan(span) else origin, "DrawingConditionTypeMismatch", "show requires a Bool condition, but this expression has type '{s}'", .{actual});
+            return error.DrawingConditionTypeMismatch;
+        }
         try ensureType(state, allocator, infoFromType(callback_info.ty.fn_result.?.*), result_type, origin);
     }
 }

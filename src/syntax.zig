@@ -1,32 +1,99 @@
 const ast = @import("ast");
 
 pub const Module = ast.Module;
-pub const PageDecl = ast.PageDecl;
-pub const ConstDecl = ast.ConstDecl;
-pub const FunctionDecl = ast.FunctionDecl;
-pub const ParamDecl = ast.ParamDecl;
-pub const CallExpr = ast.CallExpr;
-pub const Expr = ast.Expr;
-pub const AnchorRef = ast.AnchorRef;
-pub const ConstraintDecl = ast.ConstraintDecl;
-pub const Statement = ast.Statement;
-const syntax = @import("syntax/parse.zig");
-pub const scanner = @import("syntax/scanner.zig");
-pub const hole = @import("syntax/hole.zig");
-pub const ParseDiagnostic = syntax.ParseDiagnostic;
-pub const ParseFailure = syntax.ParseFailure;
-pub const HoleId = hole.HoleId;
+const std = @import("std");
+const parser = @import("syntax/parse.zig");
+const expansion = @import("syntax/desugar.zig");
+const utils = @import("utils");
+const hole = @import("syntax/hole.zig");
+pub const Surface = ast.Surface;
+pub const ParseDiagnostic = parser.ParseDiagnostic;
+pub const ParseFailure = parser.ParseFailure;
 pub const HoleKind = hole.HoleKind;
-pub const Hole = hole.Hole;
 pub const HoleTable = hole.Result;
-pub const HoleType = hole.HoleType;
 pub const ExpectedSyntax = hole.ExpectedSyntax;
-pub const parse = syntax.parse;
-pub const parseWithSourceName = syntax.parseWithSourceName;
-pub const parseWithSourceNameAndFailure = syntax.parseWithSourceNameAndFailure;
-pub const parseRecovering = syntax.parseRecovering;
-pub const parseRecoveringWithSourceName = syntax.parseRecoveringWithSourceName;
-pub const parseRecoveringWithSourceNameAndFailure = syntax.parseRecoveringWithSourceNameAndFailure;
-pub const ParseResult = syntax.ParseResult;
-pub const ParseOptions = syntax.ParseOptions;
-pub const parseRecoveringWithOptions = syntax.parseRecoveringWithOptions;
+pub const desugar = expansion.desugar;
+pub const DesugarOptions = expansion.Options;
+pub const DesugarFailure = expansion.Failure;
+pub const parseSurface = parser.parse;
+pub const printExpandedAlloc = @import("syntax/print.zig").moduleAlloc;
+
+pub const ParseOptions = struct {
+    expansion: struct { expand_stages: bool = true } = .{},
+    failure: ?*ParseFailure = null,
+    cancellation: ?utils.Cancellation = null,
+};
+
+pub const ParseResult = struct {
+    module: ast.Module,
+    holes: hole.Result,
+
+    pub fn deinit(self: *ParseResult, allocator: std.mem.Allocator) void {
+        self.module.deinit(allocator);
+        self.holes.deinit(allocator);
+    }
+};
+
+pub fn parse(allocator: std.mem.Allocator, text: []const u8) !ast.Module {
+    return parseWithSourceName(allocator, text, "");
+}
+
+pub fn parseWithSourceName(allocator: std.mem.Allocator, text: []const u8, source_name: []const u8) !ast.Module {
+    return parseWithSourceNameInner(allocator, text, source_name, null);
+}
+
+pub fn parseWithSourceNameAndFailure(allocator: std.mem.Allocator, text: []const u8, source_name: []const u8, failure: *ParseFailure) !ast.Module {
+    return parseWithSourceNameInner(allocator, text, source_name, failure);
+}
+
+fn parseWithSourceNameInner(allocator: std.mem.Allocator, text: []const u8, source_name: []const u8, failure: ?*ParseFailure) !ast.Module {
+    var surface = if (failure) |output|
+        try parser.parseWithSourceNameAndFailure(allocator, text, source_name, output)
+    else
+        try parser.parseWithSourceName(allocator, text, source_name);
+    defer surface.deinit(allocator);
+    return expand(allocator, &surface, text, .{ .failure = failure });
+}
+
+pub fn parseRecovering(allocator: std.mem.Allocator, text: []const u8) !ParseResult {
+    return parseRecoveringWithSourceName(allocator, text, "");
+}
+
+pub fn parseRecoveringWithSourceName(allocator: std.mem.Allocator, text: []const u8, source_name: []const u8) !ParseResult {
+    return parseRecoveringWithOptions(allocator, text, source_name, .{});
+}
+
+pub fn parseRecoveringWithSourceNameAndFailure(allocator: std.mem.Allocator, text: []const u8, source_name: []const u8, failure: *ParseFailure) !ParseResult {
+    return parseRecoveringWithOptions(allocator, text, source_name, .{ .failure = failure });
+}
+
+pub fn parseRecoveringWithOptions(allocator: std.mem.Allocator, text: []const u8, source_name: []const u8, options: ParseOptions) !ParseResult {
+    var surface = try parser.parseRecoveringWithOptions(allocator, text, source_name, .{
+        .failure = options.failure,
+        .cancellation = options.cancellation,
+    });
+    defer surface.deinit(allocator);
+    var module = try expand(allocator, &surface.module, text, options);
+    errdefer module.deinit(allocator);
+    const holes = surface.holes;
+    surface.holes = .{ .holes = &.{}, .diagnostics = &.{} };
+    return .{ .module = module, .holes = holes };
+}
+
+fn expand(allocator: std.mem.Allocator, surface: *const Surface.Module, text: []const u8, options: ParseOptions) !ast.Module {
+    var failure: DesugarFailure = .{};
+    const config = DesugarOptions{ .expand_stages = options.expansion.expand_stages, .failure = &failure, .cancellation = options.cancellation };
+    return desugar(allocator, surface, config) catch |err| {
+        if (options.failure) |output| {
+            const span = failure.span orelse ast.Span{ .start = text.len, .end = text.len };
+            output.diagnostic = .{
+                .err = err,
+                .span = span,
+                .expected = @import("syntax/diagnostics.zig").expected(err),
+                .found = @import("syntax/diagnostics.zig").foundToken(text, @min(span.start, text.len)),
+                .detail = failure.detail,
+            };
+        }
+        return err;
+    };
+}

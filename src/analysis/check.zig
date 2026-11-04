@@ -258,13 +258,15 @@ pub fn checkPageNamesUnique(
         const module = state.moduleById(module_id) orelse continue;
         const origin_path = originPathForModule(module);
         for (module.syntax.pages.items) |page| {
-            if (pages.contains(page.name)) {
+            if (page.stage_index) |index| if (index != 0) continue;
+            const name = page.source_name orelse page.name;
+            if (pages.contains(name)) {
                 const origin = core.SourceOrigin.at(origin_path, page.span);
 
-                try addUserReport(state, origin, "DuplicatePage", "page '{s}' is already defined", .{page.name});
+                try addUserReport(state, origin, "DuplicatePage", "page '{s}' is already defined", .{name});
                 return error.DuplicatePage;
             }
-            try pages.put(page.name, {});
+            try pages.put(name, {});
         }
     }
 }
@@ -381,6 +383,7 @@ pub fn checkPageStatements(
                 try continueAfterDiagnostic(state, diagnostic_count, err);
                 had_diagnostics = true;
             };
+            if (page.stage_index != null) try state.labelDiagnostics(diagnostic_count, page.name);
         }
     }
     if (had_diagnostics) return error.DiagnosticsFailed;

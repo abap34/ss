@@ -11,6 +11,11 @@ pub const ParseDiagnostic = struct {
 
 pub fn expected(err: anyerror) ?[]const u8 {
     return switch (err) {
+        error.EmptyStages => "at least one stage name inside 'stages name { ... }'",
+        error.DuplicateStageName => "a unique name for each stage",
+        error.DuplicateStagesDeclaration => "only one stages declaration per page",
+        error.UnknownStage => "a stage name declared in this page's stages list",
+        error.InvalidStagesLocation => "a stages declaration directly inside a page",
         error.ExpectedString => "string or page name",
         error.ExpectedIdentifier => "identifier",
         error.ExpectedExpression => "expression",

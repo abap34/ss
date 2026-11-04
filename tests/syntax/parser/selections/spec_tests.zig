@@ -7,7 +7,7 @@ const testing = std.testing;
 fn call(expr: ast.Expr, name: []const u8) !ast.CallExpr {
     try testing.expect(expr == .call);
     try testing.expectEqualStrings(name, expr.call.callee.name);
-    try testing.expect(expr.call.callee.is_operator);
+    try testing.expect(expr.call.callee.resolution == .intrinsic);
     return expr.call;
 }
 

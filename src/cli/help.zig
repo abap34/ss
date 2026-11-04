@@ -62,7 +62,7 @@ pub fn general(output: Output) void {
         s.command, s.reset,
         s.command, s.reset,
     });
-    writeAll(output, "\n");
+    writeAll(output, "  ss expand [input.ss]    Print expanded AST as source text\n\n");
     outputPrint(output,
         \\{s}Examples:{s}
         \\  {s}ss init .{s}
@@ -81,6 +81,26 @@ pub fn general(output: Output) void {
 }
 
 pub fn command(output: Output, name: []const u8) bool {
+    if (std.mem.eql(u8, name, "expand")) {
+        writeAll(output,
+            \\Usage:
+            \\  ss expand [input.ss] [output.ss]
+            \\  ss expand --project FILE_OR_DIR [--output output.ss]
+            \\
+            \\Print the entry file's expanded AST as source text before type checking
+            \\or evaluation. Imports are retained without loading their modules.
+            \\Generated identifiers and primitive calls are preserved. Internal names
+            \\make this inspection output; it is not surface-language input.
+            \\Composition metadata is shown in comments. Source spans are omitted.
+            \\
+            \\Options:
+            \\  --project FILE_OR_DIR   Resolve the entry file from ss.toml
+            \\  --output FILE           Write to a file instead of stdout
+            \\  --color auto|always|never
+            \\
+        );
+        return true;
+    }
     if (std.mem.eql(u8, name, "help")) {
         help(output);
         return true;
@@ -660,7 +680,7 @@ const bash_completion =
     \\  prev="${COMP_WORDS[COMP_CWORD-1]}"
     \\  command="${COMP_WORDS[1]}"
     \\
-    \\  local commands="init doctor check render present dump watch debug cache lsp version completion help"
+    \\  local commands="init doctor check render present dump expand watch debug cache lsp version completion help"
     \\  local common_opts="help --help -h"
     \\  local diagnostic_opts="--diagnostic-level --warnings --quiet --measure-profile --profile --profile-buffer-kb"
     \\  local project_opts="--project --asset-base-dir --jobs --color $diagnostic_opts"
@@ -705,7 +725,7 @@ const bash_completion =
     \\    doctor)
     \\      COMPREPLY=( $(compgen -W "$common_opts --project --asset-base-dir --strict" -- "$cur") )
     \\      ;;
-    \\    check|dump)
+    \\    check|dump|expand)
     \\      COMPREPLY=( $(compgen -W "$common_opts $project_opts --output" -- "$cur") )
     \\      ;;
     \\    render)
@@ -770,6 +790,7 @@ const zsh_completion =
     \\    'render:Write PDF or HTML'
     \\    'present:Open the browser presenter'
     \\    'dump:Write IR JSON'
+    \\    'expand:Print expanded AST as source text'
     \\    'watch:Re-run check or render on changes'
     \\    'debug:Write schedule or layout JSON'
     \\    'cache:Manage caches'
@@ -796,7 +817,7 @@ const zsh_completion =
     \\    doctor)
     \\      _arguments '*::arg:->args' '--project[load ss.toml]:file or dir:_files' '--asset-base-dir[resolve assets from dir]:dir:_files -/' '--strict[fail on issues]' $common_opts
     \\      ;;
-    \\    check|dump)
+    \\    check|dump|expand)
     \\      _arguments '*::arg:->args' $project_opts '--output[output path]:file:_files' $common_opts
     \\      ;;
     \\    render)
@@ -844,6 +865,7 @@ const fish_completion =
     \\complete -c ss -n '__fish_use_subcommand' -a present -d 'Open the browser presenter'
     \\complete -c ss -n '__fish_seen_subcommand_from present' -l no-open -d 'Print URL without opening the browser'
     \\complete -c ss -n '__fish_use_subcommand' -a dump -d 'Write IR JSON'
+    \\complete -c ss -n '__fish_use_subcommand' -a expand -d 'Print expanded AST as source text'
     \\complete -c ss -n '__fish_use_subcommand' -a watch -d 'Re-run check or render on changes'
     \\complete -c ss -n '__fish_use_subcommand' -a debug -d 'Write schedule or layout JSON'
     \\complete -c ss -n '__fish_use_subcommand' -a cache -d 'Manage caches'
@@ -858,18 +880,18 @@ const fish_completion =
     \\complete -c ss -n '__fish_seen_subcommand_from init' -l entry -r -d 'Entry file to create'
     \\complete -c ss -n '__fish_seen_subcommand_from init' -l force -d 'Overwrite generated files'
     \\
-    \\complete -c ss -n '__fish_seen_subcommand_from check dump render present doctor watch debug' -l project -r -d 'Load entry and asset base from ss.toml'
-    \\complete -c ss -n '__fish_seen_subcommand_from check dump render present doctor watch debug' -l asset-base-dir -r -d 'Resolve relative assets from DIR'
-    \\complete -c ss -n '__fish_seen_subcommand_from check dump render present doctor watch debug' -l color -r -a 'auto always never' -d 'Color mode'
-    \\complete -c ss -n '__fish_seen_subcommand_from check dump render present watch debug' -l diagnostic-level -r -a 'note warning error off' -d 'Diagnostic display level'
-    \\complete -c ss -n '__fish_seen_subcommand_from check dump render present watch debug' -l warnings -r -a 'off' -d 'Warning display'
-    \\complete -c ss -n '__fish_seen_subcommand_from check dump render present watch debug' -l quiet -d 'Hide progress and warning diagnostics'
-    \\complete -c ss -n '__fish_seen_subcommand_from check dump render present watch debug lsp' -l profile -r -d 'Save profiling session'
-    \\complete -c ss -n '__fish_seen_subcommand_from check dump render present watch debug lsp' -l profile-buffer-kb -x -d 'Recording buffer in KiB'
-    \\complete -c ss -n '__fish_seen_subcommand_from check dump render present watch debug' -l measure-profile -d 'Print detailed timing counters'
-    \\complete -c ss -n '__fish_seen_subcommand_from dump render present watch debug' -l output -r -d 'Output path'
+    \\complete -c ss -n '__fish_seen_subcommand_from check dump expand render present doctor watch debug' -l project -r -d 'Load entry and asset base from ss.toml'
+    \\complete -c ss -n '__fish_seen_subcommand_from check dump expand render present doctor watch debug' -l asset-base-dir -r -d 'Resolve relative assets from DIR'
+    \\complete -c ss -n '__fish_seen_subcommand_from check dump expand render present doctor watch debug' -l color -r -a 'auto always never' -d 'Color mode'
+    \\complete -c ss -n '__fish_seen_subcommand_from check dump expand render present watch debug' -l diagnostic-level -r -a 'note warning error off' -d 'Diagnostic display level'
+    \\complete -c ss -n '__fish_seen_subcommand_from check dump expand render present watch debug' -l warnings -r -a 'off' -d 'Warning display'
+    \\complete -c ss -n '__fish_seen_subcommand_from check dump expand render present watch debug' -l quiet -d 'Hide progress and warning diagnostics'
+    \\complete -c ss -n '__fish_seen_subcommand_from check dump expand render present watch debug lsp' -l profile -r -d 'Save profiling session'
+    \\complete -c ss -n '__fish_seen_subcommand_from check dump expand render present watch debug lsp' -l profile-buffer-kb -x -d 'Recording buffer in KiB'
+    \\complete -c ss -n '__fish_seen_subcommand_from check dump expand render present watch debug' -l measure-profile -d 'Print detailed timing counters'
+    \\complete -c ss -n '__fish_seen_subcommand_from dump expand render present watch debug' -l output -r -d 'Output path'
     \\complete -c ss -n '__fish_seen_subcommand_from render watch' -l format -r -a 'pdf html' -d 'Output format'
-    \\complete -c ss -n '__fish_seen_subcommand_from check dump render present watch debug' -l jobs -r -d 'Parallel page-processing jobs'
+    \\complete -c ss -n '__fish_seen_subcommand_from check dump expand render present watch debug' -l jobs -r -d 'Parallel page-processing jobs'
     \\complete -c ss -n '__fish_seen_subcommand_from render present' -l diagnostics-json -r -d 'Diagnostics JSON path'
     \\complete -c ss -n '__fish_seen_subcommand_from watch' -l interval-ms -r -d 'Poll interval'
     \\complete -c ss -n '__fish_seen_subcommand_from doctor' -l strict -d 'Fail on issues'
@@ -881,6 +903,6 @@ const fish_completion =
     \\complete -c ss -n '__fish_seen_subcommand_from cache' -a 'project tree-sitter help' -d 'Cache target'
     \\complete -c ss -n '__fish_seen_subcommand_from cache; and __fish_seen_subcommand_from project; and __fish_seen_subcommand_from clear' -l force -d 'Clear resources held by WYSIWYG after rendering finishes'
     \\complete -c ss -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish help' -d 'Shell'
-    \\complete -c ss -n '__fish_seen_subcommand_from help' -a 'init doctor check render present dump watch debug cache lsp version completion' -d 'Command'
+    \\complete -c ss -n '__fish_seen_subcommand_from help' -a 'init doctor check render present dump expand watch debug cache lsp version completion' -d 'Command'
     \\
 ;

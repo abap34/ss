@@ -919,6 +919,13 @@ pub fn isExpectedCliError(err: anyerror) bool {
         error.UnknownFunction,
         error.UnknownQuery,
         error.UnknownIdentifier,
+        error.EmptyStages,
+        error.DuplicateStageName,
+        error.DuplicateStagesDeclaration,
+        error.UnknownStage,
+        error.InvalidStagesLocation,
+        error.DrawingConditionTypeMismatch,
+        error.DrawingConditionHasEffects,
         error.UnknownType,
         error.ExpectedString,
         error.ExpectedIdentifier,
@@ -1030,6 +1037,17 @@ pub fn parseDiagnosticCode(err: anyerror) []const u8 {
 }
 
 pub fn formatContextDiagnostic(allocator: std.mem.Allocator, diagnostic: anytype) ![]const u8 {
+    const message = try formatContextDiagnosticMessage(allocator, diagnostic);
+    errdefer allocator.free(message);
+    if (diagnostic.origin) |origin| if (origin.label) |label| {
+        const contextual = try std.fmt.allocPrint(allocator, "{s} [context: {s}]", .{ message, label });
+        allocator.free(message);
+        return contextual;
+    };
+    return message;
+}
+
+fn formatContextDiagnosticMessage(allocator: std.mem.Allocator, diagnostic: anytype) ![]const u8 {
     return switch (diagnostic.data) {
         .user_report => |data| if (std.mem.eql(u8, data.code, "UserReport"))
             allocator.dupe(u8, data.message)

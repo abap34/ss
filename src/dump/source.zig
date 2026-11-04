@@ -158,6 +158,9 @@ fn writeModuleSyntax(allocator: std.mem.Allocator, object: *json.Object, program
     for (program.pages.items) |page| {
         var item = try pages.objectItem();
         try item.stringField("name", page.name);
+        try item.optionalStringField("sourceName", page.source_name);
+        try item.optionalIntField("stageIndex", page.stage_index);
+        try item.optionalStringField("stageName", if (page.stage_index) |index| page.stages.?.entries.items[index].name else null);
         try writeSpan(&item, page.span);
         var statements = try item.arrayField("statements");
         for (page.statements.items) |stmt| try writeStatement(allocator, &statements, stmt);

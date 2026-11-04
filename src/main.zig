@@ -10,6 +10,7 @@ const render_compiler = @import("render/compile.zig");
 const cli_help = @import("cli/help.zig");
 const cli_present = @import("cli/present.zig");
 const cli_completion = @import("cli/completion.zig");
+const cli_expand = @import("cli/expand.zig");
 const error_report = utils.err;
 
 fn failUsage(comptime fmt: []const u8, args: anytype) error{InvalidUsage} {
@@ -1419,6 +1420,24 @@ fn runCommand(io: std.Io, allocator: std.mem.Allocator, environ: std.process.Env
             return;
         }
         version();
+        return;
+    }
+
+    if (std.mem.eql(u8, cmd, "expand")) {
+        if (wantsCommandHelp(args[2..])) {
+            _ = cli_help.command(.stdout, "expand");
+            return;
+        }
+        const options = try parseCommandOptions(args[2..]);
+        applyDiagnosticOptions(options, null);
+        var resolved = try resolveProjectOrUsage(allocator, io, options);
+        defer resolved.deinit(allocator);
+        applyDiagnosticOptions(options, &resolved);
+        if (options.output_path) |output_path| {
+            try validateOutputParentOrCliError(io, output_path);
+            try validateOutputPathConflicts(io, allocator, &resolved, &.{.{ .path = output_path, .option = "--output" }});
+        }
+        try cli_expand.run(io, allocator, resolved.entry_path, options.output_path);
         return;
     }
 

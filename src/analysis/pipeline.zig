@@ -223,11 +223,11 @@ fn addDependencyQueryDiagnostics(allocator: std.mem.Allocator, state: *core.Docu
             defer summary.deinit();
             var scheduled = false;
             for (graph.units.items) |unit| {
-                if (unit.kind == .display) continue;
+                if (unit.kind == .display or unit.kind == .drawing) continue;
                 if (unit.module_id != module_id or unit.span.start != target.stmt.span.start or unit.span.end != target.stmt.span.end) continue;
                 summary = try unit.summary.clone(allocator);
                 scope = switch (unit.kind) {
-                    .display => unreachable,
+                    .display, .drawing => unreachable,
                     .document_statement => .{ .document = module_id },
                     .page_statement => |page| .{ .page = page.page_id },
                 };

@@ -1931,3 +1931,26 @@ test "fold evaluation: aggregate accumulators own nested selections independentl
     try testing.expectEqualStrings("13/10/2/10", input.field("content").?.string);
     try testing.expectEqual(@as(usize, 0), state.diagnostics.entries.items.len);
 }
+
+test "paired placement: generated references bypass shadowing without changing default bindings" {
+    var state = try documentWithModules(
+        \\import std:text as text_api
+        \\fn pagectx() -> Number = 0
+        \\fn place_on!(page: Number, value: Number) -> Number = page + value
+        \\fn/! label(label: String, pagectx: String = "", suffix: String = label) -> text_api::Text
+        \\  return text_api::text(label ++ pagectx ++ suffix)
+        \\end
+        \\page Demo
+        \\  label!("Body", "/", "!")
+        \\  label!("Copy")
+        \\end
+    );
+    defer state.deinit();
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const roots = state.placementRootsOf(state.graph.page_order.items[0]);
+    try testing.expectEqual(@as(usize, 2), roots.len);
+    try testing.expectEqualStrings("Body/!", core.nodeDisplayContent(state.getNode(roots[0]).?));
+    try testing.expectEqualStrings("CopyCopy", core.nodeDisplayContent(state.getNode(roots[1]).?));
+}

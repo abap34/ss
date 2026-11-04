@@ -40,6 +40,7 @@ pub const Page = struct {
 pub const Object = struct {
     id: NodeId,
     page_id: NodeId,
+    drawn: bool = true,
     x: f32,
     y: f32,
     width: f32,
@@ -93,6 +94,7 @@ pub const Report = struct {
             try objects.append(allocator, .{
                 .id = node.id,
                 .page_id = page_id,
+                .drawn = state.isDrawn(node.id),
                 .x = frame.x,
                 .y = frame.y,
                 .width = frame.width,
@@ -339,6 +341,7 @@ pub fn toJson(allocator: std.mem.Allocator, state: anytype, layouts: *const Docu
             try item.intField("id", node.id);
             try item.intField("page_id", page_id);
             try item.stringField("name", node.name);
+            try item.boolField("drawn", state.isDrawn(node.id));
             try item.floatField("x", frame.x, "{d:.4}");
             try item.floatField("y", frame.y, "{d:.4}");
             try item.floatField("width", frame.width, "{d:.4}");

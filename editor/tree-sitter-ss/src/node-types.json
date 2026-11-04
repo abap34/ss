@@ -1097,6 +1097,10 @@
         {
           "type": "return_statement",
           "named": true
+        },
+        {
+          "type": "show_statement",
+          "named": true
         }
       ]
     }
@@ -1300,6 +1304,10 @@
           "named": true
         },
         {
+          "type": "show_statement",
+          "named": true
+        },
+        {
           "type": "type_parameters",
           "named": true
         }
@@ -1479,6 +1487,10 @@
         },
         {
           "type": "return_statement",
+          "named": true
+        },
+        {
+          "type": "show_statement",
           "named": true
         }
       ]
@@ -2049,6 +2061,14 @@
         },
         {
           "type": "return_statement",
+          "named": true
+        },
+        {
+          "type": "show_statement",
+          "named": true
+        },
+        {
+          "type": "stages_declaration",
           "named": true
         }
       ]
@@ -2651,6 +2671,148 @@
     }
   },
   {
+    "type": "show_statement",
+    "named": true,
+    "fields": {
+      "condition": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "bare_callable_identifier",
+            "named": true
+          },
+          {
+            "type": "binary_expression",
+            "named": true
+          },
+          {
+            "type": "block_text",
+            "named": true
+          },
+          {
+            "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "call_expression",
+            "named": true
+          },
+          {
+            "type": "color_string",
+            "named": true
+          },
+          {
+            "type": "composition_expression",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "lambda_expression",
+            "named": true
+          },
+          {
+            "type": "member_expression",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "parenthesized_expression",
+            "named": true
+          },
+          {
+            "type": "property_default_expression",
+            "named": true
+          },
+          {
+            "type": "property_exists_expression",
+            "named": true
+          },
+          {
+            "type": "qualified_callable_identifier",
+            "named": true
+          },
+          {
+            "type": "qualified_identifier",
+            "named": true
+          },
+          {
+            "type": "string",
+            "named": true
+          },
+          {
+            "type": "text_call_expression",
+            "named": true
+          },
+          {
+            "type": "unary_expression",
+            "named": true
+          },
+          {
+            "type": "value_construction",
+            "named": true
+          },
+          {
+            "type": "value_update_expression",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "block_call_statement",
+          "named": true
+        },
+        {
+          "type": "constrain_statement",
+          "named": true
+        },
+        {
+          "type": "constraint_update_statement",
+          "named": true
+        },
+        {
+          "type": "expression_statement",
+          "named": true
+        },
+        {
+          "type": "if_statement",
+          "named": true
+        },
+        {
+          "type": "let_statement",
+          "named": true
+        },
+        {
+          "type": "line_call_statement",
+          "named": true
+        },
+        {
+          "type": "member_assignment_statement",
+          "named": true
+        },
+        {
+          "type": "return_statement",
+          "named": true
+        },
+        {
+          "type": "show_statement",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "source_file",
     "named": true,
     "root": true,
@@ -2688,6 +2850,32 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "stages_declaration",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "stage": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -3547,6 +3735,14 @@
   },
   {
     "type": "return",
+    "named": false
+  },
+  {
+    "type": "show",
+    "named": false
+  },
+  {
+    "type": "stages",
     "named": false
   },
   {

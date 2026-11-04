@@ -28,9 +28,18 @@ pub const AccessSummary = struct {
     selection_reads: std.ArrayList(Resource),
     escaped_objects: std.ArrayList(ObjectIdentity) = .empty,
     placements: std.ArrayList(PlacementDefinition) = .empty,
+    drawings: std.ArrayList(DrawingDefinition) = .empty,
+
     writes_layout_input: bool = false,
     places_objects: bool = false,
     invalid_selection_mutation: ?InvalidSelectionMutation = null,
+    invalid_drawing_condition: ?core.SourceOrigin = null,
+
+    pub const DrawingDefinition = struct {
+        key: u64,
+        origin: core.SourceOrigin,
+        condition: *AccessSummary,
+    };
 
     pub const PlacementDefinition = struct {
         call_id: u64,
@@ -53,6 +62,11 @@ pub const AccessSummary = struct {
     }
 
     pub fn deinit(self: *AccessSummary) void {
+        for (self.drawings.items) |drawing| {
+            drawing.condition.deinit();
+            self.allocator.destroy(drawing.condition);
+        }
+        self.drawings.deinit(self.allocator);
         for (self.placements.items) |*placement| {
             for (placement.steps.items) |*step| step.deinit();
             placement.steps.deinit(self.allocator);
@@ -82,7 +96,20 @@ pub const AccessSummary = struct {
         try self.escaped_objects.append(self.allocator, identity);
     }
 
+    pub fn addDrawing(self: *AccessSummary, key: u64, origin: core.SourceOrigin, condition: AccessSummary) std.mem.Allocator.Error!void {
+        for (self.drawings.items) |*existing| if (existing.key == key) {
+            try existing.condition.merge(condition);
+            return;
+        };
+        const copy = try self.allocator.create(AccessSummary);
+        errdefer self.allocator.destroy(copy);
+        copy.* = try condition.clone(self.allocator);
+        errdefer copy.deinit();
+        try self.drawings.append(self.allocator, .{ .key = key, .origin = origin, .condition = copy });
+    }
+
     pub fn merge(self: *AccessSummary, other: AccessSummary) !void {
+        for (other.drawings.items) |drawing| try self.addDrawing(drawing.key, drawing.origin, drawing.condition.*);
         for (other.placements.items) |placement| try self.addPlacement(placement);
         for (other.escaped_objects.items) |identity| try self.addEscapedObject(identity);
         try self.reads.ensureUnusedCapacity(self.allocator, other.reads.items.len);
@@ -94,6 +121,7 @@ pub const AccessSummary = struct {
         self.writes_layout_input = self.writes_layout_input or other.writes_layout_input;
         self.places_objects = self.places_objects or other.places_objects;
         if (self.invalid_selection_mutation == null) self.invalid_selection_mutation = other.invalid_selection_mutation;
+        if (self.invalid_drawing_condition == null) self.invalid_drawing_condition = other.invalid_drawing_condition;
     }
 
     fn hasConcreteMembershipScope(self: AccessSummary) bool {
@@ -102,6 +130,7 @@ pub const AccessSummary = struct {
                 if (resource == .objects and (resource.objects.page_scope != .any or !resource.objects.placement.eql(.{}))) return true;
             }
         }
+        for (self.drawings.items) |drawing| if (drawing.condition.hasConcreteMembershipScope()) return true;
         for (self.placements.items) |placement| {
             if (placement.page_scope != .any) return true;
             for (placement.steps.items) |step| if (step.hasConcreteMembershipScope()) return true;
@@ -112,6 +141,7 @@ pub const AccessSummary = struct {
     pub fn clone(self: AccessSummary, allocator: std.mem.Allocator) std.mem.Allocator.Error!AccessSummary {
         var copied = AccessSummary.init(allocator);
         errdefer copied.deinit();
+        for (self.drawings.items) |drawing| try copied.addDrawing(drawing.key, drawing.origin, drawing.condition.*);
         for (self.placements.items) |placement| try copied.addPlacement(placement);
         try copied.reads.ensureTotalCapacity(allocator, @intCast(self.reads.items.len));
         try copied.writes.ensureTotalCapacity(allocator, @intCast(self.writes.items.len));
@@ -123,6 +153,7 @@ pub const AccessSummary = struct {
         copied.writes_layout_input = self.writes_layout_input;
         copied.places_objects = self.places_objects;
         copied.invalid_selection_mutation = self.invalid_selection_mutation;
+        copied.invalid_drawing_condition = self.invalid_drawing_condition;
         return copied;
     }
 
@@ -1371,7 +1402,7 @@ pub const Analyzer = struct {
                 }
             },
             .fold => return self.foldValueFacts(call, null),
-            .first, .selection_filter => if (call.args.items.len > 0) {
+            .first, .selection_filter, .draw_when => if (call.args.items.len > 0) {
                 result = try self.callArgumentValue(call, arg_facts, 0);
             },
             .selection_union, .selection_intersection, .sub => if (call.args.items.len == 2) {
@@ -2250,6 +2281,7 @@ pub const Analyzer = struct {
         descriptor: registry.PrimitiveDescriptor,
         returned: ?*ValueFacts,
     ) anyerror!AccessSummary {
+        if (descriptor.op == .draw_when) return self.drawingCall(call, returned);
         if (descriptor.callback != null) return try self.primitiveCallbackCall(call, descriptor, returned);
         if (primitiveNeedsArgFacts(descriptor.op)) {
             var arg_facts = try self.collectCallArgFacts(call);
@@ -2296,6 +2328,27 @@ pub const Analyzer = struct {
             },
             else => {},
         }
+        return summary;
+    }
+
+    fn drawingCall(self: *Analyzer, call: ast.CallExpr, returned: ?*ValueFacts) anyerror!AccessSummary {
+        var operand = try self.analyzeCallArgFacts(call.args.items[0]);
+        defer operand.deinit();
+        var predicate = try self.analyzeCallArgFacts(call.args.items[1]);
+        defer predicate.deinit();
+        var condition = try self.invokeValueFacts(predicate.values, &.{});
+        defer condition.deinit();
+        var summary = AccessSummary.init(self.allocator);
+        errdefer summary.deinit();
+        try summary.merge(operand.summary);
+        try summary.merge(predicate.summary);
+        summary.places_objects = true;
+        const origin: core.SourceOrigin = if (self.sema.state) |state| state.sourceOrigin(self.sema.module_id, call.callee.span orelse .{ .start = 0, .end = 0 }) else .{};
+        if (condition.places_objects or condition.writes_layout_input or condition.writes.items.len != 0 or condition.drawings.items.len != 0) {
+            summary.invalid_drawing_condition = origin;
+        }
+        if (call.callee.call_id) |id| try summary.addDrawing(id, origin, condition);
+        if (returned) |output| output.* = operand.values;
         return summary;
     }
 
@@ -2578,7 +2631,7 @@ pub const Analyzer = struct {
                 .pagectx, .new_page => PropertyTarget.page(),
                 .group, .group_placed => if (self.isAdoption(call)) PropertyTarget.freshObject() else null,
                 .place_on => PropertyTarget.freshObject(),
-                .foreach, .selection_filter, .foreach_enumerate => if (call.args.items.len > 0)
+                .foreach, .selection_filter, .foreach_enumerate, .draw_when => if (call.args.items.len > 0)
                     try self.propertyTargetExpr(call.args.items[0])
                 else
                     PropertyTarget.any(),
@@ -3058,6 +3111,7 @@ fn literalStringCall(self: *Analyzer, call: ast.CallExpr) anyerror!?[]const u8 {
     return switch (descriptor) {
         .primitive => |primitive| switch (primitive.op) {
             .concat => try literalConcat(self, call),
+            .draw_when => try literalStringExpr(self, call.args.items[0]),
             else => null,
         },
         .function => |resolved| try literalStringFunctionCall(self, resolved, call),
