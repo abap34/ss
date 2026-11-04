@@ -1,10 +1,10 @@
 const std = @import("std");
 const project = @import("modules.zig");
-const compat = @import("compat.zig");
+const inputs = @import("inputs.zig");
 
 pub fn configure(ctx: project.Context, utils: *std.Build.Module) void {
     const enabled = ctx.b.option(bool, "profiling", "Enable the optional Perfetto recording SDK") orelse false;
-    const manifest_text = compat.readFile(ctx.b, "third_party/perfetto/manifest.json", .limited(64 * 1024)) catch
+    const manifest_text = inputs.readFile(ctx.b, "third_party/perfetto/manifest.json", .limited(64 * 1024)) catch
         @panic("cannot read third_party/perfetto/manifest.json");
     const manifest = std.json.parseFromSlice(std.json.Value, ctx.b.allocator, manifest_text, .{}) catch
         @panic("invalid Perfetto SDK manifest");
@@ -18,7 +18,7 @@ pub fn configure(ctx: project.Context, utils: *std.Build.Module) void {
     var files = manifest.value.object.get("files").?.object.iterator();
     while (files.next()) |file| {
         const path = ctx.b.fmt("{s}/{s}", .{ source_root, file.key_ptr.* });
-        const bytes = compat.readFile(ctx.b, path, .limited(16 * 1024 * 1024)) catch
+        const bytes = inputs.readFile(ctx.b, path, .limited(16 * 1024 * 1024)) catch
             @panic("Perfetto SDK is missing. Run: python3 third_party/perfetto/tools/fetch.py");
         var hash: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(bytes, &hash, .{});
@@ -27,7 +27,7 @@ pub fn configure(ctx: project.Context, utils: *std.Build.Module) void {
     }
     const native = ctx.b.createModule(.{
         .target = ctx.target,
-        .optimize = .ReleaseFast,
+        .optimize = .fast,
         .link_libc = true,
         .link_libcpp = true,
     });

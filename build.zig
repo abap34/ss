@@ -1,4 +1,12 @@
-const std = @import("std");
+const builtin = @import("builtin");
+const std = blk: {
+    if (builtin.zig_version.major != 0 or builtin.zig_version.minor != 17 or
+        builtin.zig_version.order(.{ .major = 0, .minor = 17, .patch = 0 }) == .lt)
+    {
+        @compileError("ss requires Zig 0.17.x (minimum 0.17.0); found " ++ builtin.zig_version_string);
+    }
+    break :blk @import("std");
+};
 const options = @import("build/options.zig");
 const project = @import("build/modules.zig");
 const dependencies = @import("build/dependencies.zig");
@@ -62,9 +70,7 @@ pub fn build(b: *std.Build) void {
     });
     const exe = qpdf.runnable(b, bridge, installed_exe);
     const run = steps.runExecutable(b, exe);
-    if (@hasDecl(std.Build.Step.Run, "addPassthruArgs")) {
-        run.addPassthruArgs();
-    } else if (b.args) |args| run.addArgs(args);
+    run.addPassthruArgs();
     b.step("run", "Run the ss CLI").dependOn(&run.step);
 
     const editor_build = steps.node(b, &checks.node.step, "editor/vscode/scripts/build.js", null);

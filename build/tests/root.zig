@@ -1,5 +1,4 @@
 const std = @import("std");
-const compat = @import("../compat.zig");
 const project = @import("../modules.zig");
 const dependencies = @import("../dependencies.zig");
 const qpdf = @import("../qpdf.zig");
@@ -35,6 +34,6 @@ pub fn register(ctx: project.Context, modules: project.ProjectModules, build_opt
     @import("runtime.zig").register(suite, exe);
 
     const diagnostics = steps.node(b, &checks.node.step, "tests/build/dependencies/spec.mjs", checks.executable.getEmittedBin());
-    compat.addZigArg(b, diagnostics);
+    diagnostics.addFileArg(.zig_exe);
     steps.focused(b, "test-build-dependencies", "Check friendly build dependency diagnostics", &diagnostics.step);
 }

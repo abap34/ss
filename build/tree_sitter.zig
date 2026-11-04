@@ -1,5 +1,5 @@
 const std = @import("std");
-const compat = @import("compat.zig");
+const inputs = @import("inputs.zig");
 const metadata = @import("tree_sitter_manifest.zig");
 const TreeSitterManifest = metadata.TreeSitterManifest;
 const Step = std.Build.Step;
@@ -17,22 +17,22 @@ pub const Bundle = struct {
 
 pub fn create(b: *std.Build) Bundle {
     const manifest_path = "third_party/tree-sitter-languages/manifest.json";
-    const manifest_text = compat.readFile(b, manifest_path, .limited(512 * 1024)) catch
+    const manifest_text = inputs.readFile(b, manifest_path, .limited(512 * 1024)) catch
         @panic("third_party/tree-sitter-languages/manifest.json is missing.");
     const manifest = metadata.parse(b.allocator, manifest_text);
     const manifest_hash = metadata.hash(b.allocator, manifest_text);
-    const cache_root = compat.pathFromRoot(b, b.option([]const u8, "tree-sitter-cache", "Shared tree-sitter source cache directory") orelse treeSitterCacheRoot(b));
+    const cache_root = inputs.pathFromRoot(b, b.option([]const u8, "tree-sitter-cache", "Shared tree-sitter source cache directory") orelse treeSitterCacheRoot(b));
     const sources = b.option([]const u8, "tree-sitter-sources", "Directory of pinned runtime and language source checkouts") orelse nixTreeSitterSourcesRoot(b);
     const module = b.createModule(.{
         .root_source_file = b.path("build/tree_sitter_prepare.zig"),
         .target = b.graph.host,
-        .optimize = .ReleaseSafe,
+        .optimize = .safe,
         .link_libc = true,
     });
     module.addImport("tree_sitter_cache", b.createModule(.{
         .root_source_file = b.path("src/utils/tree_sitter_cache.zig"),
         .target = b.graph.host,
-        .optimize = .ReleaseSafe,
+        .optimize = .safe,
         .link_libc = true,
     }));
     const executable = b.addExecutable(.{ .name = "ss-tree-sitter-prepare", .root_module = module });
@@ -41,7 +41,7 @@ pub fn create(b: *std.Build) Bundle {
     prepare.addFileArg(b.path(manifest_path));
     prepare.addArg(cache_root);
     const output = prepare.addOutputDirectoryArg("tree-sitter");
-    if (sources) |source| prepare.addDirectoryArg(.{ .cwd_relative = compat.pathFromRoot(b, source) });
+    if (sources) |source| prepare.addDirectoryArg(.{ .cwd_relative = inputs.pathFromRoot(b, source) });
     var c_sources: std.ArrayList([]const u8) = .empty;
     for (manifest.languages) |language| {
         for (language.files) |file| {
@@ -62,7 +62,7 @@ pub fn create(b: *std.Build) Bundle {
 
 fn nixTreeSitterSourcesRoot(b: *std.Build) ?[]const u8 {
     const path = ".ss-cache/nix/tree-sitter-sources";
-    compat.access(b, path) catch return null;
+    inputs.access(b, path) catch return null;
     return path;
 }
 
@@ -140,19 +140,19 @@ pub fn addAbiCheck(ctx: CompileOptions, tree_sitter: Bundle) *Step {
 pub const CompileOptions = struct {
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: compat.Optimize,
+    optimize: std.lang.Optimize,
     ubsan: bool,
 };
 
 pub fn addOptions(b: *std.Build, options: *Step.Options, bundle: Bundle) void {
     options.addOption([]const u8, "tree_sitter_cache_subdir", cache_subdir);
     options.addOption([]const u8, "tree_sitter_manifest_hash", bundle.manifest_hash);
-    const ss_query = compat.readFile(b, "editor/tree-sitter-ss/queries/highlights.scm", .limited(64 * 1024)) catch
+    const ss_query = inputs.readFile(b, "editor/tree-sitter-ss/queries/highlights.scm", .limited(64 * 1024)) catch
         @panic("editor/tree-sitter-ss/queries/highlights.scm is missing.");
     options.addOption([]const u8, "ss_highlight_query", ss_query);
     for (bundle.languages) |language| {
         const path = b.fmt("third_party/tree-sitter-languages/{s}/queries/highlights.scm", .{language.name});
-        const query = compat.readFile(b, path, .limited(128 * 1024)) catch
+        const query = inputs.readFile(b, path, .limited(128 * 1024)) catch
             @panic("bundled tree-sitter highlight query is missing.");
         options.addOption([]const u8, b.fmt("{s}_highlight_query", .{language.name}), query);
     }

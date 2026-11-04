@@ -252,7 +252,7 @@ ss has the following dependencies:
 Run `ss doctor` to check project discovery, render tools, and tree-sitter syntax
 highlighting health in the current environment.
 
-Install Zig 0.16 and the Cairo/Pango/librsvg development files listed above,
+Install Zig 0.17.0 and the Cairo/Pango/librsvg development files listed above,
 then build.
 
 The build prepares the pinned tree-sitter runtime and

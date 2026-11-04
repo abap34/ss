@@ -1,5 +1,5 @@
 const std = @import("std");
-const compat = @import("compat.zig");
+const inputs = @import("inputs.zig");
 const native_pdf = @import("native_pdf.zig");
 const tree_sitter_build = @import("tree_sitter.zig");
 const html = @import("html.zig");
@@ -10,7 +10,7 @@ const Import = Module.Import;
 pub const Context = struct {
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: compat.Optimize,
+    optimize: std.lang.Optimize,
 };
 
 pub const ProjectModules = struct {
@@ -38,7 +38,7 @@ pub fn create(ctx: Context, build_options: *Step.Options, tree_sitter: tree_sitt
     const md4c_src = "third_party/md4c/src";
     const md4c_include = ctx.b.path(md4c_src);
     for ([_][]const u8{ md4c_src ++ "/md4c.c", md4c_src ++ "/md4c.h" }) |path| {
-        compat.access(ctx.b, path) catch
+        inputs.access(ctx.b, path) catch
             @panic(
                 \\Bundled MD4C sources are missing from third_party/md4c/src.
                 \\Restore the tracked third_party/md4c files and retry the build.

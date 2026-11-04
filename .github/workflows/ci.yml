@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 env:
-  ZIG_VERSION: 0.16.0
+  ZIG_VERSION: 0.17.0
 
 jobs:
   editor-references:
@@ -32,15 +32,9 @@ jobs:
         run: python3 editor/zed/tools/check-grammar.py
 
   test:
-    name: Zig ${{ matrix.zig-version }} build test
+    name: Zig 0.17 build test
     needs: editor-references
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        zig-version: ['0.16.0', '0.17.0']
-    env:
-      ZIG_VERSION: ${{ matrix.zig-version }}
 
     steps:
       - name: Check out repository
@@ -154,7 +148,6 @@ jobs:
         run: zig build test
 
       - name: Package and validate VS Code extension
-        if: matrix.zig-version == '0.16.0'
         working-directory: editor/vscode
         run: |
           mkdir -p ../../.test-tmp/vscode-package
@@ -199,13 +192,8 @@ jobs:
           - environment: macOS 15 ARM64, Homebrew packages
             runner: macos-15
             qpdf-version: system
-          - environment: macOS 15 ARM64, Zig 0.17, Homebrew packages
-            runner: macos-15
-            qpdf-version: system
-            zig-version: '0.17.0'
 
     env:
-      ZIG_VERSION: ${{ matrix.zig-version || '0.16.0' }}
       QPDF_PREFIX: ${{ github.workspace }}/.qpdf/${{ matrix.qpdf-version }}
 
     steps:

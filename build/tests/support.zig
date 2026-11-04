@@ -1,6 +1,6 @@
 const std = @import("std");
 const project = @import("../modules.zig");
-const compat = @import("../compat.zig");
+const inputs = @import("../inputs.zig");
 const dependencies = @import("../dependencies.zig");
 const qpdf = @import("../qpdf.zig");
 const steps = @import("../steps.zig");
@@ -43,7 +43,7 @@ pub const Suite = struct {
         } else b.addRunArtifact(artifact);
         if (options.working_directory) |directory| {
             const prepare = b.addSystemCommand(&.{ "mkdir", "-p" });
-            prepare.addArg(compat.pathFromRoot(b, directory));
+            prepare.addArg(inputs.pathFromRoot(b, directory));
             run.step.dependOn(&prepare.step);
             run.setCwd(b.path(directory));
         }

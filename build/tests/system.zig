@@ -1,5 +1,5 @@
 const std = @import("std");
-const compat = @import("../compat.zig");
+const options = @import("../options.zig");
 const project = @import("../modules.zig");
 const native_pdf = @import("../native_pdf.zig");
 const steps = @import("../steps.zig");
@@ -47,7 +47,7 @@ pub fn register(suite: Suite, modules: project.ProjectModules, build_options: *S
     profile_step.dependOn(&workload_spec.step);
     addFocusedTestStep(b, "test-profile-workload", "Validate profiling workload definitions and inputs", &workload_spec.step);
     const runner_spec = steps.node(b, &suite.checks.node.step, "tests/profiling/runner_spec.mjs", exe);
-    runner_spec.addArg(compat.optimizeName(ctx.optimize));
+    runner_spec.addArg(options.optimizeName(ctx.optimize));
     test_step.dependOn(&runner_spec.step);
     profile_step.dependOn(&runner_spec.step);
     addFocusedTestStep(b, "test-profile-runner", "Verify programmable profiling scripts and process cleanup", &runner_spec.step);
@@ -64,7 +64,7 @@ pub fn register(suite: Suite, modules: project.ProjectModules, build_options: *S
         .root_module = createModule(ctx, "tests/build/tree_sitter/cache_worker.zig", &.{import("utils", modules.utils)}, true),
     });
     const tree_build_tests = steps.node(b, &suite.checks.node.step, "tests/build/tree_sitter/spec.mjs", tree_cache_worker.getEmittedBin());
-    compat.addZigArg(b, tree_build_tests);
+    tree_build_tests.addFileArg(.zig_exe);
     test_step.dependOn(&tree_build_tests.step);
     addFocusedTestStep(b, "test-tree-sitter-build", "Run isolated and concurrent tree-sitter preparation tests", &tree_build_tests.step);
     suite.addFile("tests/utils/json/spec_tests.zig", &.{

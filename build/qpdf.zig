@@ -1,5 +1,4 @@
 const std = @import("std");
-const compat = @import("compat.zig");
 
 const Module = std.Build.Module;
 const Step = std.Build.Step;
@@ -38,10 +37,7 @@ pub fn link(
 ) void {
     module.addObjectFile(bridge.file);
     switch (location) {
-        .build => module.addRPath(if (@hasDecl(std.Build, "getInstallPath"))
-            .{ .cwd_relative = b.getInstallPath(.lib, "ss") }
-        else
-            b.graph.path(.install_lib, "ss")),
+        .build => module.addRPath(b.graph.path(.install_lib, "ss")),
         .installed => switch (target.result.os.tag) {
             .linux => module.addRPathSpecial("$ORIGIN/../lib/ss"),
             .macos => module.addRPathSpecial("@loader_path/../lib/ss"),
@@ -62,7 +58,7 @@ pub fn runnable(b: *std.Build, bridge: Bridge, executable: *Step.Compile) std.Bu
 pub fn create(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: compat.Optimize,
+    optimize: std.lang.Optimize,
     build_config: Config,
     dependency_check: *Step,
 ) Bridge {
@@ -183,11 +179,11 @@ fn unsupportedTarget(
     };
 }
 
-fn optimizationFlag(optimize: compat.Optimize) []const u8 {
+fn optimizationFlag(optimize: std.lang.Optimize) []const u8 {
     return switch (optimize) {
-        .Debug => "-O0",
-        .ReleaseSafe => "-O2",
-        .ReleaseFast => "-O3",
-        .ReleaseSmall => "-Os",
+        .debug => "-O0",
+        .safe => "-O2",
+        .fast => "-O3",
+        .small => "-Os",
     };
 }

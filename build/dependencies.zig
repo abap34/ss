@@ -39,7 +39,7 @@ pub fn create(b: *std.Build, options: Options) Checks {
     const module = b.createModule(.{
         .root_source_file = b.path("build/dependency_check.zig"),
         .target = b.graph.host,
-        .optimize = .ReleaseSafe,
+        .optimize = .safe,
     });
     const executable = b.addExecutable(.{
         .name = "ss-build-dependency-check",

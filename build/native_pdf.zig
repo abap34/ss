@@ -1,20 +1,20 @@
 const std = @import("std");
 const Module = std.Build.Module;
-const compat = @import("compat.zig");
+const inputs = @import("inputs.zig");
 
 var pkg_config_flags: ?[]const u8 = null;
 
 pub fn configurePkgConfig(b: *std.Build) void {
     // Query the aggregate package once so transitive libraries are deduplicated.
     // Configure-time environment changes do not reach Zig 0.17's make process.
-    compat.externalConfigureInput(b);
+    b.graph.poisonCache();
     pkg_config_flags = null;
     const result = std.process.run(b.allocator, b.graph.io, .{
         .argv = &.{
             b.graph.environ_map.get("PKG_CONFIG") orelse "pkg-config",
             "--cflags",
             "--libs",
-            compat.pathFromRoot(b, "src/render/pdf/ss-pdf.pc"),
+            inputs.pathFromRoot(b, "src/render/pdf/ss-pdf.pc"),
         },
         .environ_map = &b.graph.environ_map,
         .stdout_limit = .limited(64 * 1024),
