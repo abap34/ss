@@ -16,6 +16,7 @@ pub const desugar = expansion.desugar;
 pub const DesugarOptions = expansion.Options;
 pub const DesugarFailure = expansion.Failure;
 pub const parseSurface = parser.parse;
+pub const printExpandedAlloc = @import("syntax/print.zig").moduleAlloc;
 
 pub const ParseOptions = struct {
     expansion: struct { expand_stages: bool = true } = .{},

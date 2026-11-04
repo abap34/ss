@@ -20,6 +20,11 @@ pub fn register(suite: Suite, modules: project.ProjectModules) void {
         import("syntax", syntax_mod),
     }, true);
     _ = suite.add(desugar_spec_mod, .{ .name = "test-desugar", .description = "Run surface syntax expansion and ownership tests" });
+    const print_spec_mod = createModule(ctx, "tests/syntax/print/spec_tests.zig", &.{
+        import("ast", modules.ast),
+        import("syntax", syntax_mod),
+    }, true);
+    _ = suite.add(print_spec_mod, .{ .name = "test-syntax-print", .description = "Check expanded AST source output without resugaring" });
     const scanner_mod = createModule(ctx, "src/syntax/scanner.zig", &.{
         import("utils", modules.utils),
     }, null);
