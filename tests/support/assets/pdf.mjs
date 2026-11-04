@@ -1,3 +1,12 @@
+export function singlePagePdfAsset(width, height) {
+  return buildPdf([
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${width} ${height}] /Contents 4 0 R >>`,
+    stream(`q\n0.18 0.44 0.56 rg\n0 0 ${width} ${height} re\nf\nQ\n`),
+  ]);
+}
+
 export function pdfAsset() {
   const firstContent = "q\n0.18 0.44 0.56 rg\n0 0 240 120 re\nf\nQ\n";
   const secondContent = "q\n0.93 0.96 0.98 rg\n0 0 240 120 re\nf\n0.94 0.32 0.22 rg\n30 24 160 24 re\nf\nQ\nBT\n/F1 18 Tf\n24 72 Td\n(SelectablePdfToken) Tj\nET\nBT\n/F1 10 Tf\n24 36 Td\n(DragSelectablePdfToken) Tj\nET\nBT\n/F1 6 Tf\n2 4 Td\n(MediaMarginToken) Tj\nET\n";
