@@ -3,14 +3,14 @@ import std:themes/default as *
 const left_offset: Number = 72
 
 fn movable!(guide: Placement) -> Placed<Text>
-  let result = text!("Move me")
+  let result = text!("Move me", TextBlockStyle {} with { layout.wrap = WrapMode.off })
   ~ result.left == guide.right + left_offset
   ~ result.top == guide.bottom - 24
   return result
 end
 
 page demo
-let guide = text!("Guide")
+let guide = text!("Guide", TextBlockStyle {} with { layout.wrap = WrapMode.off })
 let item = movable!(guide)
 ~ guide.left == page.left + 100
 ~ guide.top == page.top - 100

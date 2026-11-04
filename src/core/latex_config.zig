@@ -24,8 +24,15 @@ pub const Config = struct {
 pub fn forNode(node: *const model.Node) !Config {
     const placement = node.placement orelse return .{};
     if (placement.display != .native) return .{};
-    if (placement.display.native != .latex and placement.display.native != .text) return .{};
-    const config = placement.value.record.field("config") orelse return error.InvalidNativeDisplay;
+    const input = switch (placement.display.native) {
+        .text => model.nodeTextContent(node) orelse return error.InvalidNativeDisplay,
+        .image => if (model.nodeImageSourceKind(node) == .latex)
+            model.nodeImageSource(node) orelse return error.InvalidNativeDisplay
+        else
+            return .{},
+        .path_shape => return .{},
+    };
+    const config = input.field("config") orelse return error.InvalidNativeDisplay;
     if (config != .record) return error.InvalidNativeDisplay;
     const engine = config.record.field("engine") orelse return error.InvalidNativeDisplay;
     if (engine != .enum_case) return error.InvalidNativeDisplay;

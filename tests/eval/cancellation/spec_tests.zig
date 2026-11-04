@@ -67,7 +67,7 @@ test "evaluation cancellation releases nested calls closures records and placed 
         \\type NestedSettings { label: Label }
         \\const theme: NestedSettings = NestedSettings { label = Label { content = "first" } }
         \\fn display(self: Placed<Label>) -> Text
-        \\  return Text { content = self.value.content }
+        \\  return Text { content = TextContent { source = self.value.content } }
         \\end
         \\fn decorate(value: String, callback: String -> String) -> Label
         \\  let result = callback(value)

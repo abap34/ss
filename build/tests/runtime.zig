@@ -43,6 +43,7 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
         .{ .path = "tests/runtime/layout/composition/spec.mjs", .name = "test-layout-composition", .description = "Run focused layout composition semantics tests" },
         .{ .path = "tests/runtime/layout/frame_too_small_spec.mjs" },
         .{ .path = "tests/runtime/layout/measurement_spec.mjs" },
+        .{ .path = "tests/runtime/layout/width_allocation_spec.mjs", .name = "test-width-allocation", .description = "Check width allocation before wrapping across display types and nested groups" },
         .{ .path = "tests/runtime/layout/text-wrapping/spec.mjs" },
         .{ .path = "tests/runtime/layout/vflow/policy_spec.mjs" },
         .{ .path = "tests/runtime/layout/hflow/spec.mjs", .name = "test-layout-hflow", .description = "Run horizontal flow policy tests" },

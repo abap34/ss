@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { imageSourceIs, displayLeaf } from "../../support/display.mjs";
 import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, copyFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -32,7 +33,7 @@ end
     run("dump", "--quiet", "slide.ss", "--output", "dump.json");
     const dump = JSON.parse(await readFile(path.join(project, "dump.json"), "utf8"));
     assert.deepEqual(dump.diagnostics, []);
-    const bodies = dump.nodes.filter(node => node.placement?.display.kind === "latex");
+    const bodies = dump.nodes.filter(node => imageSourceIs(node, "latex"));
     assert.equal(bodies.length, 3);
     assert.deepEqual(bodies.map(node => node.render.latex.scale), [1, 2, 1]);
     assert.deepEqual(bodies.map(node => node.placement.page), dump.page_order);

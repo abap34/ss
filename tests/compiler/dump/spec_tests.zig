@@ -50,14 +50,14 @@ test "dump preserves generic inputs and distinguishes repeated placements from d
         \\type Heading { title: String }
         \\type Wrapped<T> { content: T label: String? = none enabled: Bool = true }
         \\fn display(self: Placed<Heading>) -> native::Text
-        \\  return native::Text { content = self.value.title }
+        \\  return native::Text { content = native::TextContent { source = self.value.title } }
         \\end
         \\fn display<T>(self: Placed<Wrapped<T>>) -> T = self.value.content
         \\const shared: Wrapped<Heading> = Wrapped<Heading> { content = Heading { title = "**First**" } }
         \\page first
         \\  let a = place!(shared)
         \\  let b = place!(shared)
-        \\  let empty = place!(native::Text { content = "" })
+        \\  let empty = place!(native::Text { content = native::TextContent { source = "" } })
         \\end
         \\page second
         \\  let c = place!(shared)
@@ -135,10 +135,10 @@ test "dump preserves callback and document references without evaluating them ag
         \\  format: () -> String
         \\}
         \\fn display(self: Placed<Caption>) -> native::Text
-        \\  return native::Text { content = self.value.title }
+        \\  return native::Text { content = native::TextContent { source = self.value.title } }
         \\end
         \\fn display<T>(self: Placed<Reference<T>>) -> native::Text
-        \\  return native::Text { content = self.value.format() }
+        \\  return native::Text { content = native::TextContent { source = self.value.format() } }
         \\end
         \\page first
         \\  let target = place!(Caption { title = "Target" })

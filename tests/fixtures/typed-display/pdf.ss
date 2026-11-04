@@ -20,7 +20,7 @@ const content: assets::Pdf = assets::Pdf {
 
 page boxes
   let unused = assets::Pdf { path = "unplaced.pdf" }
-  let title = place!(text_api::Text { content = "# PDF crop and media boxes" })
+  let title = place!(text_api::Text { content = text_api::TextContent { source = "# PDF crop and media boxes" } })
   let crop = place!(content)
   let media = place!(content with { style.asset.pdf_box = assets::PdfPageBox.media })
   ~ title.left == page.left + 64
@@ -32,7 +32,7 @@ page boxes
 end
 
 page first_sheet
-  let title = place!(text_api::Text { content = "# First PDF page returned by a display" })
+  let title = place!(text_api::Text { content = text_api::TextContent { source = "# First PDF page returned by a display" } })
   let wrapped = place!(Sheet { content = content with { style.asset.pdf_page = 1 } })
   ~ title.left == page.left + 64
   ~ title.top == page.top - 48

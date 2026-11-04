@@ -111,7 +111,7 @@ test "evaluation frames include calls made by default arguments" {
 test "evaluation frames include lambdas and primitive callbacks" {
     const source = leaf ++
         \\page main
-        \\  let item = place_on!(pagectx(), Text { content = "A" })
+        \\  let item = place_on!(pagectx(), Text { content = TextContent { source = "A" } })
         \\  foreach(select<Text>(pagectx()), (o: Placed<Text>) |-> leaf())
         \\end
     ;
@@ -122,7 +122,7 @@ test "evaluation frames include lambdas and primitive callbacks" {
 test "evaluation frames include typed displays and their captured callbacks" {
     const source = leaf ++
         \\type Label { format: () -> String }
-        \\fn display(self: Placed<Label>) -> Text = Text { content = self.value.format() }
+        \\fn display(self: Placed<Label>) -> Text = Text { content = TextContent { source = self.value.format() } }
         \\page main
         \\  place!(Label { format = () |-> leaf() })
         \\end

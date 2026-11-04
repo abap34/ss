@@ -8,6 +8,7 @@ pub const SourceOrigin = model.SourceOrigin;
 pub const NominalId = model.NominalId;
 pub const PropertyPath = model.PropertyPath;
 pub const PayloadKind = model.PayloadKind;
+pub const ImageSourceKind = model.ImageSourceKind;
 pub const Anchor = model.Anchor;
 pub const ConstraintSource = model.ConstraintSource;
 pub const ConstraintRole = model.ConstraintRole;

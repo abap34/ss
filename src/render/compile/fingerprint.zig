@@ -392,6 +392,7 @@ fn hashOptionalAssetPaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.A
         hashOptionalColor(hasher, asset.tint);
         hashU64(hasher, asset.pdf_page);
         hashString(hasher, @tagName(asset.pdf_box));
+        hashString(hasher, @tagName(asset.horizontal_align));
     }
 }
 

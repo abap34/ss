@@ -53,7 +53,7 @@ fn styleForNode(state: *Workspace, node: *const Node) LayoutStyle {
 }
 
 fn maxWidthForStyle(style: LayoutStyle) f32 {
-    return @min(Defaults.max_visual_width, Defaults.width - style.default_x - style.default_right_inset);
+    return Defaults.width - style.default_x - style.default_right_inset;
 }
 
 fn assetScale(state: *Workspace, node: *const Node) f32 {
@@ -78,8 +78,8 @@ pub fn contentFrame(state: *Workspace, node: *const Node, frame: model.Frame) mo
     return .{
         .x = frame.x + pad_x,
         .y = frame.y + pad_y,
-        .width = @max(@as(f32, 1.0), frame.width - 2.0 * pad_x),
-        .height = @max(@as(f32, 1.0), frame.height - 2.0 * pad_y),
+        .width = @max(@as(f32, 0), frame.width - 2.0 * pad_x),
+        .height = @max(@as(f32, 0), frame.height - 2.0 * pad_y),
         .x_set = frame.x_set,
         .y_set = frame.y_set,
     };
@@ -98,16 +98,15 @@ fn intrinsicWidthWithCache(state: *Workspace, node: *const Node, cache: ?*Measur
     const layout_style = styleForNode(state, node);
     const content = model.nodeDisplayContent(node);
     const chrome_width = 2.0 * chromePadX(state, node);
+    if (!model.isGroupNode(node) and shouldWrapNode(state, node)) return maxWidthForStyle(layout_style);
     if (cache) |measurements| {
         const available_width = maxWidthForStyle(layout_style) + chrome_width;
         if (try measurements.renderedMeasurement(state, node, available_width, .natural)) |measured| {
             if (measured.width > 0) {
-                return switch (model.nodePayloadKind(node) orelse .text) {
-                    .image_ref, .pdf_ref => measured.width,
-                    else => @min(available_width, measured.width),
-                };
+                return measured.width;
             }
         }
+        if (measurements.render_provider != null and model.nodeImageSourceKind(node) != null) return error.ResourceMeasurementUnavailable;
     }
     switch (model.nodePayloadKind(node) orelse .text) {
         .image_ref, .pdf_ref => {
@@ -115,10 +114,6 @@ fn intrinsicWidthWithCache(state: *Workspace, node: *const Node, cache: ?*Measur
         },
         .latex => return maxWidthForStyle(layout_style) + chrome_width,
         else => {},
-    }
-
-    if (shouldUseFullWrapWidth(state, node, content)) {
-        return maxWidthForStyle(layout_style) + chrome_width;
     }
 
     const text_style = render_policy.resolveTextForNode(state.source, node) orelse return maxWidthForStyle(layout_style) + chrome_width;
@@ -148,7 +143,7 @@ fn intrinsicWidthWithCache(state: *Workspace, node: *const Node, cache: ?*Measur
         }
     }
     if (max_width <= 0) max_width = 1;
-    return @min(maxWidthForStyle(layout_style), max_width) + chrome_width;
+    return max_width + chrome_width;
 }
 
 pub fn intrinsicHeight(state: *Workspace, node: *const Node, frame: model.Frame) f32 {
@@ -161,7 +156,7 @@ pub fn intrinsicHeightCached(state: *Workspace, node: *const Node, frame: model.
 
 pub fn frameConstrainedMeasurementCached(state: *Workspace, node: *const Node, frame: model.Frame, cache: *MeasurementCache) !?model.LayoutMeasurement {
     if (render_policy.naturalPathSize(node) != null) return try cache.renderedMeasurement(state, node, frame.width, .width_constrained);
-    const measured_outer_width = if (frame.width > 0) @max(@as(f32, 1.0), frame.width) else 1;
+    const measured_outer_width = if (frame.width > 0) frame.width else 1;
     return try cache.renderedMeasurement(state, node, measured_outer_width, .width_constrained);
 }
 
@@ -170,7 +165,7 @@ fn intrinsicHeightWithCache(state: *Workspace, node: *const Node, frame: model.F
     const layout_style = styleForNode(state, node);
     const chrome_height = 2.0 * chromePadY(state, node);
     const measured_outer_width = if (frame.width > 0)
-        @max(@as(f32, 1.0), frame.width)
+        frame.width
     else
         @max(@as(f32, 1.0), try intrinsicWidthWithCache(state, node, cache));
     if (cache) |measurements| {
@@ -432,64 +427,10 @@ fn markdownLineContainsDisplayMath(line: markdown.Line) bool {
     return false;
 }
 
-fn markdownBlocksContainMeasuredRenderArtifact(blocks: []const *markdown.Block) bool {
-    for (blocks) |block| {
-        switch (block.kind) {
-            .paragraph, .heading, .code_block => if (block.paragraph) |paragraph| {
-                for (paragraph.lines.items) |line| {
-                    if (markdownLineContainsMeasuredRenderArtifact(line)) return true;
-                }
-            },
-            .bullet_list, .ordered_list => if (block.list) |list| {
-                for (list.items.items) |item| {
-                    if (markdownBlocksContainMeasuredRenderArtifact(item.blocks.items)) return true;
-                }
-            },
-            .block_quote => if (block.quote) |quote| {
-                if (markdownBlocksContainMeasuredRenderArtifact(quote.blocks.items)) return true;
-            },
-            .table => if (block.table) |table| {
-                for (table.rows.items) |row| {
-                    for (row.cells.items) |cell| {
-                        for (cell.lines.items) |line| {
-                            if (markdownLineContainsMeasuredRenderArtifact(line)) return true;
-                        }
-                    }
-                }
-            },
-        }
-    }
-    return false;
-}
-
 fn markdownLineContainsMeasuredRenderArtifact(line: markdown.Line) bool {
     for (line.runs.items) |run| {
         switch (run.kind) {
             .icon, .math, .display_math => return true,
-            else => {},
-        }
-    }
-    return false;
-}
-
-fn shouldUseFullWrapWidth(state: *Workspace, node: *const Node, content: []const u8) bool {
-    if (!shouldWrapNode(state, node)) return false;
-    if (source.lineCount(content) > 1) return true;
-    if (!markdown.shouldParseBlocksNode(state.source, node)) return false;
-
-    var doc = markdown.parseMarkdownDocumentForNode(
-        state.allocator,
-        state.source,
-        node,
-        content,
-    ) catch return false;
-    defer doc.deinit();
-
-    if (doc.blocks.items.len > 1) return true;
-    if (markdownBlocksContainMeasuredRenderArtifact(doc.blocks.items)) return true;
-    for (doc.blocks.items) |block| {
-        switch (block.kind) {
-            .block_quote, .bullet_list, .ordered_list, .code_block, .table => return true,
             else => {},
         }
     }

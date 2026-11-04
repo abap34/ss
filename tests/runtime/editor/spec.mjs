@@ -1033,6 +1033,7 @@ function simpleSource(name) {
 
 page ${name}
 let item = text!("${name}")
+~ item.width == 300
 ~ item.left == page.left + 72
 ~ item.top == page.top - 96
 end

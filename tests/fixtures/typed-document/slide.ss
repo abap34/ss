@@ -25,11 +25,11 @@ const footer: document_api::PageNumber = document_api::pageno(theme.page_number,
 
 page cover
   let title = place!(text_api::Text {
-    content = "A reproducible reporting pipeline"
+    content = text_api::TextContent { source = "A reproducible reporting pipeline" }
     style = theme.h1 with { text.size = 48 }
   })
   let subtitle = place!(text_api::Text {
-    content = "Typed inputs, reusable displays, and document queries"
+    content = text_api::TextContent { source = "Typed inputs, reusable displays, and document queries" }
     style = theme.body with { text.size = 28 }
   })
   ~ title.left == page.left + 64
@@ -50,7 +50,7 @@ end
 page architecture
   let title = heading!("From source data to a slide", 1, theme.h1)
   let explanation = place!(text_api::Text {
-    content = <<
+    content = text_api::TextContent { source = <<
 ### Keep the inputs explicit
 
 - Read and validate source records.
@@ -58,11 +58,11 @@ page architecture
 - Reuse the same definition across pages.
 
 **Placement** gives each use its own identity and position.
->>
+>> }
     style = body_style
   })
   let chart = place!(assets::Image {
-    path = "../layout/practical/diagram.svg"
+    source = assets::image_source("../layout/practical/diagram.svg")
     style = theme.image with { asset.scale = 0.7 }
   })
   let number = place!(footer)
@@ -91,7 +91,7 @@ def compile_report(source):
   })
   let architecture = first(select<Heading>(docctx()))
   let reference = place!(text_api::Text {
-    content = "See the architecture on page " ++ body_page_number(architecture.page, architecture.document) ++ "."
+    content = text_api::TextContent { source = "See the architecture on page " ++ body_page_number(architecture.page, architecture.document) ++ "." }
     style = body_style
   })
   let number = place!(footer)

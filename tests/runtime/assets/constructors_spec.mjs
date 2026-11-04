@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { displayLeaf, imageSourceIs } from "../../support/display.mjs";
 import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -84,8 +85,10 @@ end
       close(node.width, width * scale);
       close(node.height, height * scale);
       assert.deepEqual(node.fields, {});
-      assert.equal(node.content, input);
-      assert.equal(node.placement.display.kind, name);
+      const leaf = displayLeaf(dump.nodes, node);
+      assert.equal(leaf.content, input);
+      assert.equal(leaf.placement.display.kind, "image");
+      assert(imageSourceIs(leaf, name === "image" ? "file" : name));
       if (index > 1) assert.deepEqual(node.placement.input, nodes[0].placement.input);
     }
     if (name === "icon") assertTint(nodes[0], [55, 65, 81]);
@@ -116,10 +119,10 @@ end
   success("dump", "--quiet", "options.ss", "--output", "options.json");
   const options = JSON.parse(await readFile(path.join(project, "options.json"), "utf8"));
   assert.deepEqual(options.diagnostics, []);
-  const sheet = options.nodes.find(node => node.placement?.display.kind === "pdf");
+  const sheet = options.nodes.find(node => imageSourceIs(node, "pdf"));
   close(sheet.width, 75);
   close(sheet.height, 150);
-  const symbol = options.nodes.find(node => node.placement?.display.kind === "icon");
+  const symbol = options.nodes.find(node => imageSourceIs(node, "icon"));
   close(symbol.width, 40);
   close(symbol.height, 80);
   assertTint(symbol, [37, 99, 235]);

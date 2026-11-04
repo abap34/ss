@@ -1,4 +1,4 @@
-import std:text/content as { Text }
+import std:text/content as { Text, text_content }
 import std:text/types as { SemanticRole, TextSemantics }
 import std:text/style as { TextBlockStyle }
 
@@ -13,7 +13,7 @@ end
 
 fn display(self: Placed<PageNumber>) -> Text
   return Text {
-    content = self.value.format(self.page, self.document)
+    content = text_content(self.value.format(self.page, self.document))
     style = self.value.style
   }
 end
@@ -28,7 +28,7 @@ type Heading {
 
 fn display(self: Placed<Heading>) -> Text
   return Text {
-    content = self.value.title
+    content = text_content(self.value.title)
     style = self.value.style
     semantics = TextSemantics { role = SemanticRole.heading heading_level = self.value.level }
   }

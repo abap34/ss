@@ -916,7 +916,7 @@ test "analysis queries: recovery syntax is borrowed for repeated requests" {
     }, .{ .budget_ms = 1000 });
     defer completion.deinit(testing.allocator);
     try expectHas(completion, "style");
-    try expectHas(completion, "config");
+    try expectHas(completion, "semantics");
     try expectHas(completion, "content");
 }
 

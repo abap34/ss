@@ -4,7 +4,7 @@ import std:code as code_api
 type Example { title: String source: String }
 fn display(self: Placed<Example>) -> Group<text_api::Text, code_api::Code>
   return group(
-    text_api::Text { content = self.value.title },
+    text_api::Text { content = text_api::TextContent { source = self.value.title } },
     code_api::Code { source = self.value.source language = "python" }
   )
 end

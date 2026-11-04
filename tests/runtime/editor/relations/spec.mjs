@@ -272,7 +272,7 @@ async function testRelativeEditsCompleteMovedAxes() {
     {
       name: "anonymous-reference",
       body: '',
-      guide: 'text!("Guide")',
+      guide: 'text!("Guide", TextBlockStyle {} with { layout.wrap = WrapMode.off })',
       verify: (updated) => assert(updated.includes("~!~ item.top == page.top"), updated),
     },
     ...["||", "|=|", "//", "/=/"].flatMap((operator) => [
@@ -283,14 +283,14 @@ async function testRelativeEditsCompleteMovedAxes() {
       name: "image-reference",
       body: '~ guide.left == page.left + 100\n~ guide.top == page.top - 180\n~ item.left == guide.right + 32\n~ item.top == guide.top',
       item: 'let item = image!("figure.svg", AssetBlockStyle {} with { asset.scale = 0.9 })',
-      guide: 'let guide = text!("A sufficiently wide guide for this image")',
+      guide: 'let guide = text!("A sufficiently wide guide for this image", TextBlockStyle {} with { layout.wrap = WrapMode.off })',
       header: 'heading! "Monte Carlo"',
       policy: 'hflow(LayoutPolicy.center)',
       fixGuide: false,
     },
     {
       name: "centered-reference-chain",
-      body: 'let bridge = text!("Bridge")\n~ bridge.left == guide.right + 24\n~ bridge.top == guide.top\n~ item.left == bridge.right + 32\n~ item.top == bridge.top',
+      body: 'let bridge = text!("Bridge", TextBlockStyle {} with { layout.wrap = WrapMode.off })\n~ bridge.left == guide.right + 24\n~ bridge.top == guide.top\n~ item.left == bridge.right + 32\n~ item.top == bridge.top',
       policy: 'hflow(LayoutPolicy.center)',
       fixGuide: false,
     },
@@ -314,10 +314,10 @@ async function testRelativeEditsCompleteMovedAxes() {
 page demo
 ${scenario.policy ?? "vflow(LayoutPolicy.top)"}
 ${scenario.header ?? ""}
-${scenario.composition ? `let pair = place!(text("${scenario.reverse ? "Move me" : "Guide"}") ${scenario.composition} text("${scenario.reverse ? "Guide" : "Move me"}"))
+${scenario.composition ? `let pair = place!(text("${scenario.reverse ? "Move me" : "Guide"}", TextBlockStyle {} with { layout.wrap = WrapMode.off }) ${scenario.composition} text("${scenario.reverse ? "Guide" : "Move me"}", TextBlockStyle {} with { layout.wrap = WrapMode.off }))
 let ${scenario.reverse ? "item" : "guide"} = first(children(pair))
-let ${scenario.reverse ? "guide" : "item"} = first(children(pair) - selection(${scenario.reverse ? "item" : "guide"}))` : `${scenario.guide ?? 'let guide = text!("Guide")'}
-${scenario.item ?? 'let item = text!("Move me")'}`}
+let ${scenario.reverse ? "guide" : "item"} = first(children(pair) - selection(${scenario.reverse ? "item" : "guide"}))` : `${scenario.guide ?? 'let guide = text!("Guide", TextBlockStyle {} with { layout.wrap = WrapMode.off })'}
+${scenario.item ?? 'let item = text!("Move me", TextBlockStyle {} with { layout.wrap = WrapMode.off })'}`}
 ${scenario.fixGuide === false || scenario.guide ? "" : `~ guide.left == page.left + ${scenario.guideLeft ?? 100}\n~ guide.top == page.top - 100`}
 ${scenario.body}
 end

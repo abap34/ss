@@ -9,7 +9,7 @@ const config: formulas::LatexConfig = formulas::LatexConfig {
 const shared: Math = formulas::math("\Example{x} = x^2", formulas::LatexBlockStyle {}, config)
 
 page normal
-  let title = place!(text_api::Text { content = "# Mathematical expressions" })
+  let title = place!(text_api::Text { content = text_api::TextContent { source = "# Mathematical expressions" } })
   let first = place!(shared)
   let fraction = math!("\frac{a+b}{c} % trailing comment")
   ~ title.left == page.left + 64
@@ -21,7 +21,7 @@ page normal
 end
 
 page enlarged
-  let title = place!(text_api::Text { content = "# Independent scaling" })
+  let title = place!(text_api::Text { content = text_api::TextContent { source = "# Independent scaling" } })
   let formula = place!(shared with { style.latex.scale = 2 })
   ~ title.left == page.left + 64
   ~ title.top == page.top - 48
@@ -30,8 +30,8 @@ page enlarged
 end
 
 page combined
-  let title = place!(text_api::Text { content = "# Reusable formula composition" })
-  let summary = place!(text_api::Text { content = "Formulas: " ++ str(selection_count(select<Math>(pagectx()))) })
+  let title = place!(text_api::Text { content = text_api::TextContent { source = "# Reusable formula composition" } })
+  let summary = place!(text_api::Text { content = text_api::TextContent { source = "Formulas: " ++ str(selection_count(select<Math>(pagectx()))) } })
   let row = place!((shared || shared) with { gap = 64 })
   ~ title.left == page.left + 64
   ~ title.top == page.top - 48

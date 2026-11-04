@@ -216,7 +216,7 @@ page one
 text!("hello")
 text!("world")
 let item = text!("old")
-text!(item.value.content)
+text!(item.value.content.source)
 end
 `,
     "utf8",

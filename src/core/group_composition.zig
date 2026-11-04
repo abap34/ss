@@ -7,6 +7,7 @@ const fields = @import("fields.zig");
 /// Layout consumes only the constraints surviving update normalization.
 pub fn collect(state: anytype, node: *const model.Node, constraints: *std.ArrayList(model.Constraint)) !void {
     const config = settings(node);
+    if (!std.math.isFinite(config.gap) or config.gap < 0) return error.InvalidGroupSplit;
     try collectAlignment(state, node, config, constraints);
     if (config.mode == .overlay) return;
     try collectAdjacency(state, node, config, constraints);
@@ -38,8 +39,7 @@ pub fn collect(state: anytype, node: *const model.Node, constraints: *std.ArrayL
         try appendCut(state.allocator, constraints, template, child_id, horizontal, false, end, gap * (end - 1));
     }
     for (children.items) |child_id| {
-        const child = state.getNode(child_id).?;
-        if (model.isGroupNode(child)) {
+        if (displaysGroup(state, child_id)) {
             // A nested group receives the complete cell on the other axis.
             if (horizontal) {
                 try append(state.allocator, constraints, template, child_id, .bottom, .bottom, 0, false);
@@ -55,6 +55,18 @@ pub fn collect(state: anytype, node: *const model.Node, constraints: *std.ArrayL
             try append(state.allocator, constraints, template, child_id, .left, .left, 0, true);
         }
     }
+}
+
+fn displaysGroup(state: anytype, node_id: model.NodeId) bool {
+    var node = state.getNode(node_id) orelse return false;
+    while (node.placement) |placement| {
+        switch (placement.display) {
+            .expanded => |expanded| node = state.getNode(expanded.child) orelse return false,
+            .group => return true,
+            else => return false,
+        }
+    }
+    return false;
 }
 
 fn collectAdjacency(state: anytype, node: *const model.Node, config: Settings, constraints: *std.ArrayList(model.Constraint)) !void {

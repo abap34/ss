@@ -151,13 +151,11 @@ end
     const output = combinedOutput(render);
     assert(render.code === 0, `render failed:\n${output}`);
     assert(!output.includes("FrameTooSmall"), `tex should fit the fixed frame height when scaling down is required:\n${output}`);
-    assert(!output.includes("PageOverflow"), `tex should not create a page overflow after fitting the fixed frame:\n${output}`);
-
     const payload = JSON.parse(await readFile(diagnosticsPath, "utf8"));
-    const unexpected = payload.diagnostics.filter((diagnostic) =>
-      diagnostic.code === "FrameTooSmall" ||
-      diagnostic.code === "PageOverflow");
-    assert(unexpected.length === 0, `unexpected layout diagnostics: ${JSON.stringify(unexpected)}`);
+    const overflows = payload.diagnostics.filter((diagnostic) => diagnostic.code === "PageOverflow");
+    assert(overflows.length === 1, `expected only the oversized frame to overflow: ${JSON.stringify(payload.diagnostics)}`);
+    assert(/extends above page by 120\.0\b/.test(overflows[0].message),
+      `LaTeX content should stay at the top of the oversized frame: ${JSON.stringify(overflows[0])}`);
   } finally {
     await rm(project, { recursive: true, force: true });
   }

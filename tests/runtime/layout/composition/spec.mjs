@@ -169,9 +169,10 @@ place!(text("short") || text("a considerably longer line"))
 end
 `);
   const a = node(dump, "short"), b = node(dump, "a considerably longer line");
-  assert(b.width > a.width * 2, `composition equalized natural widths: ${a.width}, ${b.width}`);
-  assertClose(b.x, a.x + a.width + gap, "natural horizontal gap");
-  assertClose(centerY(b), centerY(a), "natural center alignment");
+  assertClose(a.width, 528, "first wrapped text shares the available width");
+  assertClose(b.width, 528, "second wrapped text shares the available width");
+  assertClose(b.x, a.x + a.width + gap, "wrapped horizontal gap");
+  assertClose(centerY(b), centerY(a), "wrapped center alignment");
 }
 
 async function testEqualFrames() {
@@ -251,7 +252,7 @@ let a = first(children(g))
 let b = first(children(g) - selection(a))
 ${dimensions}
 end
-`, name === "insufficient-space" ? "NegativeFrameSize" : "ConstraintConflict");
+`, name === "insufficient-space" ? "InvalidWidthAllocation" : "ConstraintConflict");
   }
 
   const updated = await dumpSource("equal-horizontal-update", `${prelude}
@@ -309,11 +310,11 @@ end
 `, "InvalidPlacementInput");
   }
 
-  await expectFailure("negative-split-gap", `import std:text as { Text }
+  await expectFailure("negative-split-gap", `import std:text as { Text, TextContent }
 ${prelude}
 page invalid
-let a = Text { content = "A" }
-let b = Text { content = "B" }
+let a = Text { content = TextContent { source = "A" } }
+let b = Text { content = TextContent { source = "B" } }
 place!((a |=| b) with { gap = -1 })
 end
 `, "InvalidGroupSplit");
@@ -431,10 +432,10 @@ end
   for (const policy of ["left", "center", "right"]) {
     for (const scale of [1, 0.02]) {
       const { dump } = await dumpSource(`horizontal-inferred-${policy}-${scale}`, `import std:themes/default as *
-import std:text as { Text }
+import std:text as { Text, TextContent }
 page example
 hflow(LayoutPolicy.${policy})
-let pair = place!(Text { content = "Short" } |=| image("${asset}", AssetBlockStyle {} with { asset.scale = ${scale} }))
+let pair = place!(Text { content = TextContent { source = "Short" } } |=| image("${asset}", AssetBlockStyle {} with { asset.scale = ${scale} }))
 ~ pair.left == page.left + 72
 ~ pair.width == 1136
 end
@@ -454,7 +455,7 @@ end
   for (const [name, expression, width] of [
     ["horizontal-parent", "a |=| (b |=| c)", 1088],
     ["vertical-parent", "a /=/ (b |=| c)", 1088],
-    ["ordinary-parent", "group(a, b |=| c)", null],
+    ["ordinary-parent", "group(a, b |=| c)", 1088],
     ["natural-parent", "a || (b |=| c)", null],
   ]) {
     const { dump } = await dumpSource(`horizontal-width-${name}`, `${prelude}
@@ -501,7 +502,8 @@ end
     const g = groupNodes(dump)[0];
     assertClose(g.width, width, `${name} group width`);
     assertClose(g.x, left, `${name} group left`);
-    assert(node(dump, "Short").width < node(dump, "Second line").width, "short text lost natural width");
+    assertClose(node(dump, "Short").width, width, "short wrapped text uses the column width");
+    assertClose(node(dump, "Second line").width, width, "long wrapped text uses the column width");
     if (name === "positioned-child") assertClose(node(dump, "Short").x, 200, "explicit child position");
     assertSplitTree(dump, g);
     assert.equal(dump.diagnostics.length, 0);
@@ -749,11 +751,11 @@ end
 }
 
 async function testExplicitGap() {
-  const { dump } = await dumpSource("explicit-gap", `import std:text as { Text }
+  const { dump } = await dumpSource("explicit-gap", `import std:text as { Text, TextContent }
 page gaps
-let a = Text { content = "A" }
-let b = Text { content = "B" }
-let c = Text { content = "C" }
+let a = Text { content = TextContent { source = "A" } }
+let b = Text { content = TextContent { source = "B" } }
+let c = Text { content = TextContent { source = "C" } }
 let item = place!((a || ((b // c) with { gap = 12 })) with { gap = 48 })
 ~ item.left == page.left + 80
 ~ item.top == page.top - 80

@@ -11,13 +11,11 @@ const partition = @import("partition.zig");
 const groups = @import("groups.zig");
 const axis_propagation = @import("propagation.zig");
 const metrics = @import("metrics.zig");
-const style_defaults = @import("style.zig");
 const layout_trace = @import("trace.zig");
 
 const NodeId = model.NodeId;
 const AxisState = model.AxisState;
 const Constraint = model.Constraint;
-const Defaults = @import("document.zig").Defaults;
 const ConstraintTolerance = graph.ConstraintTolerance;
 
 pub const SolveOptions = graph.SolveOptions;
@@ -403,6 +401,8 @@ fn solveHorizontalLayout(
     }
 
     try solvePageAxis(state, &horizontal, trace_session, options);
+    _ = try fallback.allocateHorizontalWidths(state, &horizontal);
+    try solvePageAxis(state, &horizontal, trace_session, options);
     try graph.checkCancellation(options);
 
     var horizontal_alignments = try fallback.buildDefaultAlignmentConstraints(state, &horizontal);
@@ -442,8 +442,6 @@ fn solveHorizontalLayout(
     try settleHorizontalAxisWithTrace(state, &horizontal, trace_session, options);
     try applySolvedHorizontalFrames(state, &horizontal, measurement_cache, options);
     try graph.checkCancellation(options);
-    try groups.propagateTargetedWidthsCached(state, &horizontal, measurement_cache);
-    try graph.checkCancellation(options);
 
     return horizontal_fallback;
 }
@@ -482,7 +480,15 @@ fn applySolvedVerticalFrames(state: *Workspace, workspace: *const graph.AxisWork
     for (workspace.graph.child_ids, workspace.states) |child_id, v_state| {
         try graph.checkCancellation(options);
         const node = state.source.getNode(child_id) orelse return error.UnknownNode;
-        state.frame(node.id).*.height = v_state.size orelse state.frame(node.id).*.height;
+        const height = v_state.size orelse state.frame(node.id).*.height;
+        if (!std.math.isFinite(height) or (!groups.isGroupNode(node) and height <= 0)) {
+            try state.addLayoutError(workspace.graph.page_id, node.id, .{ .user_report = .{
+                .code = "InvalidFrameSize",
+                .message = try state.allocator.dupe(u8, "Component height must be finite and positive."),
+            } });
+            return error.InvalidFrameSize;
+        }
+        state.frame(node.id).*.height = height;
         state.frame(node.id).*.y_set = false;
         if (v_state.start) |y| {
             state.frame(node.id).*.y = y;
@@ -640,58 +646,13 @@ fn finalizeHorizontalGroupStates(state: *Workspace, workspace: *graph.AxisWorksp
     while (pass < limit) : (pass += 1) {
         try graph.checkCancellation(options);
         var changed = false;
-        changed = (try capDefaultWrappedHorizontalWidths(state, workspace, options)) or changed;
+        changed = (try fallback.allocateHorizontalWidths(state, workspace)) or changed;
         changed = (try groups.applyTargetConstraints(state, workspace, options)).changed or changed;
         changed = (try groups.updateAxisStates(state, workspace)) or changed;
         any_changed = changed or any_changed;
         if (!changed) return any_changed;
     }
     return axis_propagation.nonConvergenceError(state, workspace, options, .horizontal_groups, pass, limit, null);
-}
-
-fn capDefaultWrappedHorizontalWidths(state: *Workspace, workspace: *graph.AxisWorkspace, options: SolveOptions) !bool {
-    var changed = false;
-    for (workspace.graph.child_ids, workspace.states) |child_id, *axis_state| {
-        try graph.checkCancellation(options);
-        if (!axis_state.size_is_default) continue;
-        if (axis_state.start == null or axis_state.size == null) continue;
-        if (axis_state.end_source != null or axis_state.size_source != null) continue;
-
-        const node = state.source.getNode(child_id) orelse return error.UnknownNode;
-        if (groups.isGroupNode(node)) continue;
-        if (!metrics.shouldWrapNode(state, node)) continue;
-
-        const style = style_defaults.styleForNode(state.source, node);
-        const max_right = containingHorizontalRight(state, workspace, child_id) orelse
-            (Defaults.width - style.default_right_inset);
-        const capped_width = @max(@as(f32, 1.0), max_right - axis_state.start.?);
-        if (capped_width >= axis_state.size.? - ConstraintTolerance) continue;
-
-        axis_state.size = capped_width;
-        axis_state.end = axis_state.start.? + capped_width;
-        axis_state.center = axis_state.start.? + capped_width / 2;
-        axis_state.end_source = null;
-        axis_state.center_source = null;
-        changed = true;
-    }
-    return changed;
-}
-
-fn containingHorizontalRight(state: *Workspace, workspace: *const graph.AxisWorkspace, node_id: NodeId) ?f32 {
-    var right: ?f32 = null;
-    for (workspace.graph.parentGroupIndexes(node_id)) |parent_index| {
-        const parent_id = workspace.nodeAt(parent_index);
-        const frame = workspace.states[parent_index];
-        const bounded = frame.size_source != null or
-            workspace.graph.hardTargetAnchorCount(parent_id, .horizontal) >= 2 or
-            fallback.defaultSplitGroupWidth(state, workspace, parent_id, .{}) != null;
-        const parent_right = if (bounded and frame.end != null)
-            frame.end.? - metrics.chromePadX(state, state.source.getNode(parent_id).?)
-        else
-            containingHorizontalRight(state, workspace, parent_id) orelse continue;
-        right = @min(right orelse parent_right, parent_right);
-    }
-    return right;
 }
 
 fn solvePageAxis(state: *Workspace, workspace: *graph.AxisWorkspace, trace_session: *layout_trace.Session, options: SolveOptions) !void {
@@ -765,6 +726,7 @@ fn runPageAxisPassWithTrace(state: *Workspace, workspace: *graph.AxisWorkspace, 
         const group_targets_changed = group_targets.changed;
         if (group_targets.constraint) |constraint| last_constraint = constraint;
         changed = group_targets_changed or changed;
+        changed = (try groups.inheritExpandedVerticalSizes(state, workspace)) or changed;
 
         var group_sources_changed = false;
         for (workspace.hard_constraints) |constraint| {

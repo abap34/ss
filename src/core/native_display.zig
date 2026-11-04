@@ -122,43 +122,17 @@ fn contract(kind: Kind) Contract {
         .text => .{
             .module = "std:text/content",
             .name = "Text",
-            .value_fields = &.{.{ .field = "content", .ty = ast.Type.string, .tag = .string }},
             .record_fields = &.{
+                .{ .field = "content", .module = "std:text/content", .name = "TextContent" },
                 .{ .field = "style", .module = "std:text/style", .name = "TextBlockStyle" },
-                .{ .field = "config", .module = "std:math/types", .name = "LatexConfig" },
             },
-        },
-        .icon => .{
-            .module = "std:assets/content",
-            .name = "Icon",
-            .value_fields = &.{.{ .field = "source", .ty = ast.Type.string, .tag = .string }},
-            .record_fields = &.{.{ .field = "style", .module = "std:assets/style", .name = "AssetBlockStyle" }},
         },
         .image => .{
             .module = "std:assets/content",
             .name = "Image",
-            .value_fields = &.{.{ .field = "path", .ty = ast.Type.string, .tag = .string }},
-            .record_fields = &.{.{ .field = "style", .module = "std:assets/style", .name = "AssetBlockStyle" }},
-        },
-        .code => .{
-            .module = "std:code/content",
-            .name = "Code",
-            .value_fields = &.{ .{ .field = "source", .ty = ast.Type.string, .tag = .string }, .{ .field = "language", .ty = ast.Type.string, .tag = .string } },
-            .record_fields = &.{.{ .field = "style", .module = "std:code/style", .name = "CodeBlockStyle" }},
-        },
-        .pdf => .{
-            .module = "std:assets/content",
-            .name = "Pdf",
-            .value_fields = &.{.{ .field = "path", .ty = ast.Type.string, .tag = .string }},
-            .record_fields = &.{.{ .field = "style", .module = "std:assets/style", .name = "AssetBlockStyle" }},
-        },
-        .latex => .{
-            .module = "std:math/content",
-            .name = "Latex",
-            .value_fields = &.{.{ .field = "source", .ty = ast.Type.string, .tag = .string }},
             .record_fields = &.{
-                .{ .field = "style", .module = "std:math/style", .name = "LatexBlockStyle" },
-                .{ .field = "config", .module = "std:math/types", .name = "LatexConfig" },
+                .{ .field = "source", .module = "std:assets/content", .name = "ImageSource" },
+                .{ .field = "style", .module = "std:assets/style", .name = "AssetBlockStyle" },
             },
         },
     };
@@ -210,10 +184,52 @@ pub fn validateValue(state: anytype, value: model.Value, kind: Kind) !void {
         if (field != .record or !isLibraryType(state, field.record.ty, expected_record.module, expected_record.name)) return error.InvalidNativeDisplay;
     }
     if (kind == .path_shape) try validateShapeDimensions(value);
-    if (kind == .icon) {
-        const spec = fontawesome.parseSource(record.field("source").?.string) orelse return error.InvalidFontAwesomeIcon;
-        if (!fontawesome.contains(spec)) return error.InvalidFontAwesomeIcon;
+    if (kind == .text or kind == .image) {
+        const input = record.field(if (kind == .text) "content" else "source").?.record;
+        const source = input.field("source") orelse return error.InvalidNativeDisplay;
+        if (source != .string) return error.InvalidNativeDisplay;
+        const tag = input.field("kind") orelse return error.InvalidNativeDisplay;
+        if (tag != .enum_case) return error.InvalidNativeDisplay;
+        const input_kind = tag.enum_case.case_name;
+        if (kind == .text) {
+            const content_kind = std.meta.stringToEnum(model.TextContentKind, input_kind) orelse return error.InvalidNativeDisplay;
+            const config = input.field("config") orelse return error.InvalidNativeDisplay;
+            if (config != .record or !isLibraryType(state, config.record.ty, "std:math/types", "LatexConfig")) return error.InvalidNativeDisplay;
+            if (content_kind == .code) {
+                const language = input.field("language") orelse return error.InvalidNativeDisplay;
+                if (language != .string) return error.InvalidNativeDisplay;
+                const highlight = input.field("highlight") orelse return error.InvalidNativeDisplay;
+                if (highlight != .record or !isLibraryType(state, highlight.record.ty, "std:code/types", "CodeHighlightTheme")) return error.InvalidNativeDisplay;
+            }
+        } else {
+            const source_kind = std.meta.stringToEnum(model.ImageSourceKind, input_kind) orelse return error.InvalidNativeDisplay;
+            if (source_kind == .latex) {
+                try validateNumber(input, "min_height", false);
+                const config = input.field("config") orelse return error.InvalidNativeDisplay;
+                if (config != .record or !isLibraryType(state, config.record.ty, "std:math/types", "LatexConfig")) return error.InvalidNativeDisplay;
+            }
+        }
+        if (kind == .image and std.mem.eql(u8, input_kind, "icon")) {
+            const spec = fontawesome.parseSource(input.field("source").?.string) orelse return error.InvalidFontAwesomeIcon;
+            if (!fontawesome.contains(spec)) return error.InvalidFontAwesomeIcon;
+        }
+        const style = record.field("style").?.record;
+        if (style.field("chrome")) |chrome| {
+            if (chrome != .record) return error.InvalidNativeDisplay;
+            try validateNumber(chrome.record, "pad_x", true);
+            try validateNumber(chrome.record, "pad_y", true);
+        }
+        if (kind == .image) if (style.field("asset")) |asset| {
+            if (asset != .record) return error.InvalidNativeDisplay;
+            try validateNumber(asset.record, "scale", false);
+        };
     }
+}
+
+fn validateNumber(record: model.RecordValue, key: []const u8, zero_allowed: bool) !void {
+    const value = record.field(key) orelse return error.InvalidNativeDisplay;
+    if (value != .number or !std.math.isFinite(value.number)) return error.InvalidNativeDisplay;
+    if (if (zero_allowed) value.number < 0 else value.number <= 0) return error.InvalidNativeDisplay;
 }
 
 /// Dimensions describe the natural frame. Placement constraints may resize it.

@@ -41,6 +41,7 @@ let item = ${expression}
 ~ item.right == item.left + 360
 ~ item.bottom == item.top - 80
 let after = text!("After")
+~ after.width == 200
 ~ after.left == item.left
 ~ after.top == item.bottom - 20
 end

@@ -11,10 +11,11 @@ pub const Workspace = struct {
     allocator: std.mem.Allocator,
     source: *document_state.DocumentState,
     geometry: std.AutoHashMap(model.NodeId, document.ObjectFrame),
+    horizontal_allocations: std.AutoHashMap(model.NodeId, f32),
     diagnostics: diagnostics.DocumentDiagnostics = .{},
 
     pub fn init(allocator: std.mem.Allocator, source: *document_state.DocumentState, page: partition.Page) !Workspace {
-        var self = Workspace{ .allocator = allocator, .source = source, .geometry = std.AutoHashMap(model.NodeId, document.ObjectFrame).init(allocator) };
+        var self = Workspace{ .allocator = allocator, .source = source, .geometry = std.AutoHashMap(model.NodeId, document.ObjectFrame).init(allocator), .horizontal_allocations = .init(allocator) };
         errdefer self.deinit();
         try self.geometry.put(page.page_id, .{ .node_id = page.page_id, .frame = document.pageFrame });
         for (page.node_ids) |id| try self.geometry.put(id, .{ .node_id = id, .frame = .{} });
@@ -23,6 +24,7 @@ pub const Workspace = struct {
 
     pub fn deinit(self: *Workspace) void {
         self.geometry.deinit();
+        self.horizontal_allocations.deinit();
         self.diagnostics.deinit(self.allocator);
         self.* = undefined;
     }

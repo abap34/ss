@@ -61,7 +61,7 @@ const NativePdfError = error{
 
 pub const native_artifact_cache_version = cache_versions.native_artifacts;
 const render_page_cache_version = cache_versions.render_page;
-const layout_measurement_cache_version = measurement_store.version ++ ":table-v1";
+const layout_measurement_cache_version = measurement_store.version ++ ":table-v1:width-allocation-v1";
 const warm_render_job_cap: usize = 4;
 const cold_render_job_cap: usize = 16;
 const artifact_job_slack: usize = 2;
@@ -532,7 +532,7 @@ pub const LayoutMeasurementScope = struct {
             .frame = .{
                 .x = 0,
                 .y = 0,
-                .width = @max(width, 1),
+                .width = if (width > 0) width else 1,
                 .height = if (core.render_policy.naturalPathSize(node)) |size|
                     (if (mode == .width_constrained and frame.height > 0) frame.height else size.height)
                 else
@@ -563,8 +563,12 @@ const default_icon_size: f32 = 72;
 
 fn measurementFrameHeight(frame: Frame, mode: core.LayoutMeasurementMode, object: *const core.prepared.PreparedObject) f32 {
     if (mode == .width_constrained and frame.height > 0) {
-        return @max(frame.height, 1);
+        return frame.height;
     }
+    if (mode == .width_constrained) switch (object.render.kind) {
+        .raster_asset, .vector_asset, .latex => return 0,
+        else => {},
+    };
     for (object.asset_deps) |dep| {
         if (dep.kind == .icon and object.render.kind == .vector_asset) {
             const size = scaledAssetSize(.{ .width = default_icon_size, .height = default_icon_size }, object.render.asset);
@@ -1705,7 +1709,7 @@ fn pdfAssetPlacement(ctx: *DrawContext, command: *const ObjectCommand, source_z:
     const content_frame = contentFrameForRender(command.frame, command.render);
     const source = std.mem.span(source_z.ptr);
     const size = try artifacts.pdfAssetSize(artifactContext(ctx), source, command.render.asset, .pdf);
-    return naturalAssetFrame(content_frame, scaledAssetSize(size, command.render.asset));
+    return fittedImageFrame(content_frame, scaledAssetSize(size, command.render.asset), assetAlignment(command.render.asset));
 }
 
 fn deinitLinkAnnotations(allocator: Allocator, links: []const LinkAnnotation) void {
@@ -1983,7 +1987,7 @@ fn measureObjectCommandIntrinsic(ctx: *DrawContext, command: *const ObjectComman
         const frame_width: f32 = if (mode == .natural) 1 else @max(outer_width, 1);
         return try measureFrameIntrinsic(ctx, command, Frame{ .x = 0, .y = 0, .width = frame_width, .height = 1 });
     }
-    const frame = Frame{ .x = 0, .y = 0, .width = @max(outer_width, 1), .height = @max(command.frame.height, 1) };
+    const frame = Frame{ .x = 0, .y = 0, .width = if (outer_width > 0) outer_width else 1, .height = if (command.frame.height > 0) command.frame.height else 2 * render.chrome.pad_y + 1 };
     const content_frame = contentFrameForRender(frame, render);
     const content_measure = switch (render.kind) {
         .text => if (render.text) |text|
@@ -1995,7 +1999,7 @@ fn measureObjectCommandIntrinsic(ctx: *DrawContext, command: *const ObjectComman
             code_text.font = text.code_font;
             break :blk try measureCodeIntrinsic(ctx, command, content_frame.width, code_text);
         } else return null,
-        .latex => try measureLatexIntrinsic(ctx, command, content_frame.width, content_frame.height),
+        .latex => try measureLatexIntrinsic(ctx, command, content_frame.width, content_frame.height, mode),
         .vector_asset, .raster_asset => try measureAssetIntrinsic(
             ctx,
             command,
@@ -2032,8 +2036,9 @@ fn measureFrameIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, frame
 
 fn expandContentMeasurement(render: ResolvedRender, frame: Frame, content_frame: Frame, content: core.LayoutMeasurement) core.LayoutMeasurement {
     var result = content;
-    result.width = @max(content.width + render.chrome.pad_x * 2, 1);
-    result.height = @max(content.height + render.chrome.pad_y * 2, 1);
+    const image = render.kind == .raster_asset or render.kind == .vector_asset or render.kind == .latex;
+    result.width = if (image) content.width + render.chrome.pad_x * 2 else @max(content.width + render.chrome.pad_x * 2, 1);
+    result.height = if (image) content.height + render.chrome.pad_y * 2 else @max(content.height + render.chrome.pad_y * 2, 1);
     const top_inset = frame.height - content_frame.y - content_frame.height;
     if (result.ink_bounds) |*ink| {
         ink.x += render.chrome.pad_x;
@@ -2057,7 +2062,7 @@ fn measureTextIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width:
             var measurement = MeasurementScope.init(ctx);
             try measurement.begin();
             defer measurement.deinit();
-            const frame = Frame{ .x = 0, .y = 0, .width = @max(width, 1), .height = Defaults.height };
+            const frame = Frame{ .x = 0, .y = 0, .width = if (width > 0) width else 1, .height = Defaults.height };
             const first_text = markdownFirstBlockText(text, doc.blocks.items);
             const bottom_bl = try drawMarkdownBlocksAtTop(ctx, frame, top_bl, doc.blocks.items, text, 0);
             var measured = try measurementFromInk(
@@ -2103,9 +2108,8 @@ fn measureCodeIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width:
     var measurement = MeasurementScope.init(ctx);
     try measurement.begin();
     defer measurement.deinit();
-    const frame = Frame{ .x = 0, .y = 0, .width = @max(width, 1), .height = Defaults.height };
-    try drawCodeBlock(ctx, frame, command.content, text, command.render.code);
-    const logical_height = @as(f32, @floatFromInt(@max(utils.source.lineCount(command.content), 1))) * text.line_height;
+    const frame = Frame{ .x = 0, .y = 0, .width = if (width > 0) width else 1, .height = Defaults.height };
+    const logical_height = try layoutCodeBlock(ctx, frame, command.content, text, command.render.code);
     const baseline = if (measurement.bounds.first_baseline) |value| value else try lineBaselineFromTop(ctx, text.code_font, text.font_size, text.line_height);
     if (try measurement.inkFrame()) |ink| {
         return .{
@@ -2118,22 +2122,24 @@ fn measureCodeIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width:
     return .{ .width = 1, .height = logical_height, .ink_bounds = .{}, .first_baseline = baseline };
 }
 
-fn measureLatexIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width: f32, height: f32) !core.LayoutMeasurement {
+fn measureLatexIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width: f32, height: f32, mode: core.LayoutMeasurementMode) !core.LayoutMeasurement {
     const latex = try artifacts.renderLatexToPdf(artifactContext(ctx), command.content, command.latex_preamble, command.latex_engine, command.latex_kind);
     defer ctx.allocator.free(latex.path);
-    const fitted = fitLatexSize(latex.width, latex.height, @max(width, 1), @max(height, 1), try requiredLatexPaint(command));
     const paint = try requiredLatexPaint(command);
+    const styled_scale = @max(@as(f32, 1), paint.min_height / latex.height) * paint.scale;
+    const styled = Size{ .width = latex.width * styled_scale, .height = latex.height * styled_scale };
+    const fitted = if (mode == .natural) styled else fitImageSize(styled, width, if (command.frame.height > 0) height else null);
     const ink = core.LayoutBounds{
-        .x = alignedX(0, width, fitted.width, paint.horizontal_align),
-        .y = height - fitted.height - @max((height - fitted.height) / 2, 0),
+        .x = if (mode == .natural) 0 else alignedX(0, width, fitted.width, paint.horizontal_align),
+        .y = 0,
         .width = fitted.width,
         .height = fitted.height,
     };
     return .{
-        .width = @max(fitted.width, 1),
-        .height = @max(fitted.height, 1),
+        .width = fitted.width,
+        .height = fitted.height,
         .ink_bounds = ink,
-        .first_baseline = ink.y + fitted.height - latex.baseline_from_bottom * fitted.height / @max(latex.height, 1),
+        .first_baseline = ink.y + fitted.height - latex.baseline_from_bottom * fitted.height / latex.height,
     };
 }
 
@@ -2144,30 +2150,31 @@ fn measureAssetIntrinsic(
     height: f32,
     mode: core.LayoutMeasurementMode,
 ) !core.LayoutMeasurement {
-    if (!isPdfAssetOp(command)) {
-        if (core.fontawesome.parseSource(command.content)) |spec| {
-            if (!core.fontawesome.contains(spec)) return NativePdfError.InvalidFontAwesomeIcon;
-            const size = if (mode == .natural) scaledAssetSize(.{ .width = default_icon_size, .height = default_icon_size }, command.render.asset) else Size{ .width = @max(width, 1), .height = @max(height, 1) };
-            return .{ .width = size.width, .height = size.height, .ink_bounds = .{ .width = size.width, .height = size.height } };
+    var natural: Size = undefined;
+    if (!isPdfAssetOp(command) and core.fontawesome.parseSource(command.content) != null) {
+        const spec = core.fontawesome.parseSource(command.content).?;
+        if (!core.fontawesome.contains(spec)) return NativePdfError.InvalidFontAwesomeIcon;
+        natural = .{ .width = default_icon_size, .height = default_icon_size };
+    } else {
+        const source = try artifacts.resolveAssetPath(artifactContext(ctx), command.content);
+        defer ctx.allocator.free(source);
+        const extension = std.fs.path.extension(source);
+        if (command.render.asset != null and command.render.asset.?.format == .pdf) {
+            natural = try artifacts.pdfAssetSize(artifactContext(ctx), source, command.render.asset, .pdf);
+        } else if (std.ascii.eqlIgnoreCase(extension, ".svg")) {
+            const svg = try artifacts.svgAsset(artifactContext(ctx), source);
+            natural = .{ .width = svg.width, .height = svg.height };
+        } else {
+            natural = try artifacts.rasterAssetSize(artifactContext(ctx), source);
         }
     }
-    const source = try artifacts.resolveAssetPath(artifactContext(ctx), command.content);
-    defer ctx.allocator.free(source);
-    const extension = std.fs.path.extension(source);
-    var natural: Size = undefined;
-    if (command.render.asset != null and command.render.asset.?.format == .pdf) {
-        natural = try artifacts.pdfAssetSize(artifactContext(ctx), source, command.render.asset, .pdf);
-    } else if (std.ascii.eqlIgnoreCase(extension, ".svg")) {
-        const svg = try artifacts.svgAsset(artifactContext(ctx), source);
-        natural = .{ .width = svg.width, .height = svg.height };
-    } else {
-        natural = try artifacts.rasterAssetSize(artifactContext(ctx), source);
-    }
+    if (!std.math.isFinite(natural.width) or !std.math.isFinite(natural.height) or natural.width <= 0 or natural.height <= 0) return error.InvalidImageDimensions;
     const scaled = scaledAssetSize(natural, command.render.asset);
+    const fitted = if (mode == .natural) scaled else fitImageSize(scaled, width, if (command.frame.height > 0) height else null);
     return .{
-        .width = @max(scaled.width, 1),
-        .height = @max(scaled.height, 1),
-        .ink_bounds = .{ .width = scaled.width, .height = scaled.height },
+        .width = fitted.width,
+        .height = fitted.height,
+        .ink_bounds = .{ .x = if (mode == .natural) 0 else alignedX(0, width, fitted.width, assetAlignment(command.render.asset)), .width = fitted.width, .height = fitted.height },
     };
 }
 
@@ -2316,8 +2323,8 @@ fn contentFrameForRender(frame: Frame, render: ResolvedRender) Frame {
     return .{
         .x = frame.x + render.chrome.pad_x,
         .y = frame.y + render.chrome.pad_y,
-        .width = @max(@as(f32, 1.0), frame.width - 2.0 * render.chrome.pad_x),
-        .height = @max(@as(f32, 1.0), frame.height - 2.0 * render.chrome.pad_y),
+        .width = @max(@as(f32, 0), frame.width - 2.0 * render.chrome.pad_x),
+        .height = @max(@as(f32, 0), frame.height - 2.0 * render.chrome.pad_y),
         .x_set = frame.x_set,
         .y_set = frame.y_set,
     };
@@ -2845,7 +2852,7 @@ fn markdownCodeBlockPaint(block: *const Block, text: TextPaint) CodePaint {
 fn drawMarkdownCodeBlockContent(ctx: *DrawContext, x: f32, first_baseline_bl: f32, width: f32, source: []const u8, text: TextPaint, code_paint: CodePaint) !void {
     if (code_paint.language) |language| {
         if (utils.highlight.findLanguage(ctx.highlight_languages, language) != null) {
-            try drawHighlightedCodeLines(ctx, x, first_baseline_bl, width, source, text.code_font, text.markdown_code_font_size, text.markdown_code_line_height, code_paint, text.emoji_spacing, true);
+            _ = try drawHighlightedCodeLines(ctx, x, first_baseline_bl, width, source, text.code_font, text.markdown_code_font_size, text.markdown_code_line_height, code_paint, text.emoji_spacing, true, false);
             return;
         }
     }
@@ -3396,9 +3403,9 @@ fn drawPlainTextAtTopWithOptions(
     return placed.logical_width;
 }
 
-fn drawTreeSitterCodeBlock(ctx: *DrawContext, frame: Frame, content: []const u8, text: TextPaint, code: CodePaint, font_size: f32, line_height: f32) !void {
+fn drawTreeSitterCodeBlock(ctx: *DrawContext, frame: Frame, content: []const u8, text: TextPaint, code: CodePaint, font_size: f32, line_height: f32) !f32 {
     const first_baseline_bl = try baselineBlForBox(ctx, frame, text.code_font, font_size, line_height);
-    try drawHighlightedCodeLines(ctx, frame.x, first_baseline_bl, frame.width, content, text.code_font, font_size, line_height, code, text.emoji_spacing, false);
+    return drawHighlightedCodeLines(ctx, frame.x, first_baseline_bl, frame.width, content, text.code_font, font_size, line_height, code, text.emoji_spacing, false, text.wrap);
 }
 
 fn drawHighlightedCodeLines(
@@ -3413,17 +3420,17 @@ fn drawHighlightedCodeLines(
     code: CodePaint,
     emoji_spacing: f32,
     trim_trailing_empty_line: bool,
-) !void {
+    wrap: bool,
+) !f32 {
     const language = code.language orelse {
         var cursor_bl = first_baseline_bl;
         var plain_lines = utils.source.lineIterator(content);
         while (plain_lines.next()) |line_view| {
             const line = line_view.text(content);
             if (trim_trailing_empty_line and line.len == 0 and line_view.raw_end == content.len and content.len > 0 and content[content.len - 1] == '\n') break;
-            _ = try drawCodeTextAtTop(ctx, x, baselineTop(cursor_bl, font_size), width, line_height, line, font, font_size, code.plain, emoji_spacing);
-            cursor_bl -= line_height;
+            cursor_bl -= try drawCodeLine(ctx, x, baselineTop(cursor_bl, font_size), width, line, font, font_size, line_height, code, emoji_spacing, wrap);
         }
-        return;
+        return first_baseline_bl - cursor_bl;
     };
 
     var local_cache = syntax_highlight.Cache.init(std.heap.smp_allocator, ctx.io);
@@ -3444,9 +3451,9 @@ fn drawHighlightedCodeLines(
         if (trim_trailing_empty_line and line.len == 0 and line_view.raw_end == content.len and content.len > 0 and content[content.len - 1] == '\n') break;
         const line_start = line_view.span.start;
         const line_end = line_view.span.end;
-        try drawHighlightedCodeLine(ctx, x, baselineTop(cursor_bl, font_size), width, content, line_start, line_end, &highlighted, font, font_size, line_height, code, emoji_spacing);
-        cursor_bl -= line_height;
+        cursor_bl -= try drawHighlightedCodeLine(ctx, x, baselineTop(cursor_bl, font_size), width, content, line_start, line_end, &highlighted, font, font_size, line_height, code, emoji_spacing, wrap);
     }
+    return first_baseline_bl - cursor_bl;
 }
 
 fn drawHighlightedCodeLine(
@@ -3463,7 +3470,8 @@ fn drawHighlightedCodeLine(
     line_height: f32,
     code: CodePaint,
     emoji_spacing: f32,
-) !void {
+    wrap: bool,
+) !f32 {
     var spans = std.ArrayList(InlineSpan).empty;
     defer spans.deinit(ctx.allocator);
     defer deinitInlineSpans(ctx.allocator, spans.items);
@@ -3473,7 +3481,7 @@ fn drawHighlightedCodeLine(
         try inline_layout.appendTextSpan(inlineContext(ctx), &spans, content[segment.start..segment.end], font, color, null, false, false, .{}, .{ .start = segment.start, .end = segment.end });
         pos = segment.end;
     }
-    try drawCodeSpans(ctx, x, y_top, width, spans.items, font, font_size, line_height, emoji_spacing);
+    return drawCodeSpans(ctx, x, y_top, width, spans.items, font, font_size, line_height, emoji_spacing, wrap);
 }
 
 fn recordSyntaxHighlightFailure(ctx: *DrawContext, failure: syntax_highlight.Failure) !void {
@@ -3499,6 +3507,10 @@ fn colorForHighlightRole(code: CodePaint, role: utils.highlight.CaptureRole) Col
 }
 
 fn drawCodeBlock(ctx: *DrawContext, frame: Frame, content: []const u8, text: TextPaint, code: ?CodePaint) !void {
+    _ = try layoutCodeBlock(ctx, frame, content, text, code);
+}
+
+fn layoutCodeBlock(ctx: *DrawContext, frame: Frame, content: []const u8, text: TextPaint, code: ?CodePaint) !f32 {
     const code_paint = code orelse CodePaint{
         .language = null,
         .plain = text.color,
@@ -3518,12 +3530,13 @@ fn drawCodeBlock(ctx: *DrawContext, frame: Frame, content: []const u8, text: Tex
         }
     }
     var cursor_bl = try baselineBlForBox(ctx, frame, text.code_font, text.font_size, text.line_height);
+    const first_baseline_bl = cursor_bl;
     var lines = utils.source.lineIterator(content);
     while (lines.next()) |line_view| {
         const line = line_view.text(content);
-        try drawCodeLine(ctx, frame.x, baselineTop(cursor_bl, text.font_size), frame.width, line, text.code_font, text.font_size, text.line_height, code_paint, text.emoji_spacing);
-        cursor_bl -= text.line_height;
+        cursor_bl -= try drawCodeLine(ctx, frame.x, baselineTop(cursor_bl, text.font_size), frame.width, line, text.code_font, text.font_size, text.line_height, code_paint, text.emoji_spacing, text.wrap);
     }
+    return @max(first_baseline_bl - cursor_bl, text.line_height);
 }
 
 fn drawCodeLine(
@@ -3537,10 +3550,11 @@ fn drawCodeLine(
     line_height: f32,
     code: CodePaint,
     emoji_spacing: f32,
-) !void {
+    wrap: bool,
+) !f32 {
     if (code.language == null or !std.ascii.eqlIgnoreCase(code.language.?, "python")) {
-        _ = try drawCodeTextAtTop(ctx, x, y_top, width, line_height, line, font, font_size, code.plain, emoji_spacing);
-        return;
+        var plain = [_]InlineSpan{.{ .text = line, .font = font, .color = code.plain }};
+        return drawCodeSpans(ctx, x, y_top, width, &plain, font, font_size, line_height, emoji_spacing, wrap);
     }
 
     var spans = std.ArrayList(InlineSpan).empty;
@@ -3566,11 +3580,13 @@ fn drawCodeLine(
         };
         try inline_layout.appendTextSpan(inlineContext(ctx), &spans, line[start..index], font, color, null, false, false, .{}, .{ .start = start, .end = index });
     }
-    try drawCodeSpans(ctx, x, y_top, width, spans.items, font, font_size, line_height, emoji_spacing);
+    return drawCodeSpans(ctx, x, y_top, width, spans.items, font, font_size, line_height, emoji_spacing, wrap);
 }
 
-fn drawCodeSpans(ctx: *DrawContext, x: f32, y_top: f32, width: f32, spans: []InlineSpan, font: FontFace, font_size: f32, line_height: f32, emoji_spacing: f32) !void {
-    _ = try drawParagraphWithAlignment(ctx, x, Defaults.height - y_top - font_size, width, spans, .{ .font = font, .font_size = font_size, .line_height = line_height, .emoji_spacing = emoji_spacing, .inline_math_spacing = 0 }, false, .left);
+fn drawCodeSpans(ctx: *DrawContext, x: f32, y_top: f32, width: f32, spans: []InlineSpan, font: FontFace, font_size: f32, line_height: f32, emoji_spacing: f32, wrap: bool) !f32 {
+    const baseline = Defaults.height - y_top - font_size;
+    const placed = try drawParagraphWithAlignment(ctx, x, baseline, width, spans, .{ .font = font, .font_size = font_size, .line_height = line_height, .emoji_spacing = emoji_spacing, .inline_math_spacing = 0 }, wrap, .left);
+    return @max(baseline - placed.next_baseline, line_height);
 }
 
 fn isPythonKeyword(segment: []const u8) bool {
@@ -3590,13 +3606,8 @@ fn isPythonKeyword(segment: []const u8) bool {
 fn drawLatexCommand(ctx: *DrawContext, command: *const ObjectCommand, frame: Frame, latex: LatexPaint) !void {
     const asset = try artifacts.renderLatexToPdf(artifactContext(ctx), command.content, command.latex_preamble, command.latex_engine, command.latex_kind);
     defer ctx.allocator.free(asset.path);
-    const fitted = fitLatexSize(asset.width, asset.height, frame.width, frame.height, latex);
-    const draw_frame = Frame{
-        .x = alignedX(frame.x, frame.width, fitted.width, latex.horizontal_align),
-        .y = frame.y + @max((frame.height - fitted.height) / 2, 0),
-        .width = fitted.width,
-        .height = fitted.height,
-    };
+    const scale = @max(@as(f32, 1), latex.min_height / asset.height) * latex.scale;
+    const draw_frame = fittedImageFrame(frame, .{ .width = asset.width * scale, .height = asset.height * scale }, latex.horizontal_align);
     try placeLatexPdf(ctx, draw_frame, asset.path, asset.page_index);
 }
 
@@ -3610,7 +3621,8 @@ fn drawVectorAsset(ctx: *DrawContext, frame: Frame, content: []const u8, asset: 
     if (!is_pdf and core.fontawesome.parseSource(content) != null) {
         const icon = try artifacts.renderIconToSvg(artifactContext(ctx), content);
         defer ctx.allocator.free(icon.path);
-        try drawSvgFrame(ctx, frame, icon.path, if (asset) |paint| paint.tint else null);
+        const fitted = fittedImageFrame(frame, scaledAssetSize(.{ .width = default_icon_size, .height = default_icon_size }, asset), assetAlignment(asset));
+        try drawSvgFrame(ctx, fitted, icon.path, if (asset) |paint| paint.tint else null);
         return;
     }
     const source = try artifacts.resolveAssetPath(artifactContext(ctx), content);
@@ -3622,7 +3634,7 @@ fn drawVectorAsset(ctx: *DrawContext, frame: Frame, content: []const u8, asset: 
     }
     if (is_pdf) {
         const size = try artifacts.pdfAssetSize(artifactContext(ctx), source, asset, .pdf);
-        const fitted = naturalAssetFrame(frame, scaledAssetSize(size, asset));
+        const fitted = fittedImageFrame(frame, scaledAssetSize(size, asset), assetAlignment(asset));
         const paint = asset.?;
         const rect = render_ir.Rect{ .x = fitted.x, .y = topOf(fitted), .width = fitted.width, .height = fitted.height };
         if (ctx.measurement_bounds) |bounds| {
@@ -3718,7 +3730,7 @@ fn listMarker(allocator: Allocator, kind: core.markdown.BlockKind, depth: usize,
 
 fn drawRasterNatural(ctx: *DrawContext, frame: Frame, source: []const u8, asset: ?core.render_policy.AssetPaint) !void {
     const size = try artifacts.rasterAssetSize(artifactContext(ctx), source);
-    const fitted = naturalAssetFrame(frame, scaledAssetSize(size, asset));
+    const fitted = fittedImageFrame(frame, scaledAssetSize(size, asset), assetAlignment(asset));
     const rect = render_ir.Rect{ .x = fitted.x, .y = topOf(fitted), .width = fitted.width, .height = fitted.height };
     if (ctx.measurement_bounds) |bounds| {
         bounds.include(rect);
@@ -3729,7 +3741,7 @@ fn drawRasterNatural(ctx: *DrawContext, frame: Frame, source: []const u8, asset:
 
 fn drawSvgNatural(ctx: *DrawContext, frame: Frame, svg_path: []const u8, asset: ?core.render_policy.AssetPaint) !void {
     const svg = try artifacts.svgAsset(artifactContext(ctx), svg_path);
-    const fitted = naturalAssetFrame(frame, scaledAssetSize(.{ .width = svg.width, .height = svg.height }, asset));
+    const fitted = fittedImageFrame(frame, scaledAssetSize(.{ .width = svg.width, .height = svg.height }, asset), assetAlignment(asset));
     const rect = render_ir.Rect{ .x = fitted.x, .y = topOf(fitted), .width = fitted.width, .height = fitted.height };
     if (ctx.measurement_bounds) |bounds| {
         bounds.include(rect);
@@ -3767,17 +3779,28 @@ fn placeLatexPdf(
 
 const Size = artifacts.Size;
 
-fn naturalAssetFrame(frame: Frame, size: Size) Frame {
+fn fitImageSize(size: Size, width: f32, height: ?f32) Size {
+    var scale = @min(@as(f32, 1), width / size.width);
+    if (height) |available| scale = @min(scale, available / size.height);
+    return .{ .width = size.width * scale, .height = size.height * scale };
+}
+
+fn assetAlignment(asset: ?core.render_policy.AssetPaint) HorizontalAlign {
+    return if (asset) |paint| paint.horizontal_align else .left;
+}
+
+fn fittedImageFrame(frame: Frame, size: Size, alignment: HorizontalAlign) Frame {
+    const fitted = fitImageSize(size, frame.width, frame.height);
     return .{
-        .x = frame.x,
-        .y = frame.y + frame.height - @max(size.height, 1),
-        .width = @max(size.width, 1),
-        .height = @max(size.height, 1),
+        .x = alignedX(frame.x, frame.width, fitted.width, alignment),
+        .y = frame.y + frame.height - fitted.height,
+        .width = fitted.width,
+        .height = fitted.height,
     };
 }
 
 fn assetScale(asset: ?core.render_policy.AssetPaint) f32 {
-    if (asset) |paint| return @max(paint.scale, 0.0001);
+    if (asset) |paint| return paint.scale;
     return 1;
 }
 

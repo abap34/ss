@@ -71,7 +71,7 @@ end
   const parts = await dump(`import std:text as text_api
 type Illustration { body: PathShape caption: String }
 fn display(self: Placed<Illustration>) -> Group<PathShape, text_api::Text>
-  return (self.value.body // text_api::Text { content = self.value.caption }) with { gap = 12 }
+  return (self.value.body // text_api::Text { content = text_api::TextContent { source = self.value.caption } }) with { gap = 12 }
 end
 page diagram
 let drawing = rectangle(200, 80)

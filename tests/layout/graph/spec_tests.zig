@@ -1137,6 +1137,8 @@ test "layout solver: horizontal alignment alone does not imply vertical row alig
     const row_page = try row.addPage("Page");
     const left = try document_testing.native(&row, row_page, "left", .text, "A");
     const right = try document_testing.native(&row, row_page, "right", .text, "B");
+    try setLayoutWrap(&row, left, "off");
+    try setLayoutWrap(&row, right, "off");
     try row.constraints.addAnchor(row.allocator, right, .left, .{ .node = .{ .node_id = left, .anchor = .right } }, 30, .{ .label = "right-of-left" });
     try row.constraints.addAnchor(row.allocator, right, .center_y, .{ .node = .{ .node_id = left, .anchor = .center_y } }, 0, .{ .label = "same-center-y" });
 
@@ -1598,6 +1600,9 @@ test "layout solver: constrained group source forms one fallback unit" {
     const left_title = try document_testing.native(&state, page, "left-title", .text, "Left");
     const left_body = try document_testing.native(&state, page, "left-body", .text, "Body");
     const right = try document_testing.native(&state, page, "right", .text, "Right");
+    try setLayoutWrap(&state, left_title, "off");
+    try setLayoutWrap(&state, left_body, "off");
+    try setLayoutWrap(&state, right, "off");
     const left_group = try document_testing.group(&state, page, &.{ left_title, left_body }, .{ .label = "left-group" });
 
     try state.constraints.addAnchor(state.allocator, right, .left, .{ .node = .{ .node_id = left_group, .anchor = .right } }, 30, .{ .label = "right-of-group" });
@@ -1628,6 +1633,10 @@ test "layout solver: centered vflow treats vertically aligned groups as one row"
     const left_body = try document_testing.native(&state, page, "left-body", .text, "Body");
     const right_title = try document_testing.native(&state, page, "right-title", .text, "Right");
     const right_body = try document_testing.native(&state, page, "right-body", .text, "Body");
+    try setLayoutWrap(&state, left_title, "off");
+    try setLayoutWrap(&state, left_body, "off");
+    try setLayoutWrap(&state, right_title, "off");
+    try setLayoutWrap(&state, right_body, "off");
     const left_group = try document_testing.group(&state, page, &.{ left_title, left_body }, .{ .label = "left-group" });
     const right_group = try document_testing.group(&state, page, &.{ right_title, right_body }, .{ .label = "right-group" });
 
@@ -1779,10 +1788,12 @@ test "layout solver: group width propagation must preserve child hard widths" {
     try state.constraints.addAnchor(state.allocator, child, .right, .{ .node = .{ .node_id = child, .anchor = .left } }, 700, .{ .label = "child-width" });
     try state.constraints.addAnchor(state.allocator, group, .right, .{ .node = .{ .node_id = group, .anchor = .left } }, 600, .{ .label = "group-width" });
 
-    try testing.expectError(error.ConstraintConflict, finalizeDocumentState(&state_layout));
+    try finalizeDocumentState(&state_layout);
+    try expectFloat(700, (try state_layout.frame(child)).*.width);
+    try expectFloat(600, (try state_layout.frame(group)).*.width);
 }
 
-test "layout solver: wrapped width cap propagates through dependent anchors" {
+test "layout solver: allocated wrapped width propagates through dependent anchors" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
     var state_layout = LayoutFixture.init(&state);
@@ -1792,6 +1803,7 @@ test "layout solver: wrapped width cap propagates through dependent anchors" {
     const wrapped = try document_testing.native(&state, page, "wrapped", .text, "this is intentionally long enough to produce a wide intrinsic text box");
     const follower = try document_testing.native(&state, page, "follower", .text, "B");
     try setLayoutWrap(&state, wrapped, "on");
+    try setLayoutWrap(&state, follower, "off");
 
     try state.constraints.addAnchor(state.allocator, wrapped, .left, .{ .page = .left }, 1100, .{ .label = "wrapped-left" });
     try state.constraints.addAnchor(state.allocator, follower, .left, .{ .node = .{ .node_id = wrapped, .anchor = .right } }, 20, .{ .label = "follower-left" });
@@ -1854,6 +1866,7 @@ test "layout diagnostics preserve the direction of ink outside the page" {
         defer state_layout.deinit();
         const page = try state.addPage("Ink overflow");
         const object = try document_testing.native(&state, page, "text", .text, "j");
+        try setLayoutWrap(&state, object, "off");
         try state.constraints.addAnchor(state.allocator, object, .left, .{ .page = .left }, case.left, .{ .label = "left" });
         try state.constraints.addAnchor(state.allocator, object, .top, .{ .page = .top }, 0, .{ .label = "top" });
         var measurement = InkMeasurement{ .ink = case.ink };
@@ -2033,6 +2046,7 @@ test "layout solver uses render measurement provider for intrinsic object size" 
 
     const page = try state.addPage("Page");
     const object = try document_testing.native(&state, page, "body", .text, "provider measured text");
+    try setLayoutWrap(&state, object, "off");
     var measurement = FakeMeasurementContext{ .target = object };
 
     try solveDocumentStateWithOptions(&state_layout, null, .{
@@ -2233,8 +2247,10 @@ test "layout metrics use render atom widths for CJK emoji markdown text" {
     try setTextLineHeight(&state, object, "31");
 
     const node = state.getNode(object).?;
+    try setLayoutWrap(&state, object, "off");
     const measured_width = metrics.intrinsicWidth(try state_layout.work(), node);
     try testing.expect(measured_width > 1);
+    try setLayoutWrap(&state, object, "on");
     (try state_layout.frame(object)).*.width = measured_width - 1;
 
     try expectFloat(62, metrics.intrinsicHeight(try state_layout.work(), node, (try state_layout.frame(node.id)).*));
@@ -2388,7 +2404,7 @@ test "layout diagnostics: fixed-height object reports frame too small" {
             .content_overflow => |data| {
                 found = true;
                 try testing.expectEqual(core.DiagnosticSeverity.warning, diagnostic.severity);
-                try expectFloat(metrics.intrinsicWidth(try state_layout.work(), node), data.required_width);
+                try expectFloat((try state_layout.frame(object)).*.width, data.required_width);
                 try expectFloat((try state_layout.frame(object)).*.width, data.frame_width);
                 try expectFloat(0, data.overflow_width);
                 try expectFloat(required_height, data.required_height);
@@ -2761,7 +2777,7 @@ test "render policy: native payloads determine rendering kinds without propertie
     var state = try initEmptyDocumentState();
     defer state.deinit();
     const page = try state.addPage("Page");
-    const cases = [_]struct { payload: core.native_display.Kind, kind: core.render_policy.RenderKind }{
+    const cases = [_]struct { payload: document_testing.FixtureInput, kind: core.render_policy.RenderKind }{
         .{ .payload = .text, .kind = .text },
         .{ .payload = .code, .kind = .code },
         .{ .payload = .latex, .kind = .latex },
@@ -2953,6 +2969,75 @@ const WidthSensitiveMeasurement = struct {
         return .{ .width = width, .height = if (width < 48) @as(f32, 72) else 36 };
     }
 };
+
+const FormulaMeasurement = struct {
+    fn measure(_: *anyopaque, _: *core.layout.Workspace, node: *const model.Node, width: f32, _: model.LayoutMeasurementMode) !?model.LayoutMeasurement {
+        if (core.nodePayloadKind(node) != .latex) return null;
+        return .{ .width = 300, .height = 60, .measured_width = width };
+    }
+};
+
+test "layout diagnostics: formulas stay at the top of larger frames without ink bounds" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    var fixture = LayoutFixture.init(&state);
+    defer fixture.deinit();
+    const page = try state.addPage("Top aligned formula");
+    const formula = try document_testing.native(&state, page, "formula", .latex, "formula");
+    try addFixedSize(&state, formula, 500, 400);
+    try state.constraints.addAnchor(state.allocator, formula, .left, .{ .page = .left }, 96, null);
+    try state.constraints.addAnchor(state.allocator, formula, .top, .{ .page = .top }, 20, null);
+    var context: u8 = 0;
+    try solveDocumentStateWithOptions(&fixture, null, .{ .measurement_provider = .{ .context = &context, .measure = FormulaMeasurement.measure } });
+    const diagnostics = fixture.result.pages[0].diagnostics;
+    try testing.expectEqual(@as(usize, 1), diagnostics.len);
+    try testing.expectEqual(formula, diagnostics[0].node_id);
+    try testing.expect(diagnostics[0].data == .page_overflow);
+    try expectFloat(20, diagnostics[0].data.page_overflow.overflow_top);
+}
+
+test "layout allocation: nested empty groups accept zero-width frames" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    var fixture = LayoutFixture.init(&state);
+    defer fixture.deinit();
+    const page = try state.addPage("Empty groups");
+    const inner = try document_testing.group(&state, page, &.{}, null);
+    const outer = try document_testing.group(&state, page, &.{inner}, null);
+    for ([_]model.NodeId{ inner, outer }) |id| {
+        try addFixedSize(&state, id, 0, 0);
+        try state.constraints.addAnchor(state.allocator, id, .left, .{ .page = .left }, 96, null);
+        try state.constraints.addAnchor(state.allocator, id, .top, .{ .page = .top }, -96, null);
+    }
+    try finalizeDocumentState(&fixture);
+    try expectFloat(0, (try fixture.frame(inner)).width);
+    try expectFloat(0, (try fixture.frame(outer)).width);
+}
+
+test "layout allocation: separate formulas center in the column independently of prose length" {
+    for ([_][]const u8{ "Short", "A longer paragraph whose measured prose width must not determine the center of the following formula." }) |prose| {
+        var state = try initEmptyDocumentState();
+        defer state.deinit();
+        var fixture = LayoutFixture.init(&state);
+        defer fixture.deinit();
+        const page = try state.addPage("Column");
+        const body = try document_testing.native(&state, page, "body", .text, prose);
+        const formula = try document_testing.native(&state, page, "formula", .latex, "formula");
+        try setLayoutWrap(&state, body, "on");
+        var latex = core.Value{ .record = .init(ast.Type.recordType("LatexStyle")) };
+        defer latex.deinit(testing.allocator);
+        try latex.record.fields.append(testing.allocator, .{ .name = "align", .value = .{ .enum_case = .{ .enum_name = "Align", .case_name = "center" } } });
+        try document_testing.setField(&state, formula, "latex", latex);
+        const column = try state.adoptGroup(page, &.{ body, formula }, .vertical, null);
+        try state.collectDefaultAlignments();
+        var context: u8 = 0;
+        try solveDocumentStateWithOptions(&fixture, null, .{ .measurement_provider = .{ .context = &context, .measure = FormulaMeasurement.measure } });
+        try expectFloat(1088, (try fixture.frame(column)).width);
+        try expectFloat(1088, (try fixture.frame(body)).width);
+        try expectFloat(300, (try fixture.frame(formula)).width);
+        try expectFloat(490, (try fixture.frame(formula)).x);
+    }
+}
 
 fn expectHeightAtFinalWidth(width: f32, wrap: []const u8) !void {
     var state = try initEmptyDocumentState();

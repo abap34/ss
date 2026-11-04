@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { imageSourceIs, displayLeaf } from "../../../support/display.mjs";
 import { spawnSync } from "node:child_process";
 import { copyFile, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import path from "node:path";
@@ -28,15 +29,18 @@ try {
     assert.deepEqual(dump.diagnostics, []);
     assert.equal(dump.page_order.length, 3);
     const formulas = dump.nodes.filter(node => node.placement?.input.type?.name === "Math");
-    const bodies = dump.nodes.filter(node => node.placement?.display.kind === "latex");
+    const bodies = dump.nodes.filter(node => imageSourceIs(node, "latex"));
     assert.equal(formulas.length, 5);
     assert.equal(bodies.length, 5);
     assert(dump.nodes.some(node => node.content === "Formulas: 2"));
     for (const formula of formulas) {
       assert.equal(formula.placement.children.length, 1);
-      const child = bodies.find(node => node.id === formula.placement.children[0]);
-      assert(child);
-      assert.equal(child.placement.parent, formula.id);
+      const latex = dump.nodes.find(node => node.id === formula.placement.children[0]);
+      assert.equal(latex.placement.input.type.name, "Latex");
+      assert.equal(latex.placement.parent, formula.id);
+      const child = displayLeaf(dump.nodes, latex);
+      assert(bodies.includes(child));
+      assert.equal(child.placement.parent, latex.id);
       assert.equal(child.placement.page, formula.placement.page);
       const source = formula.placement.input.fields.find(field => field.name === "source").value.value;
       assert.equal(child.content, "$\\displaystyle " + source + "\n$");

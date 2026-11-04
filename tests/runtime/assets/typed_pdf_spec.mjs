@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { imageSourceIs } from "../../support/display.mjs";
 import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -35,7 +36,7 @@ try {
   const dump = JSON.parse(await readFile(path.join(project, "dump.json"), "utf8"));
   assert.equal(dump.page_order.length, 2);
   assert.deepEqual(dump.diagnostics, []);
-  const pdfs = dump.nodes.filter(node => node.placement?.display.kind === "pdf");
+  const pdfs = dump.nodes.filter(node => imageSourceIs(node, "pdf"));
   assert.equal(pdfs.length, 3);
   const expected = [
     { width: 116, height: 216, page: 2, box: "crop", owner: dump.page_order[0] },
@@ -51,12 +52,15 @@ try {
     assert.equal(node.payload_kind, "pdf_ref");
     assert.deepEqual(node.fields, {});
     assert.equal(node.render.kind, "vector_asset");
-    const asset = field(field(node.placement.input, "style"), "asset");
+    const asset = field(node.placement.input, "source");
     assert.equal(field(asset, "pdf_page").value, want.page);
     assert.equal(field(asset, "pdf_box").case, want.box);
   }
   const parent = dump.nodes.find(node => node.id === pdfs[2].placement.parent);
-  assert.equal(parent.placement.input.type.name, "Sheet");
+  assert.equal(parent.placement.input.type.name, "Pdf");
+  const sheet = dump.nodes.find(node => node.id === parent.placement.parent);
+  assert.equal(sheet.placement.input.type.name, "Sheet");
+  assert.deepEqual(sheet.placement.children, [parent.id]);
   assert.deepEqual(parent.placement.children, [pdfs[2].id]);
   assert.equal(new Set(pdfs.map(node => node.id)).size, 3);
   success("render", "--quiet", "slide.ss", "--output", "rendered.pdf");
@@ -68,7 +72,7 @@ try {
     await writeFile(path.join(project, "renamed.ss"), source.replace('path = "asset.pdf"', `path = "${filename}"`));
     success("dump", "--quiet", "renamed.ss", "--output", "renamed.json");
     const renamed = JSON.parse(await readFile(path.join(project, "renamed.json"), "utf8"));
-    const renamedPdfs = renamed.nodes.filter(node => node.placement?.display.kind === "pdf");
+    const renamedPdfs = renamed.nodes.filter(node => imageSourceIs(node, "pdf"));
     assert.deepEqual(renamedPdfs.map(node => [node.width, node.height]), pdfs.map(node => [node.width, node.height]));
     success("render", "--quiet", "renamed.ss", "--output", "renamed.pdf");
   }

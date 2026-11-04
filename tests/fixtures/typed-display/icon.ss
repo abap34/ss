@@ -8,11 +8,11 @@ const symbol: assets::Icon = assets::Icon {
 
 type Badge { label: String symbol: assets::Icon }
 fn display(self: Placed<Badge>) -> Group<assets::Icon, text_api::Text>
-  return (self.value.symbol // text_api::Text { content = self.value.label }) with { gap = 20 }
+  return (self.value.symbol // text_api::Text { content = text_api::TextContent { source = self.value.label } }) with { gap = 20 }
 end
 
 page styles
-  let title = place!(text_api::Text { content = "# Immutable icons" })
+  let title = place!(text_api::Text { content = text_api::TextContent { source = "# Immutable icons" } })
   let original = place!(symbol)
   let changed = place!(symbol with { source = "fa-solid:heart" style.asset.tint = c"#db2777" style.asset.scale = 1.5 })
   let constrained = place!(symbol)
@@ -29,8 +29,8 @@ page styles
 end
 
 page reused
-  let title = place!(text_api::Text { content = "# Reusable components" })
-  let count = place!(text_api::Text { content = "Icons: " ++ str(selection_count(select<assets::Icon>(pagectx()))) })
+  let title = place!(text_api::Text { content = text_api::TextContent { source = "# Reusable components" } })
+  let count = place!(text_api::Text { content = text_api::TextContent { source = "Icons: " ++ str(selection_count(select<assets::Icon>(pagectx()))) } })
   let badges = place!((
     Badge { label = "Original" symbol = symbol } ||
     Badge { label = "Independent copy" symbol = symbol }

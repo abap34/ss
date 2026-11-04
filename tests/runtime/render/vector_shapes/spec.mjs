@@ -118,7 +118,7 @@ async function testImmutableShapeConstructors() {
     const declarations = names.map(name => `const ${name}_value: PathShape = ${name}(180, 90)`).join("\n");
     const pages = names.map(name => `page ${name}
   let total = selection_count(select<PathShape>(pagectx()))
-  let label = place!(text_api::Text { content = "Shapes: " ++ str(total) })
+  let label = place!(text_api::Text { content = text_api::TextContent { source = "Shapes: " ++ str(total) } })
   let original: Placed<PathShape> = ${name}!(180, 90)
   let changed = place!(${name}_value with { width = 90 })
   let copies = place!(duplicate(${name}_value))

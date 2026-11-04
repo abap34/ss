@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { displayLeaf } from "../../../support/display.mjs";
 import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import path from "node:path";
@@ -38,7 +39,7 @@ try {
     assert(title.y > code.y + code.height);
     assert.equal(group.x, 64);
     assert(group.height >= title.height + 40 + code.height - 0.1);
-    assert.equal(code.content, groups[0].placement.input.children[1].fields.find(field => field.name === "source").value.value);
+    assert.equal(displayLeaf(dump.nodes, code).content, groups[0].placement.input.children[1].fields.find(field => field.name === "source").value.value);
   }
   run("render", "--quiet", source, "--output", path.join(output, "slides.pdf"));
   assert.equal((await readFile(path.join(output, "slides.pdf"))).subarray(0, 5).toString(), "%PDF-");

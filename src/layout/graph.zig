@@ -14,6 +14,103 @@ const Frame = model.Frame;
 
 pub const ConstraintTolerance: f32 = 0.01;
 
+/// Only surviving, non-composition size constraints determine an explicit size.
+pub fn explicitAxisSize(workspace: *const AxisWorkspace, node_id: NodeId) ?f32 {
+    const current = workspace.stateOfConst(node_id) orelse return null;
+    if (current.size_source) |source| if (!source.group_split) return current.size;
+    var anchors: usize = 0;
+    for ([_]?Constraint{ current.start_source, current.end_source, current.center_source }) |source| {
+        if (source) |constraint| if (!constraint.group_split and !constraint.default_alignment) {
+            anchors += 1;
+        };
+    }
+    return if (anchors >= 2 and !current.size_is_default) current.size else null;
+}
+
+/// Parallel anchor relations determine an extent without an absolute origin.
+/// For example, two insets from a fixed panel determine the text width even
+/// before the panel itself has been positioned.
+pub fn resolveRelativeAxisSizes(state: *Workspace, workspace: *AxisWorkspace) !bool {
+    var any_changed = false;
+    for (0..workspace.graph.len()) |_| {
+        var changed = false;
+        for (workspace.graph.child_ids) |id| {
+            if (explicitAxisSize(workspace, id) != null) continue;
+            const indexes = workspace.graph.targetConstraintIndexes(id);
+            outer: for (indexes, 0..) |first_index, first_position| {
+                const first = workspace.graph.constraints[first_index];
+                if (first.group_split or first.default_alignment or anchorAxis(first.target_anchor) != workspace.axis or first.source != .node) continue;
+                const source_id = first.source.node.node_id;
+                if (source_id == id) continue;
+                const source_state = workspace.stateOfConst(source_id) orelse continue;
+                const source_size = source_state.size orelse continue;
+                const source_node = state.source.getNode(source_id).?;
+                if (explicitAxisSize(workspace, source_id) == null and
+                    (model.isGroupNode(source_node) or @import("style.zig").shouldWrapNode(state.source, source_node))) continue;
+                for (indexes[first_position + 1 ..]) |second_index| {
+                    const second = workspace.graph.constraints[second_index];
+                    if (second.group_split or second.default_alignment or anchorAxis(second.target_anchor) != workspace.axis or second.source != .node or second.source.node.node_id != source_id) continue;
+                    const target_delta = anchorExtentFactor(second.target_anchor) - anchorExtentFactor(first.target_anchor);
+                    if (target_delta == 0) continue;
+                    const source_delta = anchorExtentFactor(second.source.node.anchor) + second.source_extent_factor -
+                        anchorExtentFactor(first.source.node.anchor) - first.source_extent_factor;
+                    const size = (source_delta * source_size + second.offset - first.offset) / target_delta;
+                    if (!std.math.isFinite(size) or size < 0) continue;
+                    const current = workspace.stateOf(id).?;
+                    _ = try setAxisSize(current, size, second);
+                    current.size_source = second;
+                    current.size_is_default = false;
+                    _ = try reconcileAxisState(current);
+                    changed = true;
+                    break :outer;
+                }
+            }
+        }
+        any_changed = any_changed or changed;
+        if (!changed) break;
+    }
+    return any_changed;
+}
+
+fn anchorExtentFactor(anchor: Anchor) f32 {
+    return switch (anchor) {
+        .left, .bottom => 0,
+        .center_x, .center_y => 0.5,
+        .right, .top => 1,
+    };
+}
+
+/// Change a default extent while preserving the anchor that positioned it.
+pub fn assignDefaultAxisSize(workspace: *AxisWorkspace, node_id: NodeId, size: f32) !bool {
+    const current = workspace.stateOf(node_id) orelse return error.UnknownNode;
+    if (explicitAxisSize(workspace, node_id) != null) return false;
+    if (current.size) |previous| if (@abs(previous - size) <= ConstraintTolerance) return false;
+    current.size = size;
+    current.size_source = null;
+    current.size_is_default = true;
+    if (current.start_source != null) {
+        current.end = null;
+        current.center = null;
+        current.end_source = null;
+        current.center_source = null;
+    } else if (current.end_source != null) {
+        current.start = null;
+        current.center = null;
+        current.start_source = null;
+        current.center_source = null;
+    } else if (current.center_source != null) {
+        current.start = null;
+        current.end = null;
+        current.start_source = null;
+        current.end_source = null;
+    } else {
+        current.end = null;
+        current.center = null;
+    }
+    _ = try reconcileAxisState(current);
+    return true;
+}
+
 pub const ConstraintClass = enum {
     self_size,
     self_anchor,

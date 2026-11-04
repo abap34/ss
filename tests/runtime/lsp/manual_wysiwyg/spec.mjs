@@ -176,6 +176,7 @@ async function testContinuousPositionEdits(debounceMs) {
 
 page demo
 let item = text!("Move me")
+~ item.width == 300
 end
 `;
     await writeFile(path.join(fixture, "ss.toml"), `[project]
@@ -338,6 +339,7 @@ async function testSignedZeroPositionEdits() {
 
 page demo
 let item = text!("Move me")
+~ item.width == 300
 ~!~ item.left == page.left + 0
 ~!~ item.top == page.top - 0
 end

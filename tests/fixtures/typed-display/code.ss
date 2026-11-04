@@ -19,7 +19,7 @@ def twice(n):
 }
 
 page languages
-  let title = place!(text_api::Text { content = "# Highlighted and plain source" })
+  let title = place!(text_api::Text { content = text_api::TextContent { source = "# Highlighted and plain source" } })
   let highlighted = place!(sample)
   let plain = place!(sample with { language = "plain" style.text.size = 22 })
   ~ title.left == page.left + 64
@@ -37,7 +37,7 @@ page wrapped
     style.chrome.fill = palette.fill
     style.chrome.stroke = palette.stroke
   }
-  let title = place!(text_api::Text { content = "# Code returned by a user display" })
+  let title = place!(text_api::Text { content = text_api::TextContent { source = "# Code returned by a user display" } })
   let example = place!(Example { code = dark })
   ~ title.left == page.left + 64
   ~ title.top == page.top - 48

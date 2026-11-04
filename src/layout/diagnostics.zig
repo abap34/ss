@@ -137,7 +137,9 @@ fn frameRequirement(state: *Workspace, node: *const Node, measurement_cache: ?*m
         }
     }
     return .{
-        .width = if (measurement_cache) |cache|
+        .width = if (metrics.shouldWrapNode(state, node))
+            state.frame(node.id).*.width
+        else if (measurement_cache) |cache|
             try metrics.intrinsicWidthCached(state, node, cache)
         else
             metrics.intrinsicWidth(state, node),
@@ -238,7 +240,7 @@ fn latexContentVisualFrame(frame: model.Frame, width: f32, height: f32, latex: ?
     const horizontal_align = if (latex) |paint| paint.horizontal_align else render_policy.HorizontalAlign.center;
     return .{
         .x = alignedX(frame.x, frame.width, width, horizontal_align),
-        .y = frame.y + @max((frame.height - height) / 2.0, 0),
+        .y = frame.y + frame.height - height,
         .width = width,
         .height = height,
     };

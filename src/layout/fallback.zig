@@ -25,6 +25,7 @@ const VerticalFallbackPolicy = enum {
 /// prescribed. Nested groups keep the extent supplied by their containing group.
 pub fn defaultSplitGroupWidth(state: *Workspace, workspace: *const graph.AxisWorkspace, node_id: NodeId, position: AxisState) ?f32 {
     if (workspace.axis != .horizontal) return null;
+    if (state.horizontal_allocations.get(node_id)) |width| return width;
     if (!isPageSplit(state, workspace, node_id)) return null;
     const node = state.source.getNode(node_id).?;
     const style = style_defaults.styleForNode(state.source, node);
@@ -48,8 +49,176 @@ fn isPageSplit(state: *Workspace, workspace: *const graph.AxisWorkspace, node_id
     const node = state.source.getNode(node_id) orelse return false;
     if (!groups.isGroupNode(node)) return false;
     const config = @import("../core/group_composition.zig").settings(node);
-    return config.mode.equal();
+    return config.mode.equal() or state.horizontal_allocations.contains(node_id);
 }
+
+const WidthInput = struct {
+    reserved: f32 = 0,
+    grows: bool = false,
+    unresolved_overlay: bool = false,
+};
+
+/// Defaults are computed from the display tree, after explicit axis constraints.
+/// Fixed descendants are counted once before remaining space is shared.
+pub fn allocateHorizontalWidths(state: *Workspace, workspace: *graph.AxisWorkspace) !bool {
+    const relative_sizes_changed = try graph.resolveRelativeAxisSizes(state, workspace);
+    const inputs = try state.allocator.alloc(WidthInput, workspace.graph.len());
+    defer state.allocator.free(inputs);
+    for (workspace.graph.child_ids, 0..) |id, index| {
+        const node = state.source.getNode(id) orelse return error.UnknownNode;
+        inputs[index] = if (graph.explicitAxisSize(workspace, id)) |width|
+            .{ .reserved = width }
+        else if (metrics.shouldWrapNode(state, node) and !groups.isGroupNode(node))
+            .{ .reserved = 2 * metrics.chromePadX(state, node), .grows = true }
+        else
+            .{ .reserved = state.frame(id).*.width };
+    }
+    for (workspace.graph.group_order) |index| {
+        const id = workspace.nodeAt(index);
+        if (graph.explicitAxisSize(workspace, id) != null) continue;
+        const node = state.source.getNode(id).?;
+        const children = state.source.childrenOf(id) orelse &.{};
+        if (node.placement.?.display == .expanded and children.len == 1) {
+            inputs[index] = inputs[workspace.indexOf(children[0]).?];
+            continue;
+        }
+        const config = @import("../core/group_composition.zig").settings(node);
+        var total: f32 = 0;
+        var largest: f32 = 0;
+        var grows = false;
+        var unresolved = false;
+        for (children) |child| {
+            const input = inputs[workspace.indexOf(child).?];
+            total += input.reserved;
+            largest = @max(largest, input.reserved);
+            grows = grows or input.grows;
+            unresolved = unresolved or input.unresolved_overlay;
+        }
+        const gaps = if (children.len > 0) config.gap * @as(f32, @floatFromInt(children.len - 1)) else 0;
+        const reserved = switch (config.mode) {
+            .horizontal => total + gaps,
+            .equal_horizontal => largest * @as(f32, @floatFromInt(children.len)) + gaps,
+            .vertical, .equal_vertical => largest,
+            .overlay => workspace.states[index].size orelse largest,
+        };
+        inputs[index] = .{
+            .reserved = reserved + 2 * metrics.chromePadX(state, node),
+            .grows = config.mode != .overlay and grows,
+            .unresolved_overlay = unresolved or (config.mode == .overlay and grows),
+        };
+    }
+    var allocation = WidthAllocation{ .state = state, .workspace = workspace, .inputs = inputs };
+    for (workspace.graph.child_ids, 0..) |id, index| {
+        if (workspace.graph.parentGroupIndexes(id).len != 0) continue;
+        const node = state.source.getNode(id).?;
+        const input = inputs[index];
+        const mode = @import("../core/group_composition.zig").settings(node).mode;
+        const available = availableRootWidth(state, workspace, id);
+        const width = graph.explicitAxisSize(workspace, id) orelse
+            (if (input.grows or mode.equal() or input.unresolved_overlay) available else input.reserved);
+        try allocation.assign(id, width, false);
+    }
+    return allocation.changed or relative_sizes_changed;
+}
+
+fn availableRootWidth(state: *Workspace, workspace: *const graph.AxisWorkspace, id: NodeId) f32 {
+    const node = state.source.getNode(id).?;
+    const style = style_defaults.styleForNode(state.source, node);
+    const page = state.frame(workspace.graph.page_id).*;
+    const left = page.x + style.default_x;
+    const right = page.x + page.width - style.default_right_inset;
+    const position = workspace.stateOfConst(id).?.*;
+    if (position.start_source != null) if (position.start) |start| return right - start;
+    if (position.end_source != null) if (position.end) |end| return end - left;
+    if (position.center_source != null) if (position.center) |center| return 2 * @min(center - left, right - center);
+    return right - left;
+}
+
+const WidthAllocation = struct {
+    state: *Workspace,
+    workspace: *graph.AxisWorkspace,
+    inputs: []const WidthInput,
+    changed: bool = false,
+
+    fn input(self: *const WidthAllocation, id: NodeId) WidthInput {
+        return self.inputs[self.workspace.indexOf(id).?];
+    }
+
+    fn assign(self: *WidthAllocation, id: NodeId, available: f32, force_frame: bool) anyerror!void {
+        const state = self.state;
+        const node = state.source.getNode(id).?;
+        const children = state.source.childrenOf(id) orelse &.{};
+        const explicit = graph.explicitAxisSize(self.workspace, id);
+        const width = explicit orelse available;
+        const is_group = groups.isGroupNode(node);
+        const transparent = is_group and node.placement.?.display == .expanded and children.len == 1;
+        const config = @import("../core/group_composition.zig").settings(node);
+        const overlay = is_group and !transparent and config.mode == .overlay;
+        const pad = metrics.chromePadX(state, node);
+        if (!std.math.isFinite(width) or width < 0 or (width == 0 and !is_group) or
+            (!is_group and metrics.shouldWrapNode(state, node) and width <= 2 * pad))
+        {
+            return self.fail(id, "InvalidWidthAllocation", "The available width must leave a positive content area after horizontal padding.");
+        }
+        if (!overlay or explicit != null) {
+            const entry = try state.horizontal_allocations.getOrPut(id);
+            if (!entry.found_existing or @abs(entry.value_ptr.* - width) > graph.ConstraintTolerance) self.changed = true;
+            entry.value_ptr.* = width;
+            if (is_group or self.input(id).grows or force_frame) {
+                self.changed = (try graph.assignDefaultAxisSize(self.workspace, id, width)) or self.changed;
+            }
+        }
+        if (!is_group or children.len == 0) return;
+        if (transparent) {
+            try self.assign(children[0], width, true);
+            return;
+        }
+        const content_width = width - 2 * pad;
+        switch (config.mode) {
+            .horizontal => {
+                var reserved: f32 = 0;
+                var growing: usize = 0;
+                for (children) |child| {
+                    const value = self.input(child);
+                    if (value.unresolved_overlay) return self.fail(child, "UnboundedGroupWidth", "Specify the width of this group before using it in a horizontal composition; its child bounds depend on that width.");
+                    reserved += value.reserved;
+                    if (value.grows) growing += 1;
+                }
+                const gaps = if (children.len > 0) config.gap * @as(f32, @floatFromInt(children.len - 1)) else 0;
+                if (growing > 0 and reserved + gaps > content_width + graph.ConstraintTolerance) {
+                    return self.fail(id, "InvalidWidthAllocation", "The fixed contents, padding, and gaps exceed the available width of this horizontal composition.");
+                }
+                const extra = if (growing > 0) (content_width - reserved - gaps) / @as(f32, @floatFromInt(growing)) else 0;
+                for (children) |child| {
+                    const value = self.input(child);
+                    try self.assign(child, value.reserved + (if (value.grows) extra else 0), false);
+                }
+            },
+            .equal_horizontal => {
+                if (children.len == 0) return;
+                const gaps = config.gap * @as(f32, @floatFromInt(children.len - 1));
+                const cell = (content_width - gaps) / @as(f32, @floatFromInt(children.len));
+                for (children) |child| {
+                    const allocated = self.workspace.graph.hasSplitTargetAnchor(child, .left) and self.workspace.graph.hasSplitTargetAnchor(child, .right);
+                    const value = self.input(child);
+                    try self.assign(child, if (allocated) cell else if (value.grows) content_width else value.reserved, allocated);
+                }
+            },
+            .vertical, .equal_vertical, .overlay => for (children) |child| {
+                const value = self.input(child);
+                try self.assign(child, if (value.grows or value.unresolved_overlay) content_width else value.reserved, false);
+            },
+        }
+    }
+
+    fn fail(self: *WidthAllocation, id: NodeId, code: []const u8, message: []const u8) anyerror {
+        self.state.addLayoutError(self.workspace.graph.page_id, id, .{ .user_report = .{
+            .code = code,
+            .message = self.state.allocator.dupe(u8, message) catch |err| return err,
+        } }) catch |err| return err;
+        return error.InvalidWidthAllocation;
+    }
+};
 
 pub fn buildHorizontalConstraints(state: *Workspace, workspace: *const graph.AxisWorkspace, options: graph.SolveOptions) !std.ArrayList(Constraint) {
     var constraints = std.ArrayList(Constraint).empty;
@@ -93,7 +262,8 @@ pub fn buildHorizontalConstraints(state: *Workspace, workspace: *const graph.Axi
         if (!hardFallbackSeedAllowed(active, &components, root, placement_id, .horizontal)) continue;
         const placement_node = state.source.getNode(placement_id) orelse return error.UnknownNode;
         const style = style_defaults.styleForNode(state.source, placement_node);
-        const offset: f32 = if (unit) |value| switch (anchor) {
+        const component_anchor = rootImageAlignment(state, workspace, placement_id) orelse anchor;
+        const offset: f32 = if (unit) |value| switch (component_anchor) {
             .center_x => value.placement_offset - value.width / 2 + horizontalCenterOffset(state, workspace.graph.page_id),
             .right => value.placement_offset - value.width - style.default_right_inset,
             else => style.default_x,
@@ -101,7 +271,7 @@ pub fn buildHorizontalConstraints(state: *Workspace, workspace: *const graph.Axi
         try constraints.append(state.allocator, .{
             .target_node = placement_id,
             .target_anchor = .left,
-            .source = .{ .page = if (unit != null) anchor else .left },
+            .source = .{ .page = if (unit != null) component_anchor else .left },
             .offset = offset,
         });
     }
@@ -285,6 +455,7 @@ pub fn buildDefaultAlignmentConstraints(state: *Workspace, workspace: *const gra
         },
     };
     for (candidates) |candidate| {
+        const selected_anchor = if (workspace.axis == .horizontal) imageAlignment(state, candidate.target_node) orelse anchor else anchor;
         const target_index = workspace.indexOf(candidate.target_node) orelse continue;
         if (seen[target_index]) continue;
         if (graph.anchorAxis(candidate.target_anchor) != workspace.axis) continue;
@@ -340,17 +511,48 @@ pub fn buildDefaultAlignmentConstraints(state: *Workspace, workspace: *const gra
         }
 
         var resolved = candidate;
-        if (anchor == .center_x or (candidate.group_split and anchor == .center_y)) resolved.offset = 0;
-        if (anchor == .right) resolved.offset = -resolved.offset;
-        resolved.target_anchor = anchor;
+        if (selected_anchor == .center_x or (candidate.group_split and selected_anchor == .center_y)) resolved.offset = 0;
+        if (selected_anchor == .right) resolved.offset = -resolved.offset;
+        resolved.target_anchor = selected_anchor;
         switch (resolved.source) {
-            .page => resolved.source = .{ .page = anchor },
-            .node => |*source| source.anchor = anchor,
+            .page => resolved.source = .{ .page = selected_anchor },
+            .node => |*source| source.anchor = selected_anchor,
         }
         try constraints.append(state.allocator, resolved);
         seen[target_index] = true;
     }
     return constraints;
+}
+
+fn imageAlignment(state: *Workspace, id: NodeId) ?model.Anchor {
+    var node = state.source.getNode(id) orelse return null;
+    while (node.placement) |placement| {
+        if (placement.display != .expanded) break;
+        const children = state.source.childrenOf(node.id) orelse return null;
+        if (children.len != 1) return null;
+        node = state.source.getNode(children[0]) orelse return null;
+    }
+    if (model.nodeImageSourceKind(node) == null) return null;
+    const asset = model.nodeField(node, "asset") orelse return null;
+    const alignment = asset.record.field("align") orelse return null;
+    if (alignment != .enum_case) return null;
+    const name = alignment.enum_case.case_name;
+    if (std.mem.eql(u8, name, "left")) return .left;
+    if (std.mem.eql(u8, name, "center")) return .center_x;
+    if (std.mem.eql(u8, name, "right")) return .right;
+    return null;
+}
+
+fn rootImageAlignment(state: *Workspace, workspace: *const graph.AxisWorkspace, id: NodeId) ?model.Anchor {
+    var root = id;
+    while (workspace.graph.parentGroupIndexes(root).len > 0) {
+        const parents = workspace.graph.parentGroupIndexes(root);
+        if (parents.len != 1) return null;
+        root = workspace.nodeAt(parents[0]);
+        const node = state.source.getNode(root) orelse return null;
+        if (node.placement.?.display != .expanded) return null;
+    }
+    return imageAlignment(state, root);
 }
 
 fn containingAlignmentFrame(state: *Workspace, workspace: *const graph.AxisWorkspace, candidate: Constraint) !?bool {

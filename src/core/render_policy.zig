@@ -248,6 +248,7 @@ pub const AssetPaint = struct {
     tint: ?Color,
     pdf_page: usize,
     pdf_box: PdfPageBox,
+    horizontal_align: HorizontalAlign = .left,
 };
 
 pub const PdfPageBox = enum {
@@ -333,11 +334,12 @@ pub fn resolveKind(node: *const Node) RenderKind {
     if (node.placement) |placement| switch (placement.display) {
         .expanded, .group => return .chrome_only,
         .native => |kind| return switch (kind) {
-            .text => .text,
-            .image => .raster_asset,
-            .pdf, .icon => .vector_asset,
-            .code => .code,
-            .latex => .latex,
+            .text => if (model.nodeTextContentKind(node) == .code) .code else .text,
+            .image => switch (model.nodeImageSourceKind(node) orelse return .chrome_only) {
+                .file => .raster_asset,
+                .pdf, .icon => .vector_asset,
+                .latex => .latex,
+            },
             .path_shape => .vector_path,
         },
         .pending, .running => {},
@@ -360,6 +362,7 @@ pub fn resolveTextMetrics(state: anytype, node: *const Node) TextMetrics {
 }
 
 pub fn shouldWrapText(state: anytype, node: *const Node) bool {
+    if (node.placement) |placement| if (placement.display == .native and placement.display.native != .text) return false;
     if (naturalPathSize(node) != null) return false;
     switch (model.nodePayloadKind(node) orelse .text) {
         .image_ref, .pdf_ref => return false,
@@ -369,7 +372,7 @@ pub fn shouldWrapText(state: anytype, node: *const Node) bool {
         if (std.mem.eql(u8, wrap_mode, "on")) return true;
         if (std.mem.eql(u8, wrap_mode, "off")) return false;
     }
-    return recordFloatProperty(state, node, "layout", &.{"right_inset"}) != null;
+    return if (node.placement) |placement| placement.display == .native and placement.display.native == .text else false;
 }
 
 fn resolveText(state: anytype, node: *const Node, kind: RenderKind) ?TextPaint {
@@ -502,9 +505,9 @@ fn resolveMarkdownHeadingUnderline(node: *const Node, heading_field: []const u8)
 fn resolveLatex(state: anytype, node: *const Node, kind: RenderKind) ?LatexPaint {
     if (kind != .latex) return null;
     return .{
-        .min_height = positiveRecordFloatProperty(state, node, "latex", &.{"min_height"}) orelse default_latex_min_height,
-        .scale = positiveRecordFloatProperty(state, node, "latex", &.{"scale"}) orelse 1,
-        .horizontal_align = parseRecordHorizontalAlign(state, node, "latex", &.{"align"}) orelse .center,
+        .min_height = positiveRecordFloatProperty(state, node, "image_source", &.{"min_height"}) orelse default_latex_min_height,
+        .scale = positiveRecordFloatProperty(state, node, "asset", &.{"scale"}) orelse 1,
+        .horizontal_align = parseRecordHorizontalAlign(state, node, "asset", &.{"align"}) orelse .center,
     };
 }
 
@@ -516,18 +519,18 @@ fn resolveAsset(state: anytype, node: *const Node, kind: RenderKind) ?AssetPaint
             .tint = parseRecordColorProperty(state, node, "asset", &.{"tint"}),
             .pdf_page = resolvedPdfPage(state, node),
             .pdf_box = resolvedPdfPageBox(state, node),
+            .horizontal_align = parseRecordHorizontalAlign(state, node, "asset", &.{"align"}) orelse .left,
         },
         else => null,
     };
 }
 
 fn isPdfInput(node: *const Node) bool {
-    const placement = node.placement orelse return false;
-    return placement.display == .native and placement.display.native == .pdf;
+    return model.nodeImageSourceKind(node) == .pdf;
 }
 
 fn resolvedPdfPage(state: anytype, node: *const Node) usize {
-    const number = positiveRecordFloatProperty(state, node, "asset", &.{"pdf_page"}) orelse 1;
+    const number = positiveRecordFloatProperty(state, node, "image_source", &.{"pdf_page"}) orelse 1;
     return pdfPageNumber(@floor(number)) orelse 1;
 }
 
@@ -539,7 +542,7 @@ pub fn pdfPageNumber(number: f32) ?usize {
 }
 
 fn resolvedPdfPageBox(state: anytype, node: *const Node) PdfPageBox {
-    const name = fields.read(state.allocator, state, node, "asset", &.{"pdf_box"}, .text) orelse return .crop;
+    const name = fields.read(state.allocator, state, node, "image_source", &.{"pdf_box"}, .text) orelse return .crop;
     return std.meta.stringToEnum(PdfPageBox, name) orelse .crop;
 }
 

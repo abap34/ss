@@ -5,7 +5,6 @@ pub const Defaults = struct {
     pub const width: f32 = 1280;
     pub const height: f32 = 720;
     pub const flow_top: f32 = 660;
-    pub const max_visual_width: f32 = 1160;
     pub const default_asset_width: f32 = 220;
     pub const max_figure_height: f32 = 220;
     pub const max_math_height: f32 = 80;

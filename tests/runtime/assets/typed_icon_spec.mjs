@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { imageSourceIs } from "../../support/display.mjs";
 import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -24,14 +25,17 @@ try {
   const dump = JSON.parse(await readFile(path.join(output, "dump.json"), "utf8"));
   assert.deepEqual(dump.diagnostics, []);
   assert.equal(dump.page_order.length, 2);
-  const icons = dump.nodes.filter(node => node.placement?.display.kind === "icon");
+  const icons = dump.nodes.filter(node => imageSourceIs(node, "icon"));
   assert.equal(icons.length, 5);
   assert(dump.nodes.some(node => node.content === "Icons: 2"));
   const byPage = dump.page_order.map(id => icons.filter(node => node.placement.page === id).sort((a, b) => a.x - b.x));
   assert.deepEqual(byPage.map(nodes => nodes.length), [3, 2]);
   for (const node of icons) {
     assert.deepEqual(node.fields, {});
-    assert.equal(node.placement.input.type.name, "Icon");
+    assert.equal(node.placement.input.type.name, "Image");
+    const original = dump.nodes.find(parent => parent.id === node.placement.parent);
+    assert.equal(original.placement.input.type.name, "Icon");
+    assert.deepEqual(original.placement.children, [node.id]);
     assert.equal(node.render.kind, "vector_asset");
     assert.equal(node.blocks, null);
     assert.equal(node.inline_lines, null);
@@ -61,7 +65,7 @@ try {
   await writeFile(changed, original.replace("asset.scale = 1.5", "asset.scale = 0.5"));
   success("dump", "--quiet", changed, "--output", path.join(output, "changed.json"));
   const updated = JSON.parse(await readFile(path.join(output, "changed.json"), "utf8"));
-  const heart = updated.nodes.find(node => node.placement?.display.kind === "icon" && node.content === "fa-solid:heart");
+  const heart = updated.nodes.find(node => imageSourceIs(node, "icon") && node.content === "fa-solid:heart");
   close(heart.width, 36);
   close(heart.height, 36);
 

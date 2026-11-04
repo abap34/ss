@@ -19,11 +19,11 @@ const shape: graphics::PathShape = graphics::PathShape {
 
 type Diagram { label: String shape: graphics::PathShape }
 fn display(self: Placed<Diagram>) -> Group<text_api::Text, graphics::PathShape>
-  return (text_api::Text { content = self.value.label } // self.value.shape) with { gap = 20 }
+  return (text_api::Text { content = text_api::TextContent { source = self.value.label } } // self.value.shape) with { gap = 20 }
 end
 
 page normal
-  let title = place!(text_api::Text { content = "# Immutable vector paths" })
+  let title = place!(text_api::Text { content = text_api::TextContent { source = "# Immutable vector paths" } })
   let original = place!(shape)
   let changed = place!(shape with { width = 240 style.fill = paint::solid_fill(c"#dcfce7") style.stroke.color = c"#16a34a" })
   let curved = place!(graphics::PathShape {
@@ -51,8 +51,8 @@ page normal
 end
 
 page reused
-  let title = place!(text_api::Text { content = "# Composition and typed queries" })
-  let count = place!(text_api::Text { content = "Shapes: " ++ str(selection_count(select<graphics::PathShape>(pagectx()))) })
+  let title = place!(text_api::Text { content = text_api::TextContent { source = "# Composition and typed queries" } })
+  let count = place!(text_api::Text { content = text_api::TextContent { source = "Shapes: " ++ str(selection_count(select<graphics::PathShape>(pagectx()))) } })
   let row = place!((
     Diagram { label = "Original" shape = shape } ||
     Diagram { label = "Independent copy" shape = shape }
@@ -66,7 +66,7 @@ page reused
 end
 
 page resized
-  let title = place!(text_api::Text { content = "# Placement constraints resize the frame" })
+  let title = place!(text_api::Text { content = text_api::TextContent { source = "# Placement constraints resize the frame" } })
   let original = place!(shape)
   let constrained = place!(shape)
   ~ title.left == page.left + 64

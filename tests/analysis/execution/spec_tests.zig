@@ -464,7 +464,7 @@ fn expectOwnedDiagnostic(source: []const u8, expected_code: []const u8, expected
 test "validation diagnostics own messages independently of analysis storage" {
     try expectOwnedDiagnostic(
         \\type Label {}
-        \\fn display(self: Placed<Label>) -> Text = Text { content = readlines("missing.txt") }
+        \\fn display(self: Placed<Label>) -> Text = Text { content = TextContent { source = readlines("missing.txt") } }
         \\page main
         \\  place!(Label {})
         \\end
@@ -478,7 +478,7 @@ test "validation diagnostics own messages independently of analysis storage" {
     try expectOwnedDiagnostic(
         \\type Label {}
         \\fn label() -> String = label()
-        \\fn display(self: Placed<Label>) -> Text = Text { content = label() }
+        \\fn display(self: Placed<Label>) -> Text = Text { content = TextContent { source = label() } }
         \\page main
         \\  place!(Label {})
         \\end
@@ -542,7 +542,7 @@ test "execution graph owns typed display summaries after temporary analysis stor
         var state = try document(
             \\type Label {}
             \\fn display(self: Placed<Label>) -> Text
-            \\  return Text { content = str(self.document.layout_h_center_offset) }
+            \\  return Text { content = TextContent { source = str(self.document.layout_h_center_offset) } }
             \\end
             \\page main
             \\  place!(Label {})

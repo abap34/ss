@@ -391,7 +391,7 @@ pub const CompositionOrder = struct {
     }
 };
 
-pub const NativeDisplayKind = enum { text, image, pdf, code, latex, path_shape, icon };
+pub const NativeDisplayKind = enum { text, image, path_shape };
 
 /// Input storage follows Value ownership: recursive storage is owned, while
 /// strings, names and function identities borrow the document's runtime inputs.
@@ -875,21 +875,17 @@ pub fn nodeField(node: *const Node, key: []const u8) ?Value {
                 },
                 .text => blk: {
                     if (std.mem.eql(u8, key, "semantics")) break :blk placement.value.record.field(key);
-                    if (std.mem.eql(u8, key, "text") or std.mem.eql(u8, key, "underline")) break :blk style.record.field(key);
+                    if (std.mem.eql(u8, key, "text") or std.mem.eql(u8, key, "underline") or std.mem.eql(u8, key, "chrome")) break :blk style.record.field(key);
                     if (std.mem.eql(u8, key, "markdown_headings")) break :blk style.record.field("headings");
-                    break :blk null;
-                },
-                .image, .pdf, .icon => if (std.mem.eql(u8, key, "asset") or std.mem.eql(u8, key, "chrome")) style.record.field(key) else null,
-                .latex => if (std.mem.eql(u8, key, "latex") or std.mem.eql(u8, key, "chrome")) style.record.field(key) else null,
-                .code => blk: {
-                    if (std.mem.eql(u8, key, "language")) break :blk placement.value.record.field("language");
-                    if (std.mem.eql(u8, key, "text") or std.mem.eql(u8, key, "chrome")) break :blk style.record.field(key);
+                    const content = nodeTextContent(node) orelse break :blk null;
+                    if (std.mem.eql(u8, key, "language")) break :blk content.field("language");
                     if (std.mem.eql(u8, key, "code")) {
-                        const highlight = style.record.field("highlight") orelse break :blk null;
+                        const highlight = content.field("highlight") orelse break :blk null;
                         if (highlight == .record) break :blk highlight.record.field("code");
                     }
                     break :blk null;
                 },
+                .image => if (std.mem.eql(u8, key, "asset") or std.mem.eql(u8, key, "chrome")) style.record.field(key) else if (std.mem.eql(u8, key, "image_source")) placement.value.record.field("source") else null,
             };
         }
     }
@@ -902,9 +898,8 @@ pub fn nodeField(node: *const Node, key: []const u8) ?Value {
 pub fn nodeContent(node: *const Node) ?[]const u8 {
     if (node.placement) |placement| {
         if (placement.display == .native) return switch (placement.display.native) {
-            .text => placement.value.record.field("content").?.string,
-            .image, .pdf => placement.value.record.field("path").?.string,
-            .code, .latex, .icon => placement.value.record.field("source").?.string,
+            .text => nodeTextContent(node).?.field("source").?.string,
+            .image => nodeImageSource(node).?.field("source").?.string,
             .path_shape => "",
         };
     }
@@ -915,14 +910,46 @@ pub fn nodeDisplayContent(node: *const Node) []const u8 {
     return nodeContent(node) orelse "";
 }
 
+pub const TextContentKind = enum { text, code };
+pub const ImageSourceKind = enum { file, pdf, icon, latex };
+
+pub fn nodeTextContent(node: *const Node) ?RecordValue {
+    const placement = node.placement orelse return null;
+    if (placement.display != .native or placement.display.native != .text) return null;
+    const value = placement.value.record.field("content") orelse return null;
+    return if (value == .record) value.record else null;
+}
+
+pub fn nodeTextContentKind(node: *const Node) ?TextContentKind {
+    const content = nodeTextContent(node) orelse return null;
+    const kind = content.field("kind") orelse return null;
+    return if (kind == .enum_case) std.meta.stringToEnum(TextContentKind, kind.enum_case.case_name) else null;
+}
+
+pub fn nodeImageSource(node: *const Node) ?RecordValue {
+    const placement = node.placement orelse return null;
+    if (placement.display != .native or placement.display.native != .image) return null;
+    const value = placement.value.record.field("source") orelse return null;
+    return if (value == .record) value.record else null;
+}
+
+pub fn nodeImageSourceKind(node: *const Node) ?ImageSourceKind {
+    const input = nodeImageSource(node) orelse return null;
+    const kind = input.field("kind") orelse return null;
+    return if (kind == .enum_case) std.meta.stringToEnum(ImageSourceKind, kind.enum_case.case_name) else null;
+}
+
 pub fn nodePayloadKind(node: *const Node) ?PayloadKind {
     const placement = node.placement orelse return null;
     if (placement.display != .native) return null;
     return switch (placement.display.native) {
-        .text, .code, .icon, .path_shape => .text,
-        .latex => .latex,
-        .image => .image_ref,
-        .pdf => .pdf_ref,
+        .text, .path_shape => .text,
+        .image => switch (nodeImageSourceKind(node) orelse return null) {
+            .file => .image_ref,
+            .pdf => .pdf_ref,
+            .icon => .text,
+            .latex => .latex,
+        },
     };
 }
 

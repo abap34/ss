@@ -13,6 +13,7 @@ pub const Fixture = struct {
             .allocator = source.allocator,
             .source = source,
             .geometry = std.AutoHashMap(core.NodeId, core.layout.ObjectFrame).init(source.allocator),
+            .horizontal_allocations = .init(source.allocator),
         } };
     }
 
@@ -64,6 +65,7 @@ pub const Fixture = struct {
             try core.layout.solver.solveDocument(self.source, trace_path, options);
         // Warnings and fit-policy errors are asserted separately by these tests.
         for (self.result.pages) |page| {
+            if (page.failure) |err| return err;
             if (page.constraint_failures.len > 0 and detailed) return page.validate();
             if (!page.converged) return error.LayoutDidNotConverge;
         }

@@ -329,6 +329,63 @@ fn prepareTarget(state: *core.DocumentState, input: Type) !core.native_display.T
     return compiler.analysis.infer.prepareDisplay(state.allocator, state, &sema, input, state.sourceOrigin(0, .{ .start = 0, .end = 1 }), &context);
 }
 
+fn nativeLeaf(state: *core.DocumentState, id: core.NodeId) !*const core.Node {
+    var node = state.getNode(id) orelse return error.UnknownNode;
+    while (node.placement.?.display == .expanded) {
+        const children = state.childrenOf(node.id) orelse return error.MissingDisplayChild;
+        try testing.expectEqual(@as(usize, 1), children.len);
+        node = state.getNode(children[0]) orelse return error.UnknownNode;
+    }
+    try testing.expect(node.placement.?.display == .native);
+    return node;
+}
+
+test "native display: exactly three kinds validate structured text and image inputs" {
+    try testing.expectEqual(@as(usize, 3), std.meta.tags(core.native_display.Kind).len);
+    var state = try documentWithModules(
+        \\page inputs
+        \\  text!("Text")
+        \\  code!("return 1", "python")
+        \\  image!("tests/fixtures/layout/practical/diagram.svg")
+        \\  icon!("fa-solid:star")
+        \\  latex!("$x$")
+        \\end
+    );
+    defer state.deinit();
+    var execution = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer execution.deinit();
+    try compiler.lowering.evaluateDocument(&state, &execution, .{ .io = testing.io });
+    const roots = state.placementRootsOf(state.graph.page_order.items[0]);
+    try testing.expectEqual(@as(usize, 5), roots.len);
+    for (roots) |root| {
+        const node = try nativeLeaf(&state, root);
+        const kind = node.placement.?.display.native;
+        var value = try node.placement.?.value.clone(testing.allocator);
+        defer value.deinit(testing.allocator);
+        try core.native_display.validateValue(&state, value, kind);
+        for (value.record.fields.items) |*field| {
+            if (!std.mem.eql(u8, field.name, if (kind == .text) "content" else "source")) continue;
+            const saved = field.value;
+            field.value = .{ .string = "Not a structured input" };
+            try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, kind));
+            field.value = saved;
+            for (field.value.record.fields.items) |*nested| {
+                if (!std.mem.eql(u8, nested.name, "source") and !std.mem.eql(u8, nested.name, "kind")) continue;
+                const original = nested.value;
+                nested.value = .{ .number = 1 };
+                try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, kind));
+                nested.value = original;
+                if (std.mem.eql(u8, nested.name, "kind")) {
+                    nested.value.enum_case.case_name = "unknown";
+                    try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, kind));
+                    nested.value = original;
+                }
+            }
+        }
+        try core.native_display.validateValue(&state, value, kind);
+    }
+}
+
 test "native text display: a user display reaches Markdown preparation through immutable Text input" {
     var state = try documentWithModules(
         \\import std:text/content as native
@@ -337,7 +394,7 @@ test "native text display: a user display reaches Markdown preparation through i
         \\type Message { content: String }
         \\fn display(self: Placed<Message>) -> native::Text
         \\  return native::Text {
-        \\    content = self.value.content
+        \\    content = native::TextContent { source = self.value.content }
         \\    style = block::TextBlockStyle { text = styles::TextStyle { size = 31 parse = styles::TextParseMode.block } }
         \\  }
         \\end
@@ -389,7 +446,7 @@ test "native image display: immutable inputs retain asset styles and independent
         \\type Picture { image: assets::Image }
         \\fn display(self: Placed<Picture>) -> assets::Image = self.value.image
         \\const picture: assets::Image = assets::Image {
-        \\  path = "tests/fixtures/layout/practical/diagram.svg"
+        \\  source = assets::image_source("tests/fixtures/layout/practical/diagram.svg")
         \\  style = assets::AssetBlockStyle {} with { asset.scale = 0.5 chrome.pad_x = 8 chrome.pad_y = 6 }
         \\}
         \\page first
@@ -470,8 +527,8 @@ test "native code display: source, language and styles remain immutable across p
     const ids = [_]core.NodeId{ roots[0], roots[1], child };
     const languages = [_][]const u8{ "python", "plain", "python" };
     for (ids, languages, [_]f32{ 18, 22, 18 }) |id, language, size| {
-        const node = state.getNode(id).?;
-        try testing.expectEqual(core.native_display.Kind.code, node.placement.?.display.native);
+        const node = try nativeLeaf(&state, id);
+        try testing.expectEqual(core.native_display.Kind.text, node.placement.?.display.native);
         try testing.expectEqual(@as(usize, 0), node.fields.items.len);
         const paint = core.render_policy.resolve(&state, node);
         try testing.expectEqual(core.render_policy.RenderKind.code, paint.kind);
@@ -521,8 +578,8 @@ test "code constructors: values allocate only at placement and defaults are inde
     try testing.expectEqual(@as(usize, 2), children.len);
     const ids = [_]core.NodeId{ roots[0], roots[1], children[0], children[1] };
     for (ids, [_]f32{ 16, 99, 16, 16 }) |id, size| {
-        const node = state.getNode(id).?;
-        try testing.expectEqual(core.native_display.Kind.code, node.placement.?.display.native);
+        const node = try nativeLeaf(&state, id);
+        try testing.expectEqual(core.native_display.Kind.text, node.placement.?.display.native);
         try testing.expectEqualStrings("return 1", core.nodeContent(node).?);
         try testing.expectEqual(@as(usize, 0), node.fields.items.len);
         const paint = core.render_policy.resolve(&state, node);
@@ -545,13 +602,13 @@ test "native code display: nominal identity and language input are required" {
     try testing.expectError(error.InvalidType, prepareTarget(&state, local));
     const module = state.moduleByPathOrSpec("std:code/content").?;
     const native_type = Type.recordType("Code").inModule(module.id);
-    try testing.expectEqual(core.native_display.Kind.code, (try prepareTarget(&state, native_type)).native);
+    try testing.expect((try prepareTarget(&state, native_type)) == .function);
     var value = core.Value{ .record = .init(native_type) };
     defer value.deinit(testing.allocator);
     try value.record.fields.append(testing.allocator, .{ .name = "source", .value = .{ .string = "Source" } });
-    try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, .code));
+    try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, .text));
     try value.record.fields.append(testing.allocator, .{ .name = "language", .value = .{ .number = 1 } });
-    try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, .code));
+    try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, .text));
 }
 
 test "native asset display: local names and incomplete inputs cannot impersonate renderer types" {
@@ -565,18 +622,21 @@ test "native asset display: local names and incomplete inputs cannot impersonate
     try compiler.analysis.analyzeDocumentState(testing.allocator, &state);
     for ([_]struct { name: []const u8, kind: core.native_display.Kind }{
         .{ .name = "Image", .kind = .image },
-        .{ .name = "Pdf", .kind = .pdf },
-        .{ .name = "Icon", .kind = .icon },
+        .{ .name = "Pdf", .kind = .image },
+        .{ .name = "Icon", .kind = .image },
     }) |case| {
         const local = Type.recordType(case.name).inModule(0);
         try testing.expect(core.native_display.kindForType(&state, local) == null);
         try testing.expectError(error.InvalidType, prepareTarget(&state, local));
         const native_module = state.moduleByPathOrSpec("std:assets/content").?;
         const native_type = Type.recordType(case.name).inModule(native_module.id);
-        try testing.expectEqual(case.kind, (try prepareTarget(&state, native_type)).native);
+        const target = try prepareTarget(&state, native_type);
+        if (std.mem.eql(u8, case.name, "Image")) {
+            try testing.expectEqual(case.kind, target.native);
+        } else try testing.expect(target == .function);
         var value = core.Value{ .record = .init(native_type) };
         defer value.deinit(testing.allocator);
-        try value.record.fields.append(testing.allocator, .{ .name = if (case.kind == .icon) "source" else "path", .value = .{ .string = "Missing style" } });
+        try value.record.fields.append(testing.allocator, .{ .name = if (std.mem.eql(u8, case.name, "Icon")) "source" else "path", .value = .{ .string = "Missing style" } });
         try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, case.kind));
         try value.record.fields.append(testing.allocator, .{ .name = "style", .value = .{ .record = .init(Type.recordType("AssetBlockStyle").inModule(0)) } });
         try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, case.kind));
@@ -587,7 +647,7 @@ test "native image display: missing assets report their placement and page befor
     var state = try documentWithModules(
         \\import std:assets as assets
         \\page first
-        \\  let missing = place!(assets::Image { path = "tests/fixtures/typed-display/absent-image.png" })
+        \\  let missing = place!(assets::image("tests/fixtures/typed-display/absent-image.png"))
         \\end
     );
     defer state.deinit();
@@ -631,7 +691,7 @@ test "native text display: public Text preserves complete block styles without m
         \\import std:text as text_api
         \\import std:layout/types as layout
         \\fn/! styled(content: String, style: text_api::TextBlockStyle) -> text_api::Text
-        \\  return text_api::Text { content = content style = style }
+        \\  return text_api::Text { content = text_api::TextContent { source = content } style = style }
         \\end
         \\page main
         \\  let original = text_api::TextBlockStyle {
@@ -679,8 +739,8 @@ test "native text display: public Text preserves complete block styles without m
 test "native text display: an immutable theme block can be used directly and updated independently" {
     var state = try documentWithModules(
         \\import std:themes/default as base
-        \\import std:text as { Text }
-        \\fn/! styled(content: String, style: TextBlockStyle) -> Text = Text { content = content style = style }
+        \\import std:text as { Text, TextContent }
+        \\fn/! styled(content: String, style: TextBlockStyle) -> Text = Text { content = TextContent { source = content } style = style }
         \\page main
         \\  let theme = base::default_theme()
         \\  styled!("Original", theme.h1)
@@ -708,8 +768,8 @@ test "native text display: every bundled theme resolves the same text paint from
     for ([_][]const u8{"default"}) |name| {
         const source = try std.fmt.allocPrint(testing.allocator,
             \\import std:themes/{s} as theme_api
-            \\import std:text as {{ Text }}
-            \\fn/! styled(content: String, style: TextBlockStyle) -> Text = Text {{ content = content style = style }}
+            \\import std:text as {{ Text, TextContent }}
+            \\fn/! styled(content: String, style: TextBlockStyle) -> Text = Text {{ content = TextContent {{ source = content }} style = style }}
             \\page main
             \\  let theme = theme_api::default_theme()
             \\  text!("# Theme", theme.body)
@@ -757,7 +817,7 @@ test "display plan: nested generic wrappers terminate at the native Text type" {
         \\type Message { content: String }
         \\fn display<T>(self: Placed<Wrapper<T>>) -> T = self.value.value
         \\fn display(self: Placed<Message>) -> native::Text
-        \\  return native::Text { content = self.value.content }
+        \\  return native::Text { content = native::TextContent { source = self.value.content } }
         \\end
     );
     defer state.deinit();
@@ -899,7 +959,7 @@ test "typed placement: display dependencies wait for page creation and retain ca
         \\  return Callback { value = () |-> format() }
         \\end
         \\fn display(self: Placed<Callback>) -> native::Text
-        \\  return native::Text { content = self.value.value() }
+        \\  return native::Text { content = native::TextContent { source = self.value.value() } }
         \\end
         \\document
         \\  let page = new_page(docctx(), "First")
@@ -991,7 +1051,7 @@ test "typed placement: indirect display writes are rejected with the concrete in
         \\  return "bad"
         \\end
         \\fn display(self: Placed<Input>) -> native::Text
-        \\  return native::Text { content = self.value.value() }
+        \\  return native::Text { content = native::TextContent { source = self.value.value() } }
         \\end
         \\page first
         \\  place_on!(pagectx(), Input { value = mutate })
@@ -1033,7 +1093,7 @@ test "typed placement: authored root order survives dependency ordering and grap
         \\import std:text/content as native
         \\type Label { title: String }
         \\fn display(self: Placed<Label>) -> native::Text
-        \\  return native::Text { content = self.value.title }
+        \\  return native::Text { content = native::TextContent { source = self.value.title } }
         \\end
         \\document
         \\  let page = new_page(docctx(), "First")
@@ -1061,7 +1121,7 @@ test "typed placement: generic displays run each concrete stage through the exec
         \\type Wrapper<T> { value: T }
         \\fn display<T>(self: Placed<Wrapper<T>>) -> T = self.value.value
         \\page first
-        \\  let text = native::Text { content = "Nested" }
+        \\  let text = native::Text { content = native::TextContent { source = "Nested" } }
         \\  let input = Wrapper<Wrapper<native::Text>> { value = Wrapper<native::Text> { value = text } }
         \\  place_on!(pagectx(), input)
         \\end
@@ -1132,7 +1192,7 @@ test "public placement: inferred explicit and forwarded type arguments preserve 
         \\import std:text as text_api
         \\type Label { title: String }
         \\fn display(self: Placed<Label>) -> text_api::Text
-        \\  return text_api::Text { content = self.value.title ++ ":" ++ str(page_index(self.page)) }
+        \\  return text_api::Text { content = text_api::TextContent { source = self.value.title ++ ":" ++ str(page_index(self.page)) } }
         \\end
         \\fn forward!<T>(value: T) -> Placed<T>
         \\  return layout::place!<T>(value)
@@ -1143,7 +1203,7 @@ test "public placement: inferred explicit and forwarded type arguments preserve 
         \\  let b: Placed<Label> = layout::place!<Label>(shared)
         \\  let alias = a
         \\  ~ b.left == alias.right + 24
-        \\  let plain: Placed<text_api::Text> = place!(text_api::Text { content = "Native" })
+        \\  let plain: Placed<text_api::Text> = place!(text_api::Text { content = text_api::TextContent { source = "Native" } })
         \\end
         \\page second
         \\  let c: Placed<Label> = forward!(shared)
@@ -1183,8 +1243,8 @@ test "public placement: non-displayable values and placed references fail before
     for ([_][]const u8{
         "place!(42)",
         "place!(Settings {})",
-        "place!(place!(text_api::Text { content = \"Twice\" }))",
-        "layout::place!<Number>(text_api::Text { content = \"Mismatch\" })",
+        "place!(place!(text_api::text(\"Twice\")))",
+        "layout::place!<Number>(text_api::text(\"Mismatch\"))",
         "place!(nothing())",
     }) |expression| {
         const source = try std.fmt.allocPrint(testing.allocator,
@@ -1240,8 +1300,8 @@ test "native latex display: immutable body and configuration survive reuse and d
     const parent = state.placementRootsOf(state.graph.page_order.items[1])[0];
     const child = state.childrenOf(parent).?[0];
     for ([_]core.NodeId{ roots[0], roots[1], child }, 0..) |id, index| {
-        const node = state.getNode(id).?;
-        try testing.expectEqual(core.native_display.Kind.latex, node.placement.?.display.native);
+        const node = try nativeLeaf(&state, id);
+        try testing.expectEqual(core.native_display.Kind.image, node.placement.?.display.native);
         try testing.expectEqual(@as(usize, 0), node.fields.items.len);
         const paint = core.render_policy.resolve(&state, node);
         try testing.expectEqual(core.render_policy.RenderKind.latex, paint.kind);
@@ -1274,7 +1334,7 @@ test "math display: public constructors preserve source, configuration and typed
         \\    config.preamble = "Other preamble"
         \\  })
         \\  let direct: Placed<Math> = math!("y^2")
-        \\  place!(t::Text { content = str(selection_count(select<Math>(pagectx()))) ++ ":" ++ str(selection_count(select<formulas::Latex>(pagectx()))) })
+        \\  place!(t::Text { content = t::TextContent { source = str(selection_count(select<Math>(pagectx()))) ++ ":" ++ str(selection_count(select<formulas::Latex>(pagectx()))) } })
         \\end
         \\page second
         \\  place!(Formula { value = shared })
@@ -1297,8 +1357,8 @@ test "math display: public constructors preserve source, configuration and typed
         try testing.expectEqual(if (index == 3) pages[1] else pages[0], input.page_id);
         const children = state.childrenOf(id).?;
         try testing.expectEqual(@as(usize, 1), children.len);
-        const leaf = state.getNode(children[0]).?;
-        try testing.expectEqual(core.native_display.Kind.latex, leaf.placement.?.display.native);
+        const leaf = try nativeLeaf(&state, children[0]);
+        try testing.expectEqual(core.native_display.Kind.image, leaf.placement.?.display.native);
         try testing.expectEqual(input.page_id, leaf.placement.?.page_id);
         const paint = core.render_policy.resolve(&state, leaf);
         try testing.expectEqual(@as(f32, if (index == 1) 2 else 1), paint.latex.?.scale);
@@ -1332,7 +1392,7 @@ test "math display: complete formula and Latex examples evaluate without externa
         var bodies: usize = 0;
         for (state.graph.nodes.items) |*node| {
             const placement = node.placement orelse continue;
-            if (placement.display != .native or placement.display.native != .latex) continue;
+            if (placement.display != .native or placement.display.native != .image or core.render_policy.resolveKind(node) != .latex) continue;
             var prepared = try core.prepared.prepareObject(testing.allocator, &state, node);
             defer prepared.deinit(testing.allocator);
             try testing.expectEqual(@as(usize, 1), prepared.asset_deps.len);
@@ -1353,15 +1413,15 @@ test "native latex display: configuration must have the declared nominal type" {
     const local = Type.recordType("Latex").inModule(0);
     try testing.expect(core.native_display.kindForType(&state, local) == null);
     const native_type = Type.recordType("Latex").inModule(state.moduleByPathOrSpec("std:math/content").?.id);
-    try testing.expectEqual(core.native_display.Kind.latex, (try prepareTarget(&state, native_type)).native);
+    try testing.expect((try prepareTarget(&state, native_type)) == .function);
     var value = core.Value{ .record = .init(native_type) };
     defer value.deinit(testing.allocator);
     try value.record.fields.append(testing.allocator, .{ .name = "source", .value = .{ .string = "Body" } });
     const style_type = Type.recordType("LatexBlockStyle").inModule(state.moduleByPathOrSpec("std:math/style").?.id);
     try value.record.fields.append(testing.allocator, .{ .name = "style", .value = .{ .record = .init(style_type) } });
-    try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, .latex));
+    try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, .image));
     try value.record.fields.append(testing.allocator, .{ .name = "config", .value = .{ .record = .init(Type.recordType("LatexConfig").inModule(0)) } });
-    try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, .latex));
+    try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, .image));
 }
 
 test "typed groups: heterogeneous inputs preserve nesting, duplicates and placement identity" {
@@ -1369,7 +1429,7 @@ test "typed groups: heterogeneous inputs preserve nesting, duplicates and placem
         \\import std:text as text_api
         \\import std:code as code_api
         \\type Label { title: String }
-        \\fn display(self: Placed<Label>) -> text_api::Text = text_api::Text { content = self.value.title }
+        \\fn display(self: Placed<Label>) -> text_api::Text = text_api::Text { content = text_api::TextContent { source = self.value.title } }
         \\fn pair<T, U>(a: T, b: U) -> Group<T, U> = group(a, b)
         \\type Panel { title: String }
         \\fn display(self: Placed<Panel>) -> Group<Label, code_api::Code>
@@ -1405,7 +1465,7 @@ test "typed groups: heterogeneous inputs preserve nesting, duplicates and placem
         const panel_children = state.childrenOf(panel_group).?;
         try testing.expectEqual(@as(usize, 2), panel_children.len);
         try testing.expectEqual(page, state.getNode(panel_children[1]).?.placement.?.page_id);
-        try testing.expectEqual(core.native_display.Kind.code, state.getNode(panel_children[1]).?.placement.?.display.native);
+        try testing.expectEqual(core.native_display.Kind.text, (try nativeLeaf(&state, panel_children[1])).placement.?.display.native);
     }
     const first_children = state.childrenOf(roots[0]).?;
     const second_children = state.childrenOf(roots[1]).?;
@@ -1419,7 +1479,7 @@ test "typed groups: child callbacks retain captures and reject document mutation
     const source =
         \\import std:text as text_api
         \\type Label { format: () -> String }
-        \\fn display(self: Placed<Label>) -> text_api::Text = text_api::Text { content = self.value.format() }
+        \\fn display(self: Placed<Label>) -> text_api::Text = text_api::Text { content = text_api::TextContent { source = self.value.format() } }
         \\fn label(prefix: String) -> Label = Label { format = () |-> prefix }
         \\fn content(a: Label, b: Label) -> Group<Label, Label> = group(a, b)
         \\page first
@@ -1439,7 +1499,7 @@ test "typed groups: child callbacks retain captures and reject document mutation
     var invalid = try documentWithModules(
         \\import std:text as text_api
         \\type Label { format: () -> String }
-        \\fn display(self: Placed<Label>) -> text_api::Text = text_api::Text { content = self.value.format() }
+        \\fn display(self: Placed<Label>) -> text_api::Text = text_api::Text { content = text_api::TextContent { source = self.value.format() } }
         \\fn mutate() -> String
         \\  new_page(docctx(), "Unexpected")
         \\  return "bad"
@@ -1475,7 +1535,7 @@ test "typed groups: construction alone does not allocate placements" {
     var state = try documentWithModules(
         \\import std:text as text_api
         \\page first
-        \\  let content = group(text_api::Text { content = "Unused" }, text_api::Text { content = "Unused" })
+        \\  let content = group(text_api::Text { content = text_api::TextContent { source = "Unused" } }, text_api::Text { content = text_api::TextContent { source = "Unused" } })
         \\end
     );
     defer state.deinit();
@@ -1491,7 +1551,7 @@ test "typed groups: paired generic constructors retain group input types" {
         \\import std:text as t
         \\fn/! pair<T, U>(a: T, b: U) -> Group<T, U> = group(a, b)
         \\page first
-        \\  let placed: Placed<Group<t::Text, t::Text>> = pair!(t::Text { content = "First" }, t::Text { content = "Second" })
+        \\  let placed: Placed<Group<t::Text, t::Text>> = pair!(t::Text { content = t::TextContent { source = "First" } }, t::Text { content = t::TextContent { source = "Second" } })
         \\end
     );
     defer state.deinit();
@@ -1513,7 +1573,7 @@ test "typed groups: unused displays reject placed children" {
         \\type Wrapper { item: Placed<t::Text> }
         \\fn display(self: Placed<Wrapper>) -> t::Text
         \\  let invalid = group(self.value.item)
-        \\  return t::Text { content = "Unused" }
+        \\  return t::Text { content = t::TextContent { source = "Unused" } }
         \\end
     );
     defer state.deinit();
@@ -1529,16 +1589,16 @@ test "typed groups: invalid children and mismatched signatures are diagnosed sta
     for ([_][]const u8{
         \\import std:text as t
         \\page first
-        \\  let placed = place!(t::Text { content = "Already placed" })
-        \\  let invalid = group(t::Text { content = "Value" }, placed)
+        \\  let placed = place!(t::Text { content = t::TextContent { source = "Already placed" } })
+        \\  let invalid = group(t::Text { content = t::TextContent { source = "Value" } }, placed)
         \\end
         ,
         \\import std:text as t
         \\import std:code as c
-        \\fn invalid() -> Group<c::Code, t::Text> = group(t::Text { content = "Text" }, c::Code { source = "Code" })
+        \\fn invalid() -> Group<c::Code, t::Text> = group(t::Text { content = t::TextContent { source = "Text" } }, c::Code { source = "Code" })
         ,
         \\import std:text as t
-        \\fn invalid() -> Group<t::Text> = group(t::Text { content = "Text" }, t::Text { content = "Text" })
+        \\fn invalid() -> Group<t::Text> = group(t::Text { content = t::TextContent { source = "Text" } }, t::Text { content = t::TextContent { source = "Text" } })
         ,
     }) |source| {
         var state = try documentWithModules(source);
@@ -1555,15 +1615,15 @@ test "typed compositions: operators preserve inputs, nested structure and immuta
         \\fn group(a: t::Text, b: t::Text) -> Number = 0
         \\type Row { content: Group<t::Text, t::Text> }
         \\fn display(self: Placed<Row>) -> Group<t::Text, t::Text> = self.value.content
-        \\const a: t::Text = t::Text { content = "A" }
-        \\const b: t::Text = t::Text { content = "B" }
+        \\const a: t::Text = t::Text { content = t::TextContent { source = "A" } }
+        \\const b: t::Text = t::Text { content = t::TextContent { source = "B" } }
         \\page first
         \\  let original = Row { content = a || b }
         \\  let updated = original with { content.gap = 48 }
         \\  place!(original)
         \\  place!(updated)
         \\  place!(updated)
-        \\  place!(t::Text { content = str(original.content.gap) ++ "/" ++ str(updated.content.gap) })
+        \\  place!(t::Text { content = t::TextContent { source = str(original.content.gap) ++ "/" ++ str(updated.content.gap) } })
         \\  place!(a |=| b |=| a)
         \\  place!((a |=| b) |=| a)
         \\  place!((a // b) with { gap = 12 })
@@ -1597,27 +1657,27 @@ test "typed compositions: invalid updates and mixed placement operands fail befo
     for ([_][]const u8{
         \\import std:text as t
         \\page first
-        \\  let a = t::Text { content = "A" }
+        \\  let a = t::Text { content = t::TextContent { source = "A" } }
         \\  let invalid = (a || a) with { gap = "wide" }
         \\end
         ,
         \\import std:text as t
         \\page first
-        \\  let a = t::Text { content = "A" }
+        \\  let a = t::Text { content = t::TextContent { source = "A" } }
         \\  let invalid = (a || a) with { missing = 3 }
         \\end
         ,
         \\import std:text as t
         \\page first
-        \\  let a = t::Text { content = "A" }
+        \\  let a = t::Text { content = t::TextContent { source = "A" } }
         \\  let group = a || a
         \\  group.gap = 4
         \\end
         ,
         \\import std:text as t
         \\page first
-        \\  let a = place!(t::Text { content = "A" })
-        \\  let invalid = a || t::Text { content = "B" }
+        \\  let a = place!(t::Text { content = t::TextContent { source = "A" } })
+        \\  let invalid = a || t::Text { content = t::TextContent { source = "B" } }
         \\end
         ,
     }) |source| {
@@ -1642,7 +1702,7 @@ test "native path display: immutable geometry, paint and markers survive reuse a
         \\  marker_end = g::marker_arrow_open()
         \\}
         \\page first
-        \\  place!(t::Text { content = str(selection_count(select<g::PathShape>(pagectx()))) })
+        \\  place!(t::Text { content = t::TextContent { source = str(selection_count(select<g::PathShape>(pagectx()))) } })
         \\  place!(input)
         \\  place!(input with { width = 240 style.stroke.width = 4 marker_start = g::MarkerStyle { path = path(p::move_to(0, 0), p::line_to(1, 1)) } })
         \\end
@@ -1741,8 +1801,8 @@ test "native icon display: immutable inputs preserve identity, paint and bundled
     defer selected.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 5), selected.ids.items.len);
     for (selected.ids.items, 0..) |id, index| {
-        const node = state.getNode(id).?;
-        try testing.expectEqual(core.native_display.Kind.icon, node.placement.?.display.native);
+        const node = try nativeLeaf(&state, id);
+        try testing.expectEqual(core.native_display.Kind.image, node.placement.?.display.native);
         try testing.expectEqual(@as(usize, 0), node.fields.items.len);
         const paint = core.render_policy.resolve(&state, node);
         try testing.expectEqual(core.render_policy.RenderKind.vector_asset, paint.kind);
@@ -1778,7 +1838,8 @@ test "native icon display: catalog names are validated without treating them as 
         const diagnostic = state.diagnostics.entries.items[0];
         try testing.expectEqualStrings("InvalidFontAwesomeIcon", diagnostic.code());
         try testing.expectEqual(state.graph.page_order.items[0], diagnostic.page_id.?);
-        try testing.expectEqual(state.placementRootsOf(diagnostic.page_id.?)[0], diagnostic.node_id.?);
+        const root = state.placementRootsOf(diagnostic.page_id.?)[0];
+        try testing.expectEqual(state.childrenOf(root).?[0], diagnostic.node_id.?);
         try testing.expect(diagnostic.origin != null);
     }
 }
@@ -1863,7 +1924,7 @@ test "native text display: public constructors preserve explicit TeX configurati
         \\import std:text as words
         \\const config: LatexConfig = LatexConfig { engine = LatexEngine.lualatex preamble = "explicit" }
         \\const original: words::Text = words::text("**Shared**", default_text_style, config)
-        \\const changed: words::Text = original with { config.preamble = "changed" style.text.size = 31 }
+        \\const changed: words::Text = original with { content.config.preamble = "changed" style.text.size = 31 }
         \\page main
         \\  let first: Placed<words::Text> = place!(original)
         \\  let second: Placed<words::Text> = place!(changed)
@@ -1928,7 +1989,7 @@ test "fold evaluation: aggregate accumulators own nested selections independentl
     try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
     const root = state.placementRootsOf(state.graph.page_order.items[0])[0];
     const input = state.getNode(root).?.placement.?.value.record;
-    try testing.expectEqualStrings("13/10/2/10", input.field("content").?.string);
+    try testing.expectEqualStrings("13/10/2/10", input.field("content").?.record.field("source").?.string);
     try testing.expectEqual(@as(usize, 0), state.diagnostics.entries.items.len);
 }
 

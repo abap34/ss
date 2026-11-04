@@ -15,47 +15,38 @@ pub fn constraintTargetsGroup(state: *Workspace, constraint: Constraint) bool {
     return isGroupNode(target_node);
 }
 
-fn propagateWidthCapToSubtree(state: *Workspace, node_id: NodeId, max_right: f32, measurement_cache: ?*metrics.MeasurementCache) !void {
-    const node = state.source.getNode(node_id) orelse return error.UnknownNode;
-    if (state.frame(node.id).*.x_set and metrics.shouldWrapNode(state, node)) {
-        const available = @max(@as(f32, 1.0), max_right - state.frame(node.id).*.x);
-        if (available < state.frame(node.id).*.width - graph.ConstraintTolerance) {
-            state.frame(node.id).*.width = available;
-            state.frame(node.id).*.height = if (measurement_cache) |cache|
-                try metrics.intrinsicHeightCached(state, node, state.frame(node.id).*, cache)
-            else
-                metrics.intrinsicHeight(state, node, state.frame(node.id).*);
-        }
-    }
-    if (isGroupNode(node)) {
-        const children = state.source.childrenOf(node_id) orelse return;
-        for (children) |child_id| {
-            try propagateWidthCapToSubtree(state, child_id, max_right, measurement_cache);
-        }
-    }
-}
-
-pub fn propagateTargetedWidthsCached(state: *Workspace, workspace: *const graph.AxisWorkspace, measurement_cache: *metrics.MeasurementCache) !void {
-    try propagateTargetedWidthsWithCache(state, workspace, measurement_cache);
-}
-
-fn propagateTargetedWidthsWithCache(state: *Workspace, workspace: *const graph.AxisWorkspace, measurement_cache: ?*metrics.MeasurementCache) !void {
-    for (workspace.graph.child_ids, workspace.states) |group_id, h_state| {
-        const node = state.source.getNode(group_id) orelse return error.UnknownNode;
-        if (!isGroupNode(node)) continue;
-        if (!workspace.graph.hasTargetConstraint(group_id, .horizontal, workspace.soft_constraints)) continue;
-        const group_left = h_state.start orelse continue;
-        const group_width = h_state.size orelse continue;
-        const group_right = group_left + group_width - metrics.chromePadX(state, node);
-        const children = state.source.childrenOf(group_id) orelse continue;
-        for (children) |child_id| {
-            try propagateWidthCapToSubtree(state, child_id, group_right, measurement_cache);
-        }
-    }
-}
-
 fn computeTightGroupAxisState(state: *Workspace, workspace: *const graph.AxisWorkspace, node_id: NodeId) !AxisState {
     var bounds = try computeChildGroupAxisState(state, workspace, node_id);
+    const parents = workspace.graph.parentGroupIndexes(node_id);
+    const expanded_parent: ?NodeId = if (parents.len == 1 and
+        state.source.getNode(workspace.nodeAt(parents[0])).?.placement.?.display == .expanded)
+        workspace.nodeAt(parents[0])
+    else
+        null;
+    if (workspace.axis == .vertical) {
+        if (expanded_parent) |parent_id| {
+            // A returned group shares the allocated display frame. Its content
+            // bounds must not shrink that frame again on every solver pass.
+            if (hasAllocatedExpandedHeight(state, workspace, parent_id)) {
+                const parent_state = workspace.stateOfConst(parent_id).?.*;
+                if (parent_state.size) |height| {
+                    const current = workspace.stateOfConst(node_id).?.*;
+                    bounds = .{ .size = height, .size_is_default = true, .end = current.end orelse bounds.end orelse parent_state.end };
+                    _ = try graph.reconcileAxisState(&bounds);
+                    return bounds;
+                }
+            }
+        }
+    }
+    if (workspace.axis == .horizontal) {
+        if (state.horizontal_allocations.get(node_id)) |width| {
+            const current = workspace.stateOfConst(node_id).?.*;
+            const parent_start = if (expanded_parent) |parent_id| workspace.stateOfConst(parent_id).?.start else null;
+            bounds = .{ .size = width, .size_is_default = true, .start = current.start orelse bounds.start orelse parent_start };
+            _ = try graph.reconcileAxisState(&bounds);
+            return bounds;
+        }
+    }
     if (!workspace.graph.hasSplitChildren(node_id)) return bounds;
 
     // Measure the contents without using an allocated parent extent. In
@@ -64,18 +55,24 @@ fn computeTightGroupAxisState(state: *Workspace, workspace: *const graph.AxisWor
         (try requiredGroupAxisSize(state, workspace, node_id, workspace.graph.len())) orelse return bounds;
     const current = workspace.stateOfConst(node_id).?.*;
     const start = current.start orelse bounds.start;
+    const end = current.end orelse bounds.end;
     bounds = .{ .size = size, .size_is_default = true };
-    if (start) |value| {
-        bounds.start = value;
-        bounds.end = value + size;
-        bounds.center = value + size / 2;
+    // Vertical flow seeds the top before the required height is fully known.
+    // Remeasuring must preserve that top instead of moving it with the bottom.
+    switch (workspace.axis) {
+        .horizontal => bounds.start = start,
+        .vertical => bounds.end = end,
     }
+    _ = try graph.reconcileAxisState(&bounds);
     return bounds;
 }
 
 fn requiredGroupAxisSize(state: *Workspace, workspace: *const graph.AxisWorkspace, group_id: NodeId, remaining: usize) anyerror!?f32 {
     if (remaining == 0) return null;
     const node = state.source.getNode(group_id) orelse return error.UnknownNode;
+    if (node.placement.?.display == .expanded) {
+        return requiredChildAxisSize(state, workspace, node.placement.?.display.expanded.child, remaining - 1);
+    }
     const split = workspace.graph.hasSplitChildren(group_id);
     const config = composition.settings(node);
     if (config.mode == .overlay) return null;
@@ -97,6 +94,7 @@ fn requiredGroupAxisSize(state: *Workspace, workspace: *const graph.AxisWorkspac
 }
 
 fn requiredChildAxisSize(state: *Workspace, workspace: *const graph.AxisWorkspace, node_id: NodeId, remaining: usize) !?f32 {
+    if (remaining == 0) return null;
     // Explicit sizes retain their original constraint source. Parent cuts are
     // allocations, and do not describe the height required by the contents.
     for (workspace.graph.targetConstraintIndexes(node_id)) |index| {
@@ -115,6 +113,9 @@ fn requiredChildAxisSize(state: *Workspace, workspace: *const graph.AxisWorkspac
         if (current.size) |size| return size;
     }
     const node = state.source.getNode(node_id) orelse return error.UnknownNode;
+    if (node.placement.?.display == .expanded) {
+        return requiredGroupAxisSize(state, workspace, node_id, remaining);
+    }
     if (isGroupNode(node)) {
         // Ordinary child groups retain the bounds produced by their surviving
         // relative constraints, including user updates to composition spacing.
@@ -156,10 +157,43 @@ fn computeChildGroupAxisState(state: *Workspace, workspace: *const graph.AxisWor
 
 fn groupAxisPadding(state: *Workspace, workspace: *const graph.AxisWorkspace, node_id: NodeId) f32 {
     const node = state.source.getNode(node_id) orelse return 0;
+    // A display expansion shares its returned frame, including its chrome.
+    if (node.placement.?.display == .expanded) return 0;
     return switch (workspace.axis) {
         .horizontal => metrics.chromePadX(state, node),
         .vertical => metrics.chromePadY(state, node),
     };
+}
+
+pub fn inheritExpandedVerticalSizes(state: *Workspace, workspace: *graph.AxisWorkspace) !bool {
+    if (workspace.axis != .vertical) return false;
+    var changed = false;
+    var remaining = workspace.graph.group_order.len;
+    while (remaining > 0) {
+        remaining -= 1;
+        const index = workspace.graph.group_order[remaining];
+        const node = state.source.getNode(workspace.nodeAt(index)).?;
+        if (node.placement.?.display != .expanded) continue;
+        if (!hasAllocatedExpandedHeight(state, workspace, node.id)) continue;
+        const size = workspace.states[index].size orelse continue;
+        const children = state.source.childrenOf(node.id) orelse continue;
+        if (children.len != 1) continue;
+        changed = (try graph.assignDefaultAxisSize(workspace, children[0], size)) or changed;
+    }
+    return changed;
+}
+
+fn hasAllocatedExpandedHeight(state: *Workspace, workspace: *const graph.AxisWorkspace, node_id: NodeId) bool {
+    var current = node_id;
+    for (0..workspace.graph.len()) |_| {
+        if (graph.explicitAxisSize(workspace, current) != null) return true;
+        if (!workspace.stateOfConst(current).?.size_is_default and axisAllocatedBySplit(workspace, current)) return true;
+        const parents = workspace.graph.parentGroupIndexes(current);
+        if (parents.len != 1) return false;
+        current = workspace.nodeAt(parents[0]);
+        if (state.source.getNode(current).?.placement.?.display != .expanded) return false;
+    }
+    return false;
 }
 
 pub fn updateAxisStates(state: *Workspace, workspace: *graph.AxisWorkspace) !bool {
@@ -320,7 +354,8 @@ pub fn applyTargetConstraints(
         if (!workspace.graph.hasTargetConstraint(group_id, workspace.axis, workspace.soft_constraints)) continue;
 
         const base = try computeTightGroupAxisState(state, workspace, group_id);
-        if (!workspace.graph.hasSplitChildren(group_id) and !axisAllocatedBySplit(workspace, group_id) and
+        const children = state.source.childrenOf(group_id) orelse &.{};
+        if (children.len != 0 and !workspace.graph.hasSplitChildren(group_id) and !axisAllocatedBySplit(workspace, group_id) and
             (base.start == null or base.end == null or base.size == null)) continue;
 
         var temp = AxisState{};
@@ -328,17 +363,28 @@ pub fn applyTargetConstraints(
         var last_constraint: ?Constraint = null;
         try applyGroupTargetConstraintSlice(state, workspace, group_id, base, &temp, &used, &last_constraint, workspace.hard_constraints, false, options);
         try applyGroupTargetConstraintSlice(state, workspace, group_id, base, &temp, &used, &last_constraint, workspace.soft_constraints, true, options);
-        if (!used) continue;
+        if (!used) {
+            // Suppressed fallback targets leave the group governed by its
+            // contents or by the frame returned through an expanded parent.
+            update.changed = !axisStatesEq(workspace.states[group_index], base) or update.changed;
+            workspace.states[group_index] = base;
+            continue;
+        }
 
         if (temp.start == null and temp.end == null and temp.center == null and temp.size == null) {
             temp = base;
         } else {
-            if (temp.size == null) {
+            const anchor_count = @as(usize, @intFromBool(temp.start != null)) +
+                @intFromBool(temp.end != null) + @intFromBool(temp.center != null);
+            if (temp.size == null and anchor_count < 2) {
                 temp.size = fallback.defaultSplitGroupWidth(state, workspace, group_id, temp) orelse base.size;
                 temp.size_is_default = true;
             }
             if (temp.start == null and temp.end == null and temp.center == null) {
-                temp.start = base.start;
+                switch (workspace.axis) {
+                    .horizontal => temp.start = base.start,
+                    .vertical => temp.end = base.end,
+                }
             }
         }
         _ = graph.reconcileAxisState(&temp) catch |err| {
@@ -367,7 +413,7 @@ pub fn applyTargetConstraints(
         const delta = if (temp.start) |start| start - (child_bounds.start orelse start) else 0;
         // Split and frame-aligned children obtain their coordinates from parent
         // anchors. Subtree translation would apply their movement twice.
-        const page_split = fallback.defaultSplitGroupWidth(state, workspace, group_id, .{}) != null;
+        const page_split = composition.settings(state.source.getNode(group_id).?).mode.equal() and fallback.defaultSplitGroupWidth(state, workspace, group_id, .{}) != null;
         const subtree_changed = if (split_children or page_split or hasChildrenAlignedToFrame(workspace, group_id)) false else try translateSubtree(state, workspace, group_id, delta);
         workspace.states[group_index] = temp;
         if (subtree_changed or !axisStatesEq(previous, temp)) {
@@ -404,6 +450,12 @@ fn hasPositionedAncestor(workspace: *const graph.AxisWorkspace, node_id: NodeId)
     for (workspace.graph.parentGroupIndexes(node_id)) |index| {
         const parent_id = workspace.nodeAt(index);
         if (workspace.states[index].start != null) {
+            // Once an ancestor is aligned, its subtree is translated with that
+            // frame. Local fallback positions must not move child groups back.
+            for (workspace.soft_constraints) |constraint| {
+                if (constraint.default_alignment and constraint.target_node == parent_id and
+                    graph.anchorAxis(constraint.target_anchor) == workspace.axis) return true;
+            }
             for (workspace.graph.targetConstraintIndexes(parent_id)) |constraint_index| {
                 const constraint = workspace.graph.constraints[constraint_index];
                 if (graph.anchorAxis(constraint.target_anchor) != workspace.axis) continue;

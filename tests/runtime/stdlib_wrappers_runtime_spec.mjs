@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { displayLeaf } from "../support/display.mjs";
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -28,10 +29,12 @@ end
     await runSs(["dump", "slide.ss", dumpPath], project);
 
     const dump = JSON.parse(await readFile(dumpPath, "utf8"));
-    const node = dump.nodes.find((candidate) => candidate.content === source);
+    const original = dump.nodes.find(candidate => candidate.placement?.input.type.name === "Latex");
+    assert(original);
+    const node = displayLeaf(dump.nodes, original);
     assert(node, `latex node was not found: ${JSON.stringify(dump.nodes)}`);
-    assert(node.placement?.input.type.name === "Latex", `latex constructor lost its input type: ${JSON.stringify(node)}`);
-    assert(node.placement?.display.kind === "latex", `latex constructor lost its display: ${JSON.stringify(node)}`);
+    assert(original.placement?.input.type.name === "Latex", `latex constructor lost its input type: ${JSON.stringify(node)}`);
+    assert(node.placement?.display.kind === "image", `latex constructor lost its display: ${JSON.stringify(node)}`);
     assert(node.render.kind === "latex", `latex should render its literal body: ${JSON.stringify(node)}`);
     assert(node.blocks === null && node.inline_lines === null, `latex body was parsed as Markdown: ${JSON.stringify(node)}`);
   } finally {

@@ -217,7 +217,7 @@ pub const EvalContext = struct {
                 const placement = if (node.placement) |*value| value else return error.InvalidValueTag;
                 core.native_display.validateValue(self.state, placement.value, kind) catch |err| switch (err) {
                     error.InvalidFontAwesomeIcon => {
-                        const source = placement.value.record.field("source").?.string;
+                        const source = placement.value.record.field("source").?.record.field("source").?.string;
                         const origin = core.ContentProvenance.originForSpan(self.state.stringProvenance(source), 0, source.len) orelse node.origin;
                         try self.state.addValidationDiagnostic(.@"error", placement.page_id, id, origin, .{
                             .user_report = .{
@@ -238,21 +238,16 @@ pub const EvalContext = struct {
                     .running => return error.DisplayExpansionCycle,
                     .expanded, .group => return error.DisplayTargetMismatch,
                 }
-                const payload_kind: core.PayloadKind = switch (kind) {
-                    .text, .code, .icon => .text,
-                    .latex => .latex,
-                    .image => .image_ref,
-                    .pdf => .pdf_ref,
-                    .path_shape => .text,
-                };
-                if (kind == .image or kind == .pdf) {
-                    const path = placement.value.record.field("path").?.string;
+                const input = if (kind == .image) placement.value.record.field("source").?.record else null;
+                const image_kind = if (input) |source| std.meta.stringToEnum(core.ImageSourceKind, source.field("kind").?.enum_case.case_name) orelse return error.InvalidNativeDisplay else null;
+                if (image_kind == .file or image_kind == .pdf) {
+                    const payload_kind: core.PayloadKind = if (image_kind == .pdf) .pdf_ref else .image_ref;
+                    const path = input.?.field("source").?.string;
                     const origin = core.ContentProvenance.originForSpan(self.state.stringProvenance(path), 0, path.len) orelse node.origin;
                     try validateAssetPath(self.state, placement.page_id, id, path, payload_kind, origin);
                 }
-                if (kind == .pdf) {
-                    const style = placement.value.record.field("style").?.record;
-                    const page = style.field("asset").?.record.field("pdf_page").?.number;
+                if (image_kind == .pdf) {
+                    const page = input.?.field("pdf_page").?.number;
                     if (core.render_policy.pdfPageNumber(page) == null) {
                         try self.state.addValidationDiagnostic(.@"error", placement.page_id, id, node.origin, .{
                             .asset_invalid = .{ .reason = try self.state.allocator.dupe(u8, "PDF page number must be a positive integer within the supported range") },

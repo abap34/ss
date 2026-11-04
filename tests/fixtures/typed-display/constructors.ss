@@ -21,7 +21,7 @@ fn/! wrap<T>(content: T, label: String = "Wrapper") -> Wrapper<T>
 end
 
 fn display(self: Placed<Label>) -> native::Text
-  return native::Text { content = self.value.prefix ++ self.value.content }
+  return native::Text { content = native::TextContent { source = self.value.prefix ++ self.value.content } }
 end
 
 fn display<T>(self: Placed<Wrapper<T>>) -> T = self.value.content

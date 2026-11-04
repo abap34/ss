@@ -13,7 +13,7 @@ const body: math::Latex = math::latex(<<
 })
 
 page normal
-  let title = place!(text_api::Text { content = "# Typed LaTeX content" })
+  let title = place!(text_api::Text { content = text_api::TextContent { source = "# Typed LaTeX content" } })
   let formula: Placed<math::Latex> = math::latex!(body.source, body.style, body.config)
   ~ title.left == page.left + 64
   ~ title.top == page.top - 48

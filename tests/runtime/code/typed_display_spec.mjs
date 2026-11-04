@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { inputField } from "../../support/display.mjs";
 import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, copyFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -25,7 +26,7 @@ try {
   const dump = JSON.parse(await readFile(path.join(project, "dump.json"), "utf8"));
   assert.equal(dump.page_order.length, 2);
   assert.deepEqual(dump.diagnostics, []);
-  const codes = dump.nodes.filter(node => node.placement?.display.kind === "code");
+  const codes = dump.nodes.filter(node => node.placement?.display.kind === "text" && node.render.kind === "code");
   assert.equal(codes.length, 3);
   assert.deepEqual(codes.map(node => node.render.code.language), ["python", "plain", "python"]);
   assert.deepEqual(codes.map(node => node.render.text.font_size), [18, 22, 18]);
@@ -35,7 +36,7 @@ try {
   assert.deepEqual(codes[0].render.chrome.fill, color("f6f8fa"));
   assert.deepEqual(codes[2].render.chrome.fill, color("0d1117"));
   for (const node of codes) {
-    const source = node.placement.input.fields.find(field => field.name === "source").value.value;
+    const source = inputField(inputField(node.placement.input, "content"), "source").value;
     assert.equal(node.content, source);
     assert(node.content.includes("**Literal** $x$ ![image](missing.png)"));
     assert.equal(node.blocks, null);
@@ -48,7 +49,10 @@ try {
   assert(codes[1].height > codes[0].height);
   assert(codes[1].width > codes[0].width);
   const parent = dump.nodes.find(node => node.id === codes[2].placement.parent);
-  assert.equal(parent.placement.input.type.name, "Example");
+  assert.equal(parent.placement.input.type.name, "Code");
+  const example = dump.nodes.find(node => node.id === parent.placement.parent);
+  assert.equal(example.placement.input.type.name, "Example");
+  assert.deepEqual(example.placement.children, [parent.id]);
   assert.deepEqual(parent.placement.children, [codes[2].id]);
   run("render", "--quiet", "slide.ss", "--output", "rendered.pdf");
   const pdf = await readFile(path.join(project, "rendered.pdf"));
@@ -73,7 +77,7 @@ end
   run("check", "--quiet", "constructors.ss");
   run("dump", "--quiet", "constructors.ss", "--output", "constructors.json");
   const constructed = JSON.parse(await readFile(path.join(project, "constructors.json"), "utf8"));
-  const placed = constructed.nodes.filter(node => node.placement?.display.kind === "code");
+  const placed = constructed.nodes.filter(node => node.placement?.display.kind === "text" && node.render.kind === "code");
   assert.equal(placed.length, 3);
   assert(!constructed.nodes.some(node => node.content === "UNPLACED"));
   assert.deepEqual(placed.map(node => node.content), Array(3).fill("return 17\n"));
@@ -88,7 +92,7 @@ end
   await writeFile(path.join(project, "snippet.py"), "return 29\n");
   run("dump", "--quiet", "constructors.ss", "--output", "updated.json");
   const updated = JSON.parse(await readFile(path.join(project, "updated.json"), "utf8"));
-  assert.deepEqual(updated.nodes.filter(node => node.placement?.display.kind === "code").map(node => node.content),
+  assert.deepEqual(updated.nodes.filter(node => node.placement?.display.kind === "text" && node.render.kind === "code").map(node => node.content),
     ["return 17\n", "return 29\n", "return 29\n"]);
   run("render", "--quiet", "constructors.ss", "--output", "constructors.pdf");
   assert.equal((await readFile(path.join(project, "constructors.pdf"))).subarray(0, 5).toString(), "%PDF-");

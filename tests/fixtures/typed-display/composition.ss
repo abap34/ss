@@ -1,8 +1,8 @@
 import std:text as text_api
 
-const a: text_api::Text = text_api::Text { content = "Input" }
-const b: text_api::Text = text_api::Text { content = "Processing" }
-const c: text_api::Text = text_api::Text { content = "Output" }
+const a: text_api::Text = text_api::Text { content = text_api::TextContent { source = "Input" } }
+const b: text_api::Text = text_api::Text { content = text_api::TextContent { source = "Processing" } }
+const c: text_api::Text = text_api::Text { content = text_api::TextContent { source = "Output" } }
 const row: Group<text_api::Text, text_api::Text> = (a || b) with { gap = 48 }
 
 page natural_row

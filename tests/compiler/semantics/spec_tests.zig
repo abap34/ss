@@ -393,9 +393,9 @@ test "compiler semantics: composition type diagnostics identify the operand" {
     const expected_origin = try std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ start, start + 3 });
     try compiler_semantics.expectDiagnostic(testing.io, allocator, path, source, expected_origin, "InvalidGroupInput");
     const typed_source =
-        \\import std:text as { Text }
+        \\import std:text as { Text, TextContent }
         \\page example
-        \\  let a = Text { content = "A" }
+        \\  let a = Text { content = TextContent { source = "A" } }
         \\  let row = a || (a // 123)
         \\end
     ;
@@ -496,9 +496,9 @@ test "compiler semantics: paired placement calls preserve nominal input types" {
 
 test "compiler semantics: core prelude is implicitly open" {
     try buildSource(
-        \\import std:text as { Text }
+        \\import std:text as { Text, TextContent }
         \\page ok
-        \\  place!(Text { content = "prelude" })
+        \\  place!(Text { content = TextContent { source = "prelude" } })
         \\end
         \\
     );
@@ -731,7 +731,7 @@ test "compiler semantics: qualified calls bypass local shadowing" {
         \\import std:text
         \\
         \\fn/! text(content: String) -> Text
-        \\  return Text { content = "local" }
+        \\  return Text { content = TextContent { source = "local" } }
         \\end
         \\
         \\page ok
@@ -988,7 +988,7 @@ test "compiler semantics: singleton selections do not depend on placement collec
         \\  let a = text!("A")
         \\  let b = text!("B")
         \\  let items = wrap(a) | wrap(b)
-        \\  text!(join(items, "", (item: Placed<Text>) |-> item.value.content))
+        \\  text!(join(items, "", (item: Placed<Text>) |-> item.value.content.source))
         \\end
     );
 }
@@ -2820,7 +2820,7 @@ test "compiler semantics: member access distinguishes immutable inputs and resou
     try expectDiagnostic(
         \\page main
         \\  let target = text("hello")
-        \\  target.content = target.content ++ "!"
+        \\  target.content.source = target.content.source ++ "!"
         \\end
     , "case.ss:bytes:", "ImmutableValue");
 
@@ -3068,9 +3068,9 @@ test "compiler semantics: successive content updates preserve each prior value" 
     try expectObjectContent(
         \\page main
         \\  let original = text("old")
-        \\  let first = original with { content = "one" }
-        \\  let second = first with { content = "two" }
-        \\  text!(original.content ++ ":" ++ first.content ++ ":" ++ second.content)
+        \\  let first = original with { content.source = "one" }
+        \\  let second = first with { content.source = "two" }
+        \\  text!(original.content.source ++ ":" ++ first.content.source ++ ":" ++ second.content.source)
         \\end
     , "old:one:two");
 }
@@ -4747,8 +4747,8 @@ test "compiler semantics: unplaced values do not expose layout anchors" {
 test "compiler semantics: placed nested groups expose layout anchors" {
     try buildSource(
         \\page main
-        \\  let left = text("left")
-        \\  let detail = text("detail")
+        \\  let left = text("left", default_text_style with { layout.wrap = WrapMode.off })
+        \\  let detail = text("detail", default_text_style with { layout.wrap = WrapMode.off })
         \\  let right = text("right")
         \\  let root = place!(group(left, detail) || right)
         \\  ~ root.left == page.left + 72
@@ -4811,7 +4811,7 @@ test "compiler semantics: page overflow points at generated object call site" {
         \\import std:themes/default as *
         \\
         \\fn make_box() -> Text
-        \\  return text("wide")
+        \\  return text("wide", default_text_style with { layout.wrap = WrapMode.off })
         \\end
         \\
         \\page overflow
@@ -4933,9 +4933,9 @@ test "compiler semantics: constructing a function value has no placement effect"
     try buildSource(
         \\import std:text/content as native
         \\fn delayed() -> Page -> Placed<native::Text>
-        \\  return (target: Page) |-> place_on!(target, native::Text { content = "Visible" })
+        \\  return (target: Page) |-> place_on!(target, native::Text { content = native::TextContent { source = "Visible" } })
         \\end
-        \\type Action { run: Page -> Placed<native::Text> = (target: Page) |-> place_on!(target, native::Text { content = "Default" }) }
+        \\type Action { run: Page -> Placed<native::Text> = (target: Page) |-> place_on!(target, native::Text { content = native::TextContent { source = "Default" } }) }
         \\fn value() -> Action = Action {}
         \\page main
         \\  let action = delayed()
@@ -4948,7 +4948,7 @@ test "compiler semantics: constructing a function value has no placement effect"
 test "compiler semantics: returning a constant function value has no placement effect" {
     try buildSource(
         \\import std:text/content as native
-        \\const delayed_place: Page -> Placed<native::Text> = (target: Page) |-> place_on!(target, native::Text { content = "Visible" })
+        \\const delayed_place: Page -> Placed<native::Text> = (target: Page) |-> place_on!(target, native::Text { content = native::TextContent { source = "Visible" } })
         \\fn delayed() -> Page -> Placed<native::Text> = delayed_place
         \\page main
         \\  delayed()(pagectx())
@@ -6250,7 +6250,7 @@ test "compiler semantics: optional resource members retain property dependencies
         \\end
     , "42");
     try expectObjectContent(
-        \\fn label(item: Placed<Text>?) -> String = item?.value?.content ?? "missing"
+        \\fn label(item: Placed<Text>?) -> String = item?.value?.content?.source ?? "missing"
         \\page main
         \\  text!(label(none))
         \\end
@@ -6481,8 +6481,8 @@ test "compiler semantics: nested record anchors wait for both delayed root bindi
         \\type Inner { item: Placed<Text> }
         \\type Outer { inner: Inner }
         \\page main
-        \\  let target = Outer { inner = Inner { item = text!(str(docctx().layout_h_center_offset)) } }
-        \\  let source = Outer { inner = Inner { item = text!(str(docctx().layout_v_center_offset)) } }
+        \\  let target = Outer { inner = Inner { item = text!(str(docctx().layout_h_center_offset), default_text_style with { layout.wrap = WrapMode.off }) } }
+        \\  let source = Outer { inner = Inner { item = text!(str(docctx().layout_v_center_offset), default_text_style with { layout.wrap = WrapMode.off }) } }
         \\  ~ target.inner.item.left == source.inner.item.right + 24
         \\end
         \\document
@@ -6496,8 +6496,8 @@ test "compiler semantics: generic anchor paths retain nested arguments and delay
     try buildSource(
         \\type Box<T> { value: T }
         \\page main
-        \\  let target = Box { value = Box { value = text!(str(docctx().layout_h_center_offset)) } }
-        \\  let source = Box { value = Box { value = text!(str(docctx().layout_v_center_offset)) } }
+        \\  let target = Box { value = Box { value = text!(str(docctx().layout_h_center_offset), default_text_style with { layout.wrap = WrapMode.off }) } }
+        \\  let source = Box { value = Box { value = text!(str(docctx().layout_v_center_offset), default_text_style with { layout.wrap = WrapMode.off }) } }
         \\  ~ target.value.value.left == source.value.value.right + 24
         \\end
         \\document
@@ -6555,7 +6555,7 @@ test "compiler semantics: first and callbacks retain explicit page element types
     , "1:1");
 
     try expectDiagnostic(
-        \\fn read(item: Placed<Text>) -> String = item.value.content
+        \\fn read(item: Placed<Text>) -> String = item.value.content.source
         \\page main
         \\  text!(read(first(pages(docctx()))))
         \\end
@@ -6912,7 +6912,7 @@ test "compiler semantics: returned placements retain their page ownership" {
         \\end
         \\page main
         \\  let item = make_item!()
-        \\  text!(item.value.content ++ ":page=" ++ str(page_index(item.page)))
+        \\  text!(item.value.content.source ++ ":page=" ++ str(page_index(item.page)))
         \\end
     , "placed:page=1");
 }
@@ -7227,8 +7227,8 @@ test "compiler semantics: generic optional values and generated placing calls" {
         \\  let missing: Number? = none
         \\  let n: Number = unwrap(missing, 2)
         \\  let s: String = unwrap<String>(none, "Fallback")
-        \\  let first: Placed<native::Text> = wrapped!<native::Text>(native::Text { content = s })
-        \\  let second = wrapped!(native::Text { content = "Created" })
+        \\  let first: Placed<native::Text> = wrapped!<native::Text>(native::Text { content = native::TextContent { source = s } })
+        \\  let second = wrapped!(native::Text { content = native::TextContent { source = "Created" } })
         \\end
     );
 }
@@ -7707,25 +7707,25 @@ test "compiler semantics: qualified values cannot bypass display purity" {
 test "compiler semantics: placement effects follow invoked function values and defaults" {
     for ([_][]const u8{
         \\fn bad(target: Page) -> Placed<native::Text>
-        \\  return ((target: Page) |-> place_on!(target, native::Text { content = "Bad" }))(target)
+        \\  return ((target: Page) |-> place_on!(target, native::Text { content = native::TextContent { source = "Bad" } }))(target)
         \\end
         ,
-        \\const action: Page -> Placed<native::Text> = (target: Page) |-> place_on!(target, native::Text { content = "Bad" })
+        \\const action: Page -> Placed<native::Text> = (target: Page) |-> place_on!(target, native::Text { content = native::TextContent { source = "Bad" } })
         \\fn bad(target: Page) -> Placed<native::Text> = action(target)
         ,
         \\type Action { run: Page -> Placed<native::Text> }
         \\fn bad(target: Page) -> Placed<native::Text>
-        \\  let action = Action { run = (target: Page) |-> place_on!(target, native::Text { content = "Bad" }) }
+        \\  let action = Action { run = (target: Page) |-> place_on!(target, native::Text { content = native::TextContent { source = "Bad" } }) }
         \\  return action.run(target)
         \\end
         ,
-        \\fn emit!(target: Page) -> Placed<native::Text> = place_on!(target, native::Text { content = "Bad" })
+        \\fn emit!(target: Page) -> Placed<native::Text> = place_on!(target, native::Text { content = native::TextContent { source = "Bad" } })
         \\fn bad(target: Page) -> Placed<native::Text> = emit!(target)
         ,
-        \\fn bad(target: Page, value: Placed<native::Text> = place_on!(target, native::Text { content = "Bad" })) -> Placed<native::Text> = value
+        \\fn bad(target: Page, value: Placed<native::Text> = place_on!(target, native::Text { content = native::TextContent { source = "Bad" } })) -> Placed<native::Text> = value
         ,
         \\fn apply<T>(action: Page -> T, target: Page) -> T = action(target)
-        \\fn bad(target: Page) -> Placed<native::Text> = apply((target: Page) |-> place_on!(target, native::Text { content = "Bad" }), target)
+        \\fn bad(target: Page) -> Placed<native::Text> = apply((target: Page) |-> place_on!(target, native::Text { content = native::TextContent { source = "Bad" } }), target)
         ,
     }) |declarations| {
         const source = try std.fmt.allocPrint(testing.allocator, "import std:text/content as native\n{s}\npage main\nbad(pagectx())\nend\n", .{declarations});
@@ -7739,14 +7739,14 @@ test "compiler semantics: higher order functions forward placement effects from 
         \\import std:text/content as native
         \\fn execute(action: Page -> Placed<native::Text>, target: Page) -> Placed<native::Text> = action(target)
         \\page main
-        \\  execute((target: Page) |-> place_on!(target, native::Text { content = "Visible" }), pagectx())
+        \\  execute((target: Page) |-> place_on!(target, native::Text { content = native::TextContent { source = "Visible" } }), pagectx())
         \\end
     );
     try buildSource(
         \\import std:text/content as native
         \\fn execute!(action: Page -> Placed<native::Text>, target: Page) -> Placed<native::Text> = action(target)
         \\page main
-        \\  execute!((target: Page) |-> place_on!(target, native::Text { content = "Visible" }), pagectx())
+        \\  execute!((target: Page) |-> place_on!(target, native::Text { content = native::TextContent { source = "Visible" } }), pagectx())
         \\end
     );
 }
@@ -7755,10 +7755,10 @@ test "compiler semantics: display may construct an unused placing callback" {
     try buildSource(
         \\import std:text/content as native
         \\type Badge {}
-        \\fn delayed() -> Page -> Placed<native::Text> = (target: Page) |-> place_on!(target, native::Text { content = "Unused" })
+        \\fn delayed() -> Page -> Placed<native::Text> = (target: Page) |-> place_on!(target, native::Text { content = native::TextContent { source = "Unused" } })
         \\fn display(self: Placed<Badge>) -> native::Text
         \\  let action = delayed()
-        \\  return native::Text { content = "Visible" }
+        \\  return native::Text { content = native::TextContent { source = "Visible" } }
         \\end
         \\page main
         \\  place_on!(pagectx(), Badge {})
@@ -7786,7 +7786,7 @@ test "compiler semantics: placement effects follow callback fields and returned 
         \\fn forward(action: Page -> Placed<native::Text>, target: Page) -> Placed<native::Text>
         \\  return execute(Action { run = (target: Page) |-> action(target) }, target)
         \\end
-        \\fn factory() -> Page -> Placed<native::Text> = (target: Page) |-> place_on!(target, native::Text { content = "Visible" })
+        \\fn factory() -> Page -> Placed<native::Text> = (target: Page) |-> place_on!(target, native::Text { content = native::TextContent { source = "Visible" } })
         \\fn create(make: () -> Page -> Placed<native::Text>, target: Page) -> Placed<native::Text> = make()(target)
         \\page main
         \\  forward(factory(), pagectx())
@@ -7798,7 +7798,7 @@ test "compiler semantics: placement effects follow callback fields and returned 
         \\type Action { run: Page -> Placed<native::Text> }
         \\fn execute(action: Action, target: Page) -> Placed<native::Text> = action.run(target)
         \\fn bad(target: Page) -> Placed<native::Text>
-        \\  return execute(Action { run = (target: Page) |-> place_on!(target, native::Text { content = "Bad" }) }, target)
+        \\  return execute(Action { run = (target: Page) |-> place_on!(target, native::Text { content = native::TextContent { source = "Bad" } }) }, target)
         \\end
         \\page main
         \\  bad(pagectx())
@@ -7809,7 +7809,7 @@ test "compiler semantics: placement effects follow callback fields and returned 
 test "compiler semantics: forwarded effects remain visible to callers and displays" {
     const declarations =
         \\import std:text/content as native
-        \\const action: Page -> Placed<native::Text> = (target: Page) |-> place_on!(target, native::Text { content = "Bad" })
+        \\const action: Page -> Placed<native::Text> = (target: Page) |-> place_on!(target, native::Text { content = native::TextContent { source = "Bad" } })
         \\fn execute(run: Page -> Placed<native::Text>, target: Page) -> Placed<native::Text> = run(target)
         \\fn warmup!(target: Page) -> Placed<native::Text> = execute(action, target)
         \\
@@ -7829,7 +7829,7 @@ test "compiler semantics: forwarded effects remain visible to callers and displa
         \\type Badge {}
         \\fn display(self: Placed<Badge>) -> native::Text
         \\  execute(action, self.page)
-        \\  return native::Text { content = "Visible" }
+        \\  return native::Text { content = native::TextContent { source = "Visible" } }
         \\end
         \\page main
         \\  warmup!(pagectx())
@@ -7843,7 +7843,7 @@ test "compiler semantics: forwarded effects remain visible to callers and displa
 test "compiler semantics: marked function defaults can place and recursive defaults are rejected" {
     try buildSource(
         \\import std:text/content as native
-        \\fn value!(target: Page, value: Placed<native::Text> = place_on!(target, native::Text { content = "Visible" })) -> Placed<native::Text> = value
+        \\fn value!(target: Page, value: Placed<native::Text> = place_on!(target, native::Text { content = native::TextContent { source = "Visible" } })) -> Placed<native::Text> = value
         \\page main
         \\  value!(pagectx())
         \\end

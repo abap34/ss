@@ -246,7 +246,7 @@ test "typed queries: exact generic input types and selection algebra keep typed 
         \\import std:text/content as native
         \\type Label<T> { value: T }
         \\fn display<T>(self: Placed<Label<T>>) -> native::Text
-        \\  return native::Text { content = "Label" }
+        \\  return native::Text { content = native::TextContent { source = "Label" } }
         \\end
         \\fn/! label<T>(value: T) -> Label<T> = Label<T> { value = value }
         \\fn selection_union(left: Number, right: Number) -> Number = 99
@@ -265,7 +265,7 @@ test "typed queries: exact generic input types and selection algebra keep typed 
         \\  let empty = difference(numbers, numbers)
         \\  let unique = numbers | numbers
         \\  let result = str(selection_count(mixed)) ++ ":" ++ str(selection_count(remaining)) ++ ":" ++ str(selection_count(common)) ++ ":" ++ str(selection_count(empty)) ++ ":" ++ str(selection_count(unique)) ++ ":" ++ str(5 - 2) ++ ":" ++ str(selection_union(1, 2))
-        \\  place_on!(pagectx(), native::Text { content = result })
+        \\  place_on!(pagectx(), native::Text { content = native::TextContent { source = result } })
         \\end
     );
     defer state.deinit();
@@ -297,7 +297,7 @@ test "typed queries: querying the collection produced by the same display is a d
         \\type Summary {}
         \\fn display(self: Placed<Summary>) -> native::Text
         \\  let items = select<native::Text>(self.document)
-        \\  return native::Text { content = str(selection_count(items)) }
+        \\  return native::Text { content = native::TextContent { source = str(selection_count(items)) } }
         \\end
         \\page main
         \\  place_on!(pagectx(), Summary {})
@@ -316,12 +316,12 @@ test "typed queries: shared display helpers retain each input subtree without de
         \\type Reader { target: Placement }
         \\fn/! label(title: String) -> Label = Label { title = title }
         \\fn display(self: Placed<Label>) -> native::Text
-        \\  return native::Text { content = self.value.title }
+        \\  return native::Text { content = native::TextContent { source = self.value.title } }
         \\end
         \\fn texts(scope: Placement) -> Selection<Placed<native::Text>> = select<native::Text>(scope)
         \\fn display(self: Placed<Reader>) -> native::Text
         \\  let selected = texts(self.value.target)
-        \\  return native::Text { content = join(selected, ",", (t: Placed<native::Text>) |-> t.value.content) }
+        \\  return native::Text { content = native::TextContent { source = join(selected, ",", (t: Placed<native::Text>) |-> t.value.content.source) } }
         \\end
         \\page main
         \\  let first_target = label!("First")
@@ -347,7 +347,7 @@ test "typed queries: iterating a completed collection cannot add matching placem
         \\import std:text/content as native
         \\type Label { title: String }
         \\fn display(self: Placed<Label>) -> native::Text
-        \\  return native::Text { content = self.value.title }
+        \\  return native::Text { content = native::TextContent { source = self.value.title } }
         \\end
         \\fn/! label(title: String) -> Label = Label { title = title }
         \\page main
@@ -423,7 +423,7 @@ test "typed queries: previous pages are optional and page filtering keeps constr
         \\  let previous: Page? = query::previous_page(self.page)
         \\  let body: Selection<Page> = query::filter(pages(self.document), (p: Page) |-> page_index(p) > 1)
         \\  let labels = join(body, ",", (p: Page) |-> str(page_index(p)))
-        \\  return native::Text { content = str(page_index(previous ?? self.page)) ++ ":" ++ labels }
+        \\  return native::Text { content = native::TextContent { source = str(page_index(previous ?? self.page)) ++ ":" ++ labels } }
         \\end
         \\page cover
         \\  place_on!(pagectx(), PageLabel {})
@@ -453,9 +453,9 @@ test "typed queries: filtering evaluates each predicate once and leaves the inpu
         \\import std:text/content as native
         \\type Heading { title: String level: Number }
         \\fn/! heading(title: String, level: Number) -> Heading = Heading { title = title level = level }
-        \\fn display(self: Placed<Heading>) -> native::Text = native::Text { content = self.value.title }
+        \\fn display(self: Placed<Heading>) -> native::Text = native::Text { content = native::TextContent { source = self.value.title } }
         \\fn visit!(item: Placed<Heading>) -> Bool
-        \\  place_on!(pagectx(), native::Text { content = "Visit " ++ item.value.title })
+        \\  place_on!(pagectx(), native::Text { content = native::TextContent { source = "Visit " ++ item.value.title } })
         \\  return item.value.level == 1
         \\end
         \\page main
@@ -468,7 +468,7 @@ test "typed queries: filtering evaluates each predicate once and leaves the inpu
         \\  let still_empty = filter(empty, (h: Placed<Heading>) |-> visit!(h))
         \\  let titles = join(selected, ",", (h: Placed<Heading>) |-> h.value.title)
         \\  let result = titles ++ ":" ++ str(selection_count(input)) ++ ":" ++ str(selection_count(still_empty))
-        \\  place_on!(pagectx(), native::Text { content = result })
+        \\  place_on!(pagectx(), native::Text { content = native::TextContent { source = result } })
         \\end
     );
     defer state.deinit();
@@ -488,11 +488,11 @@ test "typed queries: filtering preserves subtree facts for predicates and return
         \\type Label { title: String }
         \\type Reader { target: Placement }
         \\fn/! label(title: String) -> Label = Label { title = title }
-        \\fn display(self: Placed<Label>) -> native::Text = native::Text { content = self.value.title }
+        \\fn display(self: Placed<Label>) -> native::Text = native::Text { content = native::TextContent { source = self.value.title } }
         \\fn display(self: Placed<Reader>) -> native::Text
         \\  let chosen: Selection<Placement> = filter(selection(self.value.target), (p: Placement) |-> selection_count(children(p)) > 0)
         \\  let leaves = select<native::Text>(first(chosen))
-        \\  return native::Text { content = join(leaves, ",", (t: Placed<native::Text>) |-> t.value.content) }
+        \\  return native::Text { content = native::TextContent { source = join(leaves, ",", (t: Placed<native::Text>) |-> t.value.content.source) } }
         \\end
         \\page main
         \\  let first_target = label!("First")
@@ -517,7 +517,7 @@ test "typed queries: predicates cannot grow their selected collection or mutate 
         \\type Heading { title: String }
         \\type Summary {}
         \\fn/! heading(title: String) -> Heading = Heading { title = title }
-        \\fn display(self: Placed<Heading>) -> native::Text = native::Text { content = self.value.title }
+        \\fn display(self: Placed<Heading>) -> native::Text = native::Text { content = native::TextContent { source = self.value.title } }
         \\fn mutate!(item: Placed<Heading>) -> Bool
         \\  heading!(item.value.title)
         \\  return true
@@ -528,7 +528,7 @@ test "typed queries: predicates cannot grow their selected collection or mutate 
         const body = if (in_display)
             \\fn display(self: Placed<Summary>) -> native::Text
             \\  let items = filter(select<Heading>(self.document), (h: Placed<Heading>) |-> mutate!(h))
-            \\  return native::Text { content = str(selection_count(items)) }
+            \\  return native::Text { content = native::TextContent { source = str(selection_count(items)) } }
             \\end
             \\page main
             \\  heading!("Initial")
@@ -596,7 +596,7 @@ test "typed queries: child helpers wait for displays and preserve each captured 
         \\type Wrapped { content: Heading }
         \\type Reader { target: Placement }
         \\fn/! wrapped(title: String) -> Wrapped = Wrapped { content = Heading { title = title } }
-        \\fn display(self: Placed<Heading>) -> native::Text = native::Text { content = self.value.title }
+        \\fn display(self: Placed<Heading>) -> native::Text = native::Text { content = native::TextContent { source = self.value.title } }
         \\fn display(self: Placed<Wrapped>) -> Heading = self.value.content
         \\fn child_count(target: Placement) -> Number = selection_count(children(target))
         \\fn display(self: Placed<Reader>) -> native::Text
@@ -606,11 +606,11 @@ test "typed queries: child helpers wait for displays and preserve each captured 
         \\  let direct: Selection<Placement> = children(target)
         \\  let all: Selection<Placement> = descendants(target)
         \\  let result = str(read()) ++ ":" ++ str(selection_count(all)) ++ ":" ++ str(selection_count(selection(self)))
-        \\  return native::Text { content = result }
+        \\  return native::Text { content = native::TextContent { source = result } }
         \\end
         \\page main
         \\  let first_target = wrapped!("First")
-        \\  let second_target = place_on!(pagectx(), native::Text { content = "Second" })
+        \\  let second_target = place_on!(pagectx(), native::Text { content = native::TextContent { source = "Second" } })
         \\  place_on!(pagectx(), Reader { target = first_target })
         \\  place_on!(pagectx(), Reader { target = second_target })
         \\  let child = first(children(first_target))
@@ -641,7 +641,7 @@ test "typed queries: reading one's own children during display rejects a depende
             \\import std:text/content as native
             \\type Reader {{}}
             \\fn display(self: Placed<Reader>) -> native::Text
-            \\  return native::Text {{ content = str(selection_count({s}(self))) }}
+            \\  return native::Text {{ content = native::TextContent {{ source = str(selection_count({s}(self))) }} }}
             \\end
             \\page main
             \\  place_on!(pagectx(), Reader {{}})
@@ -683,7 +683,7 @@ test "typed queries: a child display can count direct siblings but not unfinishe
             \\fn display(self: Placed<Parent>) -> Child = Child {{ parent = self }}
             \\fn display(self: Placed<Child>) -> native::Text
             \\  let peers = {s}(self.value.parent)
-            \\  return native::Text {{ content = str(selection_count(peers)) }}
+            \\  return native::Text {{ content = native::TextContent {{ source = str(selection_count(peers)) }} }}
             \\end
             \\page main
             \\  place_on!(pagectx(), Parent {{}})
@@ -715,7 +715,7 @@ test "typed queries: shared typed subtree helpers preserve the receiver path and
         \\fn display(self: Placed<Child>) -> native::Text
         \\  let peers = count_children(self.value.parent)
         \\  let nested = count_children(self)
-        \\  return native::Text { content = str(peers) ++ ":" ++ str(nested) }
+        \\  return native::Text { content = native::TextContent { source = str(peers) ++ ":" ++ str(nested) } }
         \\end
         \\page main
         \\  place_on!(pagectx(), Parent {})
@@ -759,12 +759,12 @@ test "typed queries: generated compositions preserve dependency and document ord
         \\type Heading { title: String }
         \\type Bundle {}
         \\type Toc {}
-        \\fn display(self: Placed<Heading>) -> native::Text = native::Text { content = self.value.title }
+        \\fn display(self: Placed<Heading>) -> native::Text = native::Text { content = native::TextContent { source = self.value.title } }
         \\fn display(self: Placed<Bundle>) -> Group<Heading, Group<Heading, Heading>>
         \\  return (Heading { title = "First" } || (Heading { title = "Second" } // Heading { title = "Third" })) with { gap = 48 }
         \\end
         \\fn display(self: Placed<Toc>) -> native::Text
-        \\  return native::Text { content = join(select<Heading>(self.document), ", ", (h: Placed<Heading>) |-> h.value.title) }
+        \\  return native::Text { content = native::TextContent { source = join(select<Heading>(self.document), ", ", (h: Placed<Heading>) |-> h.value.title) } }
         \\end
         \\page contents
         \\  place!(Toc {})
@@ -772,7 +772,7 @@ test "typed queries: generated compositions preserve dependency and document ord
         \\page body
         \\  let bundle = place!(Bundle {})
         \\  let groups = select<Group<Heading, Group<Heading, Heading>>>(bundle)
-        \\  place!(native::Text { content = str(selection_count(groups)) })
+        \\  place!(native::Text { content = native::TextContent { source = str(selection_count(groups)) } })
         \\end
     );
     defer state.deinit();
@@ -795,15 +795,15 @@ test "typed queries: group child captures distinguish dependency summaries" {
         \\type Pair {}
         \\type Reader { read: () -> String }
         \\fn display(self: Placed<Pair>) -> Group<native::Text, native::Text>
-        \\  return group(native::Text { content = "A" }, native::Text { content = "B" })
+        \\  return group(native::Text { content = native::TextContent { source = "A" } }, native::Text { content = native::TextContent { source = "B" } })
         \\end
-        \\fn display(self: Placed<Reader>) -> native::Text = native::Text { content = self.value.read() }
+        \\fn display(self: Placed<Reader>) -> native::Text = native::Text { content = native::TextContent { source = self.value.read() } }
         \\fn reader(target: Placement) -> Reader
         \\  return Reader { read = () |-> str(selection_count(select<native::Text>(target))) }
         \\end
         \\fn reuse(value: Group<Reader>) -> Group<Reader> = value
         \\page main
-        \\  let leaf = place!(native::Text { content = "Leaf" })
+        \\  let leaf = place!(native::Text { content = native::TextContent { source = "Leaf" } })
         \\  let pair = place!(Pair {})
         \\  let empty = place!(reuse(group(reader(leaf))))
         \\  let full = place!(reuse(group(reader(pair))))
@@ -826,11 +826,11 @@ test "typed queries: stored closures retain captures and wait for document prope
         \\import std:text/content as native
         \\type Item { format: () -> String }
         \\type Summary {}
-        \\fn display(self: Placed<Item>) -> native::Text = native::Text { content = "Item" }
+        \\fn display(self: Placed<Item>) -> native::Text = native::Text { content = native::TextContent { source = "Item" } }
         \\fn display(self: Placed<Summary>) -> native::Text
         \\  let items = select<Item>(self.document)
         \\  let last = fold(items, Item { format = () |-> "Initial" }, (acc: Item, item: Placed<Item>) |-> item.value)
-        \\  return native::Text { content = last.format() ++ ":" ++ join(items, ",", (item: Placed<Item>) |-> item.value.format()) }
+        \\  return native::Text { content = native::TextContent { source = last.format() ++ ":" ++ join(items, ",", (item: Placed<Item>) |-> item.value.format()) } }
         \\end
         \\fn item(label: String, context: Document) -> Item
         \\  return Item { format = () |-> str(context.layout_h_center_offset) ++ label }
@@ -856,13 +856,13 @@ test "typed queries: ordinary calls through filtered unions retain all function 
         \\import std:text/content as native
         \\type Item { format: () -> String }
         \\type Wrapped { value: Item }
-        \\fn display(self: Placed<Item>) -> native::Text = native::Text { content = "Item" }
+        \\fn display(self: Placed<Item>) -> native::Text = native::Text { content = native::TextContent { source = "Item" } }
         \\fn display(self: Placed<Wrapped>) -> Item = self.value.value
         \\fn item(label: String) -> Item = Item { format = () |-> label }
         \\page main
         \\  let selected = select<Item>(pagectx())
         \\  let filtered = filter((selected | selected) - select<Item>(first(selected)), (item: Placed<Item>) |-> true)
-        \\  place_on!(pagectx(), native::Text { content = first(filtered).value.format() })
+        \\  place_on!(pagectx(), native::Text { content = native::TextContent { source = first(filtered).value.format() } })
         \\  place_on!(pagectx(), Wrapped { value = item("First") })
         \\  place_on!(pagectx(), item("Unused") with { format = () |-> "Second" })
         \\end
@@ -880,9 +880,9 @@ test "typed queries: callback candidates respect exact generic input types" {
         \\import std:text/content as native
         \\type Item<T> { value: T format: () -> String }
         \\type Summary {}
-        \\fn display<T>(self: Placed<Item<T>>) -> native::Text = native::Text { content = "Item" }
+        \\fn display<T>(self: Placed<Item<T>>) -> native::Text = native::Text { content = native::TextContent { source = "Item" } }
         \\fn display(self: Placed<Summary>) -> native::Text
-        \\  return native::Text { content = first(select<Item<String>>(self.document)).value.format() }
+        \\  return native::Text { content = native::TextContent { source = first(select<Item<String>>(self.document)).value.format() } }
         \\end
         \\fn mutate() -> String
         \\  new_page(docctx(), "Unexpected")
@@ -907,9 +907,9 @@ test "typed queries: display rejects an impure candidate reached through a selec
         \\import std:text/content as native
         \\type Item { format: () -> String }
         \\type Summary {}
-        \\fn display(self: Placed<Item>) -> native::Text = native::Text { content = "Item" }
+        \\fn display(self: Placed<Item>) -> native::Text = native::Text { content = native::TextContent { source = "Item" } }
         \\fn display(self: Placed<Summary>) -> native::Text
-        \\  return native::Text { content = first(select<Item>(self.document)).value.format() }
+        \\  return native::Text { content = native::TextContent { source = first(select<Item>(self.document)).value.format() } }
         \\end
         \\fn mutate() -> String
         \\  new_page(docctx(), "Unexpected")
@@ -930,11 +930,11 @@ test "typed queries: recursion through an input callback is rejected before eval
     var state = try document(
         \\import std:text/content as native
         \\type Item { format: () -> String }
-        \\fn display(self: Placed<Item>) -> native::Text = native::Text { content = "Item" }
+        \\fn display(self: Placed<Item>) -> native::Text = native::Text { content = native::TextContent { source = "Item" } }
         \\fn recursive() -> String = first(select<Item>(docctx())).value.format()
         \\page main
         \\  place_on!(pagectx(), Item { format = recursive })
-        \\  place_on!(pagectx(), native::Text { content = recursive() })
+        \\  place_on!(pagectx(), native::Text { content = native::TextContent { source = recursive() } })
         \\end
     );
     defer state.deinit();
@@ -947,8 +947,8 @@ test "typed queries: captured selections cannot be mutated through stored callba
         \\import std:text/content as native
         \\type Item {}
         \\type Action { run: () -> Selection<Placed<Item>> }
-        \\fn display(self: Placed<Item>) -> native::Text = native::Text { content = "Item" }
-        \\fn display(self: Placed<Action>) -> native::Text = native::Text { content = "Action" }
+        \\fn display(self: Placed<Item>) -> native::Text = native::Text { content = native::TextContent { source = "Item" } }
+        \\fn display(self: Placed<Action>) -> native::Text = native::Text { content = native::TextContent { source = "Action" } }
         \\fn add!(item: Placed<Item>) -> Void
         \\  place_on!(pagectx(), Item {})
         \\end
@@ -968,14 +968,14 @@ test "typed queries: fold checks callbacks obtained after the initial accumulato
         \\import std:text/content as native
         \\type Item { format: () -> String }
         \\type Summary {}
-        \\fn display(self: Placed<Item>) -> native::Text = native::Text { content = "Item" }
+        \\fn display(self: Placed<Item>) -> native::Text = native::Text { content = native::TextContent { source = "Item" } }
         \\fn next(acc: Item, item: Placed<Item>) -> Item
         \\  acc.format()
         \\  return item.value
         \\end
         \\fn display(self: Placed<Summary>) -> native::Text
         \\  let result = fold(select<Item>(self.document), Item { format = () |-> "Good" }, next)
-        \\  return native::Text { content = "Summary" }
+        \\  return native::Text { content = native::TextContent { source = "Summary" } }
         \\end
         \\fn mutate() -> String
         \\  new_page(docctx(), "Unexpected")
@@ -1002,12 +1002,12 @@ test "typed queries: placement input joins retain late nested callback captures"
         \\  second: Entry
         \\}
         \\type Summary {}
-        \\fn display(self: Placed<Entry>) -> native::Text = native::Text { content = self.value.payload.format() }
+        \\fn display(self: Placed<Entry>) -> native::Text = native::Text { content = native::TextContent { source = self.value.payload.format() } }
         \\fn display(self: Placed<Pair>) -> Group<Entry, Entry> = group(self.value.first, self.value.second)
         \\fn display(self: Placed<Summary>) -> native::Text
         \\  let entries = select<Entry>(self.document)
         \\  let last = fold(entries, Entry { payload = Payload { format = () |-> "Empty" } }, (acc: Entry, item: Placed<Entry>) |-> item.value)
-        \\  return native::Text { content = join(entries, ",", (item: Placed<Entry>) |-> item.value.payload.format()) ++ ":" ++ last.payload.format() }
+        \\  return native::Text { content = native::TextContent { source = join(entries, ",", (item: Placed<Entry>) |-> item.value.payload.format()) ++ ":" ++ last.payload.format() } }
         \\end
         \\fn entry(label: String, context: Document) -> Entry
         \\  return Entry { payload = Payload { format = () |-> str(context.layout_h_center_offset) ++ label } }

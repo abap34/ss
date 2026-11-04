@@ -653,9 +653,9 @@ test "analysis query spec: paired typed constructors expose placing signatures a
         \\fn display<T>(self: Placed<Wrapper<T>>) -> T = self.value.content
         \\fn/! wrap<T>(content: T) -> Wrapper<T> = Wrapper<T> { content = content }
         \\page main
-        \\  let content = native::Text { content = "Wrapped" }
+        \\  let content = native::Text { content = native::TextContent { source = "Wrapped" } }
         \\  let placed = wrap!(content)
-        \\  let text: String = placed.value.content.content
+        \\  let text: String = placed.value.content.content.source
         \\end
     ;
     var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
@@ -813,7 +813,7 @@ test "analysis query spec: public placement retains concrete input fields throug
         \\import std:layout as layout
         \\import std:text as text_api
         \\type Heading { title: String }
-        \\fn display(self: Placed<Heading>) -> text_api::Text = text_api::Text { content = self.value.title }
+        \\fn display(self: Placed<Heading>) -> text_api::Text = text_api::Text { content = text_api::TextContent { source = self.value.title } }
         \\page main
         \\  let inferred = place!(Heading { title = "Inferred" })
         \\  let explicit = layout::place!<Heading>(Heading { title = "Explicit" })
@@ -837,7 +837,7 @@ test "analysis query spec: groups retain concrete types through unfinished place
         \\import std:text as text_api
         \\import std:layout
         \\page main
-        \\  let text = text_api::Text { content = "Child" }
+        \\  let text = text_api::Text { content = text_api::TextContent { source = "Child" } }
         \\  let content = group(text, group(text))
         \\  let item = place!(content)
         \\  let input = item.
@@ -876,7 +876,7 @@ test "analysis query spec: composition spacing completes in member and with expr
         const source = try std.fmt.allocPrint(testing.allocator,
             \\import std:text as text_api
             \\page main
-            \\  let a = text_api::Text {{ content = "A" }}
+            \\  let a = text_api::Text {{ content = text_api::TextContent {{ source = "A" }} }}
             \\  let row = a || a
             \\  let updated = {s}
             \\end

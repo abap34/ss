@@ -16,6 +16,9 @@ import std:layout as {
 }
 import std:text as {
   Text,
+  TextContent,
+  TextContentKind,
+  text_content,
   TextSemantics,
   SemanticRole,
   default_text_style,
@@ -40,6 +43,9 @@ import std:math as {
 }
 import std:assets as {
   Image,
+  ImageSource,
+  ImageSourceKind,
+  image_source,
   Pdf,
   Icon,
   image,

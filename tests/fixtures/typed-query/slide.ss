@@ -6,7 +6,7 @@ fn/! heading(title: String) -> Heading = Heading { title = title }
 fn/! wrapped(title: String) -> Wrapped = Wrapped { content = heading(title) }
 fn/! toc() -> Toc = Toc {}
 fn display(self: Placed<Heading>) -> native::Text
-  return native::Text { content = self.value.title }
+  return native::Text { content = native::TextContent { source = self.value.title } }
 end
 fn display(self: Placed<Wrapped>) -> Heading = self.value.content
 fn all<T>(scope: Document) -> Selection<Placed<T>> = select<T>(scope)
@@ -14,7 +14,7 @@ fn display(self: Placed<Toc>) -> native::Text
   let all_headings = all<Heading>(self.document)
   let candidates = (all_headings | all_headings) - select<Heading>(self)
   let headings = filter(candidates, (h: Placed<Heading>) |-> h.value.level == 1)
-  return native::Text { content = join(headings, ", ", (h: Placed<Heading>) |-> h.value.title) }
+  return native::Text { content = native::TextContent { source = join(headings, ", ", (h: Placed<Heading>) |-> h.value.title) } }
 end
 page contents
   toc!()
