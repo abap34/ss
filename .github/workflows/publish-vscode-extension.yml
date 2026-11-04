@@ -98,7 +98,7 @@ jobs:
           zig build test
           git restore -- tests/runtime/harness.mjs tests/runtime/lsp_completion_runtime_spec.mjs
           git diff --exit-code
-          zig build -Doptimize=ReleaseSafe -Dversion="$release_version" -Dcommit="$RELEASE_COMMIT"
+          zig build -Doptimize=ReleaseFast -Dversion="$release_version" -Dcommit="$RELEASE_COMMIT"
           zig-out/bin/ss --version
           tests/smoke/project.sh
           node tests/smoke/lsp.mjs

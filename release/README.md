@@ -165,10 +165,10 @@ workflow is the canonical GitHub Release creator: it attaches a source archive
 named `ss-<version>.tar.gz` and renders a tap formula from
 `release/homebrew/ss.rb.in`.
 
-Release binaries can also be attached manually when needed. Build them with:
+To build the CLI locally:
 
 ```sh
-zig build -Doptimize=ReleaseSafe -Dversion=<version> -Dcommit=<commit>
+zig build
 ```
 
 Recommended macOS install path is a dedicated Homebrew tap, for example:

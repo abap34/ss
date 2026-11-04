@@ -65,7 +65,7 @@ pkgs.stdenv.mkDerivation {
   installPhase = ''
     runHook preInstall
     zig build \
-      -Doptimize=ReleaseSafe \
+      -Doptimize=ReleaseFast \
       ${lib.optionalString (self ? rev) "-Dversion=${version}"} \
       -Dcommit=${self.shortRev or self.dirtyShortRev or "unknown"} \
       install --prefix "$out"

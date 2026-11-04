@@ -227,7 +227,7 @@ else
   run zig build test
 fi
 
-run zig build -Doptimize=ReleaseSafe -Dversion="$version" -Dcommit="$commit"
+run zig build -Doptimize=ReleaseFast -Dversion="$version" -Dcommit="$commit"
 
 step "built ss version"
 version_output="$(zig-out/bin/ss --version)"

@@ -167,6 +167,7 @@ def test_render_homebrew_formula():
         assert "class SsAT071Patch1 < Formula" in formula
         assert 'version "0.7.1-patch.1"' in formula
         assert 'url "https://example.com/ss-0.7.1-patch.1.tar.gz"' in formula
+        assert '"-Doptimize=ReleaseFast"' in formula
         assert 'resource "md4c"' not in formula
         assert "third_party/md4c" not in formula
         assert "codeload.github.com/mity/md4c" not in formula

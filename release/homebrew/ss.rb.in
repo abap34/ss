@@ -16,7 +16,7 @@ class @FORMULA_CLASS@ < Formula
 
   def install
     system "zig", "build",
-      "-Doptimize=ReleaseSafe",
+      "-Doptimize=ReleaseFast",
       "-Dversion=#{version}",
       "-Dcommit=homebrew",
       "install",
