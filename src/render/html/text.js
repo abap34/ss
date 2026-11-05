@@ -1,4 +1,6 @@
 const baselineCache = new Map();
+const selectionRoots = new WeakSet();
+const selectionDragDistance = 3;
 
 export async function alignTextBaselines(root) {
   const document = root.nodeType === 9
@@ -7,6 +9,22 @@ export async function alignTextBaselines(root) {
   if (!document) return;
   const runs = [...root.querySelectorAll(".ss-text-run[data-ss-baseline-y]")];
   if (runs.length === 0) return;
+  if (!selectionRoots.has(root)) {
+    selectionRoots.add(root);
+    let pointerDown = null;
+    root.addEventListener("pointerdown", (event) => {
+      pointerDown = { x: event.clientX, y: event.clientY };
+    });
+    root.addEventListener("click", (event) => {
+      const start = pointerDown;
+      pointerDown = null;
+      const link = event.target.closest?.("a.ss-text-select[href]");
+      if (!link || event.detail === 0 || !start ||
+          Math.hypot(event.clientX - start.x, event.clientY - start.y) <= selectionDragDistance) return;
+      const selection = document.getSelection();
+      if (selection && !selection.isCollapsed && selection.containsNode(link, true)) event.preventDefault();
+    });
+  }
 
   const pending = new Map();
   for (const run of runs) {
@@ -35,6 +53,12 @@ export async function alignTextBaselines(root) {
     const browserBaseline = baselineCache.get(baselineKey(getComputedStyle(run), run));
     if (!Number.isFinite(browserBaseline)) continue;
     run.style.top = `calc(${baselineY}pt - ${browserBaseline}px)`;
+    const selection = run.querySelector(".ss-text-select");
+    if (selection) {
+      const width = Number.parseFloat(getComputedStyle(run).width);
+      const naturalWidth = Number.parseFloat(getComputedStyle(selection).width);
+      if (width > 0 && naturalWidth > 0) selection.style.transform = `scaleX(${width / naturalWidth})`;
+    }
   }
 }
 

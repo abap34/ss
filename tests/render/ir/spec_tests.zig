@@ -51,6 +51,24 @@ fn addDocumentSemantics(ir: *render_ir.Ir) !void {
     ir.semantics = .{ .root = 1, .nodes = nodes };
 }
 
+test "render IR text links must reference a text item on their page" {
+    const pages = try testing.allocator.alloc(render_ir.Page, 1);
+    pages[0] = .{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
+    var ir = render_ir.Ir{ .pages = pages };
+    defer ir.deinit(testing.allocator);
+    try addDocumentSemantics(&ir);
+    try pages[0].appendFillRect(testing.allocator, null, .{ .x = 0, .y = 0, .width = 320, .height = 180 }, .{ .r = 1, .g = 1, .b = 1 });
+    try pages[0].appendLink(testing.allocator, .uri, "https://example.com", .{ .x = 10, .y = 10, .width = 100, .height = 20 });
+    try ir.validate();
+    const original = ir.fingerprint();
+    const link = &pages[0].content.owned.links.items[0];
+    link.text_item = pages[0].items.items[0].header().item_id;
+    try testing.expectError(error.InvalidAnnotation, ir.validate());
+    try testing.expect(!std.mem.eql(u8, &original, &ir.fingerprint()));
+    link.text_item = (@as(u64, 1) << 32) | 100;
+    try testing.expectError(error.InvalidAnnotation, ir.validate());
+}
+
 test "render IR page owns placed text and references stable resources" {
     var page = render_ir.Page{
         .page_id = 10,

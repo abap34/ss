@@ -474,6 +474,11 @@ test "captured measurement items keep page order and annotations" {
     try testing.expectEqual(@as(usize, 1), page.links().len);
     for (page.links()) |link| {
         try testing.expectEqualStrings("https://example.com", link.target);
+        const item_id = link.text_item orelse return error.MissingTextLink;
+        const item_index: usize = @intCast(item_id & 0xffffffff);
+        try testing.expect(item_index < page.items.items.len);
+        try testing.expect(page.items.items[item_index] == .text);
+        try testing.expectEqual(item_id, page.items.items[item_index].header().item_id);
     }
 }
 

@@ -42,6 +42,10 @@ pub fn register(ctx: project.Context, modules: project.ProjectModules, build_opt
     links.step.dependOn(&checks.visual_test_packages.step);
     addFocusedTestStep(b, "test-render-html-links", "Check clickable links in HTML and presentation mode", &links.step);
 
+    const selection = steps.node(b, &checks.node.step, "tests/visual/render/selection/spec.mjs", exe);
+    selection.step.dependOn(&checks.visual_test_packages.step);
+    addFocusedTestStep(b, "test-render-html-selection", "Check text selection without changing HTML painting", &selection.step);
+
     const pdf_runtime = steps.node(b, &checks.node.step, "tests/visual/render/pdf/runtime_spec.mjs", null);
     pdf_runtime.step.dependOn(&checks.visual_test_packages.step);
     const pdf_runtime_step = b.step("test-render-pdf-runtime", "Inspect PDF image loading and cancellation locally");

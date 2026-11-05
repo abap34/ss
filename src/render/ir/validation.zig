@@ -23,7 +23,7 @@ pub const Error = error{
 };
 
 pub fn document(ir: anytype) Error!void {
-    if (ir.schema_version != 7) return error.UnsupportedSchema;
+    if (ir.schema_version != 8) return error.UnsupportedSchema;
     for (ir.resources.entries, 0..) |resource, resource_index| {
         if (resource_index > 0 and
             std.mem.order(u8, &ir.resources.entries[resource_index - 1].id, &resource.id) != .lt)
@@ -69,6 +69,11 @@ pub fn document(ir: anytype) Error!void {
             if (!link.rect.isValid() or link.target.len == 0 or
                 !std.unicode.utf8ValidateSlice(link.target) or !validLinkTarget(link.kind, link.target)) return error.InvalidAnnotation;
             if (link.kind == .destination and !hasDestination(ir, link.target)) return error.InvalidAnnotation;
+            if (link.text_item) |id| {
+                const index: usize = @intCast(id & 0xffffffff);
+                if (index >= page.items.items.len or page.items.items[index] != .text or
+                    page.items.items[index].header().item_id != id) return error.InvalidAnnotation;
+            }
         }
         for (page.destinations()) |destination| {
             if (!std.math.isFinite(destination.point.x) or !std.math.isFinite(destination.point.y) or

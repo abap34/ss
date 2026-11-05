@@ -123,7 +123,7 @@ pub const Emitter = struct {
                 wrap,
                 self.text_cache,
             );
-        try self.textLayoutBaseline(
+        _ = try self.textLayoutBaseline(
             allocator,
             x,
             baseline_y,
@@ -145,7 +145,7 @@ pub const Emitter = struct {
         font_size: f64,
         color: Color,
         decoration: TextDecoration,
-    ) !void {
+    ) !render.ItemId {
         var owned_layout = layout;
         var owns_layout = true;
         errdefer if (owns_layout) owned_layout.deinit(allocator);
@@ -215,6 +215,7 @@ pub const Emitter = struct {
             font_size,
             color,
         );
+        const item_id = self.page.items.items[self.page.items.items.len - 1].header().item_id;
         for (segments.items) |segment| {
             if (segment.behind_text) continue;
             try self.page.appendStrokeLineWithOpacity(
@@ -229,6 +230,7 @@ pub const Emitter = struct {
                 segment.opacity,
             );
         }
+        return item_id;
     }
 
     pub fn raster(self: *Emitter, allocator: Allocator, rect: render.Rect, path: []const u8) !void {

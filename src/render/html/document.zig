@@ -17,10 +17,13 @@ pub const fragment_css =
     \\* { box-sizing: border-box; }
     \\.ss-page { position: relative; flex: none; overflow: hidden; isolation: isolate; background: white; box-shadow: 0 2pt 12pt rgb(15 23 42 / 18%); }
     \\.ss-item { position: absolute; transform-origin: 0 0; }
-    \\.ss-semantic-layer { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
+    \\.ss-semantic-layer { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); clip-path: inset(50%); white-space: nowrap; border: 0; user-select: none; pointer-events: none; }
     \\.ss-text { white-space: pre; }
     \\.ss-text-run { position: absolute; white-space: pre; font-kerning: none; font-synthesis: none; }
     \\.ss-text-cluster { position: absolute; top: 0; white-space: pre; }
+    \\.ss-text-paint { display: contents; user-select: none; pointer-events: none; }
+    \\.ss-text-select { position: absolute; left: 0; top: 0; box-sizing: content-box; width: max-content; padding-inline-end: 1em; color: transparent; white-space: pre; text-decoration: none; font-kerning: normal; transform-origin: 0 0; user-select: text; cursor: text; }
+    \\.ss-text-select::selection { color: transparent; background: Highlight; }
     \\.ss-line { display: block; }
     \\.ss-image { display: block; object-fit: fill; }
     \\.ss-latex { display: block; }
@@ -259,13 +262,19 @@ fn appendPage(
         try appendAttribute(allocator, out, destination.name);
         try appendFormat(allocator, out, "\" style=\"left:{d:.6}pt;top:{d:.6}pt\"></span>", .{ normalized(destination.point.x), normalized(destination.point.y) });
     }
-    for (page.items.items) |item| try appendItem(allocator, out, ir, item, assets);
+    var text_links = std.AutoHashMap(render.ItemId, *const render.Link).init(allocator);
+    defer text_links.deinit();
+    for (page.links()) |*link| {
+        if (link.text_item) |id| try text_links.put(id, link);
+    }
+    for (page.items.items) |item| try appendItem(allocator, out, ir, item, assets, text_links.get(item.header().item_id));
     try out.appendSlice(allocator, "<div class=\"ss-semantic-layer\">");
     for (page.reading_order) |semantic_id| {
         try appendSemanticNode(allocator, out, ir, semantic_id, 0);
     }
     try out.appendSlice(allocator, "</div>");
     for (page.links()) |link| {
+        if (link.text_item != null) continue;
         try out.appendSlice(allocator, "<a class=\"ss-link\" href=\"");
         if (link.kind == .destination) try out.append(allocator, '#');
         try appendAttribute(allocator, out, link.target);
@@ -356,6 +365,7 @@ fn appendItem(
     ir: *const render.Ir,
     item: render.Item,
     assets: resources.References,
+    text_link: ?*const render.Link,
 ) !void {
     const header = item.header();
     switch (item) {
@@ -418,11 +428,12 @@ fn appendItem(
         },
         .vector_path => |value| try appendVectorPathItem(allocator, out, header, value),
         .text => |value| {
-            try appendItemStart(allocator, out, "span", "ss-text", header, .{ .x = value.x, .y = value.y }, null, .{});
+            const origin = render.Point{ .x = value.x + value.layout.logical_bounds.x, .y = value.y + value.layout.logical_bounds.y };
+            try appendItemStart(allocator, out, "span", "ss-text", header, origin, null, .{});
             try appendFormat(allocator, out, "left:{d:.6}pt;top:{d:.6}pt;width:{d:.6}pt;height:{d:.6}pt\">", .{
-                normalized(value.x), normalized(value.y), normalized(value.width), normalized(value.layout.logical_bounds.height),
+                normalized(origin.x), normalized(origin.y), normalized(value.width), normalized(value.layout.logical_bounds.height),
             });
-            try appendTextRuns(allocator, out, ir, &value.layout, value.font_size, value.color);
+            try appendTextRuns(allocator, out, ir, &value.layout, value.font_size, value.color, text_link);
             try out.appendSlice(allocator, "</span>");
         },
         .raster => |value| {
@@ -660,14 +671,16 @@ fn appendTextRuns(
     layout: *const render.TextLayout,
     font_size: f64,
     text_color: core.render_policy.Color,
+    link: ?*const render.Link,
 ) !void {
     for (layout.runs, 0..) |run, run_index| {
         _ = lineForRun(layout, run_index) orelse return error.InvalidTextLayout;
         const font = ir.fonts.find(run.font_instance) orelse return error.MissingRenderFont;
         const ascent = font_size * font.ascent_ratio;
         const descent = font_size * font.descent_ratio;
-        const run_top = run.baseline_y - ascent;
-        try appendFormat(allocator, out, "<span class=\"ss-text-run\" data-ss-baseline-y=\"{d:.6}\"", .{normalized(run.baseline_y)});
+        const baseline_y = run.baseline_y - layout.logical_bounds.y;
+        const run_top = baseline_y - ascent;
+        try appendFormat(allocator, out, "<span class=\"ss-text-run\" data-ss-baseline-y=\"{d:.6}\"", .{normalized(baseline_y)});
         if (run.language.len != 0) {
             try out.appendSlice(allocator, " lang=\"");
             try appendAttribute(allocator, out, run.language);
@@ -675,7 +688,7 @@ fn appendTextRuns(
         }
         try appendFormat(allocator, out, " dir=\"{s}\" style=\"left:{d:.6}pt;top:{d:.6}pt;font-family:", .{
             if (run.direction == .left_to_right) "ltr" else "rtl",
-            normalized(run.x),
+            normalized(run.x - layout.logical_bounds.x),
             normalized(run_top),
         });
         try out.append(allocator, '\'');
@@ -696,6 +709,7 @@ fn appendTextRuns(
         try out.append(allocator, ';');
         try appendFontSettings(allocator, out, font);
         try out.appendSlice(allocator, "\">");
+        try out.appendSlice(allocator, "<span class=\"ss-text-paint\">");
         const clusters = layout.clusters[run.cluster_range.start..run.cluster_range.end];
         if (clusters.len == 0) {
             try appendText(allocator, out, layout.source_text[run.source.start..run.source.end]);
@@ -718,6 +732,14 @@ fn appendTextRuns(
             }
         }
         try out.appendSlice(allocator, "</span>");
+        if (link) |value| {
+            try out.appendSlice(allocator, "<a class=\"ss-text-select ss-link\" draggable=\"false\" href=\"");
+            if (value.kind == .destination) try out.append(allocator, '#');
+            try appendAttribute(allocator, out, value.target);
+            try out.appendSlice(allocator, "\">");
+        } else try out.appendSlice(allocator, "<span class=\"ss-text-select\">");
+        try appendText(allocator, out, layout.source_text[run.source.start..run.source.end]);
+        try out.appendSlice(allocator, if (link != null) "</a></span>" else "</span></span>");
     }
 }
 

@@ -264,12 +264,12 @@ async function inspectNormalHtml(browser, baseUrl) {
   try {
     await page.goto(`${baseUrl}/semantics.html`, { waitUntil: "networkidle" });
     await page.evaluate(() => document.fonts.ready);
-    const visibleText = await page.locator(".ss-text").allTextContents();
+    const visibleText = await page.locator(".ss-text-select").allTextContents();
     assert(
       visibleText.some((value) => value.includes("SelectableTextToken")),
       `normal HTML text was not present in selectable elements: ${JSON.stringify(visibleText)}`,
     );
-    const selected = await selectedText(page.locator(".ss-text", { hasText: "SelectableTextToken" }).first());
+    const selected = await selectedText(page.locator(".ss-text-select", { hasText: "SelectableTextToken" }).first());
     assert(selected.includes("SelectableTextToken"), `normal HTML selection lost text: ${JSON.stringify(selected)}`);
     assert.equal(
       await page.locator('.ss-semantic-layer a[href="https://example.com/semantic"]').count(),

@@ -235,6 +235,7 @@ fn pageDigestWithHash(
             hash.tag(link.kind);
             hash.bytes(link.target);
             hashRect(&hash, link.rect);
+            if (include_metadata) hash.optionalInteger(link.text_item);
         }
         hash.integer(page_value.destinations().len);
         for (page_value.destinations()) |destination| {

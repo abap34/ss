@@ -111,6 +111,7 @@ test "HTML renderer writes deterministic normal elements with escaped text" {
     try testing.expect(std.mem.indexOf(u8, first, "<section class=\"ss-page\"") != null);
     try testing.expect(std.mem.indexOf(u8, first, "data-ss-page-index=\"1\" data-ss-active=\"true\" aria-hidden=\"false\"") != null);
     try testing.expect(std.mem.indexOf(u8, first, "<span class=\"ss-item ss-text\"") != null);
+    try testing.expect(std.mem.indexOf(u8, first, "<span class=\"ss-text-select\">&lt;selectable &amp; text&gt;</span>") != null);
     try testing.expect(std.mem.indexOf(u8, first, "&lt;") != null);
     try testing.expect(std.mem.indexOf(u8, first, "&amp;") != null);
     try testing.expect(std.mem.indexOf(u8, first, "&gt;") != null);

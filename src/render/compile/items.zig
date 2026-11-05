@@ -150,6 +150,7 @@ const LinkAnnotation = struct {
     y: f32,
     width: f32,
     height: f32,
+    text_item: ?render_ir.ItemId = null,
 
     const Kind = enum { uri, dest };
 
@@ -1662,6 +1663,7 @@ fn buildRenderPage(
             link.target,
             .{ .x = link.x, .y = link.y, .width = link.width, .height = link.height },
         );
+        page.content.owned.links.items[page.content.owned.links.items.len - 1].text_item = link.text_item;
     }
 
     return page;
@@ -1899,6 +1901,7 @@ const MeasurementScope = struct {
         if (destination_links) |links| try links.ensureUnusedCapacity(self.ctx.allocator, self.links.items.len);
         if (destination_destinations) |destinations| try destinations.ensureUnusedCapacity(self.ctx.allocator, self.destinations.items.len);
 
+        const item_offset = destination_page.items.items.len;
         for (self.page.items.items) |item| {
             var moved = item;
             remapMovedItem(&moved, destination_page.index, destination_page.items.items.len);
@@ -1907,7 +1910,14 @@ const MeasurementScope = struct {
         self.page.items.clearRetainingCapacity();
 
         if (destination_links) |links| {
-            for (self.links.items) |link| links.appendAssumeCapacity(link);
+            for (self.links.items) |link| {
+                var moved = link;
+                if (link.text_item) |id| {
+                    moved.text_item = (@as(u64, @intCast(destination_page.index + 1)) << 32) |
+                        @as(u64, @intCast(item_offset + @as(usize, @intCast(id & 0xffffffff))));
+                }
+                links.appendAssumeCapacity(moved);
+            }
             self.links.clearRetainingCapacity();
         }
         if (destination_destinations) |destinations| {
@@ -3346,17 +3356,17 @@ fn drawParagraphFragment(ctx: *DrawContext, layout: *const render_text.paragraph
             failure.recordContentRange(resolved.start, resolved.end);
         }
     };
+    owns_fragment = false;
+    const text_item = try emitter.textLayoutBaseline(ctx.allocator, x, baseline_y, @max(advance, 1), fragment, paint.font_size, span.color, decoration);
     if (span.link_url) |url| {
         const target = if (isInternalLink(url)) url[1..] else url;
         if (target.len > 0) {
             const links = ctx.link_annotations orelse return error.MissingRenderAnnotationSink;
             const owned_target = try ctx.allocator.dupe(u8, target);
             errdefer ctx.allocator.free(owned_target);
-            try links.append(ctx.allocator, .{ .kind = if (isInternalLink(url)) .dest else .uri, .target = owned_target, .x = @floatCast(x), .y = @floatCast(baseline_y - paint.font_size), .width = @floatCast(@max(advance, 1)), .height = paint.line_height });
+            try links.append(ctx.allocator, .{ .kind = if (isInternalLink(url)) .dest else .uri, .target = owned_target, .x = @floatCast(x), .y = @floatCast(baseline_y - paint.font_size), .width = @floatCast(@max(advance, 1)), .height = paint.line_height, .text_item = text_item });
         }
     }
-    owns_fragment = false;
-    try emitter.textLayoutBaseline(ctx.allocator, x, baseline_y, @max(advance, 1), fragment, paint.font_size, span.color, decoration);
 }
 
 fn drawCodeTextAtTop(

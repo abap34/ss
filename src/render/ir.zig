@@ -335,6 +335,7 @@ pub const Link = struct {
     kind: LinkKind,
     target: [:0]const u8,
     rect: Rect,
+    text_item: ?ItemId = null,
 
     fn deinit(self: *Link, allocator: std.mem.Allocator) void {
         allocator.free(self.target);
@@ -769,7 +770,7 @@ fn fillPaintOwnedByteSize(fill: FillPaint) usize {
 }
 
 pub const Ir = struct {
-    schema_version: u32 = 7,
+    schema_version: u32 = 8,
     resources: ResourceGraph = .{},
     fonts: FontCatalog = .{},
     semantics: SemanticTree = .{},

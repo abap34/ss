@@ -203,12 +203,19 @@
   overflow: hidden;
   pointer-events: none;
 }
-.presentation-content a[href] {
+.presentation-content a[href],
+.presentation-content .ss-text-select,
+.presentation-content .ss-pdf .textLayer {
   pointer-events: auto;
 }
 .presentation-stage--pen .presentation-content a[href],
-.presentation-stage--laser .presentation-content a[href] {
+.presentation-stage--laser .presentation-content a[href],
+.presentation-stage--pen .presentation-content .ss-text-select,
+.presentation-stage--laser .presentation-content .ss-text-select,
+.presentation-stage--pen .presentation-content .ss-pdf .textLayer,
+.presentation-stage--laser .presentation-content .ss-pdf .textLayer {
   pointer-events: none;
+  user-select: none;
 }
 .presentation-content .ss-page {
   position: absolute;
