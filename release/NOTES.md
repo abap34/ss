@@ -15,6 +15,19 @@ mentions and acknowledgments are preserved. Human PRs without a matching
 description are reported for editorial review; the tool does not guess
 correspondences from similar wording.
 
+## Check coverage before preparing the release
+
+Review all commits and affected files from the previous release tag to the
+chosen implementation commit, even when `Unreleased` is nonempty. The PR
+collector identifies attribution; it does not check coverage of direct commits
+or completeness of descriptions. Inspect relevant patches and account for
+syntax and semantics, stdlib changes and removals, CLI and dump formats,
+editor behavior, rendering, performance, build requirements, and distribution.
+Group related work into user-facing entries and omit internal-only cleanup.
+Repeat this comparison after any fix changes the release base. Follow the
+verification and exact-commit CI requirements in `release/README.md` before
+publishing the resulting notes.
+
 ## Collect and review locally
 
 The collector uses paginated GitHub `GET` requests. It selects merged PRs
@@ -23,21 +36,21 @@ The command writes only to standard output; it does not generate or publish
 anything on GitHub.
 
 ```sh
-mkdir -p .ss-cache/release-notes
+mkdir -p .agent-artifacts/release-notes
 python3 release/tools/release_notes.py \
   --previous-tag v0.8.2 --base v0.8.3 --collect \
-  > .ss-cache/release-notes/pull-requests.json
+  > .agent-artifacts/release-notes/pull-requests.json
 ```
 
-Write the reviewed body to `.ss-cache/release-notes/body.md`, including the
+Write the reviewed body to `.agent-artifacts/release-notes/body.md`, including the
 corresponding PR references, then generate the finished Markdown locally:
 
 ```sh
 python3 release/tools/release_notes.py \
   --previous-tag v0.8.2 --base v0.8.3 \
-  --pull-requests .ss-cache/release-notes/pull-requests.json \
-  --body .ss-cache/release-notes/body.md \
-  > .ss-cache/release-notes/preview.md
+  --pull-requests .agent-artifacts/release-notes/pull-requests.json \
+  --body .agent-artifacts/release-notes/body.md \
+  > .agent-artifacts/release-notes/preview.md
 ```
 
 Omit `--body` to draft descriptions from commit subjects and PR titles.
