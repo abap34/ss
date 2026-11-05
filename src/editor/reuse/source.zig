@@ -23,9 +23,10 @@ pub fn canApply(snapshot: *AnalysisSnapshot, path: []const u8, generated: *const
     }
     const state = &snapshot.retained_layout_state.?.state;
     // One source edit affects every expanded page. Re-evaluate them together.
-    for (state.modules.entries.items) |module| for (module.syntax.pages.items) |page| {
-        if (page.stage_index != null) return false;
-    };
+    for (state.modules.entries.items) |module| {
+        if (module.syntax.source_files.items.len != 0) return false;
+        for (module.syntax.pages.items) |page| if (page.stage_index != null) return false;
+    }
     const node = state.getNode(generated.node_id) orelse return false;
     if (node.kind != .object) return false;
     if ((state.parentPageOf(node.id) orelse return false) != generated.page_id) return false;

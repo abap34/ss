@@ -185,6 +185,21 @@ const Parser = struct {
             spec_moved = true;
             mode_moved = true;
             try module.top_level_items.append(self.allocator, .{ .import = import_index });
+        } else if (try self.consumeKeyword("include")) {
+            imports_allowed.* = false;
+            source.skipTriviaFrom(self.source, &self.pos);
+            if (self.pos >= self.source.len or self.source[self.pos] != '"') return self.fail(error.ExpectedString);
+            const spec = try self.parseImportSpec();
+            var moved = false;
+            errdefer if (!moved) self.allocator.free(spec.text);
+            try self.consumeStatementTerminator();
+            try module.top_level_items.append(self.allocator, .{ .include = module.includes.items.len });
+            try module.includes.append(self.allocator, .{
+                .path = spec.text,
+                .path_span = spec.span,
+                .span = .{ .start = item_start, .end = self.pos },
+            });
+            moved = true;
         } else if (try self.consumeKeyword("fn")) {
             imports_allowed.* = false;
             const paired = self.consumePairedFunctionMarker();

@@ -62,7 +62,7 @@ fn resolveHover(allocator: std.mem.Allocator, snapshot: anytype, req: types.Sour
     if (context.isValueName()) {
         var callee = ast.CallableName.bare(context.target);
         callee.qualifier = qualifier;
-        switch (try resolve_query.selectedValue(budget, snapshot, module.id, req.offset, callee)) {
+        switch (try resolve_query.selectedValue(budget, snapshot, module.id, module.offset(req.offset), callee)) {
             .local => |variable| return .{ .markdown = try std.fmt.allocPrint(allocator, "```ss\n({s}: {s})\n```", .{ variable.name, variable.type_label }) },
             .constant, .function => |binding| return try bindingHover(allocator, binding, budget),
             .primitive => {

@@ -89,7 +89,7 @@ pub const Cache = struct {
     }
 
     fn parseImports(self: *Cache, scratch: std.mem.Allocator, path: []const u8, source: []const u8) !?[]const []const u8 {
-        var program = syntax.parseWithSourceName(scratch, source, path) catch |err| {
+        var program = syntax.parseSurface(scratch, source) catch |err| {
             if (err == error.OutOfMemory) return err;
             // Retain the last known edges while a source file is incomplete.
             return null;
@@ -105,6 +105,11 @@ pub const Cache = struct {
             const relative = try names.importPathWithDefaultExtension(scratch, declaration.spec);
             defer scratch.free(relative);
             const resolved = try std.fs.path.resolve(self.allocator, &.{ std.fs.path.dirname(path) orelse ".", relative });
+            errdefer self.allocator.free(resolved);
+            try imports.append(self.allocator, resolved);
+        }
+        for (program.includes.items) |declaration| {
+            const resolved = try std.fs.path.resolve(self.allocator, &.{ std.fs.path.dirname(path) orelse ".", declaration.path });
             errdefer self.allocator.free(resolved);
             try imports.append(self.allocator, resolved);
         }

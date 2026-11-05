@@ -591,6 +591,23 @@ const Server = struct {
         };
         try self.checkCanceled();
         var selected_entry = if (layout_build != .single_document and config != null) config.?.entry else changed_abs;
+        if (layout_build != .single_document and config == null) {
+            // Included files borrow the enclosing module's declarations even
+            // when the project is opened without an ss.toml file.
+            if (self.analysis) |*current| {
+                if (current.moduleForPath(changed_abs)) |module| {
+                    if (module.source_offset != 0) selected_entry = current.project.entry_path;
+                }
+            }
+            if (std.mem.eql(u8, selected_entry, changed_abs)) {
+                for (self.other_analyses.entries.items) |*entry| {
+                    const module = entry.snapshot.moduleForPath(changed_abs) orelse continue;
+                    if (module.source_offset == 0) continue;
+                    selected_entry = entry.snapshot.project.entry_path;
+                    break;
+                }
+            }
+        }
         if (layout_build == .semantic) {
             if (self.analysis) |*current| {
                 if (std.mem.eql(u8, current.project.entry_path, selected_entry) and
@@ -931,9 +948,12 @@ fn runAnalysisLayoutWork(context: *anyopaque, state: *core.DocumentState, graph:
 fn recordLayoutInputs(hook: *const AnalysisLayoutContext, state: *const core.DocumentState, external_inputs: *utils.FileInputs) !void {
     try editor_reuse.inputs.recordHighlightQueries(external_inputs, hook.highlight_languages);
     for (state.modules.entries.items) |module| {
+        for (module.syntax.source_files.items) |file| {
+            if (hook.server.documents.sourceForPath(file.path) == null) try editor_reuse.inputs.recordSource(external_inputs, file.path, file.source);
+        }
         const path = module.path orelse continue;
         if (hook.server.documents.sourceForPath(path) == null) {
-            try editor_reuse.inputs.recordSource(external_inputs, path, module.source);
+            try editor_reuse.inputs.recordSource(external_inputs, path, module.original_source orelse module.source);
         }
     }
 }

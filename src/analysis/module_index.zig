@@ -17,6 +17,7 @@ pub const Index = struct {
 };
 
 pub const LoadOptions = struct {
+    file_inputs: ?*utils.FileInputs = null,
     cancellation: ?utils.Cancellation = null,
     overlay: ?*const module_loader.SourceOverlay = null,
     diagnostics: ?*module_loader.LoadDiagnostics = null,
@@ -35,6 +36,7 @@ pub fn load(
     const measure_start = utils.profile.start();
     defer utils.profile.recordAnalysis(.module_index, measure_start);
     const module_graph = try module_loader.loadGraphWithOptions(allocator, io, base_dir, project_syntax, .{
+        .file_inputs = options.file_inputs,
         .overlay = options.overlay,
         .diagnostics = options.diagnostics,
         .print_diagnostics = options.print_diagnostics,

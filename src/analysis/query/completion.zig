@@ -166,7 +166,7 @@ fn completeRecordConstructionAt(builder: *CandidateBuilder, snapshot: anytype, r
     const target = cursor.sourceNameAt(builder.budget, parsed, req.offset) orelse return false;
     const record = target.construction orelse return false;
     const module = snapshot.moduleForPath(req.path) orelse return false;
-    const ty = (try resolve_query.typeForConstruction(builder.scratch.allocator(), builder.budget, snapshot, module.id, req.offset, record)) orelse return false;
+    const ty = (try resolve_query.typeForConstruction(builder.scratch.allocator(), builder.budget, snapshot, module.id, module.offset(req.offset), record)) orelse return false;
     try appendProperties(builder, snapshot, .{ .record = ty });
     return true;
 }
@@ -414,13 +414,13 @@ fn enumTypeForExpr(budget: QueryBudget, snapshot: anytype, req: types.SourceRequ
 fn propertyTargetForExpr(allocator: std.mem.Allocator, budget: QueryBudget, snapshot: anytype, req: types.SourceRequest, program: *const ast.Module, expr: ast.Expr, depth: usize) anyerror!?PropertyTarget {
     if (budget.expired()) return null;
     const module = snapshot.moduleForPath(req.path) orelse return null;
-    if (try resolve_query.typeForExpr(allocator, budget, snapshot, module.id, req.offset, expr)) |ty| {
+    if (try resolve_query.typeForExpr(allocator, budget, snapshot, module.id, module.offset(req.offset), expr)) |ty| {
         if (propertyTargetForType(snapshot, ty)) |target| return target;
     }
     if (depth > 16) return null;
     return switch (expr) {
         .ident => |ident| blk: {
-            if (resolve_query.visibleVariableBinding(budget, snapshot, module.id, req.offset, ident.name)) |variable| {
+            if (resolve_query.visibleVariableBinding(budget, snapshot, module.id, module.offset(req.offset), ident.name)) |variable| {
                 if (propertyTargetForVariable(snapshot, variable)) |target| break :blk target;
             }
             if (cursor.visibleLetBindingAt(budget, program, req.offset, ident.name)) |binding| {
@@ -445,7 +445,7 @@ fn propertyTargetForExpr(allocator: std.mem.Allocator, budget: QueryBudget, snap
 fn recordTypeForCompletionExpr(allocator: std.mem.Allocator, budget: QueryBudget, snapshot: anytype, req: types.SourceRequest, program: *const ast.Module, expr: ast.Expr, depth: usize) anyerror!?ast.Type {
     if (budget.expired()) return null;
     const module = snapshot.moduleForPath(req.path) orelse return null;
-    if (try resolve_query.typeForExpr(allocator, budget, snapshot, module.id, req.offset, expr)) |ty| {
+    if (try resolve_query.typeForExpr(allocator, budget, snapshot, module.id, module.offset(req.offset), expr)) |ty| {
         if (ty.kind == .group or resolve_query.recordIdForType(ty) != null) return ty;
     }
     if (depth > 16) return null;

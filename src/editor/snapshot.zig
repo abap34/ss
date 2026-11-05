@@ -356,6 +356,20 @@ fn buildFromDisplayJson(
         deinitShapeEditingTargets(allocator, shape_editing);
         allocator.free(shape_editing);
     }
+    for (editing) |*target| {
+        const module = moduleForPath(state, target.path) orelse continue;
+        try physicalEditingTarget(allocator, module, target, target.page.start);
+    }
+    for (page_editing) |*target| {
+        const module = state.moduleById(target.module_id) orelse continue;
+        const offset = target.page.start - module.location(target.page).span.start;
+        try physicalEditingTarget(allocator, module, target, target.page.start);
+        if (target.first_constraint_start) |*start| start.* -= offset;
+    }
+    for (shape_editing) |*target| {
+        const module = moduleForPath(state, target.path) orelse continue;
+        try physicalEditingTarget(allocator, module, target, target.style_expression.start);
+    }
     const editing_json = try editingJson(allocator, editing);
     defer allocator.free(editing_json);
     const page_editing_json = try pageEditingJson(allocator, page_editing);
@@ -474,6 +488,11 @@ fn sourcePathsJson(allocator: std.mem.Allocator, state: *const core.DocumentStat
     try paths.stringItem(state.projectPath());
     try seen.put(state.projectPath(), {});
     for (state.modules.entries.items) |module| {
+        for (module.syntax.source_files.items) |file| {
+            if (seen.contains(file.path)) continue;
+            try paths.stringItem(file.path);
+            try seen.put(file.path, {});
+        }
         const path = module.path orelse continue;
         if (seen.contains(path)) continue;
         try paths.stringItem(path);
@@ -481,6 +500,30 @@ fn sourcePathsJson(allocator: std.mem.Allocator, state: *const core.DocumentStat
     }
     try paths.end();
     return try buffer.toOwnedSlice(allocator);
+}
+
+fn physicalEditingTarget(allocator: std.mem.Allocator, module: *const core.SourceModule, target: anytype, start: usize) !void {
+    const location = module.location(.{ .start = start, .end = start });
+    const offset = start - location.span.start;
+    if (offset == 0) return;
+    const path = try allocator.dupe(u8, location.path);
+    allocator.free(target.path);
+    target.path = path;
+    physicalSpans(target, offset);
+}
+
+fn physicalSpans(value: anytype, offset: usize) void {
+    const T = @TypeOf(value.*);
+    if (T == utils.source.ByteSpan) {
+        value.start -= offset;
+        value.end -= offset;
+        return;
+    }
+    switch (@typeInfo(T)) {
+        .@"struct" => inline for (comptime std.meta.fieldNames(T)) |name| physicalSpans(&@field(value.*, name), offset),
+        .optional => if (value.*) |*item| physicalSpans(item, offset),
+        else => {},
+    }
 }
 
 fn displayJson(allocator: std.mem.Allocator, html: []const u8, css: []const u8, has_pdf: bool, published_assets: []const assets.Asset) ![]u8 {

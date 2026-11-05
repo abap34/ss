@@ -3,6 +3,7 @@ const std = @import("std");
 
 const keywords = [_][]const u8{
     "import",
+    "include",
     "as",
     "with",
     "const",

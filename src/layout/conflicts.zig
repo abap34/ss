@@ -235,6 +235,10 @@ fn cloneLocation(allocator: std.mem.Allocator, state: anytype, origin: ?model.So
     const origin_text = origin orelse return null;
     const located = origin_text.location() orelse return null;
     const module = if (located.path) |origin_path| state.moduleByPathOrSpec(origin_path) else state.projectModule();
+    if (module) |value| {
+        const physical = value.location(located.span);
+        return .{ .path = try allocator.dupe(u8, physical.path), .start = physical.span.start, .end = physical.span.end };
+    }
     const path = if (module) |value|
         value.path orelse value.spec
     else
@@ -263,9 +267,9 @@ fn constraintSourceSyntax(state: anytype, origin: ?model.SourceOrigin) ?Constrai
     const syntax = constraint.syntax orelse return null;
     return .{
         .action = constraint.action,
-        .target = .{ .start = syntax.target.start, .end = syntax.target.end },
-        .source = if (syntax.source) |span| .{ .start = span.start, .end = span.end } else null,
-        .offset = if (syntax.offset) |span| .{ .start = span.start, .end = span.end } else null,
+        .target = module.location(syntax.target).span,
+        .source = if (syntax.source) |span| module.location(span).span else null,
+        .offset = if (syntax.offset) |span| module.location(span).span else null,
     };
 }
 
@@ -524,27 +528,32 @@ fn appendOriginObject(object: *json.Object, field_name: []const u8, state: anyty
         return;
     };
     var path = state.projectPath();
-    var source = state.projectModule().line_index;
+    var text: []const u8 = state.projectSource();
+    var span = located.span;
     if (located.path) |origin_path| {
         if (state.moduleByPathOrSpec(origin_path)) |module| {
-            path = module.path orelse module.spec;
-            source = module.line_index;
+            const physical = module.location(located.span);
+            path = physical.path;
+            text = physical.source;
+            span = physical.span;
         } else {
             path = origin_path;
         }
     } else {
         const module = state.projectModule();
-        path = module.path orelse module.spec;
-        source = module.line_index;
+        const physical = module.location(located.span);
+        path = physical.path;
+        text = physical.source;
+        span = physical.span;
     }
-    const loc = source.locationAt(located.span.start);
+    const loc = utils.source.locationAt(text, span.start);
 
     var child = try object.objectField(field_name);
     try child.stringField("path", path);
     try child.intField("line", loc.line);
     try child.intField("column", loc.column);
-    try child.intField("start", located.span.start);
-    try child.intField("end", located.span.end);
+    try child.intField("start", span.start);
+    try child.intField("end", span.end);
     try child.end();
 }
 

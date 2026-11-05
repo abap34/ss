@@ -113,24 +113,27 @@ fn sourceForLocatedOrigin(
     default_source: []const u8,
     state: anytype,
     located: LocatedOrigin,
-) struct { path: []const u8, source: []const u8, line_index: ?source.LineIndex = null } {
+) struct { path: []const u8, source: []const u8, span: source.ByteSpan, line_index: ?source.LineIndex = null } {
     if (located.path) |origin_path| {
         if (state.moduleByPathOrSpec(origin_path)) |module| {
-            return .{
-                .path = module.path orelse module.spec,
-                .source = module.source,
-                .line_index = module.line_index,
-            };
+            const location = module.location(located.span);
+            return .{ .path = location.path, .source = location.source, .span = location.span, .line_index = if (module.original_source == null) module.line_index else null };
         }
         return .{
             .path = origin_path,
             .source = default_source,
+            .span = located.span,
             .line_index = if (state.moduleByPathOrSpec(default_path)) |module| module.line_index else null,
         };
+    }
+    if (state.moduleByPathOrSpec(default_path)) |module| {
+        const location = module.location(located.span);
+        return .{ .path = location.path, .source = location.source, .span = location.span, .line_index = if (module.original_source == null) module.line_index else null };
     }
     return .{
         .path = default_path,
         .source = default_source,
+        .span = located.span,
         .line_index = if (state.moduleByPathOrSpec(default_path)) |module| module.line_index else null,
     };
 }
@@ -338,7 +341,7 @@ fn resolveContextDiagnosticLocation(
     } else null;
     if (located) |origin| {
         const resolved = sourceForLocatedOrigin(default_path, default_source, state, origin);
-        return .{ .path = resolved.path, .source = resolved.source, .span = origin.span, .line_index = resolved.line_index };
+        return .{ .path = resolved.path, .source = resolved.source, .span = resolved.span, .line_index = resolved.line_index };
     }
     return .{ .path = default_path, .source = default_source, .span = null };
 }
@@ -564,12 +567,12 @@ fn printRustLocatedOrigin(
     const origin_text = origin orelse return false;
     const located = origin_text.location() orelse return false;
     const resolved = sourceForLocatedOrigin(default_path, default_source, state, located);
-    const loc = indexedLocation(resolved.source, resolved.line_index, located.span.start);
+    const loc = indexedLocation(resolved.source, resolved.line_index, resolved.span.start);
     printDim();
     std.debug.print("  --> {s}:{d}:{d}\n", .{ resolved.path, loc.line, loc.column });
     std.debug.print("   |\n", .{});
     printReset();
-    printExcerpt(resolved.source, resolved.line_index, located.span, severity, label, 1);
+    printExcerpt(resolved.source, resolved.line_index, resolved.span, severity, label, 1);
     return true;
 }
 
@@ -739,9 +742,9 @@ fn constraintOriginSnippet(
     const located = origin.location() orelse return null;
     const resolved = sourceForLocatedOrigin(default_path, default_source, state, located);
     if (resolved.source.len == 0) return null;
-    const line = if (resolved.line_index) |index| index.lineAt(located.span.start) else source.lineAt(resolved.source, located.span.start);
+    const line = if (resolved.line_index) |index| index.lineAt(resolved.span.start) else source.lineAt(resolved.source, resolved.span.start);
     const code = std.mem.trim(u8, line.text(resolved.source), " \t\r\n");
-    const loc = indexedLocation(resolved.source, resolved.line_index, located.span.start);
+    const loc = indexedLocation(resolved.source, resolved.line_index, resolved.span.start);
     if (resolved.path.len == 0) {
         return try std.fmt.allocPrint(allocator, "line {d}:{d}: {s}", .{ loc.line, loc.column, code });
     }

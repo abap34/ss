@@ -241,15 +241,15 @@ const ConstraintFailureLocation = struct {
 
 fn constraintFailureLocation(state: *core.DocumentState, origin: ?core.SourceOrigin) ConstraintFailureLocation {
     var report_path = state.projectPath();
-    var report_source = state.projectSource();
+    const report_source = state.projectSource();
     var span: ?source.ByteSpan = null;
     if (origin) |origin_text| {
         if (origin_text.location()) |located| {
             span = located.span;
             if (located.path) |origin_path| {
                 if (state.moduleByPathOrSpec(origin_path)) |module| {
-                    report_path = module.path orelse module.spec;
-                    report_source = module.source;
+                    const location = module.location(located.span);
+                    return .{ .path = location.path, .source = location.source, .span = location.span };
                 } else {
                     report_path = origin_path;
                 }

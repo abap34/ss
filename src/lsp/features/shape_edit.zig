@@ -110,7 +110,7 @@ pub fn insertResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     const source = ctx.documents.sourceForPath(target.path) orelse blk: {
         owned_source = utils.fs.readFileAlloc(ctx.io, ctx.allocator, target.path) catch
             return try statusJson(ctx.allocator, .unsupported, "The target source document is unavailable.");
-        const module = snapshot.moduleById(target.module_id) orelse
+        const module = snapshot.moduleForPath(target.path) orelse
             return try statusJson(ctx.allocator, .stale, "The target source module changed.");
         if (!std.mem.eql(u8, owned_source.?, module.source)) {
             return try statusJson(ctx.allocator, .stale, "The target source document changed on disk.");

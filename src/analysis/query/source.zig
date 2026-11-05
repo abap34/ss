@@ -16,7 +16,7 @@ pub const ParsedSource = struct {
     pub fn parse(allocator: std.mem.Allocator, req: types.SourceRequest, budget: ?types.QueryBudget) !ParsedSource {
         if (budget) |value| if (value.expired()) return .{};
         var parsed = syntax.parseRecoveringWithOptions(allocator, req.source, req.path, .{
-            .expansion = .{ .expand_stages = false },
+            .expansion = .{ .expand_stages = false, .expand_includes = false },
             .cancellation = if (budget) |*value| .{ .context = value, .is_canceled = budgetExpired } else null,
         }) catch |err| switch (err) {
             error.OutOfMemory => return err,

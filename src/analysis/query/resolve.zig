@@ -40,6 +40,7 @@ pub const TypeDefinition = struct {
     line: usize,
     column: usize,
     length: usize,
+    span: ?ast.Span = null,
 };
 
 pub const ValueBinding = struct {
@@ -331,15 +332,17 @@ fn resolveType(allocator: std.mem.Allocator, budget: ?QueryBudget, snapshot: any
     if (ty.parameter_id == null and ty.nominal_module_id == null) {
         if (ty.class_name orelse ty.enum_name) |name| {
             var parameter: ?ast.Type = null;
-            if (snapshot.moduleById(module_id)) |module| {
+            for (snapshot.modules) |module| {
+                if (module.id != module_id or offset < module.source_offset or offset - module.source_offset > module.source.len) continue;
+                const local_offset = offset - module.source_offset;
                 if (snapshot.syntaxForSource(module.path orelse module.spec, module.source)) |program| {
                     inline for (.{ program.records.items, program.functions.items }) |declarations| {
                         for (declarations) |declaration| {
                             if (expired(budget)) return null;
-                            if (offset < declaration.span.start or offset > declaration.span.end) continue;
+                            if (local_offset < declaration.span.start or local_offset > declaration.span.end) continue;
                             for (declaration.type_params.items, 0..) |item, index| {
                                 if (!std.mem.eql(u8, item.name, name)) continue;
-                                parameter = .{ .kind = .parameter, .class_name = item.name, .parameter_id = .{ .module_id = module_id, .declaration_start = declaration.span.start, .index = @intCast(index) } };
+                                parameter = .{ .kind = .parameter, .class_name = item.name, .parameter_id = .{ .module_id = module_id, .declaration_start = module.offset(declaration.span.start), .index = @intCast(index) } };
                             }
                         }
                     }
@@ -474,18 +477,18 @@ pub fn structuredField(allocator: std.mem.Allocator, budget: ?QueryBudget, snaps
     if (context.targetKindIs(.member_name)) {
         const parsed = context.module() orelse return null;
         const member = cursor.memberAt(budget, parsed, context.offset) orelse return null;
-        const ty = (try typeForExpr(allocator, budget, snapshot, module_id, context.offset, member.target)) orelse return null;
+        const ty = (try typeForExpr(allocator, budget, snapshot, module_id, context.semantic_offset, member.target)) orelse return null;
         return fieldForType(allocator, budget, snapshot, ty, member.name);
     }
     if (context.targetKindIs(.record_field_name)) {
         const construction = context.construction orelse return null;
-        const ty = (try typeForConstruction(allocator, budget, snapshot, module_id, context.offset, construction)) orelse return null;
+        const ty = (try typeForConstruction(allocator, budget, snapshot, module_id, context.semantic_offset, construction)) orelse return null;
         return fieldForType(allocator, budget, snapshot, ty, context.target);
     }
     if (context.targetKindIs(.record_update_path_segment)) {
         const parsed = context.module() orelse return null;
         const target = cursor.recordUpdatePathAt(budget, parsed, context.offset) orelse return null;
-        const base = (try typeForExpr(allocator, budget, snapshot, module_id, context.offset, target.target)) orelse return null;
+        const base = (try typeForExpr(allocator, budget, snapshot, module_id, context.semantic_offset, target.target)) orelse return null;
         const ty = (try typeAfterPath(allocator, budget, snapshot, base, target.path[0..target.segment_index])) orelse return null;
         return fieldForType(allocator, budget, snapshot, ty, target.path[target.segment_index].name);
     }
@@ -629,6 +632,7 @@ fn resolvedTypeDefinition(item: anytype) TypeDefinition {
         .line = item.line,
         .column = item.column,
         .length = item.length,
+        .span = item.span,
     };
 }
 

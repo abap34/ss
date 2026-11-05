@@ -8,6 +8,7 @@ pub const HoleId = Expanded.HoleId;
 pub const Module = Expanded.Module;
 pub const TopLevelItem = Expanded.TopLevelItem;
 pub const ImportDecl = Expanded.ImportDecl;
+pub const SourceFile = Expanded.SourceFile;
 pub const EnumCaseDecl = Expanded.EnumCaseDecl;
 pub const FieldDecl = Expanded.FieldDecl;
 pub const TypeParameter = Expanded.TypeParameter;

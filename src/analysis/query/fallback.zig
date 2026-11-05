@@ -299,9 +299,11 @@ pub fn definition(allocator: std.mem.Allocator, snapshot: *const snapshot_api.An
                 if (len == targets.len or !work.step()) break;
                 const decl = snapshot.valueDefinitionInModule(id, context.name) orelse continue;
                 const module = findModule(snapshot, null, id, &work) orelse continue;
-                const begin = boundedPosition(module.line_index, decl.span_start) orelse continue;
-                const end = boundedPosition(module.line_index, decl.span_end) orelse continue;
-                targets[len] = .{ .path = module.path, .module_spec = if (module.path == null) module.spec else null, .line = begin.line, .character = begin.character, .end_line = end.line, .end_character = end.character };
+                const location = module.location(.{ .start = decl.span_start, .end = decl.span_end });
+                const physical = if (module.source_files.len == 0) module else findModule(snapshot, location.path, null, &work) orelse continue;
+                const begin = boundedPosition(physical.line_index, location.span.start) orelse continue;
+                const end = boundedPosition(physical.line_index, location.span.end) orelse continue;
+                targets[len] = .{ .path = physical.path, .module_spec = if (physical.path == null) physical.spec else null, .line = begin.line, .character = begin.character, .end_line = end.line, .end_character = end.character };
                 len += 1;
             }
         }

@@ -9,7 +9,14 @@ pub fn Tree(comptime surface: bool) type {
         pub const Type = common.Type;
         pub const GroupComposition = common.GroupComposition;
         pub const HoleId = common.HoleId;
-        pub const TopLevelItem = common.TopLevelItem;
+        pub const TopLevelItem = if (surface) union(enum) {
+            import: usize,
+            document: usize,
+            page: usize,
+            include: usize,
+        } else common.TopLevelItem;
+        pub const IncludeDecl = common.IncludeDecl;
+        pub const SourceFile = common.SourceFile;
         pub const ImportDecl = common.ImportDecl;
         pub const TypeDecl = common.TypeDecl;
         pub const EnumCaseDecl = common.EnumCaseDecl;
@@ -95,6 +102,8 @@ pub fn Tree(comptime surface: bool) type {
         };
 
         pub const Module = struct {
+            includes: if (surface) std.ArrayList(IncludeDecl) else void = if (surface) .empty else {},
+            source_files: std.ArrayList(SourceFile) = .empty,
             imports: std.ArrayList(ImportDecl),
             top_level_items: std.ArrayList(TopLevelItem),
             types: std.ArrayList(TypeDecl),
@@ -110,6 +119,10 @@ pub fn Tree(comptime surface: bool) type {
             }
 
             pub fn deinit(self: *Module, allocator: Allocator) void {
+                if (surface) {
+                    for (self.includes.items) |*value| value.deinit(allocator);
+                    self.includes.deinit(allocator);
+                }
                 for (self.imports.items) |*import_decl| import_decl.deinit(allocator);
                 self.imports.deinit(allocator);
                 self.top_level_items.deinit(allocator);
@@ -126,11 +139,20 @@ pub fn Tree(comptime surface: bool) type {
                 self.document_statements.deinit(allocator);
                 for (self.pages.items) |*page| page.deinit(allocator);
                 self.pages.deinit(allocator);
+                for (self.source_files.items) |*value| value.deinit(allocator);
+                self.source_files.deinit(allocator);
             }
 
             pub fn clone(self: Module, allocator: Allocator) anyerror!Module {
                 var result = Module.init();
                 errdefer result.deinit(allocator);
+
+                if (surface) {
+                    try result.includes.ensureTotalCapacity(allocator, self.includes.items.len);
+                    for (self.includes.items) |value| result.includes.appendAssumeCapacity(try value.clone(allocator));
+                }
+                try result.source_files.ensureTotalCapacity(allocator, self.source_files.items.len);
+                for (self.source_files.items) |value| result.source_files.appendAssumeCapacity(try value.clone(allocator));
 
                 try result.imports.ensureTotalCapacity(allocator, self.imports.items.len);
                 for (self.imports.items) |value| result.imports.appendAssumeCapacity(try value.clone(allocator));
@@ -148,6 +170,7 @@ pub fn Tree(comptime surface: bool) type {
                 for (self.document_statements.items) |value| result.document_statements.appendAssumeCapacity(try value.clone(allocator));
                 try result.pages.ensureTotalCapacity(allocator, self.pages.items.len);
                 for (self.pages.items) |value| result.pages.appendAssumeCapacity(try value.clone(allocator));
+                if (self.source_files.items.len != 0) common.rebindSources(&result, self.source_files.items, result.source_files.items);
                 return result;
             }
         };

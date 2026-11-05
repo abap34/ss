@@ -12,6 +12,41 @@ const source = utils.source;
 const max_module_bytes = 256 * 1024;
 const implicit_prelude_spec = "std:prelude";
 
+pub const IncludeLoader = struct {
+    io: std.Io,
+    overlay: ?*const SourceOverlay = null,
+    diagnostics: ?*LoadDiagnostics = null,
+    file_inputs: ?*utils.FileInputs = null,
+
+    pub fn resolver(self: *IncludeLoader) syntax.IncludeResolver {
+        return .{ .context = self, .read = read, .report = report };
+    }
+
+    fn read(context: *anyopaque, allocator: std.mem.Allocator, from: []const u8, spec: []const u8) !ast.SourceFile {
+        const self: *IncludeLoader = @ptrCast(@alignCast(context));
+        if (std.mem.startsWith(u8, spec, "std:")) return error.InvalidIncludePath;
+        if (spec.len == 0) return error.InvalidIncludePath;
+        const path = try std.fs.path.resolve(allocator, &.{ std.fs.path.dirname(from) orelse ".", spec });
+        errdefer allocator.free(path);
+        if (self.file_inputs) |inputs| try inputs.record(".", path, .file);
+        const text = if (self.overlay) |overlay|
+            if (try overlay.get(path)) |text| try allocator.dupe(u8, text) else try readModuleFile(allocator, self.io, path)
+        else
+            try readModuleFile(allocator, self.io, path);
+        return .{ .path = path, .source = text, .offset = 0 };
+    }
+
+    fn report(context: *anyopaque, path: []const u8, text: []const u8, err: anyerror, diagnostic: ?syntax.ParseDiagnostic) !void {
+        const self: *IncludeLoader = @ptrCast(@alignCast(context));
+        if (err == error.OutOfMemory or err == error.Canceled) return;
+        if (self.diagnostics) |bag| {
+            var buffer: [512]u8 = undefined;
+            const message = if (diagnostic) |diag| error_report.formatParseDiagnostic(&buffer, diag) else error_report.formatParseFailureWithoutDiagnostic(&buffer, err);
+            try bag.add(path, text, .@"error", error_report.parseDiagnosticCode(err), message, if (diagnostic) |diag| diag.span else null, null);
+        }
+    }
+};
+
 pub const SourceOverlay = struct {
     allocator: std.mem.Allocator,
     by_path: std.StringHashMap([]const u8),
@@ -128,6 +163,7 @@ pub const ModuleGraph = struct {
 pub const LoadDiagnostics = @import("diagnostic").Bag;
 
 pub const LoadOptions = struct {
+    file_inputs: ?*utils.FileInputs = null,
     cancellation: ?utils.Cancellation = null,
     overlay: ?*const SourceOverlay = null,
     diagnostics: ?*LoadDiagnostics = null,
@@ -168,6 +204,7 @@ pub fn loadGraphWithOptions(
         .allocator = allocator,
         .io = io,
         .overlay = options.overlay,
+        .file_inputs = options.file_inputs,
         .diagnostics = options.diagnostics,
         .print_diagnostics = options.print_diagnostics,
         .recovering = options.recovering,
@@ -195,7 +232,7 @@ pub fn loadGraphWithOptions(
     }
 
     for (project_module.imports.items) |import_decl| {
-        const module_id = try builder.loadImport(project_dir, import_decl.spec);
+        const module_id = try builder.loadImport(import_decl.base_dir orelse project_dir, import_decl.spec);
         try graph.project_import_ids.append(allocator, module_id);
     }
 
@@ -297,10 +334,10 @@ pub fn findUnknownImportReport(
     overlay: ?*const SourceOverlay,
 ) !?UnknownImportReport {
     for (program.imports.items) |import_decl| {
-        const resolved = resolveImport(allocator, io, base_dir, import_decl.spec, overlay) catch |err| switch (err) {
+        const resolved = resolveImport(allocator, io, import_decl.base_dir orelse base_dir, import_decl.spec, overlay) catch |err| switch (err) {
             error.UnknownImport => {
                 return .{
-                    .message = try formatUnknownImportMessage(allocator, base_dir, import_decl.spec),
+                    .message = try formatUnknownImportMessage(allocator, import_decl.base_dir orelse base_dir, import_decl.spec),
                     .span = import_decl.span,
                 };
             },
@@ -320,10 +357,10 @@ pub fn findImportReadFailureReport(
     expected_error: anyerror,
 ) !?UnknownImportReport {
     for (program.imports.items) |import_decl| {
-        const resolved = resolveImport(allocator, io, base_dir, import_decl.spec, overlay) catch |err| {
+        const resolved = resolveImport(allocator, io, import_decl.base_dir orelse base_dir, import_decl.spec, overlay) catch |err| {
             if (err != expected_error) return err;
             return .{
-                .message = try formatImportReadFailureMessage(allocator, base_dir, import_decl.spec, err),
+                .message = try formatImportReadFailureMessage(allocator, import_decl.base_dir orelse base_dir, import_decl.spec, err),
                 .span = import_decl.span,
             };
         };
@@ -342,7 +379,7 @@ pub fn importFailureSpan(
 ) !?source.ByteSpan {
     for (diagnostics.items.items) |diagnostic| {
         for (program.imports.items) |import_decl| {
-            if (try importMatchesDiagnosticPath(allocator, io, base_dir, import_decl.spec, diagnostic.path, overlay)) {
+            if (try importMatchesDiagnosticPath(allocator, io, import_decl.base_dir orelse base_dir, import_decl.spec, diagnostic.path, overlay)) {
                 return .{ .start = import_decl.span.start, .end = import_decl.span.end };
             }
         }
@@ -387,6 +424,7 @@ const Builder = struct {
     overlay: ?*const SourceOverlay,
     diagnostics: ?*LoadDiagnostics,
     print_diagnostics: bool,
+    file_inputs: ?*utils.FileInputs,
     recovering: bool,
     embedded_cache: ?*EmbeddedSyntaxCache,
     cancellation: ?utils.Cancellation,
@@ -474,6 +512,7 @@ const Builder = struct {
         const parse_path = resolved.path orelse resolved.spec;
         const cached_index = if (self.embedded_cache != null and resolved.path == null) embeddedModuleIndex(resolved.spec) else null;
         var parse_failure: syntax.ParseFailure = .{};
+        var include_loader = IncludeLoader{ .io = self.io, .overlay = self.overlay, .diagnostics = self.diagnostics, .file_inputs = self.file_inputs };
         const module_syntax = if (cached_index) |index| self.embedded_cache.?.cloneModule(self.allocator, index, &parse_failure) catch |err| {
             if (err == error.OutOfMemory or err == error.Canceled) return err;
             try self.addParseFailureDiagnostic(parse_path, text, err, parse_failure.diagnostic);
@@ -482,7 +521,7 @@ const Builder = struct {
             const parse_start = utils.profile.start();
             defer utils.profile.recordAnalysis(if (embeddedModuleIndex(resolved.spec) != null) .embedded_parse else .module_parse, parse_start);
             break :blk if (self.recovering) recover: {
-                var result = syntax.parseRecoveringWithOptions(self.allocator, text, parse_path, .{ .failure = &parse_failure, .cancellation = self.cancellation }) catch |err| {
+                var result = syntax.parseRecoveringWithOptions(self.allocator, text, parse_path, .{ .failure = &parse_failure, .cancellation = self.cancellation, .include_resolver = include_loader.resolver() }) catch |err| {
                     if (err == error.OutOfMemory or err == error.Canceled) return err;
                     try self.addParseFailureDiagnostic(parse_path, text, err, parse_failure.diagnostic);
                     return error.DiagnosticsFailed;
@@ -492,7 +531,7 @@ const Builder = struct {
                 try self.addParseHoleDiagnostics(parse_path, text, result.holes.diagnostics);
                 try self.recovery_holes.append(self.allocator, .{ .module_id = module_id, .result = result.holes });
                 break :recover result.module;
-            } else syntax.parseWithSourceNameAndFailure(self.allocator, text, parse_path, &parse_failure) catch |err| {
+            } else syntax.parseWithOptions(self.allocator, text, parse_path, .{ .failure = &parse_failure, .cancellation = self.cancellation, .include_resolver = include_loader.resolver() }) catch |err| {
                 if (err == error.OutOfMemory or err == error.Canceled) return err;
                 try self.addParseFailureDiagnostic(parse_path, text, err, parse_failure.diagnostic);
                 return error.DiagnosticsFailed;
@@ -537,6 +576,7 @@ const Builder = struct {
         owns_spec = false;
         owns_path = false;
         owns_line_index = false;
+        try self.modules.items[self.modules.items.len - 1].prepareIncludes(self.allocator);
 
         const importer_base_dir = if (path) |module_path| std.fs.path.dirname(module_path) orelse "." else ".";
         if (shouldImplicitlyImportPrelude(kind, spec)) {
@@ -545,33 +585,35 @@ const Builder = struct {
             try module.implicit_import_ids.append(self.allocator, import_id);
         }
         for (module_syntax.imports.items) |import_decl| {
-            const import_id = self.loadImport(importer_base_dir, import_decl.spec) catch |err| {
+            const physical = ast.SourceFile.locate(module_syntax.source_files.items, path orelse spec, text, import_decl.span);
+            const base_dir = import_decl.base_dir orelse importer_base_dir;
+            const import_id = self.loadImport(base_dir, import_decl.spec) catch |err| {
                 if (err == error.UnknownImport) {
-                    const message = try formatUnknownImportMessage(self.allocator, importer_base_dir, import_decl.spec);
+                    const message = try formatUnknownImportMessage(self.allocator, base_dir, import_decl.spec);
                     defer self.allocator.free(message);
-                    try self.addDiagnostic(path orelse spec, text, .@"error", "UnknownImport", message, .{ .start = import_decl.span.start, .end = import_decl.span.end });
+                    try self.addDiagnostic(physical.path, physical.source, .@"error", "UnknownImport", message, physical.span);
                     if (self.print_diagnostics) {
                         error_report.print(.{
-                            .path = path orelse spec,
-                            .source = text,
+                            .path = physical.path,
+                            .source = physical.source,
                             .severity = .@"error",
                             .message = message,
-                            .span = .{ .start = import_decl.span.start, .end = import_decl.span.end },
+                            .span = physical.span,
                         });
                     }
                     return error.DiagnosticsFailed;
                 }
                 if (isImportReadFailure(err)) {
-                    const message = try formatImportReadFailureMessage(self.allocator, importer_base_dir, import_decl.spec, err);
+                    const message = try formatImportReadFailureMessage(self.allocator, base_dir, import_decl.spec, err);
                     defer self.allocator.free(message);
-                    try self.addDiagnostic(path orelse spec, text, .@"error", "ImportReadFailed", message, .{ .start = import_decl.span.start, .end = import_decl.span.end });
+                    try self.addDiagnostic(physical.path, physical.source, .@"error", "ImportReadFailed", message, physical.span);
                     if (self.print_diagnostics) {
                         error_report.print(.{
-                            .path = path orelse spec,
-                            .source = text,
+                            .path = physical.path,
+                            .source = physical.source,
                             .severity = .@"error",
                             .message = message,
-                            .span = .{ .start = import_decl.span.start, .end = import_decl.span.end },
+                            .span = physical.span,
                         });
                     }
                     return error.DiagnosticsFailed;
@@ -636,21 +678,23 @@ const Builder = struct {
     }
 
     fn reportImportCycle(self: *Builder, module: *const core.SourceModule, import_index: ?usize) !void {
-        const path = module.path orelse module.spec;
         const span: ?source.ByteSpan = if (import_index) |index| blk: {
             if (index >= module.syntax.imports.items.len) break :blk null;
             const import_span = module.syntax.imports.items[index].span;
             break :blk .{ .start = import_span.start, .end = import_span.end };
         } else null;
+        const physical = module.location(span orelse .{ .start = 0, .end = 0 });
+        const path = physical.path;
+        const physical_span = if (span != null) physical.span else null;
         const message = "ImportCycle: import graph contains a cycle";
-        try self.addDiagnostic(path, module.source, .@"error", "ImportCycle", message, span);
+        try self.addDiagnostic(path, physical.source, .@"error", "ImportCycle", message, physical_span);
         if (!self.print_diagnostics) return;
         error_report.print(.{
             .path = path,
-            .source = module.source,
+            .source = physical.source,
             .severity = .@"error",
             .message = message,
-            .span = span,
+            .span = physical_span,
         });
     }
 };

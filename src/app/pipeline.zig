@@ -91,7 +91,7 @@ pub fn analyzeFile(
     if (progress) |p| p.complete();
 
     if (progress) |p| p.begin("Parse source");
-    var parsed = try app_diagnostics.parseSource(allocator, source, request.input_path, progress);
+    var parsed = try app_diagnostics.parseSource(io, allocator, source, request.input_path, request.overlay, request.file_inputs, progress);
     errdefer parsed.deinit(allocator);
     if (progress) |p| p.complete();
 
@@ -101,6 +101,7 @@ pub fn analyzeFile(
     defer load_diagnostics.deinit();
     var index = analysis.loadModuleIndex(allocator, io, import_base_dir, parsed.module, .{
         .overlay = request.overlay,
+        .file_inputs = request.file_inputs,
         .diagnostics = &load_diagnostics,
         .print_diagnostics = false,
         .embedded_cache = request.embedded_cache,
@@ -335,15 +336,13 @@ fn printUnknownImportDiagnostic(
     const import_base_dir = std.fs.path.dirname(request.input_path) orelse ".";
     var report = try module_loader.findUnknownImportReport(allocator, io, import_base_dir, program, request.overlay) orelse return error.UnknownImport;
     defer report.deinit(allocator);
+    const location = ast.SourceFile.locate(program.source_files.items, request.input_path, source, report.span);
     error_report.print(.{
-        .path = request.input_path,
-        .source = source,
+        .path = location.path,
+        .source = location.source,
         .severity = .@"error",
         .message = report.message,
-        .span = .{
-            .start = report.span.start,
-            .end = report.span.end,
-        },
+        .span = location.span,
     });
 }
 
@@ -358,15 +357,13 @@ fn printImportReadFailureDiagnostic(
     const import_base_dir = std.fs.path.dirname(request.input_path) orelse ".";
     var report = try module_loader.findImportReadFailureReport(allocator, io, import_base_dir, program, request.overlay, err) orelse return err;
     defer report.deinit(allocator);
+    const location = ast.SourceFile.locate(program.source_files.items, request.input_path, source, report.span);
     error_report.print(.{
-        .path = request.input_path,
-        .source = source,
+        .path = location.path,
+        .source = location.source,
         .severity = .@"error",
         .message = report.message,
-        .span = .{
-            .start = report.span.start,
-            .end = report.span.end,
-        },
+        .span = location.span,
     });
 }
 

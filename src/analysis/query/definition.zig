@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
+const source = @import("utils").source;
 
 const context_query = @import("context.zig");
 const import_query = @import("imports.zig");
@@ -69,7 +70,7 @@ fn appendResolvedTarget(
     if (context.importSpecAtOffset()) return false;
     const module = snapshot.moduleForPath(req.path) orelse return false;
     if (context.typeParameter()) |parameter| {
-        return appendTargetFromSpan(allocator, out, snapshot, module.id, parameter.span, req.path);
+        return appendTargetFromSpan(allocator, out, snapshot, module.id, .{ .start = module.offset(parameter.span.start), .end = module.offset(parameter.span.end) }, req.path);
     }
     if (try appendStructuredTarget(allocator, out, snapshot, module.id, context, req.path)) return true;
     if (context.expired()) return true;
@@ -78,7 +79,7 @@ fn appendResolvedTarget(
     if (context.isValueName()) {
         var callee = ast.CallableName.bare(context.target);
         callee.qualifier = qualifier;
-        switch (try resolve_query.selectedValue(context.budget, snapshot, module.id, req.offset, callee)) {
+        switch (try resolve_query.selectedValue(context.budget, snapshot, module.id, module.offset(req.offset), callee)) {
             .local => return appendVisibleVariable(context.budget, allocator, out, snapshot, module.id, req, context.target, req.path),
             .constant, .function => |binding| return appendDefinitionOfKind(context.budget, allocator, out, snapshot, module.id, binding.name, qualifier, binding.kind, req.path),
             .primitive => return true,
@@ -103,7 +104,7 @@ fn appendStructuredTarget(
     }
     if (context.targetKindIs(.member_name) or context.targetKindIs(.enum_case_name)) {
         if (context.qualifier) |receiver| {
-            const binding = try resolve_query.selectedValue(context.budget, snapshot, current_module_id, context.offset, ast.CallableName.fromText(receiver));
+            const binding = try resolve_query.selectedValue(context.budget, snapshot, current_module_id, context.semantic_offset, ast.CallableName.fromText(receiver));
             if (binding == .unknown) return appendEnumCaseTarget(context.budget, allocator, out, snapshot, current_module_id, receiver, context.target, request_path);
         }
     }
@@ -160,8 +161,13 @@ fn appendTargetFromSpan(
     const span = maybe_span orelse return false;
     const module = snapshot.moduleById(module_id) orelse return false;
     var target = moduleBackedTarget(snapshot, module_id, request_path);
-    const start = module.line_index.utf16PositionAt(span.start);
-    const end = module.line_index.utf16PositionAt(span.end);
+    const location = module.location(span);
+    if (module.path != null or !std.mem.eql(u8, location.path, module.spec)) {
+        target.path = location.path;
+        target.module_spec = null;
+    }
+    const start = source.utf16PositionAt(location.source, location.span.start);
+    const end = source.utf16PositionAt(location.source, location.span.end);
     target.line = start.line;
     target.character = start.character;
     target.end_line = end.line;
@@ -180,7 +186,7 @@ fn appendVisibleVariable(
     target: []const u8,
     request_path: []const u8,
 ) !bool {
-    const definition = resolve_query.visibleVariable(budget, snapshot, module_id, req.offset, target) orelse return false;
+    const definition = resolve_query.visibleVariable(budget, snapshot, module_id, if (snapshot.moduleForPath(req.path)) |module| module.offset(req.offset) else req.offset, target) orelse return false;
     try out.append(allocator, definitionTarget(snapshot, definition, request_path));
     return true;
 }
@@ -226,8 +232,13 @@ fn definitionTarget(snapshot: anytype, definition: core.Definition, request_path
         target.module_spec = null;
     }
     if (snapshot.moduleById(definition.module_id)) |module| {
-        const start = module.line_index.utf16PositionAt(definition.span_start);
-        const end = module.line_index.utf16PositionAt(@max(definition.span_end, definition.span_start +| 1));
+        const location = module.location(.{ .start = definition.span_start, .end = @max(definition.span_end, definition.span_start +| 1) });
+        if (module.path != null or !std.mem.eql(u8, location.path, module.spec)) {
+            target.path = location.path;
+            target.module_spec = null;
+        }
+        const start = source.utf16PositionAt(location.source, location.span.start);
+        const end = source.utf16PositionAt(location.source, location.span.end);
         target.line = start.line;
         target.character = start.character;
         target.end_line = end.line;
@@ -244,6 +255,22 @@ fn definitionTarget(snapshot: anytype, definition: core.Definition, request_path
 
 fn typeDefinitionTarget(snapshot: anytype, definition: anytype, request_path: []const u8) types.DefinitionTarget {
     var target = moduleBackedTarget(snapshot, definition.module_id, request_path);
+    if (definition.span) |span| {
+        if (snapshot.moduleById(definition.module_id)) |module| {
+            const location = module.location(span);
+            if (module.path != null or !std.mem.eql(u8, location.path, module.spec)) {
+                target.path = location.path;
+                target.module_spec = null;
+            }
+            const start = source.utf16PositionAt(location.source, location.span.start);
+            const end = source.utf16PositionAt(location.source, location.span.end);
+            target.line = start.line;
+            target.character = start.character;
+            target.end_line = end.line;
+            target.end_character = end.character;
+            return target;
+        }
+    }
     const start = lspLocation(definition.line, definition.column);
     target.line = start.line;
     target.character = start.character;

@@ -7,13 +7,17 @@ const utils = @import("utils");
 
 const error_report = utils.err;
 
-pub fn parseSource(allocator: std.mem.Allocator, source: []const u8, path: []const u8, progress: ?*utils.progress.Progress) !parser.ParseResult {
+pub fn parseSource(io: std.Io, allocator: std.mem.Allocator, source: []const u8, path: []const u8, overlay: ?*const module_loader.SourceOverlay, inputs: ?*utils.FileInputs, progress: ?*utils.progress.Progress) !parser.ParseResult {
     var failure: parser.ParseFailure = .{};
-    return parser.parseRecoveringWithSourceNameAndFailure(allocator, source, path, &failure) catch |err| {
+    var diagnostics = module_loader.LoadDiagnostics.init(allocator);
+    defer diagnostics.deinit();
+    var loader = module_loader.IncludeLoader{ .io = io, .overlay = overlay, .diagnostics = &diagnostics, .file_inputs = inputs };
+    return parser.parseRecoveringWithOptions(allocator, source, path, .{ .failure = &failure, .include_resolver = loader.resolver() }) catch |err| {
         if (progress) |p| p.abort();
-        if (err == error.OutOfMemory) return err;
+        if (err == error.OutOfMemory or err == error.Canceled) return err;
+        printLoadDiagnostics(&diagnostics);
         error_report.printParseError(path, source, err, failure.diagnostic);
-        return err;
+        return error.DiagnosticsFailed;
     };
 }
 
@@ -45,12 +49,13 @@ pub fn printImportFailureDiagnostic(
     diagnostics: *const module_loader.LoadDiagnostics,
 ) !void {
     const span = (try module_loader.importFailureSpan(allocator, io, import_base_dir, module, overlay, diagnostics)) orelse return;
+    const location = ast.SourceFile.locate(module.source_files.items, path, source, span);
     error_report.print(.{
-        .path = path,
-        .source = source,
+        .path = location.path,
+        .source = location.source,
         .severity = .@"error",
         .message = "ImportFailed: imported module failed to load",
-        .span = span,
+        .span = location.span,
     });
 }
 

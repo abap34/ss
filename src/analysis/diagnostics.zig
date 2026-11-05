@@ -67,7 +67,7 @@ const DiagnosticLocation = struct {
 
 fn diagnosticLocation(state: *core.DocumentState, diagnostic: core.Diagnostic) DiagnosticLocation {
     var report_path = state.projectPath();
-    var report_source = state.projectSource();
+    const report_source = state.projectSource();
     const located = if (diagnostic.origin) |origin|
         origin.location()
     else if (diagnostic.node_id) |node_id| blk: {
@@ -77,8 +77,8 @@ fn diagnosticLocation(state: *core.DocumentState, diagnostic: core.Diagnostic) D
     const span = if (located) |origin| blk: {
         if (origin.path) |origin_path| {
             if (state.moduleByPathOrSpec(origin_path)) |module| {
-                report_path = module.path orelse module.spec;
-                report_source = module.source;
+                const location = module.location(origin.span);
+                return .{ .path = location.path, .source = location.source, .span = location.span };
             } else {
                 report_path = origin_path;
             }

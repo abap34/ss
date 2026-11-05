@@ -14,8 +14,8 @@ pub fn moduleIdForContext(snapshot: anytype, context: *const context_query.Conte
             if (!std.mem.eql(u8, alias, context.target)) continue;
             return import_fact.module_id;
         }
-        const alias_hit = if (import_fact.alias_span) |span| spanContainsOffset(span, context.offset) else false;
-        if (!alias_hit and !spanContainsOffset(import_fact.spec_span, context.offset)) continue;
+        const alias_hit = if (import_fact.alias_span) |span| spanContainsOffset(span, module.offset(context.offset)) else false;
+        if (!alias_hit and !spanContainsOffset(import_fact.spec_span, module.offset(context.offset))) continue;
         return import_fact.module_id;
     }
     return null;
@@ -32,7 +32,7 @@ pub fn selectedBindingAt(snapshot: anytype, context: *const context_query.Contex
         if (context.expired()) return null;
         for (import_fact.selected) |item| {
             if (context.expired()) return null;
-            if (spanContainsOffset(item.span, context.offset)) return .{
+            if (spanContainsOffset(item.span, module.offset(context.offset))) return .{
                 .module_id = import_fact.module_id orelse return null,
                 .name = item.name,
             };

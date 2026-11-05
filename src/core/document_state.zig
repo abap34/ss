@@ -110,10 +110,38 @@ pub const SourceModule = struct {
     spec: []u8,
     path: ?[]u8,
     source: []u8,
+    original_source: ?[]u8 = null,
     line_index: utils.source.LineIndex,
     syntax: ast.Module,
     implicit_import_ids: std.ArrayList(SourceModuleId),
     resolved_import_ids: std.ArrayList(SourceModuleId),
+
+    pub const Location = ast.SourceFile.Location;
+
+    pub fn location(self: *const SourceModule, span: model.SourceSpan) Location {
+        return ast.SourceFile.locate(self.syntax.source_files.items, self.path orelse self.spec, self.original_source orelse self.source, span);
+    }
+
+    pub fn expandedSource(allocator: Allocator, root: []u8, syntax: ast.Module) ![]u8 {
+        if (syntax.source_files.items.len == 0) return root;
+        const last = syntax.source_files.items[syntax.source_files.items.len - 1];
+        const text = try allocator.alloc(u8, last.offset + last.source.len + 1);
+        @memset(text, '\n');
+        @memcpy(text[0..root.len], root);
+        for (syntax.source_files.items) |file| @memcpy(text[file.offset..][0..file.source.len], file.source);
+        return text;
+    }
+
+    pub fn prepareIncludes(self: *SourceModule, allocator: Allocator) !void {
+        if (self.syntax.source_files.items.len == 0) return;
+        const text = try expandedSource(allocator, self.source, self.syntax);
+        errdefer allocator.free(text);
+        const line_index = try utils.source.LineIndex.init(allocator, text);
+        self.line_index.deinit(allocator);
+        self.original_source = self.source;
+        self.source = text;
+        self.line_index = line_index;
+    }
 
     pub fn deinit(self: *SourceModule, allocator: Allocator) void {
         self.line_index.deinit(allocator);
@@ -122,6 +150,7 @@ pub const SourceModule = struct {
         self.resolved_import_ids.deinit(allocator);
         allocator.free(self.spec);
         allocator.free(self.source);
+        if (self.original_source) |text| allocator.free(text);
         if (self.path) |path| allocator.free(path);
     }
 };
@@ -373,14 +402,17 @@ pub const DocumentState = struct {
         });
         state.graph.document_id = doc_id;
 
-        const line_index = try utils.source.LineIndex.init(allocator, project_source);
+        const expanded_source = try SourceModule.expandedSource(allocator, project_source, project_syntax);
+        errdefer if (expanded_source.ptr != project_source.ptr) allocator.free(expanded_source);
+        const line_index = try utils.source.LineIndex.init(allocator, expanded_source);
         errdefer line_index.deinit(allocator);
         try state.modules.entries.append(allocator, .{
             .id = 0,
             .kind = .project,
             .spec = project_spec,
             .path = project_path,
-            .source = project_source,
+            .source = expanded_source,
+            .original_source = if (expanded_source.ptr != project_source.ptr) project_source else null,
             .line_index = line_index,
             .syntax = project_syntax,
             .implicit_import_ids = .empty,

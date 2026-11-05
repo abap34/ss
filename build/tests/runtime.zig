@@ -75,6 +75,7 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
         .{ .path = "tests/runtime/stdlib_wrappers_runtime_spec.mjs" },
         .{ .path = "tests/runtime/syntax/blocks/spec.mjs", .name = "test-block-syntax", .description = "Check block string expressions and CLI/LSP diagnostics" },
         .{ .path = "tests/runtime/syntax/staging/spec.mjs", .name = "test-staging-diagnostics", .description = "Check stage declaration and drawing condition CLI diagnostics" },
+        .{ .path = "tests/runtime/syntax/include/spec.mjs", .name = "test-source-include", .description = "Check source includes through CLI and editor operations" },
         .{ .path = "tests/runtime/syntax/expand/spec.mjs", .name = "test-expand", .description = "Check expanded AST source output and parse-only CLI behavior" },
         .{ .path = "tests/runtime/syntax/formatting/spec.mjs", .name = "test-syntax-formatting", .description = "Compare generated formatting variants through evaluation and layout" },
         .{ .path = "tests/runtime/theme/spec.mjs" },

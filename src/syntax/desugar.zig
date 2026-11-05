@@ -6,10 +6,16 @@ const build = @import("desugar/build.zig");
 const drawing = @import("desugar/drawing.zig");
 const staging = @import("desugar/staging.zig");
 const functions = @import("desugar/functions.zig");
+const includes = @import("desugar/include.zig");
+pub const IncludeResolver = includes.Resolver;
 
 pub const Failure = staging.Failure;
 pub const Options = struct {
     expand_stages: bool = true,
+    expand_includes: bool = true,
+    include_resolver: ?IncludeResolver = null,
+    source_name: []const u8 = "",
+    source_length: usize = 0,
     failure: ?*Failure = null,
     cancellation: ?utils.Cancellation = null,
 };
@@ -20,11 +26,47 @@ pub const Options = struct {
 pub fn desugar(allocator: std.mem.Allocator, input: *const surface.Module, options: Options) !ast.Module {
     if (options.failure) |failure| failure.* = .{};
     var context = Context{ .allocator = allocator, .cancellation = options.cancellation };
-    var result = try context.module(input.*);
+    var expanded: ?surface.Module = null;
+    defer if (expanded) |*value| value.deinit(allocator);
+    if (options.expand_includes and input.includes.items.len != 0) {
+        const resolver = options.include_resolver orelse return error.IncludeRequiresSourceLoader;
+        var span: ?ast.Span = null;
+        expanded = includes.expand(allocator, input, options.source_name, options.source_length, resolver, &span, options.cancellation) catch |err| {
+            if (options.failure) |failure| failure.span = span;
+            return err;
+        };
+    }
+    var result = try context.module(if (expanded) |value| value else input.*);
     errdefer result.deinit(allocator);
+    if (expanded) |*value| {
+        result.source_files = value.source_files;
+        value.source_files = .empty;
+    }
     if (options.expand_stages) {
         var failure: Failure = .{};
         staging.expand(allocator, &result, &failure, options.cancellation) catch |err| {
+            if (options.include_resolver) |resolver| {
+                if (failure.span) |span| {
+                    for (result.source_files.items) |file| {
+                        if (span.start < file.offset or span.start > file.offset + file.source.len) continue;
+                        if (resolver.report) |report| try report(resolver.context, file.path, file.source, err, .{
+                            .err = err,
+                            .span = .{ .start = span.start - file.offset, .end = span.end - file.offset },
+                            .detail = failure.detail,
+                        });
+                        var start = file.included_at;
+                        // The outer diagnostic points at the root include site.
+                        var index = result.source_files.items.len;
+                        while (index > 0) {
+                            index -= 1;
+                            const parent = result.source_files.items[index];
+                            if (start >= parent.offset and start <= parent.offset + parent.source.len) start = parent.included_at;
+                        }
+                        failure.span = .{ .start = start, .end = start + "include".len };
+                        break;
+                    }
+                }
+            }
             if (options.failure) |output| output.* = failure;
             return err;
         };
@@ -40,7 +82,12 @@ const Context = struct {
         var result = ast.Module.init();
         errdefer result.deinit(self.allocator);
         result.imports = try self.convert(@TypeOf(result.imports), input.imports);
-        result.top_level_items = try self.convert(@TypeOf(result.top_level_items), input.top_level_items);
+        for (input.top_level_items.items) |item| switch (item) {
+            .import => |i| try result.top_level_items.append(self.allocator, .{ .import = i }),
+            .document => |i| try result.top_level_items.append(self.allocator, .{ .document = i }),
+            .page => |i| try result.top_level_items.append(self.allocator, .{ .page = i }),
+            .include => {},
+        };
         result.types = try self.convert(@TypeOf(result.types), input.types);
         result.records = try self.convert(@TypeOf(result.records), input.records);
         result.constants = try self.convert(@TypeOf(result.constants), input.constants);
@@ -152,7 +199,7 @@ const Context = struct {
         }
         return switch (@typeInfo(T)) {
             .void => {},
-            .@"enum" => @enumFromInt(@intFromEnum(input)),
+            .@"enum" => @fromBackingInt(@intCast(@backingInt(input))),
             .@"struct" => blk: {
                 if (@hasField(T, "items") and @hasField(T, "capacity")) {
                     var result: T = .empty;

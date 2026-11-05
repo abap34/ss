@@ -6,6 +6,85 @@ pub const Type = types.Type;
 pub const GroupComposition = types.GroupComposition;
 pub const HoleId = u32;
 
+/// Physical sources share one module and occupy disjoint virtual byte ranges.
+pub const SourceFile = struct {
+    path: []const u8,
+    source: []const u8,
+    offset: usize,
+    included_at: usize = 0,
+
+    pub const Location = struct { path: []const u8, source: []const u8, span: Span };
+
+    pub fn locate(files: []const SourceFile, path: []const u8, source: []const u8, span: Span) Location {
+        for (files) |file| {
+            if (span.start >= file.offset and span.start <= file.offset + file.source.len) return .{
+                .path = file.path,
+                .source = file.source,
+                .span = .{ .start = span.start - file.offset, .end = @min(span.end -| file.offset, file.source.len) },
+            };
+        }
+        return .{ .path = path, .source = source, .span = span };
+    }
+
+    pub fn deinit(self: *SourceFile, allocator: Allocator) void {
+        allocator.free(self.path);
+        allocator.free(self.source);
+    }
+
+    pub fn clone(self: SourceFile, allocator: Allocator) !SourceFile {
+        const path = try allocator.dupe(u8, self.path);
+        errdefer allocator.free(path);
+        return .{ .path = path, .source = try allocator.dupe(u8, self.source), .offset = self.offset, .included_at = self.included_at };
+    }
+};
+
+pub const IncludeDecl = struct {
+    path: []const u8,
+    span: Span,
+    path_span: Span,
+
+    pub fn deinit(self: *IncludeDecl, allocator: Allocator) void {
+        allocator.free(self.path);
+    }
+
+    pub fn clone(self: IncludeDecl, allocator: Allocator) !IncludeDecl {
+        var result = self;
+        result.path = try allocator.dupe(u8, self.path);
+        return result;
+    }
+};
+
+/// Ordinary type clones borrow names; included source buffers belong to the tree.
+pub fn rebindSources(value: anytype, previous: []const SourceFile, next: []const SourceFile) void {
+    const T = @TypeOf(value.*);
+    switch (@typeInfo(T)) {
+        .@"struct" => inline for (comptime std.meta.fieldNames(T)) |name| {
+            if (!std.mem.eql(u8, name, "capacity")) rebindSources(&@field(value.*, name), previous, next);
+        },
+        .@"union" => switch (value.*) {
+            inline else => |*payload| rebindSources(payload, previous, next),
+        },
+        .optional => if (value.*) |*payload| rebindSources(payload, previous, next),
+        .pointer => |pointer| switch (pointer.size) {
+            .one => rebindSources(@constCast(value.*), previous, next),
+            .slice => if (pointer.child == u8) {
+                const address = @intFromPtr(value.ptr);
+                for (previous, next) |old, new| {
+                    const start = @intFromPtr(old.source.ptr);
+                    if (address >= start and address + value.len <= start + old.source.len) {
+                        value.* = @constCast(new.source[address - start ..][0..value.len]);
+                        break;
+                    }
+                }
+            } else {
+                for (@constCast(value.*)) |*payload| rebindSources(payload, previous, next);
+            },
+            else => {},
+        },
+        else => {},
+    }
+}
+
 pub const TopLevelItem = union(enum) {
     import: usize,
     document: usize,
@@ -52,21 +131,26 @@ pub const ImportDecl = struct {
     spec_span: Span,
     mode: Mode,
     alias_span: ?Span = null,
+    base_dir: ?[]const u8 = null,
     span: Span,
 
     pub fn deinit(self: *ImportDecl, allocator: Allocator) void {
         allocator.free(self.spec);
         self.mode.deinit(allocator);
+        if (self.base_dir) |base| allocator.free(base);
     }
 
     pub fn clone(self: ImportDecl, allocator: Allocator) !ImportDecl {
         const spec = try allocator.dupe(u8, self.spec);
         errdefer allocator.free(spec);
+        var mode = try self.mode.clone(allocator);
+        errdefer mode.deinit(allocator);
         return .{
             .spec = spec,
             .spec_span = self.spec_span,
-            .mode = try self.mode.clone(allocator),
+            .mode = mode,
             .alias_span = self.alias_span,
+            .base_dir = if (self.base_dir) |base| try allocator.dupe(u8, base) else null,
             .span = self.span,
         };
     }

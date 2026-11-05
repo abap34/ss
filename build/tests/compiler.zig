@@ -7,6 +7,10 @@ const import = project.import;
 
 pub fn register(suite: Suite, modules: project.ProjectModules, compiler_mod: *Module) void {
     const ctx = suite.ctx;
+    const include_spec_mod = createModule(ctx, "tests/modules/include/spec_tests.zig", &.{
+        import("compiler", compiler_mod),
+    }, true);
+    _ = suite.add(include_spec_mod, .{ .name = "test-include", .description = "Check source inclusion and shared syntax expansion" });
     const value_contracts_spec_mod = createModule(ctx, "tests/eval/contracts/spec_tests.zig", &.{
         import("core", modules.core),
         import("ast", modules.ast),

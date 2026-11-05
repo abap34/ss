@@ -15,11 +15,13 @@ pub const ExpectedSyntax = hole.ExpectedSyntax;
 pub const desugar = expansion.desugar;
 pub const DesugarOptions = expansion.Options;
 pub const DesugarFailure = expansion.Failure;
+pub const IncludeResolver = expansion.IncludeResolver;
 pub const parseSurface = parser.parse;
 pub const printExpandedAlloc = @import("syntax/print.zig").moduleAlloc;
 
 pub const ParseOptions = struct {
-    expansion: struct { expand_stages: bool = true } = .{},
+    expansion: struct { expand_stages: bool = true, expand_includes: bool = true } = .{},
+    include_resolver: ?IncludeResolver = null,
     failure: ?*ParseFailure = null,
     cancellation: ?utils.Cancellation = null,
 };
@@ -46,13 +48,22 @@ pub fn parseWithSourceNameAndFailure(allocator: std.mem.Allocator, text: []const
     return parseWithSourceNameInner(allocator, text, source_name, failure);
 }
 
+pub fn parseWithOptions(allocator: std.mem.Allocator, text: []const u8, source_name: []const u8, options: ParseOptions) !ast.Module {
+    var surface = if (options.failure) |failure|
+        try parser.parseWithSourceNameAndFailure(allocator, text, source_name, failure)
+    else
+        try parser.parseWithSourceName(allocator, text, source_name);
+    defer surface.deinit(allocator);
+    return expand(allocator, &surface, text, source_name, options);
+}
+
 fn parseWithSourceNameInner(allocator: std.mem.Allocator, text: []const u8, source_name: []const u8, failure: ?*ParseFailure) !ast.Module {
     var surface = if (failure) |output|
         try parser.parseWithSourceNameAndFailure(allocator, text, source_name, output)
     else
         try parser.parseWithSourceName(allocator, text, source_name);
     defer surface.deinit(allocator);
-    return expand(allocator, &surface, text, .{ .failure = failure });
+    return expand(allocator, &surface, text, source_name, .{ .failure = failure });
 }
 
 pub fn parseRecovering(allocator: std.mem.Allocator, text: []const u8) !ParseResult {
@@ -73,16 +84,16 @@ pub fn parseRecoveringWithOptions(allocator: std.mem.Allocator, text: []const u8
         .cancellation = options.cancellation,
     });
     defer surface.deinit(allocator);
-    var module = try expand(allocator, &surface.module, text, options);
+    var module = try expand(allocator, &surface.module, text, source_name, options);
     errdefer module.deinit(allocator);
     const holes = surface.holes;
     surface.holes = .{ .holes = &.{}, .diagnostics = &.{} };
     return .{ .module = module, .holes = holes };
 }
 
-fn expand(allocator: std.mem.Allocator, surface: *const Surface.Module, text: []const u8, options: ParseOptions) !ast.Module {
+fn expand(allocator: std.mem.Allocator, surface: *const Surface.Module, text: []const u8, path: []const u8, options: ParseOptions) !ast.Module {
     var failure: DesugarFailure = .{};
-    const config = DesugarOptions{ .expand_stages = options.expansion.expand_stages, .failure = &failure, .cancellation = options.cancellation };
+    const config = DesugarOptions{ .expand_stages = options.expansion.expand_stages, .expand_includes = options.expansion.expand_includes, .include_resolver = options.include_resolver, .source_name = path, .source_length = text.len, .failure = &failure, .cancellation = options.cancellation };
     return desugar(allocator, surface, config) catch |err| {
         if (options.failure) |output| {
             const span = failure.span orelse ast.Span{ .start = text.len, .end = text.len };

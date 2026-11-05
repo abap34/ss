@@ -11,6 +11,11 @@ pub const ParseDiagnostic = struct {
 
 pub fn expected(err: anyerror) ?[]const u8 {
     return switch (err) {
+        error.IncludeCycle => "an include path without a cycle",
+        error.DuplicateInclude => "each physical source file included once per module",
+        error.IncludeRequiresSourceLoader => "a source loader to resolve include paths",
+        error.InvalidIncludePath => "a non-empty file path relative to the containing source file",
+        error.IncludeLimitExceeded => "at most 128 nested includes and 16 MiB of source per module",
         error.EmptyStages => "at least one stage name inside 'stages name { ... }'",
         error.DuplicateStageName => "a unique name for each stage",
         error.DuplicateStagesDeclaration => "only one stages declaration per page",

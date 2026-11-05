@@ -43,6 +43,16 @@ fn writeModule(allocator: std.mem.Allocator, modules: *json.Array, module: core.
     }
     try imports.end();
     try item.stringField("source", module.source);
+    var source_files = try item.arrayField("sourceFiles");
+    for (module.syntax.source_files.items) |file| {
+        var physical = try source_files.objectItem();
+        try physical.stringField("path", file.path);
+        try physical.stringField("source", file.source);
+        try physical.intField("offset", file.offset);
+        try physical.intField("includedAt", file.included_at);
+        try physical.end();
+    }
+    try source_files.end();
     try writeModuleSyntax(allocator, &item, module.syntax);
     try item.end();
 }

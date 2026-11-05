@@ -176,12 +176,22 @@ pub const ModuleFact = struct {
     path: ?[]u8,
     source: []u8,
     line_index: utils.source.LineIndex,
+    source_offset: usize = 0,
+    source_files: []ast.SourceFile = &.{},
+
     imports: []ImportFact = &.{},
     implicit_import_ids: []core.SourceModuleId = &.{},
     function_scopes: []ScopeFact = &.{},
     page_scopes: []ScopeFact = &.{},
     symbols: []query_symbols.Symbol = &.{},
     folding_ranges: []query_folding.Range = &.{},
+    pub fn offset(self: ModuleFact, physical: usize) usize {
+        return self.source_offset + physical;
+    }
+
+    pub fn location(self: ModuleFact, span: ast.Span) core.SourceModule.Location {
+        return ast.SourceFile.locate(self.source_files, self.path orelse self.spec, self.source, span);
+    }
 };
 
 pub const ScopeFact = struct {
@@ -212,6 +222,7 @@ pub const TypeDefinition = struct {
     line: usize,
     column: usize,
     length: usize,
+    span: ?ast.Span = null,
 };
 
 pub const ValueBindingKind = enum {
@@ -446,18 +457,7 @@ pub const AnalysisSnapshot = struct {
         if (self.syntax_storage) |*storage| storage.deinit();
         if (self.type_storage) |*storage| storage.deinit();
         self.project.deinit(self.allocator);
-        for (self.modules) |module| {
-            module.line_index.deinit(self.allocator);
-            self.allocator.free(module.spec);
-            if (module.path) |path| self.allocator.free(path);
-            self.allocator.free(module.source);
-            deinitImports(self.allocator, module.imports);
-            self.allocator.free(module.implicit_import_ids);
-            deinitScopes(self.allocator, module.function_scopes);
-            deinitScopes(self.allocator, module.page_scopes);
-            query_symbols.deinit(self.allocator, module.symbols);
-            self.allocator.free(module.folding_ranges);
-        }
+        for (self.modules) |module| deinitModuleFact(self.allocator, module);
         self.allocator.free(self.modules);
         self.allocator.free(self.module_order);
         self.allocator.free(self.holes);
@@ -761,16 +761,18 @@ fn loadSnapshotInputs(
     var source = try readSnapshotSource(sources, entry_path, diagnostic_bag) orelse return null;
     defer allocator.free(source);
     try options.checkCanceled();
-    var parsed = try parseSnapshotSource(allocator, source, entry_path, options, diagnostic_bag) orelse return null;
+    var parsed = try parseSnapshotSource(allocator, sources, source, entry_path, options, diagnostic_bag) orelse return null;
     defer parsed.deinit(allocator);
     try syntax_storage.capture(entry_path, source, parsed.module);
+    for (parsed.module.source_files.items) |file| try syntax_storage.capture(file.path, file.source, parsed.module);
     try options.checkCanceled();
 
     var index = try loadSnapshotModules(allocator, sources, entry_path, source, &parsed, options, diagnostic_bag) orelse return null;
     defer index.deinit();
     try options.checkCanceled();
     for (index.module_graph.modules.items) |module| {
-        if (module.path) |path| try syntax_storage.capture(path, module.source, module.syntax);
+        if (module.path) |path| try syntax_storage.capture(path, module.original_source orelse module.source, module.syntax);
+        for (module.syntax.source_files.items) |file| try syntax_storage.capture(file.path, file.source, module.syntax);
     }
     var state = analysis_pipeline.buildDocumentStateWithOptions(allocator, entry_path, asset_base_dir, &source, &parsed.module, &index, .{
         .parse_holes = parsed.holes,
@@ -805,9 +807,13 @@ fn readSnapshotSource(sources: *const SourceSet, entry_path: []const u8, diagnos
     };
 }
 
-fn parseSnapshotSource(allocator: std.mem.Allocator, entry_source: []const u8, entry_path: []const u8, options: Options, diagnostic_bag: *diagnostics.DiagnosticBag) !?syntax.ParseResult {
+fn parseSnapshotSource(allocator: std.mem.Allocator, sources: *const SourceSet, entry_source: []const u8, entry_path: []const u8, options: Options, diagnostic_bag: *diagnostics.DiagnosticBag) !?syntax.ParseResult {
     var parse_failure: syntax.ParseFailure = .{};
-    return syntax.parseRecoveringWithOptions(allocator, entry_source, entry_path, .{ .failure = &parse_failure, .cancellation = options.cancellation }) catch |err| {
+    var include_diagnostics = module_loader.LoadDiagnostics.init(allocator);
+    defer include_diagnostics.deinit();
+    var includes = module_loader.IncludeLoader{ .io = sources.io, .overlay = &sources.overlay, .diagnostics = &include_diagnostics };
+    return syntax.parseRecoveringWithOptions(allocator, entry_source, entry_path, .{ .failure = &parse_failure, .cancellation = options.cancellation, .include_resolver = includes.resolver() }) catch |err| {
+        try addLoadDiagnostics(diagnostic_bag, &include_diagnostics);
         if (err == error.OutOfMemory or err == error.Canceled) return err;
         const diagnostic = parse_failure.diagnostic;
         var message_buf: [256]u8 = undefined;
@@ -844,7 +850,8 @@ fn loadSnapshotModules(allocator: std.mem.Allocator, sources: *const SourceSet, 
         if (err == error.DiagnosticsFailed) {
             if (load_diagnostics.items.items.len != 0) {
                 const span = try module_loader.importFailureSpan(allocator, sources.io, import_base_dir, &program, &sources.overlay, &load_diagnostics);
-                try diagnostic_bag.add(entry_path, entry_source, .@"error", "ImportFailed", "ImportFailed: imported module failed to load", span, null);
+                const location = ast.SourceFile.locate(program.source_files.items, entry_path, entry_source, span orelse .{ .start = 0, .end = 0 });
+                try diagnostic_bag.add(location.path, location.source, .@"error", "ImportFailed", "ImportFailed: imported module failed to load", if (span != null) location.span else null, null);
             } else {
                 try addBuildFailureDiagnostic(diagnostic_bag, entry_path, entry_source, err, null);
             }
@@ -852,19 +859,15 @@ fn loadSnapshotModules(allocator: std.mem.Allocator, sources: *const SourceSet, 
             if (try module_loader.findUnknownImportReport(allocator, sources.io, import_base_dir, program, &sources.overlay)) |found| {
                 var report = found;
                 defer report.deinit(allocator);
-                try diagnostic_bag.add(entry_path, entry_source, .@"error", "UnknownImport", report.message, .{
-                    .start = report.span.start,
-                    .end = report.span.end,
-                }, null);
+                const location = ast.SourceFile.locate(program.source_files.items, entry_path, entry_source, report.span);
+                try diagnostic_bag.add(location.path, location.source, .@"error", "UnknownImport", report.message, location.span, null);
             }
         } else {
             if (try module_loader.findImportReadFailureReport(allocator, sources.io, import_base_dir, program, &sources.overlay, err)) |found| {
                 var report = found;
                 defer report.deinit(allocator);
-                try diagnostic_bag.add(entry_path, entry_source, .@"error", "ImportReadFailed", report.message, .{
-                    .start = report.span.start,
-                    .end = report.span.end,
-                }, null);
+                const location = ast.SourceFile.locate(program.source_files.items, entry_path, entry_source, report.span);
+                try diagnostic_bag.add(location.path, location.source, .@"error", "ImportReadFailed", report.message, location.span, null);
             } else {
                 try addBuildFailureDiagnostic(diagnostic_bag, entry_path, entry_source, err, null);
             }
@@ -875,7 +878,8 @@ fn loadSnapshotModules(allocator: std.mem.Allocator, sources: *const SourceSet, 
     try addLoadDiagnostics(diagnostic_bag, &load_diagnostics);
     if (load_diagnostics.hasErrors()) {
         const span = try module_loader.importFailureSpan(allocator, sources.io, import_base_dir, &program, &sources.overlay, &load_diagnostics);
-        try diagnostic_bag.add(entry_path, entry_source, .@"error", "ImportFailed", "ImportFailed: imported module contains syntax errors", span, null);
+        const location = ast.SourceFile.locate(program.source_files.items, entry_path, entry_source, span orelse .{ .start = 0, .end = 0 });
+        try diagnostic_bag.add(location.path, location.source, .@"error", "ImportFailed", "ImportFailed: imported module contains syntax errors", if (span != null) location.span else null, null);
     }
     return index;
 }
@@ -963,6 +967,13 @@ fn collectModulePaths(allocator: std.mem.Allocator, state: *const core.DocumentS
         out.deinit(allocator);
     }
     for (state.modules.entries.items) |module| {
+        for (module.syntax.source_files.items) |file| {
+            if (seen.contains(file.path)) continue;
+            try seen.put(file.path, {});
+            const owned = try allocator.dupe(u8, file.path);
+            errdefer allocator.free(owned);
+            try out.append(allocator, owned);
+        }
         const module_path = module.path orelse continue;
         if (seen.contains(module_path)) continue;
         try seen.put(module_path, {});
@@ -1061,62 +1072,92 @@ fn cloneHoles(allocator: std.mem.Allocator, storage: *TypeStorage, tables: []con
     return out.toOwnedSlice(allocator);
 }
 
+fn deinitModuleFact(allocator: std.mem.Allocator, module: ModuleFact) void {
+    module.line_index.deinit(allocator);
+    allocator.free(module.spec);
+    if (module.path) |path| allocator.free(path);
+    allocator.free(module.source);
+    for (module.source_files) |*file| file.deinit(allocator);
+    allocator.free(module.source_files);
+    deinitImports(allocator, module.imports);
+    allocator.free(module.implicit_import_ids);
+    deinitScopes(allocator, module.function_scopes);
+    deinitScopes(allocator, module.page_scopes);
+    query_symbols.deinit(allocator, module.symbols);
+    allocator.free(module.folding_ranges);
+}
+
+fn cloneSourceFiles(allocator: std.mem.Allocator, files: []const ast.SourceFile) ![]ast.SourceFile {
+    var result = std.ArrayList(ast.SourceFile).empty;
+    errdefer {
+        for (result.items) |*file| file.deinit(allocator);
+        result.deinit(allocator);
+    }
+    try result.ensureTotalCapacity(allocator, files.len);
+    for (files) |file| result.appendAssumeCapacity(try file.clone(allocator));
+    return result.toOwnedSlice(allocator);
+}
+
 fn cloneModules(allocator: std.mem.Allocator, modules: []const core.SourceModule) ![]ModuleFact {
     var out = std.ArrayList(ModuleFact).empty;
     errdefer {
-        for (out.items) |module| {
-            module.line_index.deinit(allocator);
-            allocator.free(module.spec);
-            if (module.path) |path| allocator.free(path);
-            allocator.free(module.source);
-            deinitImports(allocator, module.imports);
-            allocator.free(module.implicit_import_ids);
-            deinitScopes(allocator, module.function_scopes);
-            deinitScopes(allocator, module.page_scopes);
-            query_symbols.deinit(allocator, module.symbols);
-            allocator.free(module.folding_ranges);
-        }
+        for (out.items) |module| deinitModuleFact(allocator, module);
         out.deinit(allocator);
     }
+    var count = modules.len;
+    for (modules) |module| count += module.syntax.source_files.items.len;
+    try out.ensureTotalCapacity(allocator, count);
     for (modules) |module| {
-        const spec = try allocator.dupe(u8, module.spec);
-        errdefer allocator.free(spec);
-        const path = if (module.path) |path| try allocator.dupe(u8, path) else null;
-        errdefer if (path) |owned_path| allocator.free(owned_path);
-        const source_copy = try allocator.dupe(u8, module.source);
-        errdefer allocator.free(source_copy);
-        const line_index = try module.line_index.clone(allocator, source_copy);
-        errdefer line_index.deinit(allocator);
-        const imports = try cloneImports(allocator, module);
-        errdefer deinitImports(allocator, imports);
-        const implicit_import_ids = try allocator.dupe(core.SourceModuleId, module.implicit_import_ids.items);
-        errdefer allocator.free(implicit_import_ids);
-        const function_scopes = try cloneFunctionScopes(allocator, module);
-        errdefer deinitScopes(allocator, function_scopes);
-        const page_scopes = try clonePageScopes(allocator, module);
-        errdefer deinitScopes(allocator, page_scopes);
-        const symbols = try query_symbols.collect(allocator, module.source, module.syntax);
-        errdefer query_symbols.deinit(allocator, symbols);
-        const folding_ranges = try query_folding.collect(allocator, module.line_index, module.syntax);
-        errdefer allocator.free(folding_ranges);
-
-        const fact = ModuleFact{
-            .id = module.id,
-            .kind = module.kind,
-            .spec = spec,
-            .path = path,
-            .source = source_copy,
-            .line_index = line_index,
-            .imports = imports,
-            .implicit_import_ids = implicit_import_ids,
-            .function_scopes = function_scopes,
-            .page_scopes = page_scopes,
-            .symbols = symbols,
-            .folding_ranges = folding_ranges,
-        };
-        try out.append(allocator, fact);
+        out.appendAssumeCapacity(try cloneModuleFact(allocator, module, module.path, module.original_source orelse module.source, 0));
+        for (module.syntax.source_files.items) |file| {
+            out.appendAssumeCapacity(try cloneModuleFact(allocator, module, file.path, file.source, file.offset));
+        }
     }
     return out.toOwnedSlice(allocator);
+}
+
+fn cloneModuleFact(allocator: std.mem.Allocator, module: core.SourceModule, physical_path: ?[]const u8, physical_source: []const u8, source_offset: usize) !ModuleFact {
+    const spec = try allocator.dupe(u8, module.spec);
+    errdefer allocator.free(spec);
+    const path = if (physical_path) |value| try allocator.dupe(u8, value) else null;
+    errdefer if (path) |owned_path| allocator.free(owned_path);
+    const source_copy = try allocator.dupe(u8, physical_source);
+    errdefer allocator.free(source_copy);
+    const line_index = try utils.source.LineIndex.init(allocator, source_copy);
+    errdefer line_index.deinit(allocator);
+    const imports = try cloneImports(allocator, module);
+    errdefer deinitImports(allocator, imports);
+    const implicit_import_ids = try allocator.dupe(core.SourceModuleId, module.implicit_import_ids.items);
+    errdefer allocator.free(implicit_import_ids);
+    const function_scopes = try cloneFunctionScopes(allocator, module);
+    errdefer deinitScopes(allocator, function_scopes);
+    const page_scopes = try clonePageScopes(allocator, module);
+    errdefer deinitScopes(allocator, page_scopes);
+    var parsed: ?syntax.ParseResult = if (module.syntax.source_files.items.len != 0) try syntax.parseRecoveringWithOptions(allocator, physical_source, physical_path orelse module.spec, .{ .expansion = .{ .expand_stages = false, .expand_includes = false } }) else null;
+    defer if (parsed) |*value| value.deinit(allocator);
+    const physical_syntax = if (parsed) |value| value.module else module.syntax;
+    const symbols = try query_symbols.collect(allocator, physical_source, physical_syntax);
+    errdefer query_symbols.deinit(allocator, symbols);
+    const folding_ranges = try query_folding.collect(allocator, line_index, physical_syntax);
+    errdefer allocator.free(folding_ranges);
+
+    const source_files = try cloneSourceFiles(allocator, if (source_offset == 0) module.syntax.source_files.items else &.{});
+    return ModuleFact{
+        .id = module.id,
+        .source_offset = source_offset,
+        .source_files = source_files,
+        .kind = module.kind,
+        .spec = spec,
+        .path = path,
+        .source = source_copy,
+        .line_index = line_index,
+        .imports = imports,
+        .implicit_import_ids = implicit_import_ids,
+        .function_scopes = function_scopes,
+        .page_scopes = page_scopes,
+        .symbols = symbols,
+        .folding_ranges = folding_ranges,
+    };
 }
 
 fn cloneFunctionScopes(allocator: std.mem.Allocator, module: core.SourceModule) ![]ScopeFact {
@@ -1224,6 +1265,7 @@ fn appendTypeDefinition(
     try out.append(allocator, .{
         .name = try allocator.dupe(u8, name),
         .kind = kind,
+        .span = span,
         .module_id = module.id,
         .line = source_location.line,
         .column = source_location.column,

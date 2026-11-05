@@ -83,8 +83,24 @@ const Printer = struct {
         const Item = struct {
             start: usize,
             kind: union(enum) { import: usize, type_decl: usize, record: usize, constant: usize, function: usize, document: usize, page: usize },
-            fn less(_: void, a: @This(), b: @This()) bool {
-                return a.start < b.start;
+            fn less(tree: ast.Module, a: @This(), b: @This()) bool {
+                var left = a.start;
+                var right = b.start;
+                while (true) {
+                    const left_file = sourceFile(tree, left);
+                    const right_file = sourceFile(tree, right);
+                    if (left_file == right_file) return left < right;
+                    if (left_file != null and (right_file == null or left_file.? > right_file.?)) {
+                        left = tree.source_files.items[left_file.?].included_at;
+                    } else {
+                        right = tree.source_files.items[right_file.?].included_at;
+                    }
+                }
+            }
+
+            fn sourceFile(tree: ast.Module, offset: usize) ?usize {
+                for (tree.source_files.items, 0..) |file, index| if (offset >= file.offset and offset <= file.offset + file.source.len) return index;
+                return null;
             }
         };
         var items = std.ArrayList(Item).empty;
@@ -97,7 +113,7 @@ const Printer = struct {
         for (value.document_blocks.items, 0..) |decl, i| try items.append(self.allocator, .{ .start = decl.span.start, .kind = .{ .document = i } });
         for (value.pages.items, 0..) |decl, i| try items.append(self.allocator, .{ .start = decl.span.start, .kind = .{ .page = i } });
         // Stable ordering retains paired functions and stage copies sharing a span.
-        std.sort.block(Item, items.items, {}, Item.less);
+        std.sort.block(Item, items.items, value, Item.less);
         for (items.items, 0..) |item, index| {
             if (index != 0) try self.text("\n");
             switch (item.kind) {

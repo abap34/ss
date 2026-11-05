@@ -66,25 +66,29 @@ pub fn validateOutputPathAgainstSources(
     kind: OutputKind,
 ) !void {
     for (state.modules.entries.items) |module| {
-        const source_path = module.path orelse continue;
-        if (!try project.pathsReferToSameFile(allocator, io, path, source_path)) continue;
-        const absolute_output = try project.absolutePath(allocator, path);
-        defer allocator.free(absolute_output);
-        const message = try std.fmt.allocPrint(
-            allocator,
-            "OutputPathConflictsWithSource: {s} '{s}' resolves to source module '{s}'; choose a different output path",
-            .{ outputKindLabel(kind), absolute_output, source_path },
-        );
-        defer allocator.free(message);
-        error_report.print(.{
-            .path = absolute_output,
-            .source = "",
-            .severity = .@"error",
-            .message = message,
-            .span = null,
-        });
-        return error.DiagnosticsFailed;
+        if (module.path) |source_path| try validateSourceOutputPath(io, allocator, path, source_path, kind);
+        for (module.syntax.source_files.items) |file| try validateSourceOutputPath(io, allocator, path, file.path, kind);
     }
+}
+
+fn validateSourceOutputPath(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source_path: []const u8, kind: OutputKind) !void {
+    if (!try project.pathsReferToSameFile(allocator, io, path, source_path)) return;
+    const absolute_output = try project.absolutePath(allocator, path);
+    defer allocator.free(absolute_output);
+    const message = try std.fmt.allocPrint(
+        allocator,
+        "OutputPathConflictsWithSource: {s} '{s}' resolves to source module '{s}'; choose a different output path",
+        .{ outputKindLabel(kind), absolute_output, source_path },
+    );
+    defer allocator.free(message);
+    error_report.print(.{
+        .path = absolute_output,
+        .source = "",
+        .severity = .@"error",
+        .message = message,
+        .span = null,
+    });
+    return error.DiagnosticsFailed;
 }
 
 pub fn validateDistinctOutputPaths(

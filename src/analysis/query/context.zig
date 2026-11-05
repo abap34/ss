@@ -13,6 +13,7 @@ pub const Context = struct {
     construction: ?ast.RecordExpr = null,
     parsed: source_query.ParsedSource = .{},
     offset: usize,
+    semantic_offset: usize,
     budget: ?types.QueryBudget = null,
 
     pub fn init(allocator: std.mem.Allocator, req: types.SourceRequest) !Context {
@@ -24,7 +25,9 @@ pub const Context = struct {
     }
 
     pub fn initFromSnapshot(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, budget: ?types.QueryBudget) !Context {
-        return initWithParsed(allocator, req, try source_query.ParsedSource.init(allocator, snapshot, req, budget), budget);
+        var result = try initWithParsed(allocator, req, try source_query.ParsedSource.init(allocator, snapshot, req, budget), budget);
+        if (snapshot.moduleForPath(req.path)) |fact| result.semantic_offset = fact.offset(req.offset);
+        return result;
     }
 
     fn initWithParsed(allocator: std.mem.Allocator, req: types.SourceRequest, source: source_query.ParsedSource, budget: ?types.QueryBudget) !Context {
@@ -39,6 +42,7 @@ pub const Context = struct {
             .construction = target.construction,
             .parsed = parsed,
             .offset = req.offset,
+            .semantic_offset = req.offset,
             .budget = budget,
         };
     }
