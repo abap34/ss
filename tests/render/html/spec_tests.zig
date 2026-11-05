@@ -602,6 +602,43 @@ test "HTML renderer packages PDF.js with explicit page geometry" {
     try testing.expect(std.mem.indexOf(u8, document, "pdfjs/") == null);
 }
 
+test "HTML renderer separates link targets from clickable rectangle styles" {
+    const output = ".test-tmp/render-html/links.html";
+    try prepareOutput(output);
+    defer deleteOutput(output);
+
+    const pages = try testing.allocator.alloc(render.Page, 1);
+    pages[0] = .{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
+    var ir = render.Ir{ .pages = pages };
+    defer ir.deinit(testing.allocator);
+    try addDocumentSemantics(&ir);
+    try pages[0].appendFillRect(testing.allocator, null, .{
+        .x = 0,
+        .y = 0,
+        .width = 320,
+        .height = 180,
+    }, .{ .r = 1, .g = 1, .b = 1 });
+    try pages[0].appendLink(testing.allocator, .uri, "https://example.com/?a=1&b=\"two\"", .{
+        .x = 12,
+        .y = 24,
+        .width = 100,
+        .height = 20,
+    });
+    try pages[0].appendDestination(testing.allocator, "target", .{ .x = 20, .y = 80 });
+    try pages[0].appendLink(testing.allocator, .destination, "target", .{
+        .x = 12,
+        .y = 48,
+        .width = 80,
+        .height = 20,
+    });
+
+    try html.write(testing.allocator, testing.io, &ir, output);
+    const document = try std.Io.Dir.cwd().readFileAlloc(testing.io, output, testing.allocator, .unlimited);
+    defer testing.allocator.free(document);
+    try testing.expect(std.mem.indexOf(u8, document, "<a class=\"ss-link\" href=\"https://example.com/?a=1&amp;b=&quot;two&quot;\" style=\"left:12.000000pt;top:24.000000pt;width:100.000000pt;height:20.000000pt;z-index:1;\" aria-label=\"Link\"></a>") != null);
+    try testing.expect(std.mem.indexOf(u8, document, "<a class=\"ss-link\" href=\"#target\" style=\"left:12.000000pt;top:48.000000pt;width:80.000000pt;height:20.000000pt;z-index:1;\" aria-label=\"Link\"></a>") != null);
+}
+
 test "HTML renderer preserves semantic headings zero-based ordered lists and links" {
     const output = ".test-tmp/render-html/semantics.html";
     try prepareOutput(output);

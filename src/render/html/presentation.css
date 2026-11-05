@@ -203,6 +203,13 @@
   overflow: hidden;
   pointer-events: none;
 }
+.presentation-content a[href] {
+  pointer-events: auto;
+}
+.presentation-stage--pen .presentation-content a[href],
+.presentation-stage--laser .presentation-content a[href] {
+  pointer-events: none;
+}
 .presentation-content .ss-page {
   position: absolute;
   top: 0;

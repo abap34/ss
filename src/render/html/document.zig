@@ -269,8 +269,9 @@ fn appendPage(
         try out.appendSlice(allocator, "<a class=\"ss-link\" href=\"");
         if (link.kind == .destination) try out.append(allocator, '#');
         try appendAttribute(allocator, out, link.target);
+        try out.appendSlice(allocator, "\" style=\"");
         try appendRectStyle(allocator, out, link.rect);
-        try out.appendSlice(allocator, " aria-label=\"Link\"></a>");
+        try appendFormat(allocator, out, "z-index:{d};\" aria-label=\"Link\"></a>", .{page.items.items.len});
     }
     try out.appendSlice(allocator, "</section>");
 }

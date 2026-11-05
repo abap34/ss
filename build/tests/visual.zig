@@ -38,6 +38,10 @@ pub fn register(ctx: project.Context, modules: project.ProjectModules, build_opt
     const navigation_step = b.step("test-render-html-navigation", "Inspect standalone HTML page navigation locally");
     navigation_step.dependOn(&navigation.step);
 
+    const links = steps.node(b, &checks.node.step, "tests/visual/render/links/spec.mjs", exe);
+    links.step.dependOn(&checks.visual_test_packages.step);
+    addFocusedTestStep(b, "test-render-html-links", "Check clickable links in HTML and presentation mode", &links.step);
+
     const pdf_runtime = steps.node(b, &checks.node.step, "tests/visual/render/pdf/runtime_spec.mjs", null);
     pdf_runtime.step.dependOn(&checks.visual_test_packages.step);
     const pdf_runtime_step = b.step("test-render-pdf-runtime", "Inspect PDF image loading and cancellation locally");
