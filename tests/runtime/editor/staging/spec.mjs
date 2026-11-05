@@ -38,7 +38,10 @@ end
     const hiddenCounts = snapshot.layout.pages.map((page) => snapshot.layout.objects.filter((object) => object.page_id === page.id && !object.drawn).length);
     assert(JSON.stringify(hiddenCounts) === "[1,0,0]", `incorrect preview visibility: ${JSON.stringify(hiddenCounts)}`);
     assert(JSON.stringify(ordered.map((target) => target.page_name)) === JSON.stringify(["Demo / first", "Demo / second", "Demo / third"]), "editing targets lost their stage labels");
-    assert((snapshot.display.html.match(/STAGED_DETAIL/g) ?? []).length === 2, "hidden text must not appear in preview HTML");
+    const previewPages = snapshot.display.html.match(/<section class="ss-page"[^>]*>[\s\S]*?<\/section>/g) ?? [];
+    assert(previewPages.length === 3, "preview HTML must contain one section per stage");
+    assert(JSON.stringify(previewPages.map((page) => page.includes("STAGED_DETAIL"))) === "[false,true,true]",
+      "preview HTML must contain staged text only on the visible stages");
     const details = snapshot.editing.filter((item) => item.binding === "detail");
     assert(details.length === 3, "flattened show bindings must remain editable on every stage");
     assert(details.every((item) => Math.abs(previewBounds(snapshot, item.node_id).width - 220) < 0.1),

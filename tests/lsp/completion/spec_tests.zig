@@ -1066,6 +1066,10 @@ test "analysis queries: retained syntax traversal stops before reaching a distan
     const SyntaxView = struct {
         tree: *const compiler.syntax.Module,
 
+        pub fn moduleForPath(_: @This(), _: []const u8) ?snapshot_api.ModuleFact {
+            return null;
+        }
+
         pub fn syntaxForSource(self: @This(), _: []const u8, _: []const u8) ?*const compiler.syntax.Module {
             return self.tree;
         }
