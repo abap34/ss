@@ -1545,6 +1545,22 @@
     }
   },
   {
+    "type": "include_declaration",
+    "named": true,
+    "fields": {
+      "path": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "string",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "lambda_expression",
     "named": true,
     "fields": {
@@ -2842,6 +2858,10 @@
           "named": true
         },
         {
+          "type": "include_declaration",
+          "named": true
+        },
+        {
           "type": "page_declaration",
           "named": true
         },
@@ -3716,6 +3736,10 @@
   {
     "type": "import_spec",
     "named": true
+  },
+  {
+    "type": "include",
+    "named": false
   },
   {
     "type": "let",

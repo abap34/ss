@@ -42,6 +42,7 @@ module.exports = grammar({
     ),
 
     _top_level: $ => choice(
+      $.include_declaration,
       $.const_declaration,
       $.function_declaration,
       $.type_declaration,
@@ -49,6 +50,8 @@ module.exports = grammar({
       $.document_block,
       $.page_declaration,
     ),
+
+    include_declaration: $ => seq("include", field("path", $.string), $._terminator),
 
     import_declaration: $ => seq(
       "import",

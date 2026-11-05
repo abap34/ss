@@ -1,5 +1,6 @@
 [
   "import"
+  "include"
   "as"
   "const"
   "document"

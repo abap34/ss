@@ -1,0 +1,22 @@
+import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+
+const exec = promisify(execFile);
+const grammar = fileURLToPath(new URL("../../../../editor/tree-sitter-ss/", import.meta.url));
+const scratch = path.resolve(grammar, "../../.test-tmp/editor/tree-sitter/include");
+await mkdir(scratch, { recursive: true });
+const directory = await mkdtemp(path.join(scratch, "run-"));
+const file = path.join(directory, "include.ss");
+await writeFile(file, 'const title: String = "Shared"\ninclude "parts/body.ss"\npage After\nend\n');
+const cli = path.join(grammar, "node_modules/.bin/tree-sitter");
+const options = { cwd: grammar, timeout: 30000, killSignal: "SIGKILL", maxBuffer: 1024 * 1024 };
+const parsed = await exec(cli, ["parse", "--rebuild", file], options);
+assert.doesNotMatch(parsed.stdout, /\((?:ERROR|MISSING)\b/);
+assert.match(parsed.stdout, /\(include_declaration\b/);
+const highlighted = await exec(cli, ["query", "queries/highlights.scm", file], options);
+assert.match(highlighted.stdout, /keyword, .*text: `include`/);
+console.log("Include grammar: insertion after declarations and keyword highlighting passed");

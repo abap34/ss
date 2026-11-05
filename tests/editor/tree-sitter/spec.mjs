@@ -14,6 +14,11 @@ await mkdir(output, { recursive: true });
 const directory = await mkdtemp(path.join(output, "run-"));
 const cases = [
   {
+    name: "include-member-and-parameter",
+    source: 'type Options { include: Bool }\nfn accept(include: Bool) -> Bool\n  return include\nend\n',
+    node: "function_declaration",
+  },
+  {
     name: "literal-line-feed-constant",
     source: 'const NEWLINE: String = "\n"\npage Lines\n  let content = "First" ++ NEWLINE ++ "Second"\nend\n',
   },
