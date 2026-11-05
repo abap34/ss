@@ -53,6 +53,8 @@ await withBrowser(output, async (browser, baseUrl) => {
         assert.equal(await link.getAttribute("href"), target);
         const bounds = await link.boundingBox();
         assert(bounds?.width > 0 && bounds.height > 0, "a link has no clickable rectangle");
+        await link.hover();
+        assert.equal(await link.evaluate((element) => getComputedStyle(element).cursor), "pointer");
         await link.click();
         await page.waitForURL(target);
         assert.equal(await page.title(), "Link destination");

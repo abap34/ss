@@ -44,7 +44,7 @@ pub const fragment_css =
     \\.ss-pdf [data-main-rotation="90"] { transform: rotate(90deg) translateY(-100%); }
     \\.ss-pdf [data-main-rotation="180"] { transform: rotate(180deg) translate(-100%, -100%); }
     \\.ss-pdf [data-main-rotation="270"] { transform: rotate(270deg) translateX(-100%); }
-    \\.ss-link { position: absolute; display: block; }
+    \\.ss-link { position: absolute; display: block; cursor: pointer; }
     \\.ss-destination { position: absolute; width: 0; height: 0; }
 ;
 
