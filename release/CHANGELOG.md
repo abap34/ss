@@ -4,10 +4,81 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-05
+
+### Added
+
+- Added immutable `type` values, explicit `enum` declarations, and generic
+  records and functions with type arguments and defaults.
+- Added type-directed `display` functions, `Placed<T>` references, and typed
+  placement queries with `select<T>`, child queries, and selection union,
+  intersection, and difference operators, plus predicate-based `filter`.
+- Added typed group composition from immutable values and existing placements,
+  with child and descendant queries.
+- Added qualified constant and function values such as `styles::defaults` and
+  `actions::format`, including references to bang-marked functions.
+- Added `stages` and `show` for incremental page reveals, preserving shared
+  layout and source edits across stage copies ([#23](https://github.com/abap34/ss/pull/23)). Contributed by @abap34.
+- Added `include "path.ss"` to insert another source file into the same module,
+  with nested relative paths, shared declarations, and original file locations
+  in diagnostics, definition navigation, and editor edits.
+- Added `ss expand` to inspect source after syntax expansion ([#23](https://github.com/abap34/ss/pull/23)). Contributed by @abap34.
+- Added the `ss: Restart WYSIWYG` command to restart the language server and
+  rebuild open previews.
+- Added optional Perfetto profiling for CLI and language-server operations,
+  including trace export and analysis tools ([#21](https://github.com/abap34/ss/pull/21)). Contributed by @abap34.
+
+### Changed
+
+- Replaced mutable object construction and presentation settings with typed
+  immutable values, explicit placement through `place!` and `fn/!`, and
+  structured theme, page, and document settings.
+- Unified native rendering around text, image, and path displays. Code, PDF,
+  icon, Math, and LaTeX values expand through these displays and standard-library
+  components, with typed inputs for page numbers, headings, and tables of contents.
+- Removed obsolete `object`, `extend`, representation, connector, and object
+  identity APIs. Reorganized standard-library modules around typed values
+  and explicit configuration.
+- Replaced legacy title and heading wrappers with `Text` and `Heading` values,
+  explicit styles, and ordinary immutable theme values.
+- Replaced `prev_page()` with `previous_page(page) -> Page?`, returning `none`
+  when the page has no predecessor.
+- Changed dump JSON to include complete generic types, typed placement inputs,
+  placement hierarchy, display state, and per-stage drawing visibility.
+- Removed triple-quoted strings; use `<<` / `>>` block strings. Added the
+  `NEWLINE` standard-library constant.
+- Improved dependency analysis, evaluation reuse, font and LaTeX caching,
+  nearby-page rendering, and PDF preview caching in the WYSIWYG editor.
+- Simplified WYSIWYG selection controls, object detail panels, and page
+  navigation; added editor syntax support for qualified values and `with` updates.
+- Updated bundled syntax-highlighting grammars ([#20](https://github.com/abap34/ss/pull/20)).
+- Required Zig 0.17 for builds and CI, and switched distributed CLI builds to
+  ReleaseFast.
+
 ### Fixed
 
+- Restored clickable links and pointer cursors in HTML and presentation mode,
+  including wrapped links and local file URLs.
+- Preserved text selection across shaped text runs in HTML and presentation
+  mode while keeping the rendered slide appearance unchanged.
+- Allocated composition widths before text wrapping and preserved frames
+  through nested display expansion, including equal columns, positioned
+  groups, and repeated child movement.
+- Preserved anonymous composition edits and repeated relative edits, and
+  restored language-server operation after process exits and canceled work.
 - Restored bounded fallback completion, hover, and definition results after a
   shared LSP query deadline expires.
+- Preserved heading and accessibility semantics through typed text displays,
+  and corrected cycle diagnostics for display expansion dependencies.
+- Corrected page-guide boundaries, keyword and compound-operator highlighting,
+  and source targets for typed placements.
+- Corrected published Zed grammar references and added verification of the
+  pinned grammar ([#22](https://github.com/abap34/ss/pull/22)). Contributed by @abap34.
+- Validated VS Code release packages before publication and allowed recovery
+  of Marketplace publication from an existing release tag.
+- Updated completion and staged-preview regression tests for included sources
+  and selectable HTML text, and made concurrent analysis and trace-processor
+  setup more reliable.
 
 ## [0.8.4] - 2026-10-16
 
