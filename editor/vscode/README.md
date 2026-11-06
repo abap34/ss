@@ -58,6 +58,12 @@ gutter_icon = true
 overview_ruler = true
 ```
 
+Page guides use the original four colors by default. In VS Code settings, set
+`ss.pageGuide.palette` to `lilac-ember`, `teal-peach`, `sage-rose`,
+or `meadow` to use one of the alternative palettes. Set it to `classic` to
+return to the original four colors. Changes apply to open slide editors without
+restarting the extension.
+
 The repository ships a JSON Schema for `ss.toml` at
 `src/project/ss-toml.schema.json`. TOML language servers such as Taplo can use it
 for completion and validation. In a deck repository, add a Taplo rule like:

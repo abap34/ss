@@ -172,6 +172,20 @@
             "verbose"
           ],
           "description": "Trace communication with the ss language server."
+        },
+        "ss.pageGuide.palette": {
+          "type": "string",
+          "default": "classic",
+          "enum": ["classic", "lilac-ember", "teal-peach", "sage-rose", "meadow"],
+          "enumDescriptions": [
+            "Original four-color page guides (blue, red, green, gold).",
+            "05: Soft lilac and pink.",
+            "06: Teal and peach.",
+            "07: Sage green and rose.",
+            "18: Meadow green, blue, peach, and lilac."
+          ],
+          "scope": "window",
+          "description": "Color palette for page guide decorations."
         }
       }
     }

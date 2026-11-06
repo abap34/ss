@@ -13,6 +13,7 @@ let searches = 0;
 const watches = new Set();
 let failingDirectory;
 const workspaceChanges = event();
+const configurationChanges = event();
 const Uri = {
   file: (fsPath) => ({ scheme: "file", fsPath: path.resolve(fsPath), toString() { return this.fsPath; } }),
   parse: (value) => ({ toString: () => value }),
@@ -38,8 +39,10 @@ class RelativePattern {
 const workspace = {
   workspaceFolders: [],
   onDidChangeWorkspaceFolders: workspaceChanges.subscribe,
+  onDidChangeConfiguration: configurationChanges.subscribe,
   onDidChangeTextDocument: documentChanges.subscribe,
   onDidSaveTextDocument: documentSaves.subscribe,
+  getConfiguration() { return { get: (_key, fallback) => fallback }; },
   createFileSystemWatcher(pattern) {
     if (pattern.baseUri.fsPath === failingDirectory) throw new Error("watch unavailable");
     const events = { change: event(), create: event(), delete: event() };
@@ -296,6 +299,7 @@ try {
   lifetime.dispose();
   assert.equal(watches.size, 0);
   assert.equal(workspaceChanges.listeners.size, 0);
+  assert.equal(configurationChanges.listeners.size, 0);
   for (const channel of [documentChanges, documentSaves, activeEditors, visibleEditors]) assert.equal(channel.listeners.size, 0);
   delete globalThis.__ssProjectConfigTest;
 }

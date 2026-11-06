@@ -8,8 +8,18 @@ const esbuild = require(`${root}editor/vscode/node_modules/esbuild`);
 const decorations = new Set();
 const paints = new Map();
 const subscribe = () => ({ dispose() {} });
+let selectedPalette;
+let onConfigurationChange;
 globalThis.__ssPageGuideTest = {
-  workspace: { onDidChangeTextDocument: subscribe, onDidSaveTextDocument: subscribe },
+  workspace: {
+    onDidChangeTextDocument: subscribe,
+    onDidSaveTextDocument: subscribe,
+    onDidChangeConfiguration(listener) { onConfigurationChange = listener; return subscribe(); },
+    getConfiguration(section) {
+      assert.equal(section, "ss");
+      return { get(key, fallback) { assert.equal(key, "pageGuide.palette"); return selectedPalette ?? fallback; } };
+    },
+  },
   window: {
     visibleTextEditors: [],
     onDidChangeActiveTextEditor: subscribe,
@@ -103,6 +113,42 @@ try {
   expectPages(first, expected);
   assert.deepEqual((await paint(many)).pages, first.pages, "unchanged pages changed colors");
 
+  // Each selected palette cycles through its own colors; classic remains the default.
+  const fourPages = ["page _", "end", "page _", "end", "page _", "end", "page _", "end"];
+  const classicColors = [
+    "rgba(86, 156, 214, 0.15)", "rgba(214, 90, 90, 0.14)",
+    "rgba(76, 168, 106, 0.14)", "rgba(214, 168, 74, 0.15)",
+  ];
+  assert.deepEqual((await paint(fourPages)).pages.map(({ color }) => color), classicColors);
+  for (const [name, colors] of [
+    ["lilac-ember", ["rgba(177, 166, 220, 0.15)", "rgba(233, 161, 169, 0.15)"]],
+    ["teal-peach", ["rgba(119, 198, 193, 0.15)", "rgba(238, 173, 145, 0.15)"]],
+    ["sage-rose", ["rgba(167, 199, 165, 0.15)", "rgba(229, 162, 172, 0.15)"]],
+    ["meadow", [
+      "rgba(167, 197, 160, 0.15)", "rgba(137, 185, 197, 0.15)",
+      "rgba(213, 175, 154, 0.15)", "rgba(193, 173, 208, 0.15)",
+    ]],
+  ]) {
+    selectedPalette = name;
+    const painted = await paint(fourPages);
+    assert.deepEqual(painted.pages.map(({ color }) => color),
+      Array.from({ length: 4 }, (_, index) => colors[index % colors.length]), `${name} colors differ`);
+    assert.equal(decorations.size, colors.length * 3, `${name} created the wrong number of decorations`);
+  }
+  selectedPalette = "not-a-palette";
+  assert.deepEqual((await paint(fourPages)).pages.map(({ color }) => color), classicColors);
+
+  selectedPalette = "teal-peach";
+  globalThis.__ssPageGuideTest.window.visibleTextEditors.push(editor);
+  paints.clear();
+  onConfigurationChange({ affectsConfiguration: (key) => key === "ss.pageGuide.palette" });
+  await new Promise(setImmediate);
+  assert.deepEqual(currentPageColors(), [
+    "rgba(119, 198, 193, 0.15)", "rgba(238, 173, 145, 0.15)",
+    "rgba(119, 198, 193, 0.15)", "rgba(238, 173, 145, 0.15)",
+  ]);
+  globalThis.__ssPageGuideTest.window.visibleTextEditors.length = 0;
+
   // Incomplete literals keep fake page headers inside their current page.
   expectPages(await paint(["page _", "text! <<", "page fake", "end"]), [[0, null, 3]]);
   expectPages(await paint(["page _", 'text! "', "page fake", "end"]), [[0, null, 3]]);
@@ -155,4 +201,10 @@ function expectPages(actual, expected) {
     assert.equal(bodyColors.size, 1, "a page body changed colors inside a nested block");
   });
   assert.deepEqual([...actual.colors.keys()].sort((a, b) => a - b), expectedLines, "page body boundaries differ");
+}
+
+function currentPageColors() {
+  return [...paints].filter(([decoration]) => decoration.options.borderWidth === "2px 0 0 0")
+    .flatMap(([decoration, ranges]) => ranges.map((range) => ({ line: range.start.line, color: decoration.options.backgroundColor })))
+    .sort((a, b) => a.line - b.line).map(({ color }) => color);
 }
