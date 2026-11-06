@@ -362,6 +362,7 @@ pub fn applyTargetConstraints(
         var used = false;
         var last_constraint: ?Constraint = null;
         try applyGroupTargetConstraintSlice(state, workspace, group_id, base, &temp, &used, &last_constraint, workspace.hard_constraints, false, options);
+        const hard_position = temp.start != null or temp.end != null or temp.center != null;
         try applyGroupTargetConstraintSlice(state, workspace, group_id, base, &temp, &used, &last_constraint, workspace.soft_constraints, true, options);
         if (!used) {
             // Suppressed fallback targets leave the group governed by its
@@ -409,7 +410,9 @@ pub fn applyTargetConstraints(
 
         const previous = workspace.states[group_index];
         const split_children = workspace.graph.hasSplitChildren(group_id);
-        const child_bounds = base;
+        // A hard frame can already have its target position while the returned
+        // display still needs to move. Defaults retain the derived group frame.
+        const child_bounds = if (hard_position) try computeChildGroupAxisState(state, workspace, group_id) else base;
         const delta = if (temp.start) |start| start - (child_bounds.start orelse start) else 0;
         // Split and frame-aligned children obtain their coordinates from parent
         // anchors. Subtree translation would apply their movement twice.
