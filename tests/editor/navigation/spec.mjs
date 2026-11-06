@@ -19,6 +19,23 @@ const state = {
 };
 const navigation = new EditorNavigation(state);
 
+state.revision = 1;
+state.snapshot.snapshot_id = "initial";
+navigation.requestPageReveal({ snapshotId: "initial", revision: 1, pageId: firstPage.id });
+assert.equal(navigation.takePageReveal(), firstPage.id);
+assert.equal(navigation.takePageReveal(), null, "navigation must be consumed once");
+navigation.requestPageReveal({ snapshotId: "next", revision: 2, pageId: secondPage.id });
+assert.equal(navigation.takePageReveal(), null, "navigation must wait for a deferred snapshot");
+state.revision = 2;
+state.snapshot.snapshot_id = "next";
+assert.equal(navigation.takePageReveal(), secondPage.id);
+navigation.requestPageReveal({ snapshotId: "initial", revision: 1, pageId: firstPage.id });
+assert.equal(navigation.takePageReveal(), null, "old navigation must not change a newer preview");
+navigation.requestPageReveal({ snapshotId: "wrong", revision: 2, pageId: firstPage.id });
+assert.equal(navigation.takePageReveal(), null, "navigation must match the snapshot identity");
+navigation.requestPageReveal({ snapshotId: "next", revision: 2, pageId: 1000 });
+assert.equal(navigation.takePageReveal(), null, "missing pages must not be revealed");
+
 const beforeRender = { scrollLeft: 7, scrollTop: 860 };
 navigation.rememberViewport(beforeRender);
 const selection = navigation.selectObject(selectedObject.id, secondPage.id);

@@ -3,6 +3,7 @@ import { LanguageClient, LanguageClientOptions, Middleware, ServerOptions, Trace
 import { PageGuideDecorations } from "./pageGuide";
 import { initializeProjectSettings, onDidChangeProjectSettings, projectSettings, ProjectSettingsResponse, setProjectSettingsProvider } from "./projectConfig";
 import { EditorController } from "./editor/controller";
+import { PageSourceTarget } from "./editor/protocol";
 import { ServerProcess } from "./serverProcess";
 import { withRequestDeadline } from "./editor/request";
 
@@ -31,6 +32,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(vscode.commands.registerCommand("ss.editor.restart", restart));
   context.subscriptions.push(vscode.commands.registerCommand("ss.editor.open", () =>
     editorController?.open(vscode.window.activeTextEditor?.document)
+  ));
+  context.subscriptions.push(vscode.commands.registerCommand("ss.editor.revealPage", (target: PageSourceTarget) =>
+    editorController?.revealPage(target)
   ));
   context.subscriptions.push(vscode.commands.registerCommand("ss.editor.build", () =>
     editorController?.build(vscode.window.activeTextEditor?.document)

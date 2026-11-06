@@ -145,6 +145,7 @@ window.addEventListener("message", (event) => {
   const message = event.data || {};
   if (message.type === "serverRestarting") {
     if (!Number.isSafeInteger(message.revision) || message.revision < state.buildRevision) return;
+    navigation.pendingPageReveal = null;
     workspace.resetInteractions();
     deferredSnapshot = null;
     translation.cancel();
@@ -205,6 +206,9 @@ window.addEventListener("message", (event) => {
     if (outcome?.status === "failed") showError(editFailureMessage(outcome.message));
   } else if (message.type === "startPresentation") {
     presentation.start();
+  } else if (message.type === "revealPage") {
+    navigation.requestPageReveal(message);
+    if (!workspace.isPointerOperationActive()) revealRequestedPage();
   }
 });
 
@@ -297,6 +301,7 @@ function acceptSnapshot(message) {
     reconcileSidebarSnapshot(app, state, previousSnapshot) &&
     workspace.reconcileRetainedSnapshot(previousSnapshot, translatedNodeIds);
   if (!retained) render();
+  revealRequestedPage();
   if (toastDuration != null) scheduleToastClear(toastDuration);
 }
 
@@ -313,6 +318,7 @@ function flushDeferredSnapshots() {
   deferredSnapshot = null;
   if (snapshot) acceptSnapshot(snapshot);
   if (renderDeferred) render();
+  revealRequestedPage();
   if (snapshot) reportSnapshotResources(snapshot.snapshot?.snapshot_id);
 }
 
@@ -553,6 +559,16 @@ function navigatePage(pageId) {
     app.querySelector(`.page-shell[data-page-id="${pageId}"]`)
       ?.scrollIntoView({ block: "center", inline: "nearest" });
   });
+}
+
+function revealRequestedPage() {
+  const pageId = navigation.takePageReveal();
+  if (pageId == null) return;
+  if (state.presentation.active) {
+    presentation.goToIndex(state.snapshot.layout.pages.findIndex((page) => page.id === pageId));
+  } else {
+    navigatePage(pageId);
+  }
 }
 
 function selectObject(objectId, pageId, rerender = true) {

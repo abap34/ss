@@ -17,6 +17,7 @@ import { exerciseRestart } from "./restart.mjs";
 import { exerciseThumbnails } from "./thumbnails.mjs";
 import { exercisePdfViewportLifecycle } from "./pdf-lifecycle.mjs";
 import { exercisePageWindow } from "./viewport.mjs";
+import { exercisePageNavigation } from "./navigation.mjs";
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const source = path.join(repository, "editor/vscode/media/editor");
@@ -69,6 +70,11 @@ await writeFile(path.join(output, "thumbnails.html"),
   '<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="main.css">');
 
 await withBrowser(output, async (browser, baseUrl) => {
+  await exercisePageNavigation(browser, baseUrl, editorSnapshot());
+  if (process.argv.includes("--navigation-only")) {
+    console.log("WYSIWYG page source navigation checks passed.");
+    return;
+  }
   await exercisePdfViewportLifecycle(browser, baseUrl, editorSnapshot());
   if (process.argv.includes("--pdf-lifecycle-only")) {
     console.log("WYSIWYG PDF viewport lifecycle checks passed.");

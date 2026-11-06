@@ -29,6 +29,7 @@
   "activationEvents": [
     "onLanguage:ss-slide",
     "onCommand:ss.editor.open",
+    "onCommand:ss.editor.revealPage",
     "onCommand:ss.editor.build",
     "onCommand:ss.editor.restart",
     "onCommand:ss.editor.presentation",
@@ -82,6 +83,10 @@
         "title": "ss: Open WYSIWYG Editor"
       },
       {
+        "command": "ss.editor.revealPage",
+        "title": "ss: Jump to Slide"
+      },
+      {
         "command": "ss.editor.build",
         "title": "ss: Build WYSIWYG Preview"
       },
@@ -109,6 +114,7 @@
         }
       ],
       "commandPalette": [
+        { "command": "ss.editor.revealPage", "when": "false" },
         { "command": "ss.editor.restart" },
         {
           "command": "ss.editor.open"

@@ -8,6 +8,7 @@ import {
   HostMessage,
   IconCatalogResult,
   LayoutEditResult,
+  PageSourceTarget,
   Rect,
   ShapeEditResult,
   WebviewMessage,
@@ -41,6 +42,7 @@ const immediateRefreshDelayMs = 0;
 const languageServerUnavailableMessage = "Language server is not running.";
 const sourceDocumentChangedMessage =
   "The document changed before the edit was applied.";
+const pageSourceChangedMessage = "The source changed. Use the updated Jump to slide action.";
 const commonSourceEditMessages = Object.freeze({
   unavailable: languageServerUnavailableMessage,
   stale: sourceDocumentChangedMessage,
@@ -82,6 +84,7 @@ interface Session {
   panel: vscode.WebviewPanel;
   ready: boolean;
   pendingPresentationStart: boolean;
+  pendingPageReveal?: { target: PageSourceTarget; document: vscode.TextDocument };
   sourceEditQueue: Promise<void>;
   sourceEditCancellation?: vscode.CancellationTokenSource;
   timer?: NodeJS.Timeout;
@@ -146,6 +149,71 @@ export class EditorController implements vscode.Disposable {
     await this.openDocument(document);
   }
 
+  async revealPage(target: PageSourceTarget): Promise<void> {
+    if (!target || typeof target.uri !== "string" ||
+        !Number.isSafeInteger(target.start) || target.start < 0) return;
+    const uri = vscode.Uri.parse(target.uri);
+    if (uri.scheme !== "file") return;
+    const source = await vscode.workspace.openTextDocument(uri);
+    if (!isSsDocument(source) || this.disposed) return;
+    if (target.version != null && source.version !== target.version) {
+      await vscode.window.showWarningMessage(pageSourceChangedMessage);
+      return;
+    }
+    const sourceVersion = source.version;
+    const sourcePath = normalizePath(uri.fsPath);
+    const candidates = [...this.sessions.values()].filter((session) =>
+      session.dependencyPaths.has(sourcePath)
+    );
+    let session: Session | undefined = candidates.find((candidate) => candidate.panel.active) ?? candidates[0];
+    if (!session) {
+      const entry = await projectEntryUri(uri);
+      const document = entry ? await vscode.workspace.openTextDocument(entry) : source;
+      session = await this.openDocument(document, true);
+    }
+    if (!session || session.disposed || this.disposed) return;
+    if (source.isClosed || source.version !== sourceVersion) {
+      await vscode.window.showWarningMessage(pageSourceChangedMessage);
+      return;
+    }
+    session.panel.reveal(session.panel.viewColumn, true);
+    session.pendingPageReveal = { target: { ...target, version: sourceVersion }, document: source };
+    if (session.ready) this.requestBuild(session);
+  }
+
+  private async revealPendingPage(
+    session: Session,
+    snapshot: EditorSnapshot,
+    versions: ReadonlyMap<string, number>,
+    revision: number,
+  ): Promise<void> {
+    const pending = session.pendingPageReveal;
+    if (!pending) return;
+    if (pending.document.isClosed || pending.document.version !== pending.target.version) {
+      session.pendingPageReveal = undefined;
+      await vscode.window.showWarningMessage(pageSourceChangedMessage);
+      return;
+    }
+    if (versions.get(pending.document.uri.toString()) !== pending.target.version) {
+      session.refreshPending = true;
+      return;
+    }
+    session.pendingPageReveal = undefined;
+    const sourcePath = normalizePath(pending.document.uri.fsPath);
+    const page = !snapshot.stale && snapshot.layout.pages.find((candidate) =>
+      candidate.location?.path &&
+      normalizePath(candidate.location.path) === sourcePath &&
+      candidate.location.start === pending.target.start
+    );
+    if (!page) {
+      await vscode.window.showWarningMessage("This page is not available in the current preview.");
+      return;
+    }
+    await this.post(session, {
+      type: "revealPage", snapshotId: snapshot.snapshot_id, revision, pageId: page.id,
+    });
+  }
+
   async presentation(document: vscode.TextDocument | undefined): Promise<void> {
     if (!document || !isSsDocument(document)) {
       await this.openProjectEntry(
@@ -201,7 +269,7 @@ export class EditorController implements vscode.Disposable {
     await onResolved(document);
   }
 
-  private async openDocument(document: vscode.TextDocument): Promise<Session | undefined> {
+  private async openDocument(document: vscode.TextDocument, preserveFocus = false): Promise<Session | undefined> {
     const settings = (await projectSettings(document.uri))?.wysiwyg;
     if (!settings || this.disposed) return undefined;
     if (!settings.enabled) {
@@ -220,7 +288,7 @@ export class EditorController implements vscode.Disposable {
     const panel = vscode.window.createWebviewPanel(
       "ss.wysiwyg",
       `ss · ${path.basename(document.uri.fsPath)}`,
-      { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false },
+      { viewColumn: vscode.ViewColumn.Beside, preserveFocus },
       {
         enableScripts: true,
         retainContextWhenHidden: true,
@@ -299,6 +367,7 @@ export class EditorController implements vscode.Disposable {
       session.refreshPending = false;
       session.pendingRefreshSinceMs = undefined;
       session.snapshotId = undefined;
+      session.pendingPageReveal = undefined;
       session.editorReconciliationPending = false;
       void this.post(session, { type: "serverRestarting", revision: session.serial });
     }
@@ -897,6 +966,7 @@ export class EditorController implements vscode.Disposable {
     const requestCancellation = new vscode.CancellationTokenSource();
     session.requestCancellation = requestCancellation;
     const documentVersion = session.document.version;
+    const versions = documentVersions();
     const buildStartedAt = performance.now();
     try {
       const snapshot = await withRequestDeadline(() => client.sendRequest<EditorSnapshot>(
@@ -932,6 +1002,7 @@ export class EditorController implements vscode.Disposable {
       ) return;
       session.editorReconciliationPending = false;
       session.snapshotId = snapshot.snapshot_id;
+      await this.revealPendingPage(session, snapshot, versions, serial);
       if (session.pendingPresentationStart) {
         session.pendingPresentationStart = false;
         void this.post(session, { type: "startPresentation" });
@@ -943,6 +1014,7 @@ export class EditorController implements vscode.Disposable {
         return;
       }
       this.output.appendLine(`[editor] snapshot failed: ${String(error)}`);
+      session.pendingPageReveal = undefined;
       await this.post(session, {
         type: "error",
         revision: serial,

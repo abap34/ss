@@ -79,9 +79,97 @@ await testComponentDeletionReachesTheWebview();
 await testIconCatalogAndInsertionReachTheWebview();
 await testResourceAcknowledgementsReachTheServer();
 await testPresentationDefersUntilFirstSnapshot();
+await testPageCodeLensOpensEntryAndRevealsFirstExpansion();
 await testRestartDiscardsUnacknowledgedRequestsAndQueuedEdits();
 await testRestartFailureIsVisibleAndRetryCanRebuild();
 setProjectSettingsProvider(undefined);
+
+async function testPageCodeLensOpensEntryAndRevealsFirstExpansion() {
+  const fixture = await mkdtemp(path.join(os.tmpdir(), "ss-editor-page-reveal-"));
+  try {
+    const slide = path.join(fixture, "slide.ss");
+    const included = path.join(fixture, "pages.ss");
+    await writeFile(path.join(fixture, "ss.toml"), '[project]\nentry = "slide.ss"\n');
+    await writeFile(slide, 'include "pages.ss"\n');
+    await writeFile(included, 'page Demo\nstages s { first second }\nend\n');
+    mock.reset();
+    configureSettings(slide, true);
+    const uri = mock.Uri.file(included);
+    const document = { uri, languageId: "ss-slide", version: 7 };
+    mock.workspace.textDocuments.push(document);
+    let release;
+    let stale = false;
+    const client = {
+      async sendRequest(method) {
+        assert.equal(method, "ss/editorSnapshot");
+        await new Promise((resolve) => { release = resolve; });
+        return {
+          ...editorSnapshot("page-reveal"),
+          stale,
+          source_paths: [slide, included],
+          layout: { pages: [
+            { id: 90, location: { path: slide, start: 0 } },
+            { id: 40, location: { path: included, start: 0 } },
+            { id: 12, location: { path: included, start: 0 } },
+          ] },
+        };
+      },
+      sendNotification() {},
+    };
+    const controller = new EditorController(
+      { extensionUri: mock.Uri.file(fixture) },
+      { appendLine() {} }, () => client, async () => {},
+    );
+    try {
+      const target = { uri: uri.toString(), start: 0, version: 7 };
+      await controller.revealPage(target);
+      const session = controller.sessions.values().next().value;
+      assert.equal(session.document.uri.fsPath, slide, "an included source must open its project entry");
+      assert.equal(mock.panels.length, 1);
+      assert.equal(mock.panels[0].showOptions.preserveFocus, true);
+      assert(!session.panel.messages.some((message) => message.type === "revealPage"));
+      await controller.handleMessage(session, { type: "ready" });
+      await waitFor(() => release);
+      assert(!session.panel.messages.some((message) => message.type === "revealPage"), "ready is earlier than the first snapshot");
+      release();
+      await waitFor(() => !session.requestRunning && session.snapshotId);
+      const revealed = session.panel.messages.find((message) => message.type === "revealPage");
+      assert.deepEqual(revealed, {
+        type: "revealPage", snapshotId: "page-reveal", revision: session.serial, pageId: 40,
+      }, "the first expanded page must win in document order");
+      assert(session.panel.messages.findIndex((message) => message.type === "snapshot") <
+        session.panel.messages.indexOf(revealed), "navigation must follow the snapshot");
+
+      document.version = 8;
+      session.panel.messages.length = 0;
+      await controller.revealPage(target);
+      assert(mock.warnings.includes("The source changed. Use the updated Jump to slide action."));
+      assert(!session.pendingPageReveal, "an obsolete lens must not queue a jump");
+
+      release = undefined;
+      await controller.revealPage({ ...target, version: 8 });
+      await waitFor(() => release);
+      document.version = 9;
+      release();
+      await waitFor(() => !session.requestRunning);
+      assert(!session.panel.messages.some((message) => message.type === "revealPage"), "editing during a build must cancel navigation");
+
+      stale = true;
+      release = undefined;
+      await controller.revealPage({ ...target, version: 9 });
+      await waitFor(() => release);
+      release();
+      await waitFor(() => !session.requestRunning);
+      assert(!session.panel.messages.some((message) => message.type === "revealPage"), "a retained failed preview must not be navigated");
+      assert(mock.warnings.includes("This page is not available in the current preview."));
+      assert.equal(mock.panels.length, 1, "repeated jumps must reuse the existing preview");
+    } finally {
+      controller.dispose();
+    }
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+}
 
 async function testOpenResolvesConfiguredEntryWithoutSsDocument() {
   const fixture = await mkdtemp(path.join(os.tmpdir(), "ss-editor-open-entry-"));
@@ -1193,6 +1281,8 @@ function vscodeMock() {
     applyEdit: async () => true,
     async openTextDocument(uri) {
       openedDocuments.push(uri.fsPath);
+      const existing = this.textDocuments.find((document) => document.uri.toString() === uri.toString());
+      if (existing) return existing;
       const document = {
         uri,
         languageId: path.extname(uri.fsPath) === ".ss" ? "ss-slide" : "plaintext",
@@ -1217,10 +1307,11 @@ function vscodeMock() {
       warnings.push(message);
       return undefined;
     },
-    createWebviewPanel(_viewType, title) {
+    createWebviewPanel(_viewType, title, showOptions) {
       let disposeListener = null;
       const panel = {
         title,
+        showOptions,
         active: true,
         messages: [],
         webview: {

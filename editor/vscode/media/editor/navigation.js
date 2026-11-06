@@ -2,6 +2,21 @@ export class EditorNavigation {
   constructor(state) {
     this.state = state;
     this.viewportPosition = null;
+    this.pendingPageReveal = null;
+  }
+
+  requestPageReveal(message) {
+    if (!Number.isSafeInteger(message.revision) || message.revision < this.state.revision) return;
+    this.pendingPageReveal = message;
+  }
+
+  takePageReveal() {
+    const target = this.pendingPageReveal;
+    if (!target || !this.state.snapshot || target.revision > this.state.revision) return null;
+    this.pendingPageReveal = null;
+    return target.snapshotId === this.state.snapshot.snapshot_id && this.hasPage(target.pageId)
+      ? target.pageId
+      : null;
   }
 
   reconcile(snapshot) {

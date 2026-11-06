@@ -89,6 +89,12 @@ export interface SourceLocation {
   end: number;
 }
 
+export interface PageSourceTarget {
+  uri: string;
+  start: number;
+  version: number | null;
+}
+
 export type DisplaySnapshot = FullDisplaySnapshot | TranslationDisplayPatch;
 
 export interface FullDisplaySnapshot {
@@ -269,6 +275,7 @@ export type BuildStatus =
 
 export type HostMessage =
   | { type: "serverRestarting"; revision: number }
+  | { type: "revealPage"; snapshotId: string; revision: number; pageId: number }
   | {
     type: "snapshot";
     revision: number;

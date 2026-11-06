@@ -1064,6 +1064,7 @@ pub const DocumentState = struct {
         path: []const u8,
         span: ast.Span,
     ) !void {
+        const origin = try self.copyOrigin(self.sourceOrigin(module_id, span));
         try self.source_map.pages.append(self.allocator, .{
             .page_id = page_id,
             .module_id = module_id,
@@ -1071,6 +1072,7 @@ pub const DocumentState = struct {
             .span_start = span.start,
             .span_end = span.end,
         });
+        if (self.getNode(page_id)) |page| page.origin = origin;
     }
 
     pub fn labelDiagnostics(self: *DocumentState, start: usize, label: []const u8) !void {
