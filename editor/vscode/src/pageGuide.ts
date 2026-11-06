@@ -28,41 +28,67 @@ type PaletteEntry = {
   boundaryBackground: string;
 };
 
+type PagePaletteName = "classic" | "lilac-ember" | "teal-peach" | "sage-rose" | "meadow";
+
 type ScanState = {
   inChevronBlock: boolean;
   inDoubleString: boolean;
 };
 
-const pagePalette: PaletteEntry[] = [
-  {
-    icon: "#569CD6",
-    ruler: "rgba(86, 156, 214, 0.80)",
-    background: "rgba(86, 156, 214, 0.075)",
-    boundary: "rgba(86, 156, 214, 0.90)",
-    boundaryBackground: "rgba(86, 156, 214, 0.15)",
-  },
-  {
-    icon: "#D65A5A",
-    ruler: "rgba(214, 90, 90, 0.78)",
-    background: "rgba(214, 90, 90, 0.07)",
-    boundary: "rgba(214, 90, 90, 0.88)",
-    boundaryBackground: "rgba(214, 90, 90, 0.14)",
-  },
-  {
-    icon: "#4CA86A",
-    ruler: "rgba(76, 168, 106, 0.78)",
-    background: "rgba(76, 168, 106, 0.07)",
-    boundary: "rgba(76, 168, 106, 0.88)",
-    boundaryBackground: "rgba(76, 168, 106, 0.14)",
-  },
-  {
-    icon: "#D6A84A",
-    ruler: "rgba(214, 168, 74, 0.80)",
-    background: "rgba(214, 168, 74, 0.075)",
-    boundary: "rgba(214, 168, 74, 0.90)",
-    boundaryBackground: "rgba(214, 168, 74, 0.15)",
-  },
-];
+const pagePalettes: Record<PagePaletteName, PaletteEntry[]> = {
+  classic: [
+    {
+      icon: "#569CD6",
+      ruler: "rgba(86, 156, 214, 0.80)",
+      background: "rgba(86, 156, 214, 0.075)",
+      boundary: "rgba(86, 156, 214, 0.90)",
+      boundaryBackground: "rgba(86, 156, 214, 0.15)",
+    },
+    {
+      icon: "#D65A5A",
+      ruler: "rgba(214, 90, 90, 0.78)",
+      background: "rgba(214, 90, 90, 0.07)",
+      boundary: "rgba(214, 90, 90, 0.88)",
+      boundaryBackground: "rgba(214, 90, 90, 0.14)",
+    },
+    {
+      icon: "#4CA86A",
+      ruler: "rgba(76, 168, 106, 0.78)",
+      background: "rgba(76, 168, 106, 0.07)",
+      boundary: "rgba(76, 168, 106, 0.88)",
+      boundaryBackground: "rgba(76, 168, 106, 0.14)",
+    },
+    {
+      icon: "#D6A84A",
+      ruler: "rgba(214, 168, 74, 0.80)",
+      background: "rgba(214, 168, 74, 0.075)",
+      boundary: "rgba(214, 168, 74, 0.90)",
+      boundaryBackground: "rgba(214, 168, 74, 0.15)",
+    },
+  ],
+  "lilac-ember": [softPaletteEntry("#B1A6DC"), softPaletteEntry("#E9A1A9")],
+  "teal-peach": [softPaletteEntry("#77C6C1"), softPaletteEntry("#EEAD91")],
+  "sage-rose": [softPaletteEntry("#A7C7A5"), softPaletteEntry("#E5A2AC")],
+  meadow: [
+    softPaletteEntry("#A7C5A0"), softPaletteEntry("#89B9C5"),
+    softPaletteEntry("#D5AF9A"), softPaletteEntry("#C1ADD0"),
+  ],
+};
+
+function softPaletteEntry(icon: string): PaletteEntry {
+  const rgb = [1, 3, 5].map((start) => Number.parseInt(icon.slice(start, start + 2), 16)).join(", ");
+  return {
+    icon,
+    ruler: `rgba(${rgb}, 0.82)`,
+    background: `rgba(${rgb}, 0.09)`,
+    boundary: `rgba(${rgb}, 0.92)`,
+    boundaryBackground: `rgba(${rgb}, 0.15)`,
+  };
+}
+
+function isPagePaletteName(value: unknown): value is PagePaletteName {
+  return typeof value === "string" && Object.prototype.hasOwnProperty.call(pagePalettes, value);
+}
 
 export class PageGuideDecorations implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
@@ -80,6 +106,9 @@ export class PageGuideDecorations implements vscode.Disposable {
       vscode.window.onDidChangeActiveTextEditor((editor) => this.refreshEditor(editor)),
       vscode.window.onDidChangeVisibleTextEditors(() => this.refreshVisibleEditors()),
       onDidChangeProjectSettings(() => this.refreshVisibleEditors()),
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (event.affectsConfiguration("ss.pageGuide.palette")) this.refreshVisibleEditors();
+      }),
     );
 
     this.refreshVisibleEditors();
@@ -94,14 +123,14 @@ export class PageGuideDecorations implements vscode.Disposable {
     this.disposables.length = 0;
   }
 
-  private rebuildDecorations(settings: PageGuideSettings): void {
-    const signature = JSON.stringify(settings);
+  private rebuildDecorations(settings: PageGuideSettings, palette: PaletteEntry[], paletteName: PagePaletteName): void {
+    const signature = JSON.stringify({ settings, paletteName });
     if (signature === this.decorationSignature) {
       return;
     }
     this.decorationSignature = signature;
     this.disposeDecorations();
-    this.bodyDecorations = pagePalette.map((entry) => {
+    this.bodyDecorations = palette.map((entry) => {
       const options: vscode.DecorationRenderOptions = {
         isWholeLine: true,
         rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
@@ -119,7 +148,7 @@ export class PageGuideDecorations implements vscode.Disposable {
       }
       return vscode.window.createTextEditorDecorationType(options);
     });
-    this.startDecorations = pagePalette.map((entry) => vscode.window.createTextEditorDecorationType({
+    this.startDecorations = palette.map((entry) => vscode.window.createTextEditorDecorationType({
       isWholeLine: true,
       backgroundColor: settings.boundaryBackground ? entry.boundaryBackground : undefined,
       borderColor: settings.boundary ? entry.boundary : undefined,
@@ -127,7 +156,7 @@ export class PageGuideDecorations implements vscode.Disposable {
       borderWidth: settings.boundary ? "2px 0 0 0" : undefined,
       rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
     }));
-    this.endDecorations = pagePalette.map((entry) => vscode.window.createTextEditorDecorationType({
+    this.endDecorations = palette.map((entry) => vscode.window.createTextEditorDecorationType({
       isWholeLine: true,
       backgroundColor: settings.boundaryBackground ? entry.boundaryBackground : undefined,
       borderColor: settings.boundary ? entry.boundary : undefined,
@@ -174,14 +203,17 @@ export class PageGuideDecorations implements vscode.Disposable {
       this.clearEditor(editor);
       return;
     }
-    this.rebuildDecorations(settings);
+    const configuredPalette = vscode.workspace.getConfiguration("ss").get<string>("pageGuide.palette", "classic");
+    const paletteName = isPagePaletteName(configuredPalette) ? configuredPalette : "classic";
+    const palette = pagePalettes[paletteName];
+    this.rebuildDecorations(settings, palette, paletteName);
     if (!settings.enabled) {
       this.clearEditor(editor);
       return;
     }
 
-    const buckets = computePageDecorationBuckets(editor.document, pagePalette.length);
-    for (let index = 0; index < pagePalette.length; index += 1) {
+    const buckets = computePageDecorationBuckets(editor.document, palette.length);
+    for (let index = 0; index < palette.length; index += 1) {
       editor.setDecorations(this.bodyDecorations[index], buckets.bodies[index]);
       editor.setDecorations(this.startDecorations[index], buckets.starts[index]);
       editor.setDecorations(this.endDecorations[index], buckets.ends[index]);
