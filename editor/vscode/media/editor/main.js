@@ -116,6 +116,7 @@ const actions = {
   render,
   revealSource,
   selectObject,
+  clearSelection,
   selectPage,
   navigatePage,
   translation,
@@ -568,6 +569,15 @@ function revealRequestedPage() {
     presentation.goToIndex(state.snapshot.layout.pages.findIndex((page) => page.id === pageId));
   } else {
     navigatePage(pageId);
+  }
+}
+
+function clearSelection() {
+  if (state.selectedObjectId == null) return;
+  state.selectedObjectId = null;
+  if (!reconcileSidebarSnapshot(app, state, state.snapshot) ||
+      !workspace.syncSelection(state.currentPageId)) {
+    render();
   }
 }
 

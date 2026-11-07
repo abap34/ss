@@ -75,6 +75,14 @@ export class WorkspaceView {
     }, { passive: true });
     viewport.addEventListener("wheel", this.handlePinch, { passive: false });
     viewport.addEventListener("pointerdown", this.beginPan, true);
+    viewport.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || this.state.pointerMode !== "select" ||
+          this.state.shapeTool !== "select" || this.isPointerOperationActive() ||
+          !event.target.matches(
+            ".viewport, .pages-stage, .page-shell, .page-surface, .interaction-layer",
+          )) return;
+      this.actions.clearSelection();
+    });
     viewport.addEventListener("click", (event) => {
       if (this.state.pointerMode !== "pan") return;
       event.preventDefault();
