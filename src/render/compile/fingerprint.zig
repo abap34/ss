@@ -278,6 +278,7 @@ fn hashOptionalTextPaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.Te
         hashFontFace(hasher, text.code_font);
         hashF32(hasher, text.font_size);
         hashF32(hasher, text.line_height);
+        hashHorizontalAlign(hasher, text.horizontal_align);
         hashColor(hasher, text.color);
         hashColor(hasher, text.link_color);
         hashOptionalColor(hasher, text.markdown_bold_color);
@@ -332,6 +333,7 @@ fn hashOptionalHeadingPaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy
         hashFontFace(hasher, heading.code_font);
         hashF32(hasher, heading.font_size);
         hashF32(hasher, heading.line_height);
+        hashHorizontalAlign(hasher, heading.horizontal_align);
         hashColor(hasher, heading.color);
         hashColor(hasher, heading.link_color);
         hashOptionalColor(hasher, heading.markdown_bold_color);

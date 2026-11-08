@@ -308,6 +308,7 @@ fn writeInlineTextPaint(object: *json.Object, spec: anytype) !void {
     try writeFontFace(object, "code_font", spec.code_font);
     try object.floatField("font_size", spec.font_size, "{d:.1}");
     try object.floatField("line_height", spec.line_height, "{d:.1}");
+    try object.enumTagField("align", spec.horizontal_align);
     try writeColor(object, "color", spec.color);
     try writeColor(object, "link_color", spec.link_color);
     try writeOptionalColor(object, "markdown_bold_color", spec.markdown_bold_color);

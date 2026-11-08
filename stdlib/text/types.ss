@@ -92,6 +92,7 @@ type TextStyle {
   code_font: FontFace = FontFace { family = "monospace" }
   size: Number = 20
   line_height: Number? = none
+  align: Align = Align.left
   color: Color = c"0.08,0.08,0.08"
   link_color: Color = c"0.1,0.25,0.75"
   emoji_spacing: Number = 0.12

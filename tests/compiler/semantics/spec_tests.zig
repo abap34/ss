@@ -1020,6 +1020,28 @@ test "compiler semantics: dynamically built text survives lowering" {
     , "hello world");
 }
 
+test "compiler semantics: text alignment belongs to typed input styles" {
+    try buildSource(
+        \\page ok
+        \\  text!("Centered", default_text_style with { text.align = Align.center })
+        \\  text!("Right", default_text_style with { text.align = Align.right })
+        \\  text!("# Heading", default_text_style with {
+        \\    headings.h1 = MarkdownHeadingStyle { text = TextStyle { align = Align.center } }
+        \\  })
+        \\end
+    );
+    try expectDiagnostic(
+        \\page bad
+        \\  text!("Text", default_text_style with { text.align = "center" })
+        \\end
+    , "case.ss:bytes:", "TypeMismatch: expected Align, got String");
+    try expectDiagnostic(
+        \\page bad
+        \\  text!("Text", default_text_style with { text.align = Align.sideways })
+        \\end
+    , "case.ss:bytes:", "UnknownEnumCase: enum 'Align' has no case 'sideways'");
+}
+
 test "compiler semantics: math alignment belongs to typed input styles" {
     try buildSource(
         \\import std:themes/default as *

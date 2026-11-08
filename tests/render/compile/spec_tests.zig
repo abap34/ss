@@ -2137,56 +2137,163 @@ test "font diagnostics identify prior failures by cause code" {
 test "paragraph measurement and emission retain the same final-width glyph layout" {
     const examples = [_][]const u8{
         "one **two** three four five six",
+        "before ==highlighted== ![star](fa:star) after",
         "a\u{a0}b e\u{301} \u{304b}\u{3099} \u{3042}\u{3044}\u{3001}\u{3046}",
         "left \u{633}\u{644}[\u{627}\u{645}](https://example.com) right",
         "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467} joined",
     };
     for (examples) |content| {
-        var state = try initEmptyDocumentState();
-        defer state.deinit();
-        var state_layout = LayoutFixture.init(&state);
-        defer state_layout.deinit();
-        const page_id = try state.addPage("paragraph");
-        const object_id = try document_testing.native(&state, page_id, "paragraph", .text, content);
-        const object = state.getNode(object_id).?;
-        (try state_layout.frame(object_id)).* = .{ .x = 0, .y = 0, .width = 100, .height = 720 };
-        var prepared = try core.prepared.prepare(testing.allocator, &state);
-        defer prepared.deinit(testing.allocator);
-        const paint = &prepared.pages[0].objects[0].render.text.?;
-        paint.font.family = "DejaVu Sans";
-        paint.bold_font.family = "DejaVu Sans";
-        paint.font_size = 24;
-        paint.line_height = 36;
-        paint.wrap = true;
-        var cache = render_text.Cache.init(testing.allocator, testing.io);
-        defer cache.deinit();
-        const environment = try render_compile.acquireFontEnvironment();
-        var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .cache_dir = test_cache_dir, .font_environment = environment, .text_cache = &cache });
-        defer scope.deinit();
-        scope.measurements.persistent.clearRetainingCapacity();
-        const provider = scope.provider();
-        const measured = (try provider.measure(provider.context, try state_layout.work(), object, 100, .width_constrained)).?;
-        try testing.expect(cache.paragraphs.entries.count() > 0);
-        const retained_count = cache.paragraphs.entries.count();
-        var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .cache_dir = test_cache_dir, .jobs = 1, .text_cache = &cache, .font_environment = environment });
-        defer ir.deinit(testing.allocator);
-        try ir.validate();
-        try testing.expectEqual(retained_count, cache.paragraphs.entries.count());
-        var ink: ?render.Rect = null;
-        var baseline: ?f64 = null;
-        for (ir.pages[0].items.items) |item| {
-            if (item.header().node_id != object_id) continue;
-            const bounds = item.header().ink_bounds;
-            if (bounds.width > 0 and bounds.height > 0) ink = if (ink) |previous| previous.unioned(bounds) else bounds;
-            if (item == .text and baseline == null) baseline = textBaseline(&item.text);
+        for ([_]core.render_policy.HorizontalAlign{ .left, .center, .right }) |alignment| {
+            var state = try initEmptyDocumentState();
+            defer state.deinit();
+            var state_layout = LayoutFixture.init(&state);
+            defer state_layout.deinit();
+            const page_id = try state.addPage("paragraph");
+            const object_id = try document_testing.native(&state, page_id, "paragraph", .text, content);
+            const object = state.getNode(object_id).?;
+            (try state_layout.frame(object_id)).* = .{ .x = 0, .y = 0, .width = 100, .height = 720 };
+            var prepared = try core.prepared.prepare(testing.allocator, &state);
+            defer prepared.deinit(testing.allocator);
+            const paint = &prepared.pages[0].objects[0].render.text.?;
+            paint.horizontal_align = alignment;
+            paint.font.family = "DejaVu Sans";
+            paint.bold_font.family = "DejaVu Sans";
+            paint.font_size = 24;
+            paint.line_height = 36;
+            paint.wrap = true;
+            var cache = render_text.Cache.init(testing.allocator, testing.io);
+            defer cache.deinit();
+            const environment = try render_compile.acquireFontEnvironment();
+            var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .cache_dir = test_cache_dir, .font_environment = environment, .text_cache = &cache });
+            defer scope.deinit();
+            scope.measurements.persistent.clearRetainingCapacity();
+            const provider = scope.provider();
+            const measured = (try provider.measure(provider.context, try state_layout.work(), object, 100, .width_constrained)).?;
+            try testing.expect(cache.paragraphs.entries.count() > 0);
+            const retained_count = cache.paragraphs.entries.count();
+            var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .cache_dir = test_cache_dir, .jobs = 1, .text_cache = &cache, .font_environment = environment });
+            defer ir.deinit(testing.allocator);
+            try ir.validate();
+            try testing.expectEqual(retained_count, cache.paragraphs.entries.count());
+            var ink: ?render.Rect = null;
+            var baseline: ?f64 = null;
+            for (ir.pages[0].items.items) |item| {
+                if (item.header().node_id != object_id) continue;
+                const bounds = item.header().ink_bounds;
+                if (bounds.width > 0 and bounds.height > 0) ink = if (ink) |previous| previous.unioned(bounds) else bounds;
+                if (item == .text and baseline == null) baseline = textBaseline(&item.text);
+            }
+            const expected = measured.ink_bounds.?;
+            try testing.expectApproxEqAbs(@as(f64, expected.x), ink.?.x, 0.001);
+            try testing.expectApproxEqAbs(@as(f64, expected.y), ink.?.y, 0.001);
+            try testing.expectApproxEqAbs(@as(f64, expected.width), ink.?.width, 0.001);
+            try testing.expectApproxEqAbs(@as(f64, expected.height), ink.?.height, 0.001);
+            try testing.expectApproxEqAbs(@as(f64, measured.first_baseline.?), baseline.?, 0.001);
         }
-        const expected = measured.ink_bounds.?;
-        try testing.expectApproxEqAbs(@as(f64, expected.x), ink.?.x, 0.001);
-        try testing.expectApproxEqAbs(@as(f64, expected.y), ink.?.y, 0.001);
-        try testing.expectApproxEqAbs(@as(f64, expected.width), ink.?.width, 0.001);
-        try testing.expectApproxEqAbs(@as(f64, expected.height), ink.?.height, 0.001);
-        try testing.expectApproxEqAbs(@as(f64, measured.first_baseline.?), baseline.?, 0.001);
     }
+}
+
+test "text alignment positions each wrapped line inside its padded frame" {
+    for ([_][]const u8{ "plain", "inline", "block" }) |parse_mode| {
+        for ([_]core.LayoutMeasurementMode{ .natural, .width_constrained }) |mode| {
+            var state = try initEmptyDocumentState();
+            defer state.deinit();
+            var state_layout = LayoutFixture.init(&state);
+            defer state_layout.deinit();
+            const page_id = try state.addPage("text-alignment");
+            const content = if (std.mem.eql(u8, parse_mode, "block")) "Several words wrap inside this narrow text frame.\n\nShort" else "Several words wrap inside this narrow text frame.\nShort";
+            const object_id = try document_testing.native(&state, page_id, "aligned", .text, content);
+            try document_testing.setPath(&state, object_id, "text", &.{"parse"}, .{ .enum_case = .{ .enum_name = "TextParseMode", .case_name = parse_mode } });
+            try document_testing.setPath(&state, object_id, "chrome", &.{"pad_x"}, .{ .number = 12 });
+            try document_testing.setPath(&state, object_id, "chrome", &.{"pad_y"}, .{ .number = 8 });
+            (try state_layout.frame(object_id)).* = .{ .x = 0, .y = 0, .width = 180, .height = 720 };
+            var prepared = try core.prepared.prepare(testing.allocator, &state);
+            defer prepared.deinit(testing.allocator);
+            const paint = &prepared.pages[0].objects[0].render.text.?;
+            try testing.expectEqual(core.render_policy.HorizontalAlign.left, paint.horizontal_align);
+            paint.font.family = "DejaVu Sans";
+            paint.font_size = 24;
+            paint.line_height = 36;
+            paint.wrap = mode != .natural;
+            var page_cache = render_compile.PageCache.init(testing.allocator, testing.io);
+            defer page_cache.deinit();
+            const environment = try render_compile.acquireFontEnvironment();
+            var previous_key: ?u64 = null;
+            for ([_]core.render_policy.HorizontalAlign{ .left, .center, .right }) |alignment| {
+                paint.horizontal_align = alignment;
+                var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .cache_dir = test_cache_dir, .font_environment = environment });
+                defer scope.deinit();
+                const provider = scope.provider();
+                const measured = (try provider.measure(provider.context, try state_layout.work(), state.getNode(object_id).?, 180, mode)).?;
+                if (previous_key) |key| try testing.expect(key != measured.cache_key);
+                previous_key = measured.cache_key;
+                const frame_width = if (mode == .natural) measured.width else 180;
+                (try state_layout.frame(object_id)).width = frame_width;
+                var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .cache_dir = test_cache_dir, .jobs = 1, .font_environment = environment, .page_cache = &page_cache });
+                defer ir.deinit(testing.allocator);
+                try ir.validate();
+                var ink: ?render.Rect = null;
+                var line_count: usize = 0;
+                for (ir.pages[0].items.items) |item| {
+                    if (item.header().node_id != object_id) continue;
+                    const bounds = item.header().ink_bounds;
+                    if (bounds.width > 0 and bounds.height > 0) ink = if (ink) |previous| previous.unioned(bounds) else bounds;
+                    if (item != .text) continue;
+                    line_count += 1;
+                    const slack = @max(@as(f64, frame_width - 24) - item.text.width, 0);
+                    const expected_x = 12 + switch (alignment) {
+                        .left => @as(f64, 0),
+                        .center => slack / 2,
+                        .right => slack,
+                    };
+                    try testing.expectApproxEqAbs(expected_x, item.text.x, 0.001);
+                }
+                try testing.expect(line_count >= if (mode == .natural) @as(usize, 2) else 3);
+                const expected = measured.ink_bounds.?;
+                try testing.expectApproxEqAbs(@as(f64, expected.x), ink.?.x, 0.001);
+                try testing.expectApproxEqAbs(@as(f64, expected.y), ink.?.y, 0.001);
+                try testing.expectApproxEqAbs(@as(f64, expected.width), ink.?.width, 0.001);
+                try testing.expectApproxEqAbs(@as(f64, expected.height), ink.?.height, 0.001);
+            }
+            try testing.expectEqual(@as(usize, 3), page_cache.entries.count());
+        }
+    }
+}
+
+test "markdown headings resolve independent text alignment and invalidate cached pages" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
+    const page_id = try state.addPage("heading-alignment");
+    const object_id = try document_testing.native(&state, page_id, "heading", .text, "# Heading\n\nParagraph");
+    try document_testing.setPath(&state, object_id, "text", &.{"parse"}, .{ .enum_case = .{ .enum_name = "TextParseMode", .case_name = "block" } });
+    try document_testing.setPath(&state, object_id, "text", &.{"align"}, .{ .enum_case = .{ .enum_name = "Align", .case_name = "right" } });
+    try document_testing.setPath(&state, object_id, "markdown_headings", &.{ "h1", "text", "size" }, .{ .number = 24 });
+    try document_testing.setPath(&state, object_id, "markdown_headings", &.{ "h1", "text", "align" }, .{ .enum_case = .{ .enum_name = "Align", .case_name = "center" } });
+    (try state_layout.frame(object_id)).* = .{ .x = 0, .y = 0, .width = 400, .height = 720 };
+    var prepared = try core.prepared.prepare(testing.allocator, &state);
+    defer prepared.deinit(testing.allocator);
+    const paint = &prepared.pages[0].objects[0].render.text.?;
+    try testing.expectEqual(core.render_policy.HorizontalAlign.right, paint.horizontal_align);
+    try testing.expectEqual(core.render_policy.HorizontalAlign.center, paint.forMarkdownHeading(1).horizontal_align);
+    var cache = render_compile.PageCache.init(testing.allocator, testing.io);
+    defer cache.deinit();
+    for ([_]core.render_policy.HorizontalAlign{ .center, .right }) |heading_align| {
+        paint.markdown_headings[0].?.horizontal_align = heading_align;
+        var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .cache_dir = test_cache_dir, .jobs = 1, .page_cache = &cache });
+        defer ir.deinit(testing.allocator);
+        var text_count: usize = 0;
+        for (ir.pages[0].items.items) |item| {
+            if (item != .text) continue;
+            const slack = 400 - item.text.width;
+            const expected_x = if (text_count == 0 and heading_align == .center) slack / 2 else slack;
+            try testing.expectApproxEqAbs(expected_x, item.text.x, 0.001);
+            text_count += 1;
+        }
+        try testing.expectEqual(@as(usize, 2), text_count);
+    }
+    try testing.expectEqual(@as(usize, 2), cache.entries.count());
 }
 
 test "paint boundaries preserve contextual glyphs and visual positions" {

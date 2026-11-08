@@ -144,6 +144,7 @@ pub const MarkdownHeadingPaint = struct {
     code_font: FontFace,
     font_size: f32,
     line_height: f32,
+    horizontal_align: HorizontalAlign = .left,
     color: Color,
     link_color: Color,
     markdown_bold_color: ?Color,
@@ -166,6 +167,7 @@ pub const TextPaint = struct {
     code_font: FontFace,
     font_size: f32,
     line_height: f32,
+    horizontal_align: HorizontalAlign = .left,
     color: Color,
     link_color: Color,
     markdown_bold_color: ?Color,
@@ -219,6 +221,7 @@ pub const TextPaint = struct {
         result.code_font = heading.code_font;
         result.font_size = heading.font_size;
         result.line_height = heading.line_height;
+        result.horizontal_align = heading.horizontal_align;
         result.color = heading.color;
         result.link_color = heading.link_color;
         result.markdown_bold_color = heading.markdown_bold_color;
@@ -390,6 +393,7 @@ fn resolveText(state: anytype, node: *const Node, kind: RenderKind) ?TextPaint {
         .code_font = fonts.code,
         .font_size = text_metrics.font_size,
         .line_height = text_metrics.line_height,
+        .horizontal_align = parseRecordHorizontalAlign(state, node, "text", &.{"align"}) orelse .left,
         .color = parseRecordColorProperty(state, node, "text", &.{"color"}) orelse FALLBACK_TEXT_COLOR,
         .link_color = parseRecordColorProperty(state, node, "text", &.{"link_color"}) orelse FALLBACK_LINK_COLOR,
         .markdown_bold_color = parseRecordColorProperty(state, node, "text", &.{ "markdown", "bold_color" }),
@@ -452,6 +456,7 @@ fn resolveMarkdownHeading(node: *const Node, field_name: []const u8) ?MarkdownHe
         .code_font = fonts.code,
         .font_size = font_size,
         .line_height = positiveMarkdownHeadingTextFloatProperty(node, field_name, &.{"line_height"}) orelse font_size * 1.45,
+        .horizontal_align = parseMarkdownHeadingHorizontalAlign(node, field_name, &.{"align"}) orelse .left,
         .color = parseMarkdownHeadingTextColor(node, field_name, &.{"color"}) orelse FALLBACK_TEXT_COLOR,
         .link_color = parseMarkdownHeadingTextColor(node, field_name, &.{"link_color"}) orelse FALLBACK_LINK_COLOR,
         .markdown_bold_color = parseMarkdownHeadingTextColor(node, field_name, &.{ "markdown", "bold_color" }),
@@ -461,7 +466,7 @@ fn resolveMarkdownHeading(node: *const Node, field_name: []const u8) ?MarkdownHe
         .inline_math_spacing = nonNegativeMarkdownHeadingTextFloatProperty(node, field_name, &.{ "math", "inline_spacing" }) orelse 0,
         .display_math_gap = nonNegativeMarkdownHeadingTextFloatProperty(node, field_name, &.{ "math", "display_gap" }) orelse 0.2,
         .display_math_fit = parseEnum(MathFit, fields.readExplicit(node, "markdown_headings", &.{ field_name, "text", "math", "display_fit" }, .text)) orelse .none,
-        .math_align = parseMarkdownHeadingHorizontalAlign(node, field_name) orelse .center,
+        .math_align = parseMarkdownHeadingHorizontalAlign(node, field_name, &.{ "math", "align" }) orelse .center,
         .emoji_spacing = nonNegativeMarkdownHeadingTextFloatProperty(node, field_name, &.{"emoji_spacing"}) orelse 0,
     };
 }
@@ -846,8 +851,8 @@ fn parseMarkdownHeadingTextColor(node: *const Node, heading_field: []const u8, c
     return parseColor(value);
 }
 
-fn parseMarkdownHeadingHorizontalAlign(node: *const Node, heading_field: []const u8) ?HorizontalAlign {
-    const value = fields.readExplicit(node, "markdown_headings", &.{ heading_field, "text", "math", "align" }, .text) orelse return null;
+fn parseMarkdownHeadingHorizontalAlign(node: *const Node, heading_field: []const u8, comptime path: []const []const u8) ?HorizontalAlign {
+    const value = fields.readExplicit(node, "markdown_headings", &([_][]const u8{ heading_field, "text" } ++ path[0..].*), .text) orelse return null;
     return parseHorizontalAlign(value);
 }
 

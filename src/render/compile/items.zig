@@ -2072,7 +2072,8 @@ fn measureTextIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width:
             var measurement = MeasurementScope.init(ctx);
             try measurement.begin();
             defer measurement.deinit();
-            const frame = Frame{ .x = 0, .y = 0, .width = if (width > 0) width else 1, .height = Defaults.height };
+            const logical_width = @max(try markdownBlocksConstrainedLogicalWidth(ctx, doc.blocks.items, text, 0, width), 1);
+            const frame = Frame{ .x = 0, .y = 0, .width = if (mode == .natural) logical_width else @max(width, 1), .height = Defaults.height };
             const first_text = markdownFirstBlockText(text, doc.blocks.items);
             const bottom_bl = try drawMarkdownBlocksAtTop(ctx, frame, top_bl, doc.blocks.items, text, 0);
             var measured = try measurementFromInk(
@@ -2081,7 +2082,7 @@ fn measureTextIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width:
                 @max(top_bl - bottom_bl, first_text.line_height),
                 try lineBaselineFromTop(ctx, first_text.font, first_text.font_size, first_text.line_height),
             );
-            measured.width = @max(try markdownBlocksConstrainedLogicalWidth(ctx, doc.blocks.items, text, 0, width), 1);
+            measured.width = logical_width;
             break :blk measured;
         },
         .plain, .@"inline" => blk: {
@@ -2097,10 +2098,11 @@ fn measureTextIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width:
             };
             var inline_text = text;
             if (mode == .natural) inline_text.wrap = false;
+            const logical_width = @max(try inlineLinesConstrainedLogicalWidth(ctx, layout.lines.items, inline_text, width, inline_text.wrap), 1);
             var measurement = MeasurementScope.init(ctx);
             try measurement.begin();
             defer measurement.deinit();
-            const next_bl = try drawInlineLines(ctx, 0, baseline_bl, @max(width, 1), layout.lines.items, inline_text, inline_text.wrap);
+            const next_bl = try drawInlineLines(ctx, 0, baseline_bl, if (mode == .natural) logical_width else @max(width, 1), layout.lines.items, inline_text, inline_text.wrap);
             const baseline_from_top = try lineBaselineFromTop(ctx, inline_text.font, inline_text.font_size, inline_text.line_height);
             var measured = try measurementFromInk(
                 &measurement,
@@ -2108,7 +2110,7 @@ fn measureTextIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width:
                 @max(baseline_bl - next_bl, inline_text.line_height),
                 baseline_from_top,
             );
-            measured.width = @max(try inlineLinesConstrainedLogicalWidth(ctx, layout.lines.items, inline_text, width, inline_text.wrap), 1);
+            measured.width = logical_width;
             break :blk measured;
         },
     };
@@ -3005,7 +3007,7 @@ fn drawInlineLines(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, line
         defer spans.deinit(ctx.allocator);
         defer deinitInlineSpans(ctx.allocator, spans.items);
         try inline_layout.prepareLineSpans(inlineContext(ctx), line, text, &spans);
-        cursor_bl = try drawParagraph(ctx, x, cursor_bl, width, spans.items, paragraphPaint(text), wrap);
+        cursor_bl = try drawParagraphAligned(ctx, x, cursor_bl, width, spans.items, paragraphPaint(text), wrap, text.horizontal_align);
     }
     if (lines.len == 0) cursor_bl -= text.line_height;
     return cursor_bl;
@@ -3144,7 +3146,7 @@ fn paragraphLogicalWidth(ctx: *DrawContext, spans: []const InlineSpan, paint: Pa
 }
 
 fn drawLineWithDisplayMath(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, line: Line, text: TextPaint, wrap: bool) !f32 {
-    return drawLineWithDisplayMathWithAlign(ctx, x, baseline_bl, width, line, text, wrap, .left, text.math_align);
+    return drawLineWithDisplayMathWithAlign(ctx, x, baseline_bl, width, line, text, wrap, text.horizontal_align, text.math_align);
 }
 
 fn drawLineWithDisplayMathWithAlign(
@@ -3216,10 +3218,6 @@ fn drawDisplayMathBlockAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, widt
     };
     try placeLatexPdf(ctx, draw_frame, asset.path, asset.page_index);
     return block_bottom - baseline_from_top;
-}
-
-fn drawParagraph(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, spans: []InlineSpan, paint: ParagraphPaint, wrap: bool) !f32 {
-    return (try drawParagraphWithAlignment(ctx, x, baseline_bl, width, spans, paint, wrap, .left)).next_baseline;
 }
 
 fn drawParagraphAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, spans: []InlineSpan, paint: ParagraphPaint, wrap: bool, horizontal_align: HorizontalAlign) !f32 {
