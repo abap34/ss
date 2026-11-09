@@ -4,6 +4,32 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-11-09
+
+### Added
+
+- Added left, center, and right alignment within text components through
+  `TextStyle.align`.
+- Added speaker notes through `PageSettings.notes`, preserved in HTML output
+  and editor snapshots.
+- Added a presenter view with synchronized presentation windows, current and
+  next slide previews, speaker notes, elapsed and current time, timer controls,
+  and light and dark themes. The VS Code preview supports an inline presenter view.
+- Added page CodeLens actions to jump from source declarations to their slides
+  in the VS Code preview.
+- Added selectable VS Code page guide color palettes through
+  `ss.pageGuide.palette` ([#24](https://github.com/abap34/ss/pull/24)). Contributed by @noya2ruler.
+
+### Fixed
+
+- Fixed PDF display positions inside placed compositions.
+- Fixed clearing WYSIWYG object selection when clicking empty slide or workspace
+  space.
+
+### Thanks
+
+Thanks to @noya2ruler for contributing to this release!
+
 ## [0.9.0] - 2026-11-05
 
 ### Added
