@@ -250,6 +250,13 @@ async function waitForPdfPreview(page, selector = ".speaker-preview .ss-pdf") {
 }
 
 async function assertPreviewRasterMatchesProjection(projection, presenter) {
+  const projectionViewport = projection.viewportSize();
+  const presenterViewport = presenter.viewportSize();
+  // Compare at a larger matching size so cached lower-resolution previews must
+  // render again rather than comparing a resampled raster with a direct render.
+  await projection.setViewportSize({ width: projectionViewport.width * 2, height: projectionViewport.height * 2 });
+  await presenter.setViewportSize({ width: presenterViewport.width * 2, height: presenterViewport.height * 2 });
+  await projection.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const frame = presenter.locator(".speaker-current .speaker-preview");
   const width = await projection.locator(".presentation-content .ss-page").evaluate((page) => page.getBoundingClientRect().width);
   await frame.evaluate((element, width) => {
@@ -274,6 +281,8 @@ async function assertPreviewRasterMatchesProjection(projection, presenter) {
       element.style.removeProperty("width");
       element.closest(".speaker-view").scrollTo(0, 0);
     });
+    await projection.setViewportSize(projectionViewport);
+    await presenter.setViewportSize(presenterViewport);
   }
 }
 
