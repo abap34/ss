@@ -58,6 +58,7 @@ await esbuild.build({
   platform: "browser",
   plugins: [{ name: "ss-dom", setup(build) {
     build.onResolve({ filter: /^@ss\/dom$/ }, () => ({ path: path.join(repository, "src/render/html/dom.js") }));
+    build.onResolve({ filter: /^@ss\/speaker$/ }, () => ({ path: path.join(repository, "src/render/html/speaker.js") }));
   } }],
 });
 for (const name of ["text.js", "dom.js", "presentation.css"]) {
