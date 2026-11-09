@@ -10,12 +10,13 @@ import {
   applyDisplayTranslationPatch,
   composeDisplayTranslations,
   disposePages,
+  previewPage,
   renderPage,
 } from "./document.js";
 import { defaultIconDraft, IconController } from "./icon-insertion.js";
 import { EditorNavigation } from "./navigation.js";
 import { ObjectLockController } from "./object-locks.js";
-import { disposePdfItems, disposePdfRuntime } from "./pdf.js";
+import { disposePdfItems, disposePdfRuntime, refreshPdfItems, renderPdfItems } from "./pdf.js";
 import { PresentationController, createPresentationState } from "../../out/render/presentation.js";
 import {
   reconcileSidebarSnapshot,
@@ -110,6 +111,12 @@ const presentation = new PresentationController(state.presentation, {
   render,
   getPages: () => state.snapshot?.layout.pages || [],
   renderPage: (id) => renderPage(state.snapshot, id),
+  previewPage: (id) => previewPage(state.snapshot, id),
+  renderPreview: (root) => ({
+    ready: renderPdfItems(root, { textLayer: false, annotationLayer: false }),
+    refresh: () => refreshPdfItems(root),
+    dispose: () => disposePdfItems(root),
+  }),
 });
 const actions = {
   restart: () => vscode.postMessage({ type: "restart" }),

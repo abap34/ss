@@ -161,6 +161,13 @@ pub fn write(
         try out.writeAll(pdf.worker_module);
         try out.writeAll("\",{resolveSource:resourceStore.resolve,onError:reportError});");
     }
+    if (runtime.pdf) |pdf| {
+        try out.writeAll("pager.setPreviewHandler(root=>{const controller=pdfRuntime.mountPdfPages(root,()=>import(\"");
+        try out.writeAll(pdf.pdfjs_module);
+        try out.writeAll("\"),\"");
+        try out.writeAll(pdf.worker_module);
+        try out.writeAll("\",{resolveSource:resourceStore.resolve,cacheRaster:true,textLayer:false,annotationLayer:false});return {ready:controller.ready,refresh:()=>controller.refreshVisible(),dispose:()=>controller.destroy()}});");
+    }
     try out.writeAll("const prepareForPrint=()=>pager.prepareForPrint(()=>pdfController?.renderAll());const finishPrint=()=>{pager.finishPrint();pdfController?.restoreAfterPrint()};const nativePrint=window.print.bind(window);const printDocument=async()=>{await prepareForPrint();try{nativePrint()}finally{finishPrint()}};const requestPrint=()=>{void printDocument().catch(reportError)};pager.setPrintHandler(requestPrint);window.print=requestPrint;globalThis.ssDocument=Object.freeze({prepareForPrint,finishPrint,print:printDocument});pager.refresh();document.documentElement.dataset.ssReady=\"true\"}catch(error){void pdfRuntime?.disposePdfRuntime();resourceStore?.dispose();if(!document.documentElement.dataset.ssError)reportError(error);throw error}</script></body></html>\n");
 }
 

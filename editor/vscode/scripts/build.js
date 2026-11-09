@@ -63,6 +63,7 @@ const presentationOptions = {
   target: "chrome120",
   plugins: [{ name: "ss-dom", setup(build) {
     build.onResolve({ filter: /^@ss\/dom$/ }, () => ({ path: path.join(repoRoot, "src/render/html/dom.js") }));
+    build.onResolve({ filter: /^@ss\/speaker$/ }, () => ({ path: path.join(repoRoot, "src/render/html/speaker.js") }));
   } }],
 };
 

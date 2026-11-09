@@ -1,4 +1,5 @@
 import { element, setAttributes, svgElement, svgPoint } from "@ss/dom";
+import { SpeakerView, acceptsInput } from "@ss/speaker";
 
 const minimumScale = 1;
 const maximumScale = 6;
@@ -16,7 +17,7 @@ const controlsIntroFadeMs = 800;
 const controlsIntroDurationMs = controlsIntroHoldMs + controlsIntroFadeMs;
 
 export function createPresentationState() {
-  return { active: false, pageId: null, tool: "none", penColor: defaultPenColor, strokes: new Map() };
+  return { active: false, pageId: null, speaker: false, tool: "none", penColor: defaultPenColor, strokes: new Map() };
 }
 
 // The host supplies page geometry and DOM content; no editor or transport state
@@ -25,6 +26,20 @@ export class PresentationController {
   constructor(state, actions) {
     this.state = state;
     this.actions = actions;
+    this.speaker = new SpeakerView({
+      getPages: () => this.actions.getPages(),
+      getPageId: () => this.state.pageId,
+      previewPage: (id) => this.actions.previewPage?.(id),
+      renderPreview: (root) => this.actions.renderPreview?.(root),
+      previous: () => this.previous(),
+      next: () => this.next(),
+      handleKeydown: (event) => this.handleKeydown(event),
+      showSlides: () => {
+        this.state.speaker = false;
+        this.actions.render();
+      },
+      allowWindow: actions.allowSpeakerWindow === true,
+    });
     this.scale = minimumScale;
     this.pan = { x: 0, y: 0 };
     this.fit = null;
@@ -60,6 +75,7 @@ export class PresentationController {
   }
 
   dispose() {
+    this.speaker.close();
     window.removeEventListener("keydown", this.handleKeydown);
     window.removeEventListener("resize", this.handleResize);
     window.removeEventListener("focus", this.syncControlsIntroduction);
@@ -77,6 +93,8 @@ export class PresentationController {
       ? pageId
       : pages[0].id;
     this.state.active = true;
+    this.state.speaker = false;
+    this.speaker.start();
     this.state.pageId = resolved;
     this.state.tool = "none";
     this.controlsVisible = false;
@@ -90,6 +108,8 @@ export class PresentationController {
   exit() {
     if (!this.state.active) return;
     this.state.active = false;
+    this.state.speaker = false;
+    this.speaker.close();
     this.state.tool = "none";
     this.state.strokes = new Map();
     this.stopControlsIntroduction();
@@ -219,6 +239,11 @@ export class PresentationController {
     this.laserDot = laser;
     const controls = this.controls(page, pages);
     overlay.append(stage, laser, controls);
+    if (this.state.speaker) {
+      overlay.classList.add("presentation-speaker-active");
+      overlay.append(this.speaker.render());
+    } else this.speaker.releaseEmbedded();
+    this.speaker.refresh();
     // The control bar's visibility (hover/focus) and focused button live on
     // this JS-tracked state rather than pure CSS :hover/:focus-within,
     // because every navigation click rebuilds the whole overlay: without
@@ -286,6 +311,9 @@ export class PresentationController {
     const exit = this.controlButton("exit", "Exit presentation", () => this.exit());
 
     bar.append(previous, next, laser, pen, clear, counter);
+    const speaker = this.controlButton("speaker", "Presenter view (S)", () => this.toggleSpeaker());
+    speaker.setAttribute("aria-pressed", String(this.state.speaker));
+    bar.append(speaker);
     if (this.actions.toggleFullscreen) {
       bar.append(this.controlButton("fullscreen", "Toggle full screen", this.actions.toggleFullscreen));
     }
@@ -389,8 +417,14 @@ export class PresentationController {
     this.applyTransform();
   }
 
+  toggleSpeaker() {
+    this.state.speaker = !this.state.speaker;
+    this.actions.render();
+  }
+
   handleKeydown(event) {
-    if (!this.state.active || event.defaultPrevented) return;
+    if (!this.state.active || event.defaultPrevented || acceptsInput(event.target)) return;
+    if (event.target?.closest?.("button") && (event.key === " " || event.key === "Enter")) return;
     if (
       (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey &&
       event.key.toLowerCase() === "z"
@@ -401,6 +435,11 @@ export class PresentationController {
     }
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     switch (event.key) {
+    case "s":
+    case "S":
+      event.preventDefault();
+      this.toggleSpeaker();
+      return;
     case "f":
     case "F":
       if (this.actions.toggleFullscreen) {

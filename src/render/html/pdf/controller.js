@@ -278,6 +278,7 @@ export class PdfRenderController {
               pdfjs,
               this.view,
               this.options,
+              this.service.ownerDocument,
             );
             state.activePlacement = placement;
             try {
@@ -317,7 +318,7 @@ export class PdfRenderController {
         return this.service.usePage(source, placementPageNumber(metadata), async (page, pdfjs) => {
           const placement = new PdfPlacementRender(metadata, page, pdfjs, this.view, {
             ...this.options, textLayer: false, annotationLayer: false,
-          });
+          }, this.service.ownerDocument);
           const cancel = () => placement.cancel();
           jobSignal.addEventListener("abort", cancel);
           try {

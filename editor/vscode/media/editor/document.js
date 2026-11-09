@@ -8,6 +8,14 @@ const displayNodes = new WeakMap();
 const thumbnailObservers = new WeakMap();
 const translationTolerance = 0.0001;
 
+export function previewPage(snapshot, pageId) {
+  const source = pageTemplate(snapshot, pageId);
+  if (!source) return null;
+  const page = source.cloneNode(true);
+  applyDisplayTranslations(page, snapshot.display.translations || []);
+  return page;
+}
+
 export function renderPage(snapshot, pageId, thumbnail = false) {
   const display = snapshot.display;
   let cached = previews.get(display);

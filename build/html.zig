@@ -15,6 +15,7 @@ const Source = struct {
 const sources = [_]Source{
     .{ .name = "resource_module", .path = "src/render/html/resources.js" },
     .{ .name = "dom_module", .path = "src/render/html/dom.js", .exported = false, .specifier = "@ss/dom" },
+    .{ .name = "speaker_module", .path = "src/render/html/speaker.js", .exported = false, .specifier = "@ss/speaker" },
     .{ .name = "presentation_module", .path = "src/render/html/presentation.js" },
     .{ .name = "navigation_module", .path = "src/render/html/navigation.js" },
     .{ .name = "text_module", .path = "src/render/html/text.js" },

@@ -1,12 +1,13 @@
 import { pageGeometry, thumbnailPixelSize, visiblePixelSize } from "@ss/pdf/geometry";
 
 export class PdfPlacementRender {
-  constructor(container, page, pdfjs, view, options) {
+  constructor(container, page, pdfjs, view, options, canvasDocument = container.ownerDocument) {
     this.container = container;
     this.page = page;
     this.pdfjs = pdfjs;
     this.view = view;
     this.options = options;
+    this.canvasDocument = canvasDocument;
     this.cancelled = false;
     this.renderTask = null;
     this.textLayer = null;
@@ -21,7 +22,9 @@ export class PdfPlacementRender {
       this.view,
       this.options,
     );
-    const canvas = this.container.ownerDocument.createElement("canvas");
+    // PDF.js loads embedded fonts into the service's document. Rasterize there
+    // before moving the finished pixels into another window's document.
+    const canvas = this.canvasDocument.createElement("canvas");
     canvas.width = geometry.pixelWidth;
     canvas.height = geometry.pixelHeight;
     canvas.setAttribute("aria-hidden", "true");

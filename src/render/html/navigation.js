@@ -26,7 +26,11 @@ export function start(root, presentation = null) {
   const presenter = presentation ? new presentation.PresentationController(presentationState, {
     getPages: () => pages.map((page, index) => ({
       id: index, width: parseFloat(page.style.width), height: parseFloat(page.style.height),
+      name: page.getAttribute("aria-label"), notes: page.dataset.ssNotes || "",
     })),
+    previewPage: (index) => pages[index],
+    renderPreview: (root) => previewHandler?.(root),
+    allowSpeakerWindow: true,
     renderPage: (index) => {
       const content = root.createElement("div");
       content.append(pages[index]);
@@ -50,6 +54,7 @@ export function start(root, presentation = null) {
     new URLSearchParams(location.search).get("present") === "1";
   let activeIndex = 0;
   let printHandler = null;
+  let previewHandler = null;
   let printPreparation = null;
   let printPrepared = false;
 
@@ -175,6 +180,9 @@ export function start(root, presentation = null) {
     },
     setPrintHandler(handler) {
       printHandler = typeof handler === "function" ? handler : null;
+    },
+    setPreviewHandler(handler) {
+      previewHandler = typeof handler === "function" ? handler : null;
     },
   };
 }

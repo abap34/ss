@@ -10,6 +10,7 @@ export class PdfService {
   constructor(pdfjsProvider, workerSource) {
     this.pdfjsProvider = pdfjsProvider;
     this.workerSource = workerSource;
+    this.ownerDocument = globalThis.document;
     this.pdfjsPromise = null;
     this.worker = null;
     this.workerPort = null;
@@ -175,6 +176,7 @@ export class PdfService {
     const parameters = {
       url: source,
       isEvalSupported: false,
+      ownerDocument: this.ownerDocument,
     };
     if (this.worker) parameters.worker = this.worker;
     const loadingTask = pdfjs.getDocument(parameters);

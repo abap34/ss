@@ -356,6 +356,9 @@ fn present(output: Output) void {
         \\Source changes take effect when this command is run again.
         \\Use arrows or PageUp/PageDown to navigate, F for full screen, and Escape
         \\to leave presentation mode. Press P to resume. The toolbar has pen and laser tools.
+        \\Press S for presenter view with notes, the next slide, and a pausable timer.
+        \\Use "Open in separate window" there to keep the slides on another display.
+        \\Write speaker notes with pagectx().notes = "Notes for this slide".
         \\
         \\Options:
         \\  --no-open                Print the presentation URL without opening a browser
