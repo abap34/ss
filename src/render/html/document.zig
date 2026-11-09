@@ -256,6 +256,8 @@ fn appendPage(
         if (page.index == 0) "true" else "false", if (page.index == 0) "false" else "true",
     });
     try appendAttribute(allocator, out, page.name);
+    try out.appendSlice(allocator, "\" data-ss-notes=\"");
+    try appendAttribute(allocator, out, page.notes);
     try appendFormat(allocator, out, "\" style=\"width:{d:.6}pt;height:{d:.6}pt\">", .{ normalized(page.width), normalized(page.height) });
     for (page.destinations()) |destination| {
         try out.appendSlice(allocator, "<span class=\"ss-destination\" id=\"");

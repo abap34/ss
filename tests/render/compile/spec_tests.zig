@@ -18,6 +18,27 @@ fn textBaseline(text: *const render.Text) f64 {
     return text.y + text.layout.firstBaseline();
 }
 
+test "speaker notes refresh independently of cached page drawing" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    var fixture = LayoutFixture.init(&state);
+    defer fixture.deinit();
+    const page_id = try state.addPage("speaker-notes");
+    const object_id = try document_testing.native(&state, page_id, "body", .text, "Slide content");
+    (try fixture.frame(object_id)).* = .{ .x = 48, .y = 300, .width = 300, .height = 60 };
+    var cache = render_compile.PageCache.init(testing.allocator, testing.io);
+    defer cache.deinit();
+    for ([_][]const u8{ "First note", "Changed note\nSecond line", "" }) |notes| {
+        try document_testing.setField(&state, page_id, "notes", .{ .string = notes });
+        var prepared = try core.prepared.prepare(testing.allocator, &state);
+        defer prepared.deinit(testing.allocator);
+        var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try fixture.document(), .{ .cache_dir = test_cache_dir, .jobs = 1, .page_cache = &cache });
+        defer ir.deinit(testing.allocator);
+        try testing.expectEqualStrings(notes, ir.pages[0].notes);
+    }
+    try testing.expectEqual(@as(usize, 1), cache.entries.count());
+}
+
 test "final-width measurements retain ink origins and baselines through the file cache" {
     var state = try initEmptyDocumentState();
     defer state.deinit();

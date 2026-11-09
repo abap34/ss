@@ -323,6 +323,8 @@ pub fn toJson(allocator: std.mem.Allocator, state: anytype, layouts: *const Docu
             try item.intField("id", page.id);
             try item.intField("index", index + 1);
             try item.stringField("name", page.name);
+            const notes = model.nodeField(page, "notes");
+            try item.stringField("notes", if (notes != null and notes.? == .string) notes.?.string else "");
             const solved = layouts.pageById(page.id).?;
             try item.boolField("converged", solved.converged);
             const failure: ?[]const u8 = if (solved.validate()) |_| null else |err| @errorName(err);

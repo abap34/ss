@@ -361,6 +361,10 @@ fn finishDocument(
         };
     }
     for (pages.items, prepared_pages.pages) |*page, prepared_page| {
+        if (state.getNode(prepared_page.page_id)) |page_node| {
+            const notes = core.fields.read(state.allocator, state, page_node, "notes", &.{}, .text) orelse "";
+            page.notes = try allocator.dupe(u8, notes);
+        }
         page.name = if (state.getNode(prepared_page.page_id)) |page_node|
             try allocator.dupe(u8, page_node.name)
         else

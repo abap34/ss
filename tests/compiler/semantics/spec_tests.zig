@@ -2681,6 +2681,12 @@ test "compiler semantics: document and page settings require declared fields" {
 
 test "compiler semantics: typed settings and value updates reject incompatible values" {
     try expectDiagnostic(
+        \\page main
+        \\  pagectx().notes = 123
+        \\end
+    , "case.ss:bytes:", "InvalidFieldValue: field 'notes' expects String, got Number");
+
+    try expectDiagnostic(
         \\document
         \\  docctx().background_fill = "white"
         \\end

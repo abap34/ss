@@ -399,6 +399,7 @@ pub const Page = struct {
     page_id: core.NodeId,
     index: usize,
     name: []u8 = &.{},
+    notes: []u8 = &.{},
     width: f64,
     height: f64,
     items: std.ArrayList(Item) = .empty,
@@ -435,6 +436,7 @@ pub const Page = struct {
 
     pub fn deinit(self: *Page, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
+        allocator.free(self.notes);
         switch (self.content) {
             .owned => |*owned| {
                 for (self.items.items) |*item| item.deinit(allocator);
@@ -457,6 +459,7 @@ pub const Page = struct {
     ) !*PageContent {
         try self.requireOwnedContent();
         std.debug.assert(self.name.len == 0);
+        std.debug.assert(self.notes.len == 0);
         std.debug.assert(self.reading_order.len == 0);
         const content = try owner_allocator.create(PageContent);
         content.* = .{
