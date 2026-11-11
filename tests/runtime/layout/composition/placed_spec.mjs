@@ -49,13 +49,38 @@ try {
   const flat = rootGroup(6);
   assert.equal(children(flat).length, 3);
   assert.equal(pageNodes(6).length, 4);
-  for (const child of children(flat)) close(child.width, (900 - 64) / 3);
+  for (const child of children(flat)) close(child.width, (900 - 32) / 3);
   assert.equal(pageNodes(7).length, 2);
   const report = pageNodes(8).find(node => node.placement.parent === dump.page_order[8] && node.placement.input.kind === "record");
   assert.equal(report.content, "1", "generic adoption was missing from a preceding typed query");
-  for (const child of children(rootGroup(9))) close(child.height, 184);
+  for (const child of children(rootGroup(9))) close(child.height, 188);
   const vertical = children(rootGroup(10));
   close(vertical[0].y - vertical[1].y - vertical[1].height, 48);
+
+  const orderedChildren = children(rootGroup(11));
+  assert(orderedChildren[0].id < orderedChildren[1].id);
+  assert(orderedChildren[1].id < text("Spacing evaluated").id, "settings ran before the child operands");
+  assert.equal(pageNodes(11).length, 4, "settings duplicated placements");
+  close(orderedChildren[1].x - orderedChildren[0].x - orderedChildren[0].width, 48);
+  const dependent = children(rootGroup(12));
+  close(dependent[1].x - dependent[0].x - dependent[0].width, 40);
+  for (const [index, gap] of [[13, 16], [14, 24]]) {
+    const staged = children(rootGroup(index));
+    close(staged[1].x - staged[0].x - staged[0].width, gap);
+  }
+  for (const [index, gap] of [[15, 0], [16, 32]]) {
+    const pair = children(rootGroup(index));
+    close(pair[1].x - pair[0].x - pair[0].width, gap);
+  }
+  const outer = children(rootGroup(17));
+  const inner = children(outer[0]);
+  close(outer[1].x - outer[0].x - outer[0].width, 48);
+  close(inner[1].x - inner[0].x - inner[0].width, 12);
+  for (const [index, gap] of [[0, 24], [1, 48], [6, 16], [9, 24], [10, 48]]) {
+    const group = rootGroup(index);
+    assert.equal(group.placement.input.gap, gap);
+    assert(!Object.hasOwn(group.fields ?? {}, "layout"), "settings were stored as placement properties");
+  }
 
   run(["render", "--quiet", source, "--output", path.join(output, "placed.pdf")]);
   assert.equal((await readFile(path.join(output, "placed.pdf"))).subarray(0, 5).toString(), "%PDF-");
@@ -75,15 +100,27 @@ try {
     ["mixed", 'let g = text!("A") || text("B")', "InvalidGroupInput"],
     ["effect", 'let a = text!("A")\nlet g = pure(a)', "PlacementEffect"],
     ["operator-effect", 'let a = text!("A")\nlet g = pure(a)', "PlacementEffect"],
-    ["gap", 'let g = text!("A") || text!("B")\ng.layout.gap = 24\ng.layout.gap = 32', "DuplicatePropertyDefinition"],
-    ["negative-gap", 'let g = text!("A") || text!("B")\ng.layout.gap = -1', "InvalidGroupSplit"],
+    ["configured-effect", 'let a = text!("A")\nlet g = pure(a)', "PlacementEffect"],
+    ["configured-display", 'let a = place!(Impure {})', "ImpureDisplayFunction"],
+    ["gap-assignment", 'let g = text!("A") || text!("B")\ng.layout.gap = 24', "UnknownField"],
+    ["layout-assignment", 'let g = text!("A") || text!("B")\ng.layout = 24', "UnknownField"],
+    ["layout-read", 'let g = text!("A") || text!("B")\nlet setting = g.layout', "UnknownField"],
+    ["bound-update", 'let g = text!("A") || text!("B")\nlet changed = g with { gap = 24 }', "InvalidValueUpdate"],
+    ["nested-bound-update", 'let g = text!("A") || text!("B")\nlet changed = (g) with { gap = 24 }', "InvalidValueUpdate"],
+    ["repeated-update", 'let g = ((text!("A") || text!("B")) with { gap = 24 }) with { gap = 48 }', "InvalidValueUpdate"],
+    ["duplicate-gap", 'let g = (text!("A") || text!("B")) with { gap = 24 gap = 48 }', "OverlappingValueUpdate"],
+    ["unknown-setting", 'let g = (text!("A") || text!("B")) with { padding = 24 }', "UnknownField"],
+    ["nested-setting", 'let g = (text!("A") || text!("B")) with { gap.value = 24 }', "InvalidValueUpdatePath"],
+    ["gap-type", 'let g = (text!("A") || text!("B")) with { gap = "wide" }', "TypeMismatch"],
+    ["nonfinite-gap", 'let g = (text!("A") || text!("B")) with { gap = 1 / 0 }', "InvalidGroupSplit"],
+    ["negative-gap", 'let g = (text!("A") || text!("B")) with { gap = -1 }', "InvalidGroupSplit"],
     ["conflict", 'let g = label!("A") |=| label!("B")\n~ g.width == 900', "ConstraintConflict"],
     ["display", 'let a = place!(Impure {})', "ImpureDisplayFunction"],
     ["operator-display", 'let a = place!(Impure {})', "ImpureDisplayFunction"],
     ["collection-cycle", 'let g = group!(select<Group>(pagectx()))', "ExecutionDependencyCycle"],
   ]) {
     const file = path.join(output, `${name}.ss`);
-    const helper = name.endsWith("effect") ? `fn pure(a: Placed<Text>) -> Placed<Group>\nreturn ${name === "effect" ? "group!(a)" : "a || a"}\nend\n` : name.endsWith("display") ? `type Impure {}\nfn display(self: Placed<Impure>) -> Text\nlet g = ${name === "display" ? "group!(self)" : "self || self"}\nreturn text("Invalid")\nend\n` : '';
+    const helper = name.endsWith("effect") ? `fn pure(a: Placed<Text>) -> Placed<Group>\nreturn ${name === "effect" ? "group!(a)" : name === "configured-effect" ? "(a || a) with { gap = 24 }" : "a || a"}\nend\n` : name.endsWith("display") ? `type Impure {}\nfn display(self: Placed<Impure>) -> Text\nlet g = ${name === "display" ? "group!(self)" : name === "configured-display" ? "(self || self) with { gap = 24 }" : "self || self"}\nreturn text("Invalid")\nend\n` : '';
     await writeFile(file, `fn label!(s: String) -> Placed<Text>\nlet a = text!(s)\n~ a.width == 320\nreturn a\nend\n${helper}page test\n${body}\nend\n`);
     const result = run(["check", "--quiet", file], 1);
     assert(result.includes(code), `${name}: missing ${code}: ${result}`);

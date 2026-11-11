@@ -10,7 +10,7 @@ fn align_group!(item: Placed<Group>) -> Void
 end
 
 fn pair!<T>(a: Placed<T>, b: Placed<T>) -> Placed<Group<T, T>>
-  return a || b
+  return (a || b) with { gap = 24 }
 end
 
 type Badge {
@@ -22,8 +22,7 @@ fn display(self: Placed<Badge>) -> Group<Text, Text>
 end
 
 page direct
-  let row = label!("Left") |=| label!("Right")
-  row.layout.gap = 24
+  let row = (label!("Left") |=| label!("Right")) with { gap = 24 }
   ~ row.width == 664
   align_group!(row)
 end
@@ -31,8 +30,7 @@ end
 page natural
   let a = label!("First")
   let b = label!("Second")
-  let row = a || b
-  row.layout = GroupLayout { gap = 48 }
+  let row = (a || b) with { gap = 48 }
   align_group!(row)
 end
 
@@ -77,7 +75,7 @@ page nested
 end
 
 page flat
-  let g = text!("Flat A") |=| text!("Flat B") |=| text!("Flat C")
+  let g = (text!("Flat A") |=| text!("Flat B") |=| text!("Flat C")) with { gap = 16 }
   ~ g.width == 900
   align_group!(g)
 end
@@ -94,13 +92,52 @@ page generic
 end
 
 page vertical
-  let g = text!("Upper") /=/ text!("Lower")
+  let g = (text!("Upper") /=/ text!("Lower")) with { gap = 24 }
   ~ g.height == 400
   align_group!(g)
 end
 
 page natural_vertical
-  let g = text!("Natural upper") // text!("Natural lower")
-  g.layout.gap = 48
+  let g = (text!("Natural upper") // text!("Natural lower")) with { gap = 48 }
   align_group!(g)
+end
+
+fn spacing!() -> Number
+  let marker = text!("Spacing evaluated")
+  return 48
+end
+
+page evaluation_order
+  let row = (text!("Ordered left") || text!("Ordered right")) with { gap = spacing!() }
+  align_group!(row)
+end
+
+page dependencies
+  let ctx = pagectx()
+  let spacing = ctx.layout_h_center_offset
+  let row = (text!("Dependent left") || text!("Dependent right")) with { gap = spacing }
+  ctx.layout_h_center_offset = 40
+  align_group!(row)
+end
+
+page staged
+  stages s { first second }
+  let row = (text!("Staged left") || text!("Staged right")) with { gap = 16 + s * 8 }
+  align_group!(row)
+end
+
+page zero_gap
+  let row = (text!("Zero left") || text!("Zero right")) with { gap = 0 }
+  align_group!(row)
+end
+
+page default_gap
+  let row = (text!("Default left") || text!("Default right")) with {}
+  align_group!(row)
+end
+
+page configured_nested
+  let inner = (text!("Nested left") || text!("Nested right")) with { gap = 12 }
+  let outer = (inner || text!("Nested outer")) with { gap = 48 }
+  align_group!(outer)
 end

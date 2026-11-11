@@ -816,7 +816,8 @@ const Analyzer = struct {
         }
     }
 
-    fn primitiveFacts(self: *Analyzer, primitive: registry.PrimitiveDescriptor, call: ast.CallExpr, args: []const ValueFacts) !ValueFacts {
+    fn primitiveFacts(self: *Analyzer, primitive: registry.PrimitiveDescriptor, call: ast.CallExpr, argument_facts: []const ValueFacts) !ValueFacts {
+        const args = argument_facts[0 .. argument_facts.len - @intFromBool(call.callee.composition != null)];
         if (primitive.op == .group_placed or (primitive.op == .group and call.callee.call_id != null and self.state.displays.adoptions.contains(call.callee.call_id.?))) {
             var receiver = ValueFacts.init(self.allocator);
             if (call.callee.call_id) |id| receiver.reference = .{ .placement = .{ .call = id, .path = &.{} } };
@@ -1295,7 +1296,7 @@ const Analyzer = struct {
             @intFromBool(value.unknown_string), @intFromBool(value.unknown_reference),
         });
         if (value.reference) |reference| {
-            try out.append(self.key_allocator, @as(u8, @intFromEnum(reference)) + 1);
+            try out.append(self.key_allocator, @as(u8, @backingInt(reference)) + 1);
             if (reference == .placement) {
                 try self.appendInteger(out, @intCast(reference.placement.call));
                 try self.appendInteger(out, reference.placement.path.len);
@@ -1339,7 +1340,7 @@ const Analyzer = struct {
     }
 
     fn appendLabel(self: *Analyzer, out: *std.ArrayList(u8), label: Label) !void {
-        try out.append(self.key_allocator, @intFromEnum(label));
+        try out.append(self.key_allocator, @backingInt(label));
         switch (label) {
             .function => |key| {
                 try self.appendInteger(out, key.module_id);

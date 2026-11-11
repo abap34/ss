@@ -268,7 +268,7 @@ fn exerciseGroupAdoption(allocator: std.mem.Allocator) !void {
     state.graph.composition_cursor = .{ .source_order = 10 };
     const next_id = state.graph.next_id;
     const ownership_count = state.graph.direct_page_ownership.items.len;
-    const g = state.adoptGroup(page, &.{ b, a }, .horizontal, .{ .path = "group.ss" }) catch |err| {
+    const g = state.adoptGroup(page, &.{ b, a }, .horizontal, 48, .{ .path = "group.ss" }) catch |err| {
         try testing.expectEqual(next_id, state.graph.next_id);
         try testing.expectEqual(ownership_count, state.graph.direct_page_ownership.items.len);
         try testing.expectEqualSlices(core.NodeId, &.{ a, b }, state.childrenOf(page).?);
@@ -279,6 +279,7 @@ fn exerciseGroupAdoption(allocator: std.mem.Allocator) !void {
         return err;
     };
     try testing.expectEqual(next_id, g);
+    try testing.expectEqual(@as(f32, 48), state.getNode(g).?.placement.?.value.group.gap);
     try testing.expectEqualSlices(core.NodeId, &.{ b, a }, state.childrenOf(g).?);
     try testing.expectEqualSlices(core.NodeId, &.{g}, state.childrenOf(page).?);
     try testing.expectEqualSlices(core.NodeId, &.{ a, b, g }, state.placementRootsOf(page));
@@ -301,14 +302,16 @@ test "document state spec: group adoption rejects aliases, existing parents and 
     const a = try state.registerPlacement(page, input, null);
     const b = try state.registerPlacement(other, input, null);
     const next_id = state.graph.next_id;
-    try testing.expectError(error.DuplicateGroupChild, state.adoptGroup(page, &.{ a, a }, .overlay, null));
-    try testing.expectError(error.CrossPageGroup, state.adoptGroup(page, &.{ a, b }, .overlay, null));
+    try testing.expectError(error.InvalidGroupSplit, state.adoptGroup(page, &.{a}, .horizontal, -1, null));
+    try testing.expectError(error.InvalidGroupSplit, state.adoptGroup(page, &.{a}, .horizontal, std.math.inf(f32), null));
+    try testing.expectError(error.DuplicateGroupChild, state.adoptGroup(page, &.{ a, a }, .overlay, 32, null));
+    try testing.expectError(error.CrossPageGroup, state.adoptGroup(page, &.{ a, b }, .overlay, 32, null));
     try testing.expectEqual(next_id, state.graph.next_id);
-    const group = try state.adoptGroup(page, &.{a}, .overlay, null);
-    try testing.expectError(error.DuplicatePlacementParent, state.adoptGroup(page, &.{a}, .overlay, null));
-    const outer = try state.adoptGroup(page, &.{group}, .overlay, null);
+    const group = try state.adoptGroup(page, &.{a}, .overlay, 32, null);
+    try testing.expectError(error.DuplicatePlacementParent, state.adoptGroup(page, &.{a}, .overlay, 32, null));
+    const outer = try state.adoptGroup(page, &.{group}, .overlay, 32, null);
     try testing.expectEqual(outer, state.getNode(group).?.placement.?.parent_id);
-    const empty = try state.adoptGroup(page, &.{}, .overlay, null);
+    const empty = try state.adoptGroup(page, &.{}, .overlay, 32, null);
     try testing.expectEqual(@as(usize, 0), state.childrenOf(empty).?.len);
 }
 

@@ -1361,11 +1361,11 @@ test "syntax spec: required parameters cannot follow defaulted parameters" {
 }
 
 fn expectComposition(expr: ast.Expr, mode: ast.GroupComposition) !ast.CallExpr {
-    const result = try expectCall(expr, "group", 2);
+    const result = try expectCall(expr, "group", 3);
     try testing.expectEqual(mode, result.callee.composition.?);
     try testing.expect(result.callee.resolution == .intrinsic);
     try testing.expect(result.callee.qualifier == null);
-    try testing.expectEqual(@as(usize, 2), result.arg_spans.items.len);
+    try testing.expectEqual(@as(usize, 3), result.arg_spans.items.len);
     return result;
 }
 
@@ -1547,7 +1547,7 @@ test "syntax spec: composition preserves punctuation in line text arguments" {
     const checked = try expectComposition(statements[16].kind.expr_stmt, .horizontal);
     try expectIdent(checked.args.items[0].optional_check.target.*, "a");
     const placed = try expectComposition(statements[17].kind.expr_stmt, .horizontal);
-    for (placed.args.items) |operand| _ = try expectCall(operand, "text!", 1);
+    for (placed.args.items[0..2]) |operand| _ = try expectCall(operand, "text!", 1);
     try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source_text});
 }
 
@@ -1721,11 +1721,11 @@ test "syntax spec: equal composition chains preserve grouping and spans" {
     defer parsed.deinit();
     const statements = parsed.module.pages.items[0].statements.items;
     for ([_]usize{ 0, 2 }, [_]ast.GroupComposition{ .equal_horizontal, .equal_vertical }) |index, mode| {
-        const split = try expectCall(statements[index].kind.let_binding.expr, "group", 3);
+        const split = try expectCall(statements[index].kind.let_binding.expr, "group", 4);
         try testing.expectEqual(mode, split.callee.composition.?);
         try testing.expect(split.callee.resolution == .intrinsic);
         try expectSpanText(source_text, split.callee.span.?, if (index == 0) "|=|" else "/=/");
-        for (split.args.items, [_][]const u8{ "a", "b", "c" }) |operand, name| try expectIdent(operand, name);
+        for (split.args.items[0..3], [_][]const u8{ "a", "b", "c" }) |operand, name| try expectIdent(operand, name);
         try expectSpanText(source_text, split.arg_spans.items[2], "c");
     }
     const grouped = try expectComposition(statements[1].kind.let_binding.expr, .equal_horizontal);
@@ -1733,7 +1733,7 @@ test "syntax spec: equal composition chains preserve grouping and spans" {
     const mixed = try expectComposition(statements[3].kind.let_binding.expr, .equal_horizontal);
     _ = try expectComposition(mixed.args.items[1], .vertical);
     const division = try expectComposition(statements[4].kind.let_binding.expr, .equal_vertical);
-    for (division.args.items) |operand| _ = try expectCall(operand, "div", 2);
+    for (division.args.items[0..2]) |operand| _ = try expectCall(operand, "div", 2);
     try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source_text});
     try allocation_testing.checkAllAllocationFailures(testing.allocator, cloneAndDeinitModule, .{&parsed.module});
 }
@@ -1755,7 +1755,7 @@ test "syntax spec: equal compositions diagnose mixed operators and recover missi
     defer parsed.deinit();
     const statements = parsed.result.module.pages.items[0].statements.items;
     try testing.expectEqual(@as(usize, 3), statements.len);
-    const horizontal = try expectCall(statements[0].kind.expr_stmt, "group", 3);
+    const horizontal = try expectCall(statements[0].kind.expr_stmt, "group", 4);
     try testing.expectEqual(ast.GroupComposition.equal_horizontal, horizontal.callee.composition.?);
     try testing.expect(horizontal.args.items[2] == .hole);
     try testing.expectEqualStrings("ok", statements[1].kind.let_binding.name);

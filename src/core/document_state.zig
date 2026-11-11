@@ -817,7 +817,8 @@ pub const DocumentState = struct {
 
     /// Define one parent for existing roots. Validate and allocate everything
     /// before publishing the node, containment, or changed parent references.
-    pub fn adoptGroup(self: *DocumentState, context_page: NodeId, ids: []const NodeId, composition: model.GroupComposition, origin: ?model.SourceOrigin) !NodeId {
+    pub fn adoptGroup(self: *DocumentState, context_page: NodeId, ids: []const NodeId, composition: model.GroupComposition, gap: f32, origin: ?model.SourceOrigin) !NodeId {
+        if (!std.math.isFinite(gap) or gap < 0) return error.InvalidGroupSplit;
         var page_id = context_page;
         var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
@@ -832,7 +833,7 @@ pub const DocumentState = struct {
         }
         const page = self.getNode(page_id) orelse return error.InvalidGroupPage;
         if (page.kind != .page) return error.InvalidGroupPage;
-        var group = model.GroupValue{ .ty = .{ .kind = .group }, .composition = composition };
+        var group = model.GroupValue{ .ty = .{ .kind = .group }, .composition = composition, .gap = gap };
         defer group.deinit(self.allocator);
         try group.children.ensureTotalCapacity(self.allocator, ids.len);
         const types = try self.allocator.alloc(ast.Type, ids.len);

@@ -70,6 +70,8 @@ test "language registry spec: group and placement primitives declare typed resul
     const group = registry.lookupPrimitiveCall("group").?;
     try testing.expect(registry.primitiveAllowsDisplayEvaluation(group.op));
     try testing.expectEqual(Type.Kind.group, registry.primitiveResultType(group).?.kind);
+    try testing.expectEqual(@as(usize, 1), group.min_arity);
+    try testing.expectEqual(@as(usize, 0), registry.lookupSyntaxCall("group").?.min_arity);
     const place = registry.lookupPrimitiveCall("place_on!").?;
     try testing.expectEqual(registry.PrimitiveResultPolicy.placement, place.result_policy);
     try testing.expect(Type.eql(Type.placement, registry.primitiveResultType(place).?));

@@ -181,7 +181,40 @@ const Context = struct {
             .equal_vertical => .equal_vertical,
             else => null,
         };
+        // Composition constructors take their gap after the child operands.
+        // Keeping it last preserves operand evaluation before configuration.
+        if (result.call.callee.composition != null) {
+            try result.call.args.append(self.allocator, .{ .number = 32 });
+            try result.call.arg_spans.append(self.allocator, input.span orelse .{ .start = 0, .end = 0 });
+        }
         if (result.call.callee.composition != null) result.call.callee.name_span = input.span;
+        return result;
+    }
+
+    fn compositionUpdate(self: *Context, update: surface.RecordUpdateExpr) !?ast.Expr {
+        if (update.target.* != .operation) return null;
+        const operation_expr = update.target.operation;
+        switch (operation_expr.operator) {
+            .horizontal, .vertical, .equal_horizontal, .equal_vertical => {},
+            else => return null,
+        }
+        var result = try self.operation(operation_expr);
+        errdefer result.deinit(self.allocator);
+
+        // Reuse ordinary immutable Group field checking, diagnostics, and
+        // completion for the constructor settings. This value has no placements.
+        const settings = try self.allocator.create(ast.Expr);
+        errdefer self.allocator.destroy(settings);
+        settings.* = try build.call(self.allocator, "group", &.{}, operation_expr.span);
+        errdefer settings.deinit(self.allocator);
+        var fields = try self.convert(std.ArrayList(ast.RecordUpdateFieldExpr), update.fields);
+        errdefer self.release(&fields);
+        const target = try self.allocator.create(ast.Expr);
+        errdefer self.allocator.destroy(target);
+        const name = try self.allocator.dupe(u8, "gap");
+        target.* = .{ .record_update = .{ .target = settings, .fields = fields, .body_span = update.body_span } };
+        result.call.args.items[result.call.args.items.len - 1] = .{ .member = .{ .target = target, .name = name } };
+        result.call.arg_spans.items[result.call.arg_spans.items.len - 1] = update.body_span;
         return result;
     }
 
@@ -191,6 +224,7 @@ const Context = struct {
         if (self.cancellation) |token| try token.check();
         if (T == ast.Expr and @TypeOf(input) == surface.Expr) {
             if (input == .operation) return self.operation(input.operation);
+            if (input == .record_update) if (try self.compositionUpdate(input.record_update)) |result| return result;
         }
         if (T == std.ArrayList(ast.Statement)) return self.statements(input.items);
         if (T == ast.AnchorRef) return input.cloneWithAnchor(self.allocator, input.anchor);

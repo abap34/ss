@@ -290,7 +290,10 @@ pub fn lookupSyntaxCall(name: []const u8) ?PrimitiveDescriptor {
     inline for (syntax_descriptors) |descriptor| {
         if (std.mem.eql(u8, name, descriptor.name)) return descriptor;
     }
-    return lookupPrimitiveCall(name);
+    var descriptor = lookupPrimitiveCall(name) orelse return null;
+    // The core constructor also builds the empty immutable settings value.
+    if (descriptor.op == .group) descriptor.min_arity = 0;
+    return descriptor;
 }
 
 pub fn lookupQueryOp(name: []const u8) ?QueryDescriptor {

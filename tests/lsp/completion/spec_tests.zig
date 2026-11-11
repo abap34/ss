@@ -505,32 +505,35 @@ test "analysis completion: function and const annotations preserve inputs and pl
     try expectMissing(placed, "style");
 }
 
-test "analysis completion: placed groups expose their layout record" {
+test "analysis completion: composition settings expose gap and placements stay read-only" {
     var case = try CompletionCase.init(
         \\page main
-        \\  let row = text!("Left") |=| text!("Right")
-        \\  row.layout.gap = 24
+        \\  let row = (text!("Left") |=| text!("Right")) with { gap = 24 }
         \\end
     );
     defer case.deinit();
     const request_source =
         \\page main
-        \\  let row = text!("Left") |=| text!("Right")
+        \\  let row = (text!("Left") |=| text!("Right")) with { gap = 24 }
         \\  row.
-        \\  row.layout.
         \\end
     ;
     var placed = try case.completeSourceAfter(request_source, "row.");
     defer placed.deinit(case.allocator);
     try expectUnique(placed);
-    try expectHas(placed, "layout");
+    try expectMissing(placed, "layout");
     try expectHas(placed, "value");
     try expectHas(placed, "left");
-    var layout = try case.completeSourceAfter(request_source, "row.layout.");
-    defer layout.deinit(case.allocator);
-    try expectUnique(layout);
-    try expectHas(layout, "gap");
-    try expectMissing(layout, "value");
+    const settings_source =
+        \\page main
+        \\  let row = (text!("Left") |=| text!("Right")) with { ga = 24 }
+        \\end
+    ;
+    var settings = try case.completeSourceAfter(settings_source, "with { ga");
+    defer settings.deinit(case.allocator);
+    try expectUnique(settings);
+    try expectHas(settings, "gap");
+    try expectMissing(settings, "value");
 }
 
 test "analysis completion: record update paths complete record fields" {

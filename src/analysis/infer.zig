@@ -503,9 +503,6 @@ fn inferMemberInfoFromTargetInfo(
         return error.InvalidType;
     }
     if (target_info.ty.kind == .placed or target_info.ty.kind == .placement) {
-        if (isPlacedGroup(target_info.ty) and std.mem.eql(u8, member_name, "layout")) {
-            if (sema.state) |owner| if (core.group_composition.layoutType(owner)) |ty| return infoFromType(ty);
-        }
         const field_type = @import("../language/placement.zig").memberType(target_info.ty, member_name) orelse {
             const label = try typeLabelAlloc(allocator, target_info.ty);
             defer allocator.free(label);
@@ -977,12 +974,13 @@ fn inferPrimitiveCallInfo(
     descriptor: registry.PrimitiveDescriptor,
     options: InferenceOptions,
 ) !TypeInfo {
-    if (call.args.items.len < descriptor.min_arity or call.args.items.len > descriptor.max_arity) {
+    const argument_count = call.args.items.len - @intFromBool(call.callee.composition != null);
+    if (argument_count < descriptor.min_arity or argument_count > descriptor.max_arity) {
         if (firstHoleInArgs(call.args.items)) |hole_id| return infoFromHole(hole_id);
         if (descriptor.min_arity == descriptor.max_arity) {
-            try addUserReport(state, origin, "InvalidArity", "expected {d}, got {d}", .{ descriptor.min_arity, call.args.items.len });
+            try addUserReport(state, origin, "InvalidArity", "expected {d}, got {d}", .{ descriptor.min_arity, argument_count });
         } else {
-            try addUserReport(state, origin, "InvalidArity", "expected {d}..{d}, got {d}", .{ descriptor.min_arity, descriptor.max_arity, call.args.items.len });
+            try addUserReport(state, origin, "InvalidArity", "expected {d}..{d}, got {d}", .{ descriptor.min_arity, descriptor.max_arity, argument_count });
         }
         return error.InvalidArity;
     }
@@ -1009,13 +1007,17 @@ fn inferPrimitiveCallInfo(
         if (descriptor.op == .add and left == .number and right == .anchor) return infoFromType(Type.anchor);
     }
     if (descriptor.op == .group or descriptor.op == .group_placed) {
-        const selection = argument_infos.len == 1 and argument_infos[0].ty.kind == .selection;
-        const placed = descriptor.op == .group_placed or (call.callee.composition != null and argument_infos.len > 0 and
+        if (call.callee.composition != null) {
+            try ensureType(state, allocator, argument_infos[argument_count], Type.number, callArgumentOrigin(call, argument_count, origin));
+        }
+        const child_infos = argument_infos[0..argument_count];
+        const selection = child_infos.len == 1 and child_infos[0].ty.kind == .selection;
+        const placed = descriptor.op == .group_placed or (call.callee.composition != null and child_infos.len > 0 and
             (argument_infos[0].ty.kind == .placed or argument_infos[0].ty.kind == .placement));
-        const children = try allocator.alloc(Type, if (selection) 0 else argument_infos.len);
+        const children = try allocator.alloc(Type, if (selection) 0 else child_infos.len);
         defer allocator.free(children);
         var erased = selection;
-        for (argument_infos, 0..) |info, index| {
+        for (child_infos, 0..) |info, index| {
             if (info.hole != null) return info;
             const ty = if (selection) info.ty.selectionItem() else info.ty;
             if (placed) {
@@ -1573,11 +1575,6 @@ fn validatePropertySetPath(
     }
 }
 
-fn isPlacedGroup(ty: Type) bool {
-    const input = ty.placedInput() orelse return false;
-    return input.kind == .group;
-}
-
 fn validateMemberTargetPropertySetPath(
     allocator: std.mem.Allocator,
     state: ?*core.DocumentState,
@@ -1587,16 +1584,6 @@ fn validateMemberTargetPropertySetPath(
     value_info: TypeInfo,
     origin: core.SourceOrigin,
 ) !void {
-    if (isPlacedGroup(object_info.ty) and path.len > 0 and std.mem.eql(u8, path[0].name, "layout")) {
-        if (path.len == 2 and std.mem.eql(u8, path[1].name, "gap")) {
-            try ensureType(state, allocator, value_info, Type.number, origin);
-            return;
-        }
-        if (path.len == 1) if (sema.state) |owner| if (core.group_composition.layoutType(owner)) |ty| {
-            try ensureType(state, allocator, value_info, ty, origin);
-            return;
-        };
-    }
     var current_info = object_info;
     for (path, 0..) |segment, index| {
         if (current_info.hole != null) return;

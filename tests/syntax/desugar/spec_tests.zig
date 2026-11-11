@@ -27,6 +27,49 @@ const source =
     \\end
 ;
 
+test "desugar: composition settings become constructor arguments for every operator" {
+    for ([_][]const u8{ "||", "//", "|=|", "/=/" }, [_]ast.GroupComposition{ .horizontal, .vertical, .equal_horizontal, .equal_vertical }) |operator, mode| {
+        const text = try std.fmt.allocPrint(testing.allocator, "page Main\nlet row = (a {s} b) with {{ gap = spacing }}\nend\n", .{operator});
+        defer testing.allocator.free(text);
+        var parsed = try syntax.parseSurface(testing.allocator, text);
+        defer parsed.deinit(testing.allocator);
+        var expanded = try syntax.desugar(testing.allocator, &parsed, .{});
+        defer expanded.deinit(testing.allocator);
+        const expr = expanded.pages.items[0].statements.items[0].kind.let_binding.expr;
+        try testing.expect(expr == .call);
+        const call = expr.call;
+        try testing.expectEqual(mode, call.callee.composition.?);
+        try testing.expectEqual(@as(usize, 3), call.args.items.len);
+        try testing.expectEqualStrings("a", call.args.items[0].ident.name);
+        try testing.expectEqualStrings("b", call.args.items[1].ident.name);
+        const gap = call.args.items[2].member;
+        try testing.expectEqualStrings("gap", gap.name);
+        const settings = gap.target.record_update;
+        try testing.expectEqualStrings("group", settings.target.call.callee.name);
+        try testing.expectEqual(@as(usize, 0), settings.target.call.args.items.len);
+        try testing.expectEqualStrings("spacing", settings.fields.items[0].value.ident.name);
+        try testing.expectEqualStrings(" gap = spacing ", text[settings.body_span.start..settings.body_span.end]);
+        try testing.expect(parsed.pages.items[0].statements.items[0].kind.let_binding.expr == .record_update);
+    }
+}
+
+fn expandCompositionSettings(allocator: std.mem.Allocator) !void {
+    var parsed = try syntax.parseSurface(allocator,
+        \\page Main
+        \\  let row = ((text!("A") || text!("B")) with { gap = 24 }) /=/ text!("C")
+        \\end
+    );
+    defer parsed.deinit(allocator);
+    var expanded = try syntax.desugar(allocator, &parsed, .{});
+    defer expanded.deinit(allocator);
+    var copied = try expanded.clone(allocator);
+    defer copied.deinit(allocator);
+}
+
+test "desugar: composition settings and cloning release partial allocations" {
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, expandCompositionSettings, .{});
+}
+
 test "desugar: the surface tree retains syntax and expansion produces only core nodes" {
     try testing.expect(@hasField(syntax.Surface.Expr, "operation"));
     try testing.expect(@hasField(syntax.Surface.Statement.Kind, "show"));

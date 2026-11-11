@@ -3028,7 +3028,7 @@ test "layout allocation: separate formulas center in the column independently of
         defer latex.deinit(testing.allocator);
         try latex.record.fields.append(testing.allocator, .{ .name = "align", .value = .{ .enum_case = .{ .enum_name = "Align", .case_name = "center" } } });
         try document_testing.setField(&state, formula, "latex", latex);
-        const column = try state.adoptGroup(page, &.{ body, formula }, .vertical, null);
+        const column = try state.adoptGroup(page, &.{ body, formula }, .vertical, 32, null);
         try state.collectDefaultAlignments();
         var context: u8 = 0;
         try solveDocumentStateWithOptions(&fixture, null, .{ .measurement_provider = .{ .context = &context, .measure = FormulaMeasurement.measure } });

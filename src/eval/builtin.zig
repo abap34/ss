@@ -6,7 +6,7 @@ const eval_value = @import("value.zig");
 const path_eval = @import("path.zig");
 
 pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.PrimitiveDescriptor) anyerror!core.Value {
-    try ctx.checkArityRange(call.args.items.len, descriptor.min_arity, descriptor.max_arity);
+    try ctx.checkArityRange(call.args.items.len - @intFromBool(call.callee.composition != null), descriptor.min_arity, descriptor.max_arity);
     return switch (descriptor.op) {
         .pagectx => ctx.currentPageValue(),
         .docctx => ctx.currentDocumentValue(),
@@ -314,26 +314,30 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             }
             try values.ensureTotalCapacity(ctx.state.allocator, call.args.items.len);
             for (call.args.items) |arg| values.appendAssumeCapacity(try ctx.evalExprValue(arg));
-            const placed = descriptor.op == .group_placed or (call.callee.composition != null and values.items.len > 0 and values.items[0] == .object);
+            const child_count = values.items.len - @intFromBool(call.callee.composition != null);
+            const children = values.items[0..child_count];
+            const gap = if (call.callee.composition != null) try eval_value.number(values.items[child_count]) else 32;
+            if (!std.math.isFinite(gap) or gap < 0) return error.InvalidGroupSplit;
+            const placed = descriptor.op == .group_placed or (call.callee.composition != null and children.len > 0 and children[0] == .object);
             if (placed) {
                 var ids = std.ArrayList(core.NodeId).empty;
                 defer ids.deinit(ctx.state.allocator);
-                for (values.items) |value| switch (value) {
+                for (children) |value| switch (value) {
                     .object => |id| try ids.append(ctx.state.allocator, id),
                     .selection => |selection| {
-                        if (values.items.len != 1 or selection.item_tag != .object) return error.InvalidGroupInput;
+                        if (children.len != 1 or selection.item_tag != .object) return error.InvalidGroupInput;
                         try ids.appendSlice(ctx.state.allocator, selection.ids.items);
                     },
                     else => return error.InvalidGroupInput,
                 };
-                break :blk .{ .object = try ctx.adoptGroup(ids.items, call.callee.composition orelse .overlay) };
+                break :blk .{ .object = try ctx.adoptGroup(ids.items, call.callee.composition orelse .overlay, gap) };
             }
-            var result = core.GroupValue{ .ty = .{ .kind = .group }, .composition = call.callee.composition orelse .overlay };
+            var result = core.GroupValue{ .ty = .{ .kind = .group }, .composition = call.callee.composition orelse .overlay, .gap = gap };
             errdefer result.deinit(ctx.state.allocator);
-            try result.children.ensureTotalCapacity(ctx.state.allocator, call.args.items.len);
-            const types = try ctx.state.allocator.alloc(ast.Type, call.args.items.len);
+            try result.children.ensureTotalCapacity(ctx.state.allocator, children.len);
+            const types = try ctx.state.allocator.alloc(ast.Type, children.len);
             defer ctx.state.allocator.free(types);
-            for (values.items, types) |child, *ty| {
+            for (children, types) |child, *ty| {
                 result.children.appendAssumeCapacity(try child.clone(ctx.state.allocator));
                 ty.* = child.presentationType() orelse return error.InvalidType;
             }

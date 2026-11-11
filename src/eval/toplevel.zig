@@ -1379,8 +1379,8 @@ const BuiltinContext = struct {
         return id;
     }
 
-    pub fn adoptGroup(self: *BuiltinContext, ids: []const core.NodeId, composition: ast.GroupComposition) !core.NodeId {
-        const id = try self.state.adoptGroup(self.page_id, ids, composition, self.current_origin);
+    pub fn adoptGroup(self: *BuiltinContext, ids: []const core.NodeId, composition: ast.GroupComposition, gap: f32) !core.NodeId {
+        const id = try self.state.adoptGroup(self.page_id, ids, composition, gap, self.current_origin);
         if (self.evaluation.active_drawing) |index| try self.evaluation.pending_drawings.items[index].nodes.append(self.evaluation.allocator, id);
         return id;
     }
@@ -1820,32 +1820,6 @@ fn writePropertyPathToNode(
     const functions = evaluation.functions;
     if (path.len == 0) return error.ExpectedObject;
     const property_name = path[0].name;
-    const receiver = state.getNode(node_id) orelse return error.UnknownNode;
-    if (receiver.placement) |placement| if (placement.value == .group and std.mem.eql(u8, property_name, "layout")) {
-        var layout = try core.group_composition.layoutValue(state, receiver);
-        defer layout.deinit(state.allocator);
-        const path_text = try ast.formatRecordPath(state.allocator, path);
-        defer state.allocator.free(path_text);
-        if (path.len == 1) {
-            const replacement = try value.clone(state.allocator);
-            layout.deinit(state.allocator);
-            layout = replacement;
-        } else {
-            var copy = try value.clone(state.allocator);
-            errdefer copy.deinit(state.allocator);
-            try updateRecordFieldPath(state.allocator, &layout, path[1..], copy);
-        }
-        const gap = layout.record.field("gap") orelse return error.InvalidGroupSplit;
-        if (gap != .number or !std.math.isFinite(gap.number) or gap.number < 0) return error.InvalidGroupSplit;
-        state.defineNodeFieldPath(node_id, "layout", path_text, layout, evaluation.frames.depth, origin) catch |err| switch (err) {
-            error.DuplicatePropertyDefinition => {
-                try reportDuplicatePropertyDefinition(state, origin, node_id, path_text);
-                return err;
-            },
-            else => return err,
-        };
-        return;
-    };
     if (path.len == 1) {
         try writeNodeFieldValue(state, node_id, property_name, value, origin, evaluation.frames.depth);
         return;

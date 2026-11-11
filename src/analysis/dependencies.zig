@@ -1412,7 +1412,8 @@ pub const Analyzer = struct {
                 result = combined;
             },
             .group, .group_placed => {
-                const children = try self.value_storage.allocator().alloc(ValueFacts, call.args.items.len);
+                const child_count = call.args.items.len - @intFromBool(call.callee.composition != null);
+                const children = try self.value_storage.allocator().alloc(ValueFacts, child_count);
                 for (children, 0..) |*child, index| child.* = try self.callArgumentValue(call, arg_facts, index);
                 result.children = children;
                 if (self.isAdoption(call)) {

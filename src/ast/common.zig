@@ -341,6 +341,7 @@ pub const CallableName = struct {
     call_id: ?u64 = null,
     // Expansion fixes generated references to their kernel or function binding.
     resolution: Resolution = .lexical,
+    // Composition calls carry child operands followed by a Number gap argument.
     composition: ?GroupComposition = null,
     qualifier: ?[]const u8 = null,
     name: []const u8,

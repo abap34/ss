@@ -46,7 +46,7 @@ pub fn native(state: *core.DocumentState, page: core.NodeId, name: []const u8, k
 }
 
 pub fn group(state: *core.DocumentState, page: core.NodeId, children: []const core.NodeId, origin: ?core.SourceOrigin) !core.NodeId {
-    return state.adoptGroup(page, children, .overlay, origin);
+    return state.adoptGroup(page, children, .overlay, 32, origin);
 }
 
 /// Mutate test input records before preparation, following the native contract.
