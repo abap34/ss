@@ -149,6 +149,26 @@ end
     assert.deepEqual(numbers.map(n => document.nodes.find(child => child.id === n.placement.children[0]).content), ['1/2', '2/2']);
   }
 
+  const notes = await dump(`import std:document as document_api
+page first
+  note! "First speaker note"
+  text!("First slide")
+end
+page second
+  document_api::note! <<
+Second speaker note
+Another line
+>>
+  text!("Second slide")
+end
+page third
+  text!("Third slide")
+end
+`);
+  const pageNotes = notes.page_order.map(id => notes.nodes.find(node => node.id === id).fields.notes ?? '');
+  assert.deepEqual(pageNotes, ['First speaker note', 'Second speaker note\nAnother line', '']);
+  assert(!notes.nodes.some(node => node.content?.includes('speaker note')), 'speaker notes must not become visible text');
+
   for (const name of ['default']) {
     const themed = await dump(`import std:themes/${name} as chosen
  const theme: Theme = chosen::default_theme() with { body.text.size = 27 }

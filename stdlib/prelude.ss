@@ -63,6 +63,7 @@ import std:components/toc as {
 import std:document as {
   Heading,
   PageNumber,
+  note!,
   heading,
   heading!,
   number_of,
