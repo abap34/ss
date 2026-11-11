@@ -95,6 +95,92 @@ test "desugar: stage declarations apply to the whole page from any body position
     }
 }
 
+test "desugar: integer stages preserve literal values, order, and inclusive endpoints" {
+    const cases = .{
+        .{ "1:3", &[_]f32{ 1, 2, 3 } },
+        .{ "-2 : 0", &[_]f32{ -2, -1, 0 } },
+        .{ "7:7", &[_]f32{7} },
+        .{ "1:2:9", &[_]f32{ 1, 3, 5, 7, 9 } },
+        .{ "1:2:8", &[_]f32{ 1, 3, 5, 7 } },
+        .{ "9:-2:1", &[_]f32{ 9, 7, 5, 3, 1 } },
+        .{ "9:-2:2", &[_]f32{ 9, 7, 5, 3 } },
+        .{ "-3:2:3", &[_]f32{ -3, -1, 1, 3 } },
+        .{ "3:-2:-3", &[_]f32{ 3, 1, -1, -3 } },
+        .{ "7:-2:7", &[_]f32{7} },
+        .{ "1:3 7 10:12", &[_]f32{ 1, 2, 3, 7, 10, 11, 12 } },
+        .{ "0:2:4 1:2:5", &[_]f32{ 0, 2, 4, 1, 3, 5 } },
+        .{ "9:-2:5 1:2", &[_]f32{ 9, 7, 5, 1, 2 } },
+        .{ "-16777216:16777216:16777216", &[_]f32{ -16777216, 0, 16777216 } },
+        .{ "16777216:-16777216:-16777216", &[_]f32{ 16777216, 0, -16777216 } },
+        .{ "7 1 -3 0", &[_]f32{ 7, 1, -3, 0 } },
+        .{ "-16777216 16777216", &[_]f32{ -16777216, 16777216 } },
+        .{ "1 ;; First value\n  3", &[_]f32{ 1, 3 } },
+        .{ "1\n :\n 2", &[_]f32{ 1, 2 } },
+        .{ "1\n :\n 2\n :\n 5", &[_]f32{ 1, 3, 5 } },
+    };
+    inline for (cases) |case| {
+        const text = "page Before\nend\npage Demo\nlet current = i\nstages i { " ++ case[0] ++ " }\nend\npage After\nend\n";
+        var parsed = try syntax.parseSurface(testing.allocator, text);
+        defer parsed.deinit(testing.allocator);
+        var expanded = try syntax.desugar(testing.allocator, &parsed, .{});
+        defer expanded.deinit(testing.allocator);
+        try testing.expectEqual(case[1].len + 2, expanded.pages.items.len);
+        try testing.expectEqualStrings("Before", expanded.pages.items[0].name);
+        try testing.expectEqualStrings("After", expanded.pages.items[expanded.pages.items.len - 1].name);
+        for (expanded.pages.items[1 .. 1 + case[1].len], case[1], 0..) |page, value, index| {
+            try testing.expectEqual(value, page.statements.items[0].kind.let_binding.expr.number);
+            try testing.expectEqual(index, page.stage_index.?);
+            try testing.expectEqualStrings("Demo", page.source_name.?);
+            const label = try std.fmt.allocPrint(testing.allocator, "Demo / {d}", .{@as(i32, @intFromFloat(value))});
+            defer testing.allocator.free(label);
+            try testing.expectEqualStrings(label, page.name);
+            try testing.expectEqual(index + 1, expanded.top_level_items.items[index + 1].page);
+        }
+    }
+}
+
+test "desugar: integer stages preserve lexical shadowing and callable errors" {
+    var parsed = try syntax.parseSurface(testing.allocator,
+        \\page Demo
+        \\  stages i { 3 7 }
+        \\  let identity = (i: Number) |-> i
+        \\  let captured = (n: Number) |-> i
+        \\  let invalid = i()
+        \\  let i = i + 10
+        \\  let local = i
+        \\end
+    );
+    defer parsed.deinit(testing.allocator);
+    var expanded = try syntax.desugar(testing.allocator, &parsed, .{});
+    defer expanded.deinit(testing.allocator);
+    for (expanded.pages.items, [_]f32{ 3, 7 }) |page, value| {
+        const statements = page.statements.items;
+        try testing.expectEqualStrings("i", statements[0].kind.let_binding.expr.lambda.body.ident.name);
+        try testing.expectEqual(value, statements[1].kind.let_binding.expr.lambda.body.number);
+        try testing.expectEqual(value, statements[2].kind.let_binding.expr.apply.callee.number);
+        try testing.expectEqual(value, statements[3].kind.let_binding.expr.call.args.items[0].number);
+        try testing.expectEqualStrings("i", statements[4].kind.let_binding.expr.ident.name);
+    }
+}
+
+fn integerStagesAllocation(allocator: std.mem.Allocator) !void {
+    var parsed = try syntax.parseSurface(allocator, "page Range\nstages i { -1:1 }\nlet value = i\nend\npage List\nstages i { 7:-2:3 0 }\nlet value = i\nend\n");
+    defer parsed.deinit(allocator);
+    var retained = try syntax.desugar(allocator, &parsed, .{ .expand_stages = false });
+    defer retained.deinit(allocator);
+    var copy = try retained.clone(allocator);
+    defer copy.deinit(allocator);
+    var expanded = try syntax.desugar(allocator, &parsed, .{});
+    defer expanded.deinit(allocator);
+    try testing.expectEqual(@as(usize, 2), copy.pages.items.len);
+    try testing.expectEqual(@as(usize, 3), copy.pages.items[0].stages.?.count());
+    try testing.expectEqual(@as(usize, 7), expanded.pages.items.len);
+}
+
+test "desugar: integer stage lists and compact ranges release partial allocations" {
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, integerStagesAllocation, .{});
+}
+
 test "desugar: document block offsets follow flattened show statements" {
     var parsed = try syntax.parseSurface(testing.allocator, source);
     defer parsed.deinit(testing.allocator);

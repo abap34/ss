@@ -230,27 +230,101 @@ pub fn cloneTypeArguments(allocator: Allocator, arguments: []const Type) !std.Ar
 }
 
 pub const StagesDecl = struct {
+    pub const Integer = struct { value: i32, span: Span };
+    pub const NumberRange = struct {
+        first: i32,
+        last: i32,
+        step: i32 = 1,
+        span: Span,
+
+        pub fn count(self: NumberRange) usize {
+            return @intCast(@divTrunc(@as(i64, self.last) - self.first, self.step) + 1);
+        }
+
+        pub fn value(self: NumberRange, index: usize) i32 {
+            return @intCast(@as(i64, self.first) + @as(i64, self.step) * @as(i64, @intCast(index)));
+        }
+    };
+    pub const Entries = union(enum) {
+        names: std.ArrayList(EnumCaseDecl),
+        numbers: std.ArrayList(NumberRange),
+    };
+
+    // Every integer in this interval is represented exactly by Number (f32).
+    pub const max_integer: i32 = 1 << 24;
+
     name: []const u8,
     name_span: Span,
-    entries: std.ArrayList(EnumCaseDecl),
+    entries: Entries,
     span: Span,
+
+    pub fn count(self: StagesDecl) usize {
+        return switch (self.entries) {
+            .names => |entries| entries.items.len,
+            .numbers => |entries| blk: {
+                var total: usize = 0;
+                for (entries.items) |entry| total += entry.count();
+                break :blk total;
+            },
+        };
+    }
+
+    pub fn value(self: StagesDecl, index: usize) f32 {
+        return switch (self.entries) {
+            .names => @floatFromInt(index),
+            .numbers => |entries| blk: {
+                var remaining = index;
+                for (entries.items) |entry| {
+                    const length = entry.count();
+                    if (remaining < length) break :blk @floatFromInt(entry.value(remaining));
+                    remaining -= length;
+                }
+                unreachable;
+            },
+        };
+    }
+
+    pub fn stageName(self: StagesDecl, index: usize) ?[]const u8 {
+        return switch (self.entries) {
+            .names => |entries| entries.items[index].name,
+            else => null,
+        };
+    }
+
+    pub fn labelAlloc(self: StagesDecl, allocator: Allocator, index: usize) ![]const u8 {
+        if (self.stageName(index)) |label| return allocator.dupe(u8, label);
+        return std.fmt.allocPrint(allocator, "{d}", .{@as(i32, @intFromFloat(self.value(index)))});
+    }
 
     pub fn deinit(self: *StagesDecl, allocator: Allocator) void {
         allocator.free(self.name);
-        for (self.entries.items) |*entry| entry.deinit(allocator);
-        self.entries.deinit(allocator);
+        switch (self.entries) {
+            .names => |*entries| {
+                for (entries.items) |*entry| entry.deinit(allocator);
+                entries.deinit(allocator);
+            },
+            .numbers => |*entries| entries.deinit(allocator),
+        }
     }
 
     pub fn clone(self: StagesDecl, allocator: Allocator) !StagesDecl {
         var result = StagesDecl{
             .name = try allocator.dupe(u8, self.name),
             .name_span = self.name_span,
-            .entries = .empty,
+            .entries = .{ .names = .empty },
             .span = self.span,
         };
         errdefer result.deinit(allocator);
-        try result.entries.ensureTotalCapacity(allocator, self.entries.items.len);
-        for (self.entries.items) |entry| result.entries.appendAssumeCapacity(try entry.clone(allocator));
+        switch (self.entries) {
+            .names => |entries| {
+                try result.entries.names.ensureTotalCapacity(allocator, entries.items.len);
+                for (entries.items) |entry| result.entries.names.appendAssumeCapacity(try entry.clone(allocator));
+            },
+            .numbers => |entries| {
+                result.entries = .{ .numbers = .empty };
+                try result.entries.numbers.appendSlice(allocator, entries.items);
+            },
+        }
         return result;
     }
 };

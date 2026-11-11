@@ -882,23 +882,67 @@ const Parser = struct {
         const start = self.pos;
         try self.expectKeyword("stages");
         const name = try self.parseIdentifierWithSpan();
-        var result = ast.StagesDecl{ .name = name.text, .name_span = name.span, .entries = .empty, .span = undefined };
+        var result = ast.StagesDecl{ .name = name.text, .name_span = name.span, .entries = .{ .names = .empty }, .span = undefined };
         errdefer result.deinit(self.allocator);
         source.skipTriviaFrom(self.source, &self.pos);
         try self.expectChar('{');
         source.skipTriviaFrom(self.source, &self.pos);
-        while (!self.eof() and !self.peekChar('}')) {
-            const entry = try self.parseIdentifierWithSpan();
-            var moved = false;
-            errdefer if (!moved) self.allocator.free(entry.text);
-            try result.entries.append(self.allocator, .{ .name = entry.text, .name_span = entry.span });
-            moved = true;
-            source.skipTriviaFrom(self.source, &self.pos);
+        if (self.startsNumberLiteral() or source.startsWithAt(self.source, self.pos, "-")) {
+            result.entries = .{ .numbers = .empty };
+            while (!self.eof() and !self.peekChar('}')) {
+                if (self.eof()) break;
+                if (source.isIdentifierStart(self.source[self.pos])) return self.fail(error.MixedStageEntries);
+                const first = try self.parseStageInteger();
+                var entry = ast.StagesDecl.NumberRange{ .first = first.value, .last = first.value, .span = first.span };
+                if (self.peekChar(':')) {
+                    self.pos += 1;
+                    const second = try self.parseStageInteger();
+                    var last = second;
+                    if (self.peekChar(':')) {
+                        self.pos += 1;
+                        entry.step = second.value;
+                        last = try self.parseStageInteger();
+                    }
+                    entry.last = last.value;
+                    entry.span.end = last.span.end;
+                    if (entry.step == 0) return self.failSpan(second.span, error.InvalidStageRange);
+                    if ((entry.first < entry.last and entry.step < 0) or (entry.first > entry.last and entry.step > 0))
+                        return self.failSpan(entry.span, error.InvalidStageRange);
+                }
+                try result.entries.numbers.append(self.allocator, entry);
+            }
+        } else {
+            while (!self.eof() and !self.peekChar('}')) {
+                if (self.eof()) break;
+                if (self.startsNumberLiteral() or self.source[self.pos] == '-') return self.fail(error.MixedStageEntries);
+                const entry = try self.parseIdentifierWithSpan();
+                var moved = false;
+                errdefer if (!moved) self.allocator.free(entry.text);
+                try result.entries.names.append(self.allocator, .{ .name = entry.text, .name_span = entry.span });
+                moved = true;
+                source.skipTriviaFrom(self.source, &self.pos);
+            }
         }
         try self.expectChar('}');
         try self.consumeStatementTerminator();
         result.span = .{ .start = start, .end = self.pos };
         return result;
+    }
+
+    fn parseStageInteger(self: *Parser) !ast.StagesDecl.Integer {
+        source.skipTriviaFrom(self.source, &self.pos);
+        const start = self.pos;
+        if (source.startsWithAt(self.source, self.pos, "-")) self.pos += 1;
+        const digits = self.pos;
+        while (!self.eof() and std.ascii.isDigit(self.source[self.pos])) self.pos += 1;
+        if (self.pos == digits) return self.failAt(start, error.InvalidStageInteger);
+        if (!self.eof() and !source.isInlineSpace(self.source[self.pos]) and self.source[self.pos] != '\n' and self.source[self.pos] != '}' and self.source[self.pos] != ':' and
+            source.lineCommentMarkerLength(self.source, self.pos) == null)
+            return self.failAt(start, error.InvalidStageInteger);
+        const span: ast.Span = .{ .start = start, .end = self.pos };
+        const value = std.fmt.parseInt(i32, self.source[start..self.pos], 10) catch return self.failSpan(span, error.InvalidStageInteger);
+        if (value < -ast.StagesDecl.max_integer or value > ast.StagesDecl.max_integer) return self.failSpan(span, error.InvalidStageInteger);
+        return .{ .value = value, .span = span };
     }
 
     fn parsePageNameWithSpan(self: *Parser) !ParsedName {

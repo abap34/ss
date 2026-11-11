@@ -66,6 +66,23 @@ test "include rejects cycles and repeated physical files" {
     try testing.expectError(error.DuplicateInclude, parse(&overlay, "include \"one.ss\"\ninclude \"./one.ss\"\n"));
 }
 
+test "include expands integer stages and retains physical declaration spans" {
+    var overlay = compiler.module_loader.SourceOverlay.init(testing.allocator);
+    defer overlay.deinit();
+    const child_source = "page Range\nstages i { 1:2 }\nlet value = i\nend\npage List\nstages i { 7 1 }\nlet value = i\nend\n";
+    try overlay.put("/include-spec/integers.ss", child_source);
+    var module = try parse(&overlay, "include \"integers.ss\"\n");
+    defer module.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 4), module.pages.items.len);
+    for (module.pages.items, [_]f32{ 1, 2, 7, 1 }) |page, value| {
+        try testing.expectEqual(value, page.statements.items[0].kind.let_binding.expr.number);
+        const file = module.source_files.items[0];
+        try testing.expectEqualStrings("/include-spec/integers.ss", file.path);
+        const span = page.stages.?.span;
+        try testing.expect(std.mem.startsWith(u8, child_source[span.start - file.offset .. span.end - file.offset], "stages i"));
+    }
+}
+
 test "include snapshots map cross-file definitions and semantic errors to physical sources" {
     const api = compiler.analysis.snapshot;
     const child_path = "/include-spec/child.ss";

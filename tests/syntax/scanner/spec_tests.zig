@@ -9,6 +9,19 @@ const ExpectedToken = struct {
     line: usize,
 };
 
+test "syntax scanner: Julia stage ranges retain integer and decimal literal boundaries" {
+    try expectTokens("stages i { 1:2:12 }\nlet value = 1.25", &.{
+        .{ .kind = .identifier, .text = "stages", .line = 0 },
+        .{ .kind = .identifier, .text = "i", .line = 0 },
+        .{ .kind = .number, .text = "1", .line = 0 },
+        .{ .kind = .number, .text = "2", .line = 0 },
+        .{ .kind = .number, .text = "12", .line = 0 },
+        .{ .kind = .identifier, .text = "let", .line = 1 },
+        .{ .kind = .identifier, .text = "value", .line = 1 },
+        .{ .kind = .number, .text = "1.25", .line = 1 },
+    });
+}
+
 test "syntax scanner: tokenizes source words and literals without comments" {
     const text =
         \\fn title!(x: String)

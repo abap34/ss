@@ -32,6 +32,7 @@ module.exports = grammar({
     [$.bare_callable_identifier, $._type_name],
     [$._expression, $.bare_callable_identifier, $._type_name],
     [$._expression, $.bare_callable_identifier],
+    [$.stage_range],
   ],
 
   rules: {
@@ -131,7 +132,23 @@ module.exports = grammar({
 
     page_declaration: $ => seq("page", field("name", choice($.string, $.identifier)), $._terminator, repeat($._statement), optional(seq($.stages_declaration, repeat($._statement))), "end"),
 
-    stages_declaration: $ => seq("stages", field("name", $.identifier), "{", repeat($._terminator), repeat1(seq(field("stage", $.identifier), repeat($._terminator))), "}", $._terminator),
+    stages_declaration: $ => seq(
+      "stages", field("name", $.identifier), "{", repeat($._terminator),
+      choice(
+        repeat1(seq(field("stage", $.identifier), repeat($._terminator))),
+        repeat1(seq(field("stage", choice($.stage_integer, $.stage_range)), repeat($._terminator))),
+      ),
+      "}", $._terminator,
+    ),
+
+    stage_integer: $ => seq(optional("-"), alias(token(/\d+/), $.number)),
+    stage_range: $ => seq(
+      field("first", $.stage_integer), repeat($._terminator), ":", repeat($._terminator),
+      choice(
+        field("last", $.stage_integer),
+        seq(field("step", $.stage_integer), repeat($._terminator), ":", repeat($._terminator), field("last", $.stage_integer)),
+      ),
+    ),
 
     _body: $ => seq($._terminator, repeat($._statement), "end"),
 

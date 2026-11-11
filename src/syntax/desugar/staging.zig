@@ -12,15 +12,29 @@ pub fn expand(allocator: std.mem.Allocator, module: *ast.Module, failure: *Failu
     for (module.pages.items) |page| if (page.stages != null and page.stage_index == null) {
         needed = true;
         const stages = page.stages.?;
-        if (stages.entries.items.len == 0) {
+        if (stages.count() == 0) {
             failure.* = .{ .span = stages.span };
             return error.EmptyStages;
         }
-        for (stages.entries.items, 0..) |entry, index| {
-            for (stages.entries.items[0..index]) |previous| if (std.mem.eql(u8, previous.name, entry.name)) {
-                failure.* = .{ .span = entry.name_span };
-                return error.DuplicateStageName;
-            };
+        switch (stages.entries) {
+            .names => |entries| for (entries.items, 0..) |entry, index| {
+                for (entries.items[0..index]) |previous| if (std.mem.eql(u8, previous.name, entry.name)) {
+                    failure.* = .{ .span = entry.name_span };
+                    return error.DuplicateStageName;
+                };
+            },
+            .numbers => |entries| if (entries.items.len > 1) {
+                var seen = std.AutoHashMap(i32, void).init(allocator);
+                defer seen.deinit();
+                for (entries.items) |entry| for (0..entry.count()) |index| {
+                    if (cancellation) |token| try token.check();
+                    const previous = try seen.getOrPut(entry.value(index));
+                    if (previous.found_existing) {
+                        failure.* = .{ .span = entry.span };
+                        return error.DuplicateStageValue;
+                    }
+                };
+            },
         }
     };
     if (!needed) return;
@@ -36,16 +50,19 @@ pub fn expand(allocator: std.mem.Allocator, module: *ast.Module, failure: *Failu
     for (module.pages.items) |original| {
         if (cancellation) |token| try token.check();
         try starts.append(allocator, pages.items.len);
-        const count = if (original.stages) |stages| if (original.stage_index == null) stages.entries.items.len else 1 else 1;
+        const count = if (original.stages) |stages| if (original.stage_index == null) stages.count() else 1 else 1;
         try counts.append(allocator, count);
         for (0..count) |index| {
+            if (cancellation) |token| try token.check();
             var page = try original.clone(allocator);
             var moved = false;
             errdefer if (!moved) page.deinit(allocator);
             if (original.stages) |stages| {
                 if (original.stage_index == null) {
                     page.stage_index = index;
-                    const name = try std.fmt.allocPrint(allocator, "{s} / {s}", .{ original.name, stages.entries.items[index].name });
+                    const label = try stages.labelAlloc(allocator, index);
+                    defer allocator.free(label);
+                    const name = try std.fmt.allocPrint(allocator, "{s} / {s}", .{ original.name, label });
                     page.source_name = page.name;
                     page.name = name;
                     var rewriter = Rewriter{ .allocator = allocator, .stages = stages, .index = index, .failure = failure, .cancellation = cancellation };
@@ -105,14 +122,15 @@ const Rewriter = struct {
         switch (value.*) {
             .ident => |ident| if (!shadowed and std.mem.eql(u8, ident.name, self.stages.name)) {
                 value.deinit(self.allocator);
-                value.* = .{ .number = @floatFromInt(self.index) };
+                value.* = .{ .number = self.stages.value(self.index) };
             },
             .member => |*member| {
                 if (!shadowed and member.target.* == .ident and std.mem.eql(u8, member.target.ident.name, self.stages.name)) {
-                    for (self.stages.entries.items, 0..) |entry, index| {
-                        if (std.mem.eql(u8, entry.name, member.name)) {
+                    for (0..self.stages.count()) |index| {
+                        const name = self.stages.stageName(index) orelse break;
+                        if (std.mem.eql(u8, name, member.name)) {
                             value.deinit(self.allocator);
-                            value.* = .{ .number = @floatFromInt(index) };
+                            value.* = .{ .number = self.stages.value(index) };
                             return;
                         }
                     }
@@ -125,7 +143,7 @@ const Rewriter = struct {
                 for (call.args.items) |*arg| try self.expr(arg, shadowed);
                 if (!shadowed and !call.callee.isQualified() and call.callee.resolution == .lexical and std.mem.eql(u8, call.callee.name, self.stages.name)) {
                     const callee = try self.allocator.create(ast.Expr);
-                    callee.* = .{ .number = @floatFromInt(self.index) };
+                    callee.* = .{ .number = self.stages.value(self.index) };
                     const args = call.args;
                     const arg_spans = call.arg_spans;
                     for (call.type_args.items) |*argument| argument.deinit(self.allocator);

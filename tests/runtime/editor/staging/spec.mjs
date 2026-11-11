@@ -80,6 +80,82 @@ end
     assert((await diagnostics).params.diagnostics.length === 0, "fixing a stage name did not clear diagnostics");
     snapshot = await client.request("ss/editorSnapshot", { textDocument: { uri } });
     assert(!snapshot.stale && snapshot.layout.pages.length === 3, "preview did not recover after a stage error");
+
+    source = source.replace("stages s { first second third }", "stages s { 1:3 }").replaceAll("s.second", "2");
+    diagnostics = client.waitForDiagnostics(uri);
+    client.changeDocument({ uri, version: 5, text: source });
+    assert((await diagnostics).params.diagnostics.length === 0, "integer range stages produced diagnostics");
+    snapshot = await client.request("ss/editorSnapshot", { textDocument: { uri } });
+    assert(!snapshot.stale && snapshot.layout.pages.length === 3, "integer range preview failed to build");
+    targets = snapshot.editing.filter((item) => item.binding === "item");
+    assert(JSON.stringify(snapshot.layout.pages.map(page => targets.find(item => item.page_id === page.id)?.page_name)) ===
+      JSON.stringify(["Demo / 1", "Demo / 2", "Demo / 3"]), "integer stages lost their value labels");
+    const numericTarget = targets[1];
+    const numericBounds = previewBounds(snapshot, numericTarget.node_id);
+    const numericEdit = await requestEdit(client, uri, snapshot, numericTarget, numericBounds,
+      { ...numericBounds, x: 180, y: 190 }, "absolute", numericTarget.page_id);
+    assert(numericEdit.status === "ok", "integer stage source edit failed");
+    source = applyProtocolEdits(source, numericEdit.workspaceEdit.changes[uri]);
+    diagnostics = client.waitForDiagnostics(uri);
+    client.changeDocument({ uri, version: 6, text: source });
+    assert((await diagnostics).params.diagnostics.length === 0, "integer stage shared edit produced diagnostics");
+    snapshot = await client.request("ss/editorSnapshot", { textDocument: { uri } });
+    targets = snapshot.editing.filter((item) => item.binding === "item");
+    assert(targets.length === 3, "integer stage edit lost a page copy");
+    for (const item of targets) {
+      const bounds = previewBounds(snapshot, item.node_id);
+      assert(Math.abs(bounds.x - 180) < 0.1 && Math.abs(bounds.y - 190) < 0.1, "integer stage edit did not update every page");
+    }
+    source = source.replace("stages s { 1:3 }", "stages s { 1:2:5 }");
+    diagnostics = client.waitForDiagnostics(uri);
+    client.changeDocument({ uri, version: 7, text: source });
+    assert((await diagnostics).params.diagnostics.length === 0, "integer stage list produced diagnostics");
+    snapshot = await client.request("ss/editorSnapshot", { textDocument: { uri } });
+    targets = snapshot.editing.filter((item) => item.binding === "item");
+    assert(!snapshot.stale && JSON.stringify(snapshot.layout.pages.map(page => targets.find(item => item.page_id === page.id)?.page_name)) ===
+      JSON.stringify(["Demo / 1", "Demo / 3", "Demo / 5"]), "integer stage range lost its step");
+    source = source.replace("stages s { 1:2:5 }", "stages s { 7:-2:3 1 }");
+    diagnostics = client.waitForDiagnostics(uri);
+    client.changeDocument({ uri, version: 8, text: source });
+    assert((await diagnostics).params.diagnostics.length === 0, "combined integer stages produced diagnostics");
+    snapshot = await client.request("ss/editorSnapshot", { textDocument: { uri } });
+    targets = snapshot.editing.filter((item) => item.binding === "item");
+    assert(!snapshot.stale && JSON.stringify(snapshot.layout.pages.map(page => targets.find(item => item.page_id === page.id)?.page_name)) ===
+      JSON.stringify(["Demo / 7", "Demo / 5", "Demo / 3", "Demo / 1"]), "combined integer stages lost their order");
+    diagnostics = client.waitForDiagnostics(uri, reports => reports.some(report => report.code === "InvalidStageRange"));
+    client.changeDocument({ uri, version: 9, text: source.replace("7:-2:3 1", "7:0:3 1") });
+    assert((await diagnostics).params.diagnostics.some(report => report.code === "InvalidStageRange"), "zero step must produce a source diagnostic");
+    diagnostics = client.waitForDiagnostics(uri);
+    client.changeDocument({ uri, version: 10, text: source });
+    assert((await diagnostics).params.diagnostics.length === 0, "fixing a stage step did not clear diagnostics");
+    snapshot = await client.request("ss/editorSnapshot", { textDocument: { uri } });
+    assert(!snapshot.stale && snapshot.layout.pages.length === 4, "preview did not recover after a stage step error");
+
+    let version = 10;
+    const malformed = [
+      ["1::3", "InvalidStageInteger"],
+      ["1:2:", "InvalidStageInteger"],
+      ["1:16777217:3", "InvalidStageInteger"],
+      ["1:-1:3", "InvalidStageRange"],
+      ["1:3 2", "DuplicateStageValue"],
+      ["0 -0", "DuplicateStageValue"],
+      ["1 first", "MixedStageEntries"],
+      ["", "EmptyStages"],
+    ];
+    for (const [entries, code] of malformed) {
+      const lastGoodId = snapshot.snapshot_id;
+      diagnostics = client.waitForDiagnostics(uri, reports => reports.some(report => report.code === code));
+      client.changeDocument({ uri, version: ++version, text: source.replace("7:-2:3 1", entries) });
+      assert((await diagnostics).params.diagnostics.some(report => report.code === code), `${entries}: missing ${code}`);
+      const stale = await client.request("ss/editorSnapshot", { textDocument: { uri } });
+      assert(stale.stale && stale.snapshot_id === lastGoodId && stale.layout.pages.length === 4,
+        `${entries}: invalid stages must retain the last valid preview`);
+      diagnostics = client.waitForDiagnostics(uri);
+      client.changeDocument({ uri, version: ++version, text: source });
+      assert((await diagnostics).params.diagnostics.length === 0, `${entries}: repaired stages retained diagnostics`);
+      snapshot = await client.request("ss/editorSnapshot", { textDocument: { uri } });
+      assert(!snapshot.stale && snapshot.layout.pages.length === 4, `${entries}: repaired stages did not rebuild`);
+    }
   });
 } finally {
   await rm(directory, { recursive: true, force: true });

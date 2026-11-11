@@ -26,6 +26,104 @@ fn evaluate(state: *core.DocumentState) !void {
     try compiler.lowering.evaluateDocument(state, &graph, .{ .io = testing.io });
 }
 
+test "staging: integer ranges and lists evaluate expressions and drawing conditions in order" {
+    var state = try document(
+        \\page Range
+        \\  stages i { 1:3 }
+        \\  text!("frame-" ++ str(i) ++ ".png")
+        \\  show i >= 2
+        \\    text! "Detail"
+        \\  end
+        \\end
+        \\page List
+        \\  stages i { 7:-2:3 1 }
+        \\  let identity = (i: Number) |-> i
+        \\  text!(str(identity(42)))
+        \\  text!(str(i))
+        \\end
+    );
+    defer state.deinit();
+    try evaluate(&state);
+    try testing.expectEqual(@as(usize, 7), state.graph.page_order.items.len);
+    for (state.graph.page_order.items[0..3], 0..) |page, index| {
+        const roots = state.placementRootsOf(page);
+        try testing.expectEqual(@as(usize, 2), roots.len);
+        const expected = try std.fmt.allocPrint(testing.allocator, "frame-{d}.png", .{index + 1});
+        defer testing.allocator.free(expected);
+        try testing.expectEqualStrings(expected, core.nodeDisplayContent(state.getNode(roots[0]).?));
+        try testing.expectEqual(index >= 1, state.isDrawn(roots[1]));
+    }
+    for (state.graph.page_order.items[3..], [_][]const u8{ "7", "5", "3", "1" }) |page, value| {
+        const roots = state.placementRootsOf(page);
+        try testing.expectEqualStrings("42", core.nodeDisplayContent(state.getNode(roots[0]).?));
+        try testing.expectEqualStrings(value, core.nodeDisplayContent(state.getNode(roots[1]).?));
+    }
+}
+
+test "staging: numeric values survive captures, record updates, branches, and lexical shadowing" {
+    var state = try document(
+        \\type Sample { value: Number }
+        \\page Example
+        \\  stages i { -3:2:3 8 }
+        \\  let captured = (() |-> i)
+        \\  let sample = Sample { value = i }
+        \\  let updated = sample with { value = i + 10 }
+        \\  let offset = ((i: Number) |-> i + 1)(40)
+        \\  if i < 0
+        \\    let i = i + 100
+        \\    text!(str(i))
+        \\  else
+        \\    text!(str(i))
+        \\  end
+        \\  text!(str(captured()))
+        \\  text!(str(sample.value))
+        \\  text!(str(updated.value))
+        \\  text!(str(offset))
+        \\  let i = i + 20
+        \\  text!(str(i))
+        \\  text!(str(captured()))
+        \\end
+    );
+    defer state.deinit();
+    try evaluate(&state);
+    try testing.expectEqual(@as(usize, 5), state.graph.page_order.items.len);
+    for (state.graph.page_order.items, [_]i32{ -3, -1, 1, 3, 8 }) |page, value| {
+        const roots = state.placementRootsOf(page);
+        try testing.expectEqual(@as(usize, 7), roots.len);
+        const expected = [_]i32{ if (value < 0) value + 100 else value, value, value, value + 10, 41, value + 20, value };
+        for (roots, expected) |node, number| {
+            const text = try std.fmt.allocPrint(testing.allocator, "{d}", .{number});
+            defer testing.allocator.free(text);
+            try testing.expectEqualStrings(text, core.nodeDisplayContent(state.getNode(node).?));
+        }
+    }
+}
+
+test "staging: descending signed ranges drive nested drawing predicates by value" {
+    var state = try document(
+        \\page Example
+        \\  stages i { 3:-1:-3 }
+        \\  text!(str(i))
+        \\  show i >= 0
+        \\    text! "Nonnegative"
+        \\    show i <= 2
+        \\      text! "Small"
+        \\    end
+        \\  end
+        \\end
+    );
+    defer state.deinit();
+    try evaluate(&state);
+    try testing.expectEqual(@as(usize, 7), state.graph.page_order.items.len);
+    for (state.graph.page_order.items, [_]i32{ 3, 2, 1, 0, -1, -2, -3 }) |page, value| {
+        const roots = state.placementRootsOf(page);
+        try testing.expectEqual(@as(usize, 3), roots.len);
+        try testing.expect(state.isDrawn(roots[0]));
+        try testing.expectEqual(value >= 0, state.isDrawn(roots[1]));
+        try testing.expectEqual(value >= 0 and value <= 2, state.isDrawn(roots[2]));
+    }
+}
+
 test "staging: bindings from separate show blocks compose outside the blocks" {
     var state = try document(
         \\page Demo
