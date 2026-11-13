@@ -28,7 +28,6 @@ function assertPainted(html, code, pdf) {
 async function verify(name, source) {
   const entry = `${name}.ss`;
   await writeFile(path.join(output, entry), source);
-  run("check", "--quiet", entry);
   run("dump", "--quiet", entry, "--output", "dump.json");
   const dump = JSON.parse(await readFile(path.join(output, "dump.json"), "utf8"));
   assert.deepEqual(dump.diagnostics, []);

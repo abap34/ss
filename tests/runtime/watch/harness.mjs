@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { ssBin } from "../harness.mjs";
 import { terminateProcessTree } from "../process.mjs";
 
@@ -25,6 +26,15 @@ export class WatchProcess {
 
   occurrences(text) {
     return this.log.split(text).length - 1;
+  }
+
+  async waitForOutput(file, predicate, description) {
+    await this.waitFor(async () => {
+      try { return predicate(await readFile(file)); } catch (error) {
+        if (error.code === "ENOENT") return false;
+        throw error;
+      }
+    }, description);
   }
 
   async waitFor(predicate, description) {

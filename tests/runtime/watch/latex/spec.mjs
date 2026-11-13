@@ -95,34 +95,39 @@ exec ${quote(realPdflatex)} "$@"
   }
   await run(ssBin, ["render", "--quiet", "slide.ss", ".test-tmp/final.pdf"], project);
   const beforeWatch = await calls();
-  watch = new WatchProcess(project, ["check", "--quiet", "slide.ss"]);
-  await watch.waitFor(() => checks() === 1, "warm watch initialization");
+  const watchedPdf = path.join(project, "watched.pdf");
+  watch = new WatchProcess(project, ["render", "--quiet", "slide.ss", watchedPdf]);
+  await watch.waitForOutput(watchedPdf, bytes => bytes.subarray(0, 5).equals(Buffer.from("%PDF-")), "warm watch PDF");
   await settle();
-  assert.equal(checks(), 1, watch.log);
+  const changes = () => watch.occurrences("watch: change detected");
+  assert.equal(changes(), 0, watch.log);
   assert.equal(await calls(), beforeWatch, "Warm watch initialization executed TeX");
   await writeFile(path.join(project, "unused.tex"), "Still unused");
   await settle();
-  assert.equal(checks(), 1, `An unused TeX file triggered compilation:\n${watch.log}`);
+  assert.equal(changes(), 0, `An unused TeX file triggered compilation:\n${watch.log}`);
+  const initialPdf = await readFile(watchedPdf);
   await writeFile(nested, String.raw`\input{../outside/second.tex}`);
-  await watch.waitFor(() => checks() === 2, "replacement TeX dependency");
+  await watch.waitForOutput(watchedPdf, bytes => !bytes.equals(initialPdf), "replacement TeX dependency");
   await settle();
-  assert.equal(checks(), 2, watch.log);
+  assert.equal(changes(), 1, watch.log);
+  const secondPdf = await readFile(watchedPdf);
   await writeFile(first, String.raw`\def\ProbeText{OBSOLETE}`);
   await settle();
-  assert.equal(checks(), 2, `An obsolete TeX input triggered compilation:\n${watch.log}`);
+  assert.equal(changes(), 1, `An obsolete TeX input triggered compilation:\n${watch.log}`);
   await rm(second);
-  await watch.waitFor(() => watch.occurrences("RenderFailed:") >= 4, "missing TeX input diagnostic");
+  await watch.waitFor(() => watch.log.includes("RenderFailed:"), "missing TeX input diagnostic");
   await settle();
+  assert.deepEqual(await readFile(watchedPdf), secondPdf, "a failed render replaced the PDF");
   await writeFile(second, String.raw`\def\ProbeText{RESTORED}`);
-  await watch.waitFor(() => checks() === 3, "restored external TeX input");
+  await watch.waitForOutput(watchedPdf, bytes => !bytes.equals(secondPdf), "restored external TeX input");
   await settle();
-  assert.equal(checks(), 3, watch.log);
+  assert.equal(changes(), 3, watch.log);
+  const restoredPdf = await readFile(watchedPdf);
   assert(!watch.log.includes("ResourceChangedDuringRead"), watch.log);
   await writeFile(raceMarker, "change after the next successful TeX run");
   await writeFile(second, String.raw`\def\ProbeText{RACESTART}`);
-  await watch.waitFor(() => checks() === 4, "input changed during TeX execution");
+  await watch.waitForOutput(watchedPdf, bytes => !bytes.equals(restoredPdf), "input changed during TeX execution");
   await settle();
-  assert.equal(checks(), 4, watch.log);
   assert(watch.log.includes("ResourceChangedDuringRead"), "An input changed during compilation was published as current");
   await watch.close();
   watch = null;
@@ -131,13 +136,15 @@ exec ${quote(realPdflatex)} "$@"
     if (name.endsWith(".ref")) await rm(path.join(artifactDirectory, name));
   }
   await writeFile(nested, String.raw`\input{../outside/new-input.tex}`);
-  watch = new WatchProcess(project, ["check", "--quiet", "slide.ss"]);
-  await watch.waitFor(() => watch.occurrences("RenderFailed:") >= 4, "cold missing external input");
+  const recoveredPdf = path.join(project, "recovered.pdf");
+  watch = new WatchProcess(project, ["render", "--quiet", "slide.ss", recoveredPdf]);
+  await watch.waitFor(() => watch.log.includes("RenderFailed:"), "cold missing external input");
   await settle();
+  await assert.rejects(readFile(recoveredPdf), { code: "ENOENT" });
   await writeFile(path.join(outside, "new-input.tex"), String.raw`\def\ProbeText{CREATED}`);
-  await watch.waitFor(() => checks() === 1, "newly created external input");
+  await watch.waitForOutput(recoveredPdf, bytes => bytes.subarray(0, 5).equals(Buffer.from("%PDF-")), "newly created external TeX input");
   await settle();
-  assert.equal(checks(), 1, watch.log);
+  assert.equal(changes(), 1, watch.log);
   console.log("TeX input tracking: cold/warm manifests, nested external files, immutable PDFs, dimensions, replacement, concurrent changes and missing-input recovery passed");
 } finally {
   await watch?.close();
@@ -146,7 +153,6 @@ exec ${quote(realPdflatex)} "$@"
   else await rm(directory, { recursive: true, force: true });
 }
 
-function checks() { return watch.occurrences("ok "); }
 function quote(text) { return `'${text.replaceAll("'", "'\\''")}'`; }
 async function calls() { return (await readFile(callsFile, "utf8")).trim().split("\n").length; }
 async function dump(name) {

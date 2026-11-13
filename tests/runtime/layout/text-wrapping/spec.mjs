@@ -42,13 +42,12 @@ for (const generation of ["first", "persisted"]) {
 }
 
 for (const args of [
-  ["check", "--quiet", slide],
   ["dump", "--quiet", slide, path.join(project, "dump.json")],
   ["render", "--quiet", "--format", "html", slide, path.join(project, "slide.html")],
   ["render", "--quiet", slide, path.join(project, "slide.pdf")],
 ]) execFileSync(ssBin, args, { cwd: project, timeout: 60000, stdio: "pipe" });
 assertLines(await readFile(path.join(project, "slide.html"), "utf8"));
-console.log("text wrapping: natural and constrained widths passed in WYSIWYG, persisted snapshots, HTML, check, dump, and PDF render");
+console.log("text wrapping: natural and constrained widths passed in WYSIWYG, persisted snapshots, HTML, dump, and PDF render");
 
 function assertLines(html) {
   const pages = [...html.matchAll(/<section class="ss-page"[^>]*>([\s\S]*?)<\/section>/g)];

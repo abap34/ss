@@ -15,7 +15,6 @@ function run(...args) {
 }
 const close = (actual, expected) => assert(Math.abs(actual - expected) < 0.1, `${actual} != ${expected}`);
 try {
-  run("check", "--quiet", source);
   run("dump", "--quiet", source, "--output", path.join(output, "dump.json"));
   const dump = JSON.parse(await readFile(path.join(output, "dump.json"), "utf8"));
   assert.deepEqual(dump.diagnostics, []);
@@ -50,7 +49,7 @@ try {
 
   const invalidSource = path.join(output, "invalid.ss");
   await writeFile(invalidSource, (await readFile(source, "utf8")).replace("width = 180", "width = -1"));
-  const invalid = spawnSync(ssBin, ["check", "--quiet", invalidSource], { cwd: output, encoding: "utf8", timeout: 60000 });
+  const invalid = spawnSync(ssBin, ["dump", "--quiet", invalidSource], { cwd: output, encoding: "utf8", timeout: 60000 });
   assert.ifError(invalid.error);
   assert.notEqual(invalid.status, 0);
   assert.match(invalid.stderr, /InvalidShapeSize/);

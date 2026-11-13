@@ -20,7 +20,6 @@ function success(...args) {
 }
 const close = (actual, expected) => assert(Math.abs(actual - expected) < 0.1, `${actual} != ${expected}`);
 try {
-  success("check", "--quiet", source);
   success("dump", "--quiet", source, "--output", path.join(output, "dump.json"));
   const dump = JSON.parse(await readFile(path.join(output, "dump.json"), "utf8"));
   assert.deepEqual(dump.diagnostics, []);
@@ -72,7 +71,7 @@ try {
   for (const name of ["fa-solid:not-a-real-ss-icon", "unrecognized:star", "image.svg", ""]) {
     const invalid = path.join(output, "invalid.ss");
     await writeFile(invalid, original.replace("fa-solid:star", name));
-    const result = run("check", "--quiet", invalid);
+    const result = run("dump", "--quiet", invalid);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /InvalidFontAwesomeIcon/);
     assert.doesNotMatch(result.stderr, /AssetNotFound/);

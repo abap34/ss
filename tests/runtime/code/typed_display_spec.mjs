@@ -21,7 +21,6 @@ function color(hex) {
 
 try {
   await copyFile(path.join(root, "tests/fixtures/typed-display/code.ss"), path.join(project, "slide.ss"));
-  run("check", "--quiet", "slide.ss");
   run("dump", "--quiet", "slide.ss", "--output", "dump.json");
   const dump = JSON.parse(await readFile(path.join(project, "dump.json"), "utf8"));
   assert.equal(dump.page_order.length, 2);
@@ -74,7 +73,6 @@ page constructors
   ~ third.top == second.bottom - 32
 end
 `);
-  run("check", "--quiet", "constructors.ss");
   run("dump", "--quiet", "constructors.ss", "--output", "constructors.json");
   const constructed = JSON.parse(await readFile(path.join(project, "constructors.json"), "utf8"));
   const placed = constructed.nodes.filter(node => node.placement?.display.kind === "text" && node.render.kind === "code");

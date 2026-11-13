@@ -18,7 +18,6 @@ function run(...args) {
 }
 async function dumpSource(name, source) {
   await writeFile(path.join(output, `${name}.ss`), source);
-  run("check", "--quiet", `${name}.ss`);
   run("dump", "--quiet", `${name}.ss`, "--output", `${name}.json`);
   const dump = JSON.parse(await readFile(path.join(output, `${name}.json`), "utf8"));
   return dump;

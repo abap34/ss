@@ -58,7 +58,7 @@ try {
     await writeFile(file, source);
     let failure;
     try {
-      await exec(ssBin, ["check", "--quiet", "--color", "never", file], { cwd: directory, timeout: 15000, killSignal: "SIGKILL" });
+      await exec(ssBin, ["dump", "--quiet", "--color", "never", file], { cwd: directory, timeout: 15000, killSignal: "SIGKILL" });
     } catch (error) {
       failure = error;
     }

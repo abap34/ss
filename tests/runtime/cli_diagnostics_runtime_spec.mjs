@@ -4,7 +4,9 @@ import { access, link, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, 
 import os from "node:os";
 import path from "node:path";
 import { assert, ssBin } from "./harness.mjs";
+import { terminateProcessTree } from "./process.mjs";
 
+await testRemovedCheckCommands();
 await testColoredDiagnosticsHighlightProgramBody();
 await testImportedModuleImportFailureReportsBothFiles();
 await testFunctionBodyUnknownIdentifierReportsFunctionSource();
@@ -47,6 +49,28 @@ await testHoleCallbackSuppressesInvalidCallback();
 await testMemberNameHoleSuppressesEnumCaseDiagnostic();
 await testRecordUpdatePathHoleSuppressesFieldDiagnostic();
 
+async function testRemovedCheckCommands() {
+  const project = await mkdtempProject("ss-cli-removed-commands-");
+  try {
+    for (const [args, diagnostic] of [
+      [["check", "slide.ss"], "unknown command: check"],
+      [["help", "check"], "unknown help topic: check"],
+      [["watch", "check"], "unknown watch mode: check"],
+      [["watch", "check", "--help"], "unknown watch mode: check"],
+    ]) {
+      const result = await runSs(args, project);
+      assert(result.code !== 0 && result.stderr.includes(diagnostic), combinedOutput(result));
+    }
+    for (const args of [["help"], ["help", "watch"], ["watch", "render", "--help"]]) {
+      const result = await runSs(args, project);
+      assert(result.code === 0 && result.stdout.includes("ss watch render"), combinedOutput(result));
+      assert(!/ss (?:watch )?check\b/.test(result.stdout), result.stdout);
+    }
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
 async function testColoredDiagnosticsHighlightProgramBody() {
   const project = await mkdtempProject("ss-cli-colored-diagnostics-");
   try {
@@ -66,9 +90,9 @@ end
       "utf8",
     );
 
-    const result = await runSs(["check", "slide.ss", "--color", "always"], project);
+    const result = await runSs(["dump", "slide.ss", "--color", "always"], project);
     const output = combinedOutput(result);
-    assert(result.code !== 0, "check should fail for a missing expression");
+    assert(result.code !== 0, "dump should fail for a missing expression");
     assert(output.includes("\u001b[36mtext!\u001b[0m"), `callable identifier should include the bang in one highlighted token:\n${output}`);
     assert(output.includes('\u001b[32mc"#ff0033"\u001b[0m'), `color string should be highlighted as one string token:\n${output}`);
     assert(output.includes('\u001b[32m"hello\u001b[0m'), `quoted string start should be highlighted as one string token:\n${output}`);
@@ -100,9 +124,9 @@ import "./missing" as *
       "utf8",
     );
 
-    const result = await runSs(["check", "slide.ss"], project);
+    const result = await runSs(["dump", "slide.ss"], project);
     const output = combinedOutput(result);
-    assert(result.code !== 0, "check should fail for an imported missing module");
+    assert(result.code !== 0, "dump should fail for an imported missing module");
     assert(output.includes("a.ss:2:1: UnknownImport:"), `missing imported-module diagnostic:\n${output}`);
     assert(output.includes('| import "./missing" as *'), `imported-module diagnostic omitted source excerpt:\n${output}`);
     assert(output.includes("slide.ss:1:1: ImportFailed:"), `missing importing-module diagnostic:\n${output}`);
@@ -134,9 +158,9 @@ end
       "utf8",
     );
 
-    const result = await runSs(["check", "slide.ss"], project);
+    const result = await runSs(["dump", "slide.ss"], project);
     const output = combinedOutput(result);
-    assert(result.code !== 0, "check should fail for an unknown identifier in a function body");
+    assert(result.code !== 0, "dump should fail for an unknown identifier in a function body");
     assert(output.includes("lib.ss:2:11: UnknownIdentifier:"), `function diagnostic did not point at the unknown identifier:\n${output}`);
     assert(output.includes("|   let x = y"), `function diagnostic omitted source excerpt:\n${output}`);
     assert(!output.includes("slide.ss:4:1: UnknownIdentifier:"), `function body error was reported only at the call site:\n${output}`);
@@ -161,9 +185,9 @@ query = "builtin:python"
     );
     await writeFile(path.join(project, "slide.ss"), "page main\nend\n", "utf8");
 
-    const result = await runSs(["check", "--project", project], project);
+    const result = await runSs(["dump", "--project", project], project);
     const output = combinedOutput(result);
-    assert(result.code !== 0, "check should fail for an invalid project highlight parser");
+    assert(result.code !== 0, "dump should fail for an invalid project highlight parser");
     assert(output.includes("ss.toml:5:1: UnknownHighlightParser:"), `project config diagnostic did not point at parser line:\n${output}`);
     assert(output.includes("supported built-in tree-sitter parser"), `project config diagnostic omitted corrective guidance:\n${output}`);
     assert(output.includes('| parser = "python3"'), `project config diagnostic omitted source excerpt:\n${output}`);
@@ -184,9 +208,9 @@ entry = "slide.ss"
     );
     await writeFile(path.join(project, "slide.ss"), "page main\nend\n", "utf8");
 
-    const result = await runSs(["check", project], project);
+    const result = await runSs(["dump", project], project);
     const output = combinedOutput(result);
-    assert(result.code !== 0, "check should reject a directory passed as its input file");
+    assert(result.code !== 0, "dump should reject a directory passed as its input file");
     assert(output.includes(project), `directory-input diagnostic omitted the input path:\n${output}`);
     assert(output.includes("--project"), `directory-input diagnostic omitted the --project guidance:\n${output}`);
     assert(!/^error: IsDir\s*$/m.test(output), `directory input leaked a bare IsDir error:\n${output}`);
@@ -199,9 +223,9 @@ async function testMissingInputReportsPath() {
   const project = await mkdtempProject("ss-cli-missing-input-diagnostics-");
   try {
     const missing = path.join(project, "missing.ss");
-    const result = await runSs(["check", missing], project);
+    const result = await runSs(["dump", missing], project);
     const output = combinedOutput(result);
-    assert(result.code !== 0, "check should fail for a missing input file");
+    assert(result.code !== 0, "dump should fail for a missing input file");
     assert(output.includes(missing), `missing-input diagnostic omitted the input path:\n${output}`);
     assert(output.toLowerCase().includes("not found"), `missing-input diagnostic did not explain that the file was not found:\n${output}`);
     assert(!/^error: FileNotFound\s*$/m.test(output), `missing input leaked a bare FileNotFound error:\n${output}`);
@@ -218,9 +242,9 @@ async function testInputPathComponentReportsNotDirectory() {
     const input = path.join(blocker, "slide.ss");
     await writeFile(blocker, "file blocks the input path\n", "utf8");
 
-    const result = await runSs(["check", input], project);
+    const result = await runSs(["dump", input], project);
     const output = combinedOutput(result);
-    assert(result.code !== 0, "check should fail when an input path component is a file");
+    assert(result.code !== 0, "dump should fail when an input path component is a file");
     assert(output.includes("InputAccessFailed:"), `input path-component diagnostic omitted its operation:\n${output}`);
     assert(output.includes(input), `input path-component diagnostic omitted the input path:\n${output}`);
     assert(output.includes("not a directory"), `input path-component diagnostic omitted the actual cause:\n${output}`);
@@ -239,9 +263,9 @@ async function testMissingProjectConfigReportsPath() {
       { argument: missingProject, expected: path.join(missingProject, "ss.toml") },
       { argument: missingConfig, expected: missingConfig },
     ]) {
-      const result = await runSs(["check", "--project", testCase.argument], project);
+      const result = await runSs(["dump", "--project", testCase.argument], project);
       const output = combinedOutput(result);
-      assert(result.code !== 0, "check should fail when the requested project config is missing");
+      assert(result.code !== 0, "dump should fail when the requested project config is missing");
       assert(output.includes(testCase.expected), `missing-project diagnostic omitted the resolved configuration path:\n${output}`);
       assert(output.includes("project configuration file was not found"), `missing-project diagnostic omitted the cause:\n${output}`);
       assert(!output.includes(`${missingConfig}${path.sep}ss.toml`), `custom project file incorrectly gained an ss.toml suffix:\n${output}`);
@@ -261,9 +285,9 @@ async function testProjectConfigPathComponentReportsNotDirectory() {
     const configPath = path.join(requestedProject, "ss.toml");
     await writeFile(blocker, "file blocks the project path\n", "utf8");
 
-    const result = await runSs(["check", "--project", requestedProject], project);
+    const result = await runSs(["dump", "--project", requestedProject], project);
     const output = combinedOutput(result);
-    assert(result.code !== 0, "check should fail when a project path component is a file");
+    assert(result.code !== 0, "dump should fail when a project path component is a file");
     assert(output.includes("ProjectConfigReadFailed:"), `project path-component diagnostic omitted its operation:\n${output}`);
     assert(output.includes(configPath), `project path-component diagnostic omitted the resolved configuration path:\n${output}`);
     assert(output.includes("not a directory"), `project path-component diagnostic omitted the actual cause:\n${output}`);
@@ -281,7 +305,7 @@ async function testWatchMissingProjectConfigReportsPath() {
     const entryPath = path.join(missingProject, "slide.ss");
     const temporaryConfig = path.join(missingProject, "ss.toml.tmp");
     const result = await runSsUntilOutputs(
-      ["watch", "check", "--project", missingProject, "--interval-ms", "50"],
+      ["watch", "render", "--project", missingProject, "--interval-ms", "50"],
       project,
       [
         {
@@ -294,7 +318,7 @@ async function testWatchMissingProjectConfigReportsPath() {
           },
         },
         { text: "watch: project configuration is valid" },
-        { text: `watch: check ${entryPath} every 50ms` },
+        { text: `watch: render ${entryPath} every 50ms` },
       ],
     );
     const output = combinedOutput(result);
@@ -302,7 +326,7 @@ async function testWatchMissingProjectConfigReportsPath() {
     assert(output.includes(configPath), `watch missing-project diagnostic omitted the resolved ss.toml path:\n${output}`);
     assert(output.toLowerCase().includes("not found"), `watch missing-project diagnostic omitted the cause:\n${output}`);
     assert(output.includes("watch: project configuration is valid"), `watch did not resume after the configuration was created:\n${output}`);
-    assert(output.includes(`watch: check ${entryPath} every 50ms`), `watch did not start checking the repaired project:\n${output}`);
+    assert(output.includes(`watch: render ${entryPath} every 50ms`), `watch did not start rendering the repaired project:\n${output}`);
     assert(!output.includes("CommandFailed:"), `watch missing-project diagnostic escaped to the command boundary:\n${output}`);
   } finally {
     await rm(project, { recursive: true, force: true });
@@ -321,7 +345,7 @@ async function testWatchProjectPathComponentRecovers() {
     await writeFile(blocker, "file blocks the project path\n", "utf8");
 
     const result = await runSsUntilOutputs(
-      ["watch", "check", "--project", requestedProject, "--interval-ms", "50"],
+      ["watch", "render", "--project", requestedProject, "--interval-ms", "50"],
       project,
       [
         {
@@ -335,7 +359,7 @@ async function testWatchProjectPathComponentRecovers() {
           },
         },
         { text: "watch: project configuration is valid" },
-        { text: `watch: check ${entryPath} every 50ms` },
+        { text: `watch: render ${entryPath} every 50ms` },
       ],
     );
     const output = combinedOutput(result);
@@ -343,7 +367,7 @@ async function testWatchProjectPathComponentRecovers() {
     assert(output.includes(configPath), `watch path-component diagnostic omitted the configuration path:\n${output}`);
     assert(output.includes("not a directory"), `watch path-component diagnostic omitted the actual cause:\n${output}`);
     assert(output.includes("watch: project configuration is valid"), `watch did not resume after the path was repaired:\n${output}`);
-    assert(output.includes(`watch: check ${entryPath} every 50ms`), `watch did not start checking the repaired project:\n${output}`);
+    assert(output.includes(`watch: render ${entryPath} every 50ms`), `watch did not start rendering the repaired project:\n${output}`);
     assert(!output.includes("CommandFailed:"), `watch path-component diagnostic escaped to the command boundary:\n${output}`);
   } finally {
     await rm(project, { recursive: true, force: true });
@@ -420,9 +444,9 @@ async function testMalformedProjectEntryIsActionable() {
   try {
     await writeFile(path.join(project, "ss.toml"), "[project]\nentry = slide.ss\n", "utf8");
 
-    const result = await runSs(["check", "--project", project], project);
+    const result = await runSs(["dump", "--project", project], project);
     const output = combinedOutput(result);
-    assert(result.code !== 0, "check should reject an unquoted project entry");
+    assert(result.code !== 0, "dump should reject an unquoted project entry");
     assert(output.includes("InvalidToml:"), `malformed project entry omitted its diagnostic code:\n${output}`);
     assert(output.includes("(line 2)"), `malformed project entry omitted the parser location:\n${output}`);
     assert(output.includes("quoted strings"), `malformed project entry omitted corrective guidance:\n${output}`);
@@ -444,9 +468,9 @@ asset_base_dir = "."
       "utf8",
     );
 
-    const result = await runSs(["check", "--project", project], project);
+    const result = await runSs(["dump", "--project", project], project);
     const output = combinedOutput(result);
-    assert(result.code !== 0, "check should fail when the configured project entry is missing");
+    assert(result.code !== 0, "dump should fail when the configured project entry is missing");
     assert(output.includes(missingEntry), `missing-project-entry diagnostic omitted the resolved entry path:\n${output}`);
     assert(output.toLowerCase().includes("not found"), `missing-project-entry diagnostic did not explain that the file was not found:\n${output}`);
     assert(!/^error: FileNotFound\s*$/m.test(output), `missing project entry leaked a bare FileNotFound error:\n${output}`);
@@ -470,9 +494,9 @@ end
       "utf8",
     );
 
-    const result = await runSs(["check", "slide.ss"], project);
+    const result = await runSs(["dump", "slide.ss"], project);
     const output = combinedOutput(result);
-    assert(result.code !== 0, "check should fail when an import resolves to a directory");
+    assert(result.code !== 0, "dump should fail when an import resolves to a directory");
     assert(output.includes("slide.ss:1:1: ImportReadFailed:"), `directory-import diagnostic did not point at the import:\n${output}`);
     assert(output.includes(importedPath), `directory-import diagnostic omitted the resolved module path:\n${output}`);
     assert(output.toLowerCase().includes("directory"), `directory-import diagnostic did not explain the path kind:\n${output}`);
@@ -497,9 +521,9 @@ end
       "utf8",
     );
 
-    const result = await runSs(["check", "slide.ss"], project);
+    const result = await runSs(["dump", "slide.ss"], project);
     const output = combinedOutput(result);
-    assert(result.code !== 0, "check should fail for an import with a symbolic-link cycle");
+    assert(result.code !== 0, "dump should fail for an import with a symbolic-link cycle");
     assert(output.includes("slide.ss:1:1: ImportReadFailed:"), `symlink-loop import diagnostic did not point at the import:\n${output}`);
     assert(output.includes(loopPath), `symlink-loop import diagnostic omitted the resolved path:\n${output}`);
     assert(output.includes("symbolic-link cycle"), `symlink-loop import diagnostic omitted the actual cause:\n${output}`);
@@ -523,9 +547,9 @@ end
       "utf8",
     );
 
-    const result = await runSs(["check", "slide.ss"], project);
+    const result = await runSs(["dump", "slide.ss"], project);
     const output = combinedOutput(result);
-    assert(result.code !== 0, "check should fail when readlines encounters a symbolic-link cycle");
+    assert(result.code !== 0, "dump should fail when readlines encounters a symbolic-link cycle");
     assert(output.includes("ReadlinesFailed:"), `readlines diagnostic omitted its operation:\n${output}`);
     assert(output.includes(loopPath), `readlines diagnostic omitted the resolved path:\n${output}`);
     assert(output.includes("symbolic-link cycle"), `readlines diagnostic omitted the actual cause:\n${output}`);
@@ -549,9 +573,9 @@ end
       "utf8",
     );
 
-    const result = await runSs(["check", "slide.ss"], project);
+    const result = await runSs(["dump", "slide.ss"], project);
     const output = combinedOutput(result);
-    assert(result.code !== 0, "check should fail when a standard-library helper cannot read its input");
+    assert(result.code !== 0, "dump should fail when a standard-library helper cannot read its input");
     const diagnostic = output.split("\n").find((line) => line.includes("ReadlinesFailed:"));
     assert(diagnostic?.includes("std:code:"), `standard-library diagnostic used the wrong source path:\n${output}`);
     assert(
@@ -726,7 +750,7 @@ end
       "utf8",
     );
 
-    const result = await runSs(["check", "--project", project], project);
+    const result = await runSs(["dump", "--project", project], project);
     const output = combinedOutput(result);
     assert(result.code === 0, `project-relative import resolved from asset_base_dir instead of the entry directory:\n${output}`);
     assert(!output.includes("UnknownImport"), `project-relative import produced an import diagnostic:\n${output}`);
@@ -751,7 +775,7 @@ asset_base_dir = "asset-base"
     await writeFile(entry, "page main\nend\n", "utf8");
     await writeFile(assetBase, "not a directory\n", "utf8");
 
-    const result = await runSs(["watch", "check", "--project", project, "--interval-ms", "50"], project);
+    const result = await runSs(["watch", "render", "--project", project, "--interval-ms", "50"], project);
     const output = combinedOutput(result);
     assert(result.code !== 0, "watch should fail when the asset base is not a directory");
     assert(output.includes("could not inspect asset base directory"), `watch fingerprint failure omitted the failing path category:\n${output}`);
@@ -772,11 +796,11 @@ async function testWatchFingerprintFailureIsDeduplicatedAndRecovers() {
     await mkdir(assetBase);
 
     const result = await runSsUntilOutputs(
-      ["watch", "check", entry, "--asset-base-dir", assetBase, "--interval-ms", "50"],
+      ["watch", "render", entry, "--asset-base-dir", assetBase, "--interval-ms", "50"],
       project,
       [
         {
-          text: `watch: check ${entry} every 50ms`,
+          text: `watch: render ${entry} every 50ms`,
           action: async () => {
             await rm(assetBase, { recursive: true, force: true });
             await writeFile(assetBase, "not a directory\n", "utf8");
@@ -810,7 +834,6 @@ async function testRenderCachePathConflictReportsReason() {
     await writeFile(path.join(project, "slide.ss"), "page main\nend\n", "utf8");
 
     for (const testCase of [
-      { label: "check", args: ["check", "slide.ss"] },
       { label: "dump", args: ["dump", "slide.ss", "--output", "out.json"] },
       { label: "render", args: ["render", "slide.ss", "--output", "out.pdf"] },
     ]) {
@@ -853,9 +876,9 @@ end
       "utf8",
     );
 
-    const result = await runSs(["check", "--project", project], project);
+    const result = await runSs(["dump", "--project", project], project);
     const output = combinedOutput(result);
-    assert(result.code !== 0, "check should fail when a configured highlight query is missing");
+    assert(result.code !== 0, "dump should fail when a configured highlight query is missing");
     assert(output.includes("RenderFailed:"), `missing highlight query did not produce a source diagnostic:\n${output}`);
     assert(output.includes(queryPath), `missing highlight query diagnostic omitted the resolved path:\n${output}`);
     assert(output.includes("path was not found"), `missing highlight query diagnostic omitted the actual cause:\n${output}`);
@@ -889,7 +912,6 @@ async function testFontEnvironmentRefreshFailureIsActionable() {
 
     const env = { FONTCONFIG_FILE: fontsConfPath };
     const cases = [
-      { label: "check", args: ["check", "slide.ss"] },
       { label: "render", args: ["render", "slide.ss", "out.pdf"] },
       {
         label: "layout conflict report",
@@ -952,7 +974,7 @@ end
     const project = await mkdtempProject(testCase.prefix);
     try {
       await writeFile(path.join(project, "slide.ss"), testCase.source, "utf8");
-      const result = await runSs(["check", "slide.ss"], project);
+      const result = await runSs(["dump", "slide.ss"], project);
       const output = combinedOutput(result);
       assert(result.code !== 0, `${testCase.diagnostic} fixture should fail`);
       assert(output.includes(testCase.diagnostic), `contextual diagnostic was not printed:\n${output}`);
@@ -997,10 +1019,10 @@ end
       "utf8",
     );
 
-    const result = await runSs(["check", "slide.ss"], project);
+    const result = await runSs(["dump", "slide.ss"], project);
     const output = combinedOutput(result);
     const headers = output.match(/^ERROR: .*UnknownField:/gm) ?? [];
-    assert(result.code !== 0, "check should fail for an unknown record field in a placing function");
+    assert(result.code !== 0, "dump should fail for an unknown record field in a placing function");
     assert(headers.length === 2, `two unknown record fields produced ${headers.length} diagnostic headers instead of two:\n${output}`);
     assert(output.includes("theme.ss:5:10: UnknownField:"), `first unknown record field diagnostic did not point at the field token:\n${output}`);
     assert(output.includes("theme.ss:11:10: UnknownField:"), `second unknown record field diagnostic did not point at the field token:\n${output}`);
@@ -1023,12 +1045,12 @@ end
       "utf8",
     );
 
-    const result = await runSs(["check", "slide.ss"], project);
+    const result = await runSs(["dump", "slide.ss"], project);
     const output = combinedOutput(result);
-    assert(result.code !== 0, "check should fail for missing expressions");
+    assert(result.code !== 0, "dump should fail for missing expressions");
     assert(output.includes("slide.ss:2:"), `first missing expression did not point at line 2:\n${output}`);
     assert(output.includes("slide.ss:3:"), `second missing expression did not point at line 3:\n${output}`);
-    assert((output.match(/ExpectedExpression/g) ?? []).length >= 2, `check did not print multiple expression diagnostics:\n${output}`);
+    assert((output.match(/ExpectedExpression/g) ?? []).length >= 2, `dump did not print multiple expression diagnostics:\n${output}`);
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -1039,9 +1061,9 @@ async function testMixedHoleParseDiagnostics() {
   try {
     await writeFile(path.join(project, "slide.ss"), mixedHoleSource(), "utf8");
 
-    const result = await runSs(["check", "slide.ss"], project);
+    const result = await runSs(["dump", "slide.ss"], project);
     const output = combinedOutput(result);
-    assert(result.code !== 0, "check should fail for mixed holes");
+    assert(result.code !== 0, "dump should fail for mixed holes");
     assert(output.includes("slide.ss:1:"), `import hole did not point at line 1:\n${output}`);
     assert(output.includes("InvalidImportSpec"), `import hole diagnostic missing:\n${output}`);
     assert(output.includes("slide.ss:4:"), `expression hole did not point at line 4:\n${output}`);
@@ -1068,9 +1090,9 @@ end
       "utf8",
     );
 
-    const result = await runSs(["check", "slide.ss"], project);
+    const result = await runSs(["dump", "slide.ss"], project);
     const output = combinedOutput(result);
-    assert(result.code !== 0, "check should fail for a parse hole and an unknown type");
+    assert(result.code !== 0, "dump should fail for a parse hole and an unknown type");
     assert(output.includes("slide.ss:2:"), `expression hole did not point at line 2:\n${output}`);
     assert(output.includes("ExpectedExpression"), `expression hole diagnostic missing:\n${output}`);
     assert(output.includes("slide.ss:3:"), `unknown type did not point at line 3:\n${output}`);
@@ -1093,12 +1115,12 @@ end
       "utf8",
     );
 
-    const result = await runSs(["check", "slide.ss"], project);
+    const result = await runSs(["dump", "slide.ss"], project);
     const output = combinedOutput(result);
-    assert(result.code !== 0, "check should fail for multiple independent type errors");
+    assert(result.code !== 0, "dump should fail for multiple independent type errors");
     assert(output.includes("slide.ss:2:"), `first type diagnostic did not point at line 2:\n${output}`);
     assert(output.includes("slide.ss:3:"), `second type diagnostic did not point at line 3:\n${output}`);
-    assert((output.match(/TypeMismatch/g) ?? []).length >= 2, `check did not print multiple type diagnostics:\n${output}`);
+    assert((output.match(/TypeMismatch/g) ?? []).length >= 2, `dump did not print multiple type diagnostics:\n${output}`);
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -1121,9 +1143,9 @@ type Broken {
       "utf8",
     );
 
-    const result = await runSs(["check", "slide.ss"], project);
+    const result = await runSs(["dump", "slide.ss"], project);
     const output = combinedOutput(result);
-    assert(result.code !== 0, "check should fail for type holes and an independent type error");
+    assert(result.code !== 0, "dump should fail for type holes and an independent type error");
     assert(output.includes("slide.ss:2:"), `first type hole did not point at line 2:\n${output}`);
     assert(output.includes("slide.ss:3:"), `second type hole did not point at line 3:\n${output}`);
     assert(output.includes("slide.ss:7:"), `field type hole did not point at line 7:\n${output}`);
@@ -1148,9 +1170,9 @@ end
       "utf8",
     );
 
-    const result = await runSs(["check", "slide.ss"], project);
+    const result = await runSs(["dump", "slide.ss"], project);
     const output = combinedOutput(result);
-    assert(result.code !== 0, "check should fail for a missing callee binding expression");
+    assert(result.code !== 0, "dump should fail for a missing callee binding expression");
     assert(output.includes("ExpectedExpression"), `hole diagnostic missing:\n${output}`);
     assert(!output.includes("UnknownFunction"), `hole-bound callee produced a secondary UnknownFunction diagnostic:\n${output}`);
   } finally {
@@ -1170,9 +1192,9 @@ end
       "utf8",
     );
 
-    const result = await runSs(["check", "slide.ss"], project);
+    const result = await runSs(["dump", "slide.ss"], project);
     const output = combinedOutput(result);
-    assert(result.code !== 0, "check should fail for a missing callback expression");
+    assert(result.code !== 0, "dump should fail for a missing callback expression");
     assert(output.includes("ExpectedExpression"), `hole diagnostic missing:\n${output}`);
     assert(!output.includes("InvalidCallback"), `callback hole produced a secondary InvalidCallback diagnostic:\n${output}`);
   } finally {
@@ -1197,9 +1219,9 @@ end
       "utf8",
     );
 
-    const result = await runSs(["check", "slide.ss"], project);
+    const result = await runSs(["dump", "slide.ss"], project);
     const output = combinedOutput(result);
-    assert(result.code !== 0, "check should fail for a missing enum member name");
+    assert(result.code !== 0, "dump should fail for a missing enum member name");
     assert(output.includes("ExpectedMemberName"), `member-name hole diagnostic missing:\n${output}`);
     assert(!output.includes("UnknownEnumCase"), `member-name hole produced a secondary UnknownEnumCase diagnostic:\n${output}`);
   } finally {
@@ -1229,9 +1251,9 @@ end
       "utf8",
     );
 
-    const result = await runSs(["check", "slide.ss"], project);
+    const result = await runSs(["dump", "slide.ss"], project);
     const output = combinedOutput(result);
-    assert(result.code !== 0, "check should fail for a missing record update path segment");
+    assert(result.code !== 0, "dump should fail for a missing record update path segment");
     assert(output.includes("ExpectedIdentifier"), `record update path hole diagnostic missing:\n${output}`);
     assert(!output.includes("UnknownField"), `record update path hole produced a secondary UnknownField diagnostic:\n${output}`);
   } finally {
@@ -1263,11 +1285,17 @@ async function runSs(args, cwd, env = {}) {
   return await new Promise((resolve, reject) => {
     const child = spawn(ssBin, args, {
       cwd,
+      detached: process.platform !== "win32",
       env: { ...process.env, NO_COLOR: "1", ...env },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
     let stderr = "";
+    let expired = false;
+    const timer = setTimeout(() => {
+      expired = true;
+      terminateProcessTree(child.pid);
+    }, 15_000);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
@@ -1276,8 +1304,12 @@ async function runSs(args, cwd, env = {}) {
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
     });
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code: code ?? -1, stdout, stderr }));
+    child.on("error", error => { clearTimeout(timer); reject(error); });
+    child.on("close", code => {
+      clearTimeout(timer);
+      if (expired) reject(new Error(`ss ${args.join(" ")} timed out:\n${stderr}`));
+      else resolve({ code: code ?? -1, stdout, stderr });
+    });
   });
 }
 

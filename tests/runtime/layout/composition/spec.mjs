@@ -888,7 +888,6 @@ end
 
 async function testFixture() {
   const fixture = path.join(root, "tests", "fixtures", "layout-composition", "slide.ss");
-  expectSuccess(await runSs(["check", "--quiet", fixture], output), "composition fixture check");
   const dumpPath = path.join(output, "fixture.json");
   expectSuccess(await runSs(["dump", "--quiet", fixture, dumpPath], output), "composition fixture dump");
   const dump = JSON.parse(await readFile(dumpPath, "utf8"));
@@ -1137,7 +1136,7 @@ async function dumpSource(name, source, files = {}) {
 
 async function expectFailure(name, source, diagnostic) {
   const directory = await createCase(name, source);
-  const result = await runSs(["check", "slide.ss"], directory);
+  const result = await runSs(["dump", "slide.ss"], directory);
   assert(result.code !== 0, `${name} unexpectedly succeeded`);
   const text = `${result.stdout}\n${result.stderr}`.replace(/\u001b\[[0-9;]*m/g, "");
   if (diagnostic) assert(text.includes(diagnostic), `${name} omitted ${diagnostic}:\n${text}`);

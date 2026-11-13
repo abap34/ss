@@ -71,7 +71,7 @@ test("command deadlines terminate the process before rejecting", { timeout: 5000
   await assert.rejects(command(process.execPath, ["-e", "setInterval(()=>{},1000)"], { timeoutMs: 50 }), /exceeded 50ms/);
 });
 
-test("custom scripts compose checks, rendering, editor requests, and external inputs", { timeout: 60_000 }, async (context) => {
+test("custom scripts compose document dumps, rendering, editor requests, and external inputs", { timeout: 60_000 }, async (context) => {
   const directory = await temporaryWorkload(context, false);
   const scriptDirectory = path.join(directory, "experiment");
   await mkdir(scriptDirectory);
@@ -86,9 +86,10 @@ export const protocolVersion = 17;
 export async function run(p) {
   await p.input(new URL("../external.txt", import.meta.url));
   p.defer(() => p.save("cleaned.json", {closed: true}));
-  await p.measure("custom check", async () => {
-    const response = await p.command(p.ssBin, ["check", p.workload.definition.entry, "--quiet"]);
+  await p.measure("custom dump", async () => {
+    const response = await p.command(p.ssBin, ["dump", p.workload.definition.entry, "--quiet"]);
     assert.equal(response.code, 0, response.stderr);
+    assert.equal(JSON.parse(response.stdout).page_order.length, 1);
   });
   await p.measure("custom render", () => p.render());
   const client = await p.editor();
@@ -112,8 +113,8 @@ export async function run(p) {
   assert.equal(Object.keys(result.script.inputs).length, 3);
   assert(result.script.inputs["helper.mjs"]);
   assert(result.script.inputs["../external.txt"]);
-  assert.deepEqual(Object.keys(result.measurements), ["custom check", "custom render", "rebuild Beta", "rebuild Gamma"]);
-  assert.equal(result.measurements["custom check"].samples_ms.length, 1);
+  assert.deepEqual(Object.keys(result.measurements), ["custom dump", "custom render", "rebuild Beta", "rebuild Gamma"]);
+  assert.equal(result.measurements["custom dump"].samples_ms.length, 1);
   assert.deepEqual(result.recordings, {});
   assert.equal(JSON.parse(await readFile(path.join(output, "cleaned.json"))).closed, true);
   assert.equal(await readFile(path.join(directory, "project/slide.ss"), "utf8"), source);

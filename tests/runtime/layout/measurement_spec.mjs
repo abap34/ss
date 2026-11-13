@@ -11,12 +11,12 @@ await testNaturalTitleWidthDoesNotSelfWrap();
 await testTableHeightUsesFinalWidthWithWrappingDisabled();
 await testSplitTablesReserveTheirFinalHeight();
 await testPageOverflowUsesInkOrigins();
-await testCheckReportsRasterMeasurementFailure();
-await testCheckReportsUnknownStandaloneIcon();
+await testDumpReportsRasterMeasurementFailure();
+await testDumpReportsUnknownStandaloneIcon();
 await testPanelHeightUsesRenderedIconMeasurement();
 if (pdflatexAvailable) {
   await testPanelHeightUsesRenderedMathMeasurement();
-  await testCheckReportsInvalidInlineLatex();
+  await testDumpReportsInvalidInlineLatex();
   await testLatexScaleChangesNaturalWidth();
 }
 await testPdfFactorScalesMeasuredAssetFrame();
@@ -50,7 +50,6 @@ async function testTableHeightUsesFinalWidthWithWrappingDisabled() {
   await mkdir(output, { recursive: true });
   const fixture = path.join(root, "tests", "fixtures", "layout", "final-width", "slide.ss");
   const dumpPath = path.join(output, "dump.json");
-  await runSs(["check", "--quiet", fixture], output);
   await runSs(["dump", "--quiet", fixture, dumpPath], output);
   const dump = JSON.parse(await readFile(dumpPath, "utf8"));
   const tables = dump.nodes.filter((node) => node.content?.startsWith("| content | value |"));
@@ -71,7 +70,6 @@ async function testSplitTablesReserveTheirFinalHeight() {
   await mkdir(output, { recursive: true });
   const fixture = path.join(root, "tests", "fixtures", "layout", "composition", "measured-splits.ss");
   const dumpPath = path.join(output, "dump.json");
-  await runSs(["check", "--quiet", fixture], output);
   await runSs(["dump", "--quiet", fixture, dumpPath], output);
   const dump = JSON.parse(await readFile(dumpPath, "utf8"));
   const tables = dump.nodes.filter((node) => node.content?.startsWith("| ああ |"));
@@ -93,7 +91,6 @@ async function testPageOverflowUsesInkOrigins() {
   const output = path.join(root, ".test-tmp", "layout-ink-bounds");
   await mkdir(output, { recursive: true });
   const fixture = path.join(root, "tests", "fixtures", "layout", "ink-bounds", "slide.ss");
-  await runSs(["check", "--quiet", fixture], output);
   const dumps = [];
   for (const generation of ["first", "warm"]) {
     const dumpPath = path.join(output, `${generation}.json`);
@@ -197,7 +194,7 @@ end
   }
 }
 
-async function testCheckReportsInvalidInlineLatex() {
+async function testDumpReportsInvalidInlineLatex() {
   const project = await mkdtempProject("ss-layout-measure-math-failure-");
   try {
     const slide = path.join(project, "slide.ss");
@@ -212,9 +209,9 @@ end
       "utf8",
     );
 
-    const result = await spawnCollect(ssBin, ["check", "slide.ss"], project);
+    const result = await spawnCollect(ssBin, ["dump", "slide.ss"], project);
     const output = stripAnsi(`${result.stdout}\n${result.stderr}`);
-    assert(result.code !== 0, "check should fail when LaTeX rejects inline mathematics");
+    assert(result.code !== 0, "dump should fail when LaTeX rejects inline mathematics");
     assert(output.includes("RenderFailed:"), `invalid LaTeX did not produce a render diagnostic:\n${output}`);
     assert(output.includes("slide.ss:4:9"), `render diagnostic did not point at the failing formula:\n${output}`);
     assert(output.includes('| text!("$\\notacommand$")'), `measurement diagnostic omitted source excerpt:\n${output}`);
@@ -223,7 +220,7 @@ end
   }
 }
 
-async function testCheckReportsRasterMeasurementFailure() {
+async function testDumpReportsRasterMeasurementFailure() {
   const project = await mkdtempProject("ss-layout-measure-raster-failure-");
   try {
     const slide = path.join(project, "slide.ss");
@@ -239,9 +236,9 @@ end
       "utf8",
     );
 
-    const result = await spawnCollect(ssBin, ["check", "slide.ss"], project);
+    const result = await spawnCollect(ssBin, ["dump", "slide.ss"], project);
     const output = stripAnsi(`${result.stdout}\n${result.stderr}`);
-    assert(result.code !== 0, "check should fail when virtual raster measurement fails");
+    assert(result.code !== 0, "dump should fail when virtual raster measurement fails");
     assert(output.includes("RenderFailed:"), `raster measurement failure did not produce a render diagnostic:\n${output}`);
     assert(output.includes("slide.ss:4:9"), `raster measurement diagnostic did not point at the asset source:\n${output}`);
     assert(output.includes('| image!("bad.jpg")'), `raster measurement diagnostic omitted source excerpt:\n${output}`);
@@ -250,7 +247,7 @@ end
   }
 }
 
-async function testCheckReportsUnknownStandaloneIcon() {
+async function testDumpReportsUnknownStandaloneIcon() {
   const project = await mkdtempProject("ss-layout-measure-icon-failure-");
   try {
     const slide = path.join(project, "slide.ss");
@@ -267,9 +264,9 @@ end
       "utf8",
     );
 
-    const result = await spawnCollect(ssBin, ["check", "slide.ss"], project);
+    const result = await spawnCollect(ssBin, ["dump", "slide.ss"], project);
     const output = stripAnsi(`${result.stdout}\n${result.stderr}`);
-    assert(result.code !== 0, `check should fail for an unknown standalone icon:\n${output}`);
+    assert(result.code !== 0, `dump should fail for an unknown standalone icon:\n${output}`);
     assert(output.includes("InvalidFontAwesomeIcon"), `icon measurement diagnostic omitted the identifier error:\n${output}`);
     assert(output.includes('icon!("fa-solid:not-an-icon"'), `icon measurement diagnostic omitted source excerpt:\n${output}`);
   } finally {

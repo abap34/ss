@@ -88,7 +88,7 @@ function camel(name) {
 }
 
 function checkCli(projectFile, code) {
-  const result = spawnSync(ssBin, ["check", "--project", projectFile], { encoding: "utf8", timeout: 10000 });
+  const result = spawnSync(ssBin, ["dump", "--project", projectFile], { encoding: "utf8", timeout: 10000 });
   assert.ifError(result.error);
   if (code) {
     assert.notEqual(result.status, 0);

@@ -955,7 +955,6 @@ fn projectConfigPathForOptions(allocator: std.mem.Allocator, options: CommandOpt
 fn runWatchCommand(
     io: std.Io,
     allocator: std.mem.Allocator,
-    mode: watcher.Mode,
     options: CommandOptions,
 ) !void {
     const configuration_paths = try project.configurationPaths(allocator, options.input_path, options.project_path);
@@ -993,7 +992,7 @@ fn runWatchCommand(
         if (last_error != null) std.debug.print("watch: project configuration is valid\n", .{});
         last_error = null;
         applyDiagnosticOptions(options, &resolved);
-        try runResolvedWatch(io, generation_allocator, mode, options, &resolved, configuration);
+        try runResolvedWatch(io, generation_allocator, options, &resolved, configuration);
     }
 }
 
@@ -1045,24 +1044,18 @@ fn watchRecoverableProjectError(options: CommandOptions, err: anyerror) bool {
 fn runResolvedWatch(
     io: std.Io,
     allocator: std.mem.Allocator,
-    mode: watcher.Mode,
     options: CommandOptions,
     resolved: *const project.Resolved,
     configuration: watcher.Configuration,
 ) !void {
-    const output_path = if (mode == .render)
-        options.output_path orelse try utils.fs.siblingPathWithExtension(
-            allocator,
-            resolved.entry_path,
-            if (options.format == .pdf) "pdf" else "html",
-        )
-    else
-        options.output_path;
-    if (output_path) |path| try validateOutputParentOrCliError(io, path);
-    if (mode == .render) {
-        if (output_path) |path| try validateOutputPathConflicts(io, allocator, resolved, &.{.{ .path = path, .option = "--output" }});
-    }
-    try watcher.run(io, std.heap.smp_allocator, mode, .{
+    const output_path = options.output_path orelse try utils.fs.siblingPathWithExtension(
+        allocator,
+        resolved.entry_path,
+        if (options.format == .pdf) "pdf" else "html",
+    );
+    try validateOutputParentOrCliError(io, output_path);
+    try validateOutputPathConflicts(io, allocator, resolved, &.{.{ .path = output_path, .option = "--output" }});
+    try watcher.run(io, std.heap.smp_allocator, .{
         .input_path = resolved.entry_path,
         .output_path = output_path,
         .asset_base_dir = resolved.asset_base_dir,
@@ -1368,7 +1361,7 @@ fn run(init: std.process.Init) !void {
     if (limit_supplied and directory == null) return failUsage("--profile-buffer-kb requires --profile", .{});
     if (directory == null or wantsCommandHelp(filtered.items[2..])) return runCommand(io, allocator, environ, filtered.items);
     const cmd = args[1];
-    const supported = for ([_][]const u8{ "check", "dump", "render", "present", "debug", "watch", "lsp" }) |name| {
+    const supported = for ([_][]const u8{ "dump", "render", "present", "debug", "watch", "lsp" }) |name| {
         if (std.mem.eql(u8, cmd, name)) break true;
     } else false;
     if (!supported) return failUsage("--profile is not supported for {s}", .{cmd});
@@ -1438,26 +1431,6 @@ fn runCommand(io: std.Io, allocator: std.mem.Allocator, environ: std.process.Env
             try validateOutputPathConflicts(io, allocator, &resolved, &.{.{ .path = output_path, .option = "--output" }});
         }
         try cli_expand.run(io, allocator, resolved.entry_path, options.output_path);
-        return;
-    }
-
-    if (std.mem.eql(u8, cmd, "check")) {
-        if (wantsCommandHelp(args[2..])) {
-            _ = cli_help.command(.stdout, "check");
-            return;
-        }
-        const options = try parseCommandOptions(args[2..]);
-        applyDiagnosticOptions(options, null);
-        var resolved = try resolveProjectOrUsage(allocator, io, options);
-        defer resolved.deinit(allocator);
-        applyDiagnosticOptions(options, &resolved);
-        var progress = commandProgress(6, options);
-        try app.checkFile(io, allocator, .{
-            .input_path = resolved.entry_path,
-            .asset_base_dir = resolved.asset_base_dir,
-            .layout_jobs = effectiveJobs(options, &resolved),
-            .highlight_languages = resolved.highlight.languages,
-        }, &progress);
         return;
     }
 
@@ -1601,23 +1574,19 @@ fn runCommand(io: std.Io, allocator: std.mem.Allocator, environ: std.process.Env
     }
 
     if (std.mem.eql(u8, cmd, "watch")) {
-        if (wantsCommandHelp(args[2..]) or (args.len == 4 and (std.mem.eql(u8, args[2], "check") or std.mem.eql(u8, args[2], "render")) and isHelpArg(args[3]))) {
+        if (wantsCommandHelp(args[2..]) or (args.len >= 3 and std.mem.eql(u8, args[2], "render") and wantsCommandHelp(args[3..]))) {
             _ = cli_help.command(.stdout, "watch");
             return;
         }
         if (args.len < 3) {
             return failUsage("missing watch mode", .{});
         }
-        const mode: watcher.Mode = if (std.mem.eql(u8, args[2], "check"))
-            .check
-        else if (std.mem.eql(u8, args[2], "render"))
-            .render
-        else {
+        if (!std.mem.eql(u8, args[2], "render")) {
             return failUsage("unknown watch mode: {s}", .{args[2]});
-        };
+        }
         const options = try parseCommandOptions(args[3..]);
         applyDiagnosticOptions(options, null);
-        try runWatchCommand(io, allocator, mode, options);
+        try runWatchCommand(io, allocator, options);
         return;
     }
 

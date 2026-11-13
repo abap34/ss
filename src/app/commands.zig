@@ -36,18 +36,8 @@ const CompiledRendering = struct {
     }
 };
 
-pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, progress: ?*Progress) !pipeline.BuiltDocument {
-    return try pipeline.buildFile(io, allocator, request, progress);
-}
-
-pub fn checkFile(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, progress: ?*Progress) !void {
-    var state = try buildFile(io, allocator, request, progress);
-    defer state.deinit();
-    std.debug.print("ok {s}\n", .{request.input_path});
-}
-
 pub fn printContextJson(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, progress: *Progress) !void {
-    var state = try buildFile(io, allocator, request, progress);
+    var state = try pipeline.buildFile(io, allocator, request, progress);
     defer state.deinit();
     const text = try dump.toOwnedString(allocator, &state.state, &state.layouts);
     defer allocator.free(text);
@@ -56,7 +46,7 @@ pub fn printContextJson(io: std.Io, allocator: std.mem.Allocator, request: types
 }
 
 pub fn writeContextJson(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, output_path: []const u8, progress: *Progress) !void {
-    var state = try buildFile(io, allocator, request, progress);
+    var state = try pipeline.buildFile(io, allocator, request, progress);
     defer state.deinit();
     try app_output.validateOutputPathAgainstSources(io, allocator, &state.state, output_path, .dump_json);
     const json = try dump.toOwnedString(allocator, &state.state, &state.layouts);

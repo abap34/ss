@@ -228,8 +228,8 @@ page invalid
 path(line_to(1, 1))
 end
 `, "utf8");
-    const result = await runSs(["check", "slide.ss"], project);
-    assert(result.code !== 0, "a path beginning with line_to unexpectedly passed checking");
+    const result = await runSs(["render", "slide.ss"], project);
+    assert(result.code !== 0, "a path beginning with line_to unexpectedly rendered");
     assert(
       `${result.stdout}\n${result.stderr}`.includes("InvalidPathCommandOrder"),
       `path command order diagnostic was not preserved:\n${result.stdout}\n${result.stderr}`,

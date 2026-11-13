@@ -32,7 +32,6 @@ image!(${JSON.stringify(requested)})
 end
 `, "utf8");
       const options = ["--asset-base-dir", "assets"];
-      await runSs(["check", "slide.ss", ...options], project);
       await runSs(["render", "slide.ss", "out.pdf", ...options], project);
       const initial = await pdfFiles(pages);
 

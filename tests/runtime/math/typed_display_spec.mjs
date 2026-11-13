@@ -28,8 +28,6 @@ end
   if (probe.error?.code !== "ENOENT") {
     assert.ifError(probe.error);
     assert.equal(probe.status, 0, "pdflatex availability probe failed");
-    // CLI check includes layout measurement. Static display checks run in Zig.
-    run("check", "--quiet", "slide.ss");
     run("dump", "--quiet", "slide.ss", "--output", "dump.json");
     const dump = JSON.parse(await readFile(path.join(project, "dump.json"), "utf8"));
     assert.deepEqual(dump.diagnostics, []);

@@ -16,7 +16,6 @@ function run(args, expected = 0) {
 }
 const close = (actual, expected) => assert(Math.abs(actual - expected) < 0.1, `${actual} != ${expected}`);
 try {
-  run(["check", "--quiet", source]);
   const json = path.join(output, "dump.json");
   run(["dump", "--quiet", source, "--output", json]);
   const dump = JSON.parse(await readFile(json, "utf8"));
@@ -122,7 +121,7 @@ try {
     const file = path.join(output, `${name}.ss`);
     const helper = name.endsWith("effect") ? `fn pure(a: Placed<Text>) -> Placed<Group>\nreturn ${name === "effect" ? "group!(a)" : name === "configured-effect" ? "(a || a) with { gap = 24 }" : "a || a"}\nend\n` : name.endsWith("display") ? `type Impure {}\nfn display(self: Placed<Impure>) -> Text\nlet g = ${name === "display" ? "group!(self)" : name === "configured-display" ? "(self || self) with { gap = 24 }" : "self || self"}\nreturn text("Invalid")\nend\n` : '';
     await writeFile(file, `fn label!(s: String) -> Placed<Text>\nlet a = text!(s)\n~ a.width == 320\nreturn a\nend\n${helper}page test\n${body}\nend\n`);
-    const result = run(["check", "--quiet", file], 1);
+    const result = run(["dump", "--quiet", file], 1);
     assert(result.includes(code), `${name}: missing ${code}: ${result}`);
   }
 } finally {

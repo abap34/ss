@@ -45,7 +45,6 @@ try {
   await writeFile(main, source);
   await writeFile(child, body);
   await writeFile(path.join(directory, "parts/helper.ss"), 'fn suffix() -> String = " tail"\n');
-  run(["check", "--quiet", main]);
   run(["dump", "--quiet", main, "dump.json"]);
   const dump = JSON.parse(await readFile(path.join(directory, "dump.json"), "utf8"));
   const project = dump.modules.find((module) => module.kind === "project");
@@ -92,22 +91,22 @@ try {
     }
   });
   await writeFile(child, "page Broken\n  let value = missing_name\nend\n");
-  assert.match(run(["check", "--quiet", main], false).stderr, /parts\/body\.ss:2:/);
+  assert.match(run(["dump", "--quiet", main], false).stderr, /parts\/body\.ss:2:/);
   await writeFile(child, 'import ./missing as *\n');
-  assert.match(run(["check", "--quiet", main], false).stderr, /parts\/body\.ss:1:/);
+  assert.match(run(["dump", "--quiet", main], false).stderr, /parts\/body\.ss:1:/);
   await writeFile(child, 'page Broken\n  let value =\nend\n');
-  const syntaxError = run(["check", "--quiet", main], false).stderr;
+  const syntaxError = run(["dump", "--quiet", main], false).stderr;
   assert.match(syntaxError, /parts\/body\.ss:3:/);
   assert.doesNotMatch(syntaxError, /unexpected failure/);
   await writeFile(main, 'import ./library as *\npage Main\n  text!(caption())\nend\n');
   await writeFile(path.join(directory, "library.ss"), 'const title: String = "Library"\ninclude "parts/body.ss"\n');
   await writeFile(child, 'fn caption() -> String = title\n');
-  run(["check", "--quiet", main]);
+  run(["dump", "--quiet", main]);
   await writeFile(child, 'import ./missing as *\n');
-  assert.match(run(["check", "--quiet", main], false).stderr, /parts\/body\.ss:1:/);
+  assert.match(run(["dump", "--quiet", main], false).stderr, /parts\/body\.ss:1:/);
   await writeFile(main, source);
   await writeFile(child, "include \"../main.ss\"\n");
-  assert.match(run(["check", "--quiet", main], false).stderr, /IncludeCycle/);
+  assert.match(run(["dump", "--quiet", main], false).stderr, /IncludeCycle/);
   console.log("Source includes: CLI expansion, shared declarations, relative imports, physical diagnostics, and staged editor edits passed");
 } finally {
   await rm(directory, { recursive: true, force: true });

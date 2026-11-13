@@ -68,7 +68,6 @@ overhanging.measurement.ink_bounds = { x: -2, y: -2, width: overhanging.width + 
 assertPractical(withOverhang);
 
 await writeFile(slide, source);
-await run(["check", "--quiet", slide]);
 await run(["render", "--quiet", slide, path.join(project, "practical.pdf")]);
 await run(["render", "--quiet", "--format", "html", slide, path.join(project, "practical.html")]);
 const html = await readFile(path.join(project, "practical.html"), "utf8");

@@ -1,5 +1,6 @@
 const std = @import("std");
 const steps = @import("../steps.zig");
+const inputs = @import("../inputs.zig");
 const Suite = @import("support.zig").Suite;
 const Step = std.Build.Step;
 const addFocusedTestStep = steps.focused;
@@ -152,10 +153,17 @@ fn addManualWysiwygSpec(suite: Suite, exe: std.Build.LazyPath) void {
 
 fn addStdlibChecks(b: *std.Build, test_step: *Step, exe: std.Build.LazyPath) void {
     const stdlib_step = b.step("test-stdlib-modules", "Check every embedded standard-library module");
+    const directory = ".test-tmp/stdlib-modules";
+    const prepare = b.addSystemCommand(&.{ "mkdir", "-p", inputs.pathFromRoot(b, directory) });
     for (@import("../../stdlib/embed.zig").modules) |module| {
-        const check = steps.runExecutable(b, exe);
-        check.addArgs(&.{ "check", "--quiet", module.path });
-        stdlib_step.dependOn(&check.step);
+        const run = steps.runExecutable(b, exe);
+        run.step.dependOn(&prepare.step);
+        run.setCwd(b.path(directory));
+        run.setName(b.fmt("ss dump {s}", .{module.path}));
+        run.addArgs(&.{ "dump", "--quiet" });
+        run.addFileArg(b.path(module.path));
+        run.expectExitCode(0);
+        stdlib_step.dependOn(&run.step);
     }
     test_step.dependOn(stdlib_step);
 }

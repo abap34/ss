@@ -59,7 +59,6 @@ async function testPageAnchorFixture() {
   try {
     const fixture = path.join(root, "tests", "fixtures", "layout", "page-anchors", "slide.ss");
     const dumpPath = path.join(project, "dump.json");
-    await runSs(["check", "--quiet", fixture], project);
     await runSs(["dump", "--quiet", fixture, dumpPath], project);
     const dump = JSON.parse(await readFile(dumpPath, "utf8"));
     const objectsOnPage = (name) => {

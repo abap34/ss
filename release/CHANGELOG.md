@@ -4,6 +4,12 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+### Removed
+
+- Removed `ss check` and `ss watch check`. Use `ss render` to build a deck or
+  `ss watch render` to rebuild it on changes. `ss dump` evaluates a document
+  or a standalone module and writes JSON.
+
 ## [0.9.1] - 2026-11-09
 
 ### Added

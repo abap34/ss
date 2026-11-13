@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { root } from "../../harness.mjs";
 import { WatchProcess, settle } from "../harness.mjs";
@@ -131,12 +131,7 @@ async function writeConfiguration(directory, entry, assets, extra = "") {
 }
 
 async function waitForHtml(watch, directory, name, content) {
-  await watch.waitFor(async () => {
-    try { return (await readFile(path.join(directory, name), "utf8")).includes(content); } catch (error) {
-      if (error.code === "ENOENT") return false;
-      throw error;
-    }
-  }, `${name} containing ${content}`);
+  await watch.waitForOutput(path.join(directory, name), bytes => bytes.includes(content), `${name} containing ${content}`);
 }
 
 async function exists(file) {

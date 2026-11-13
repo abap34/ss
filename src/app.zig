@@ -15,10 +15,6 @@ pub const pdf_and_html_progress_steps = commands.pdf_and_html_progress_steps;
 
 const Progress = utils.progress.Progress;
 
-pub fn checkFile(io: std.Io, allocator: std.mem.Allocator, request: SourceRequest, progress: ?*Progress) !void {
-    try commands.checkFile(io, allocator, request, progress);
-}
-
 pub fn printContextJson(io: std.Io, allocator: std.mem.Allocator, request: SourceRequest, progress: *Progress) !void {
     try commands.printContextJson(io, allocator, request, progress);
 }

@@ -16,7 +16,6 @@ function run(...args) {
 }
 
 try {
-  run("check", "--quiet", source);
   run("dump", "--quiet", source, "--output", path.join(output, "dump.json"));
   const dump = JSON.parse(await readFile(path.join(output, "dump.json"), "utf8"));
   assert.equal(dump.page_order.length, 4);
@@ -47,7 +46,6 @@ try {
   run("render", "--quiet", source, "--output", path.join(output, "slides.pdf"));
   assert.equal((await readFile(path.join(output, "slides.pdf"))).subarray(0, 5).toString(), "%PDF-");
   const numbering = path.join(root, "tests/fixtures/typed-document/numbering.ss");
-  run("check", "--quiet", numbering);
   run("dump", "--quiet", numbering, "--output", path.join(output, "numbering.json"));
   const numbered = JSON.parse(await readFile(path.join(output, "numbering.json"), "utf8"));
   assert.deepEqual(numbered.diagnostics, []);

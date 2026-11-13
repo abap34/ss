@@ -50,7 +50,7 @@ for (const first of operators) {
 // even when another block begins on the same line.
 await writeFile(slide, wrap('let g = text << ;; header\nA\n>> |=| text <<\nB\n>> || text("C")'));
 try {
-  await exec(ssBin, ["check", "--quiet", "--color", "always", slide], { cwd: project, timeout: 15000, killSignal: "SIGKILL" });
+  await exec(ssBin, ["dump", "--quiet", "--color", "always", slide], { cwd: project, timeout: 15000, killSignal: "SIGKILL" });
   assert.fail("mixed operators were accepted");
 } catch (error) {
   assert.equal(error.code, 1);
@@ -78,7 +78,7 @@ async function check(text, messages = [], absent = []) {
   await writeFile(slide, text);
   let failure;
   try {
-    await exec(ssBin, ["check", "--quiet", slide], { cwd: project, timeout: 15000, killSignal: "SIGKILL" });
+    await exec(ssBin, ["dump", "--quiet", slide], { cwd: project, timeout: 15000, killSignal: "SIGKILL" });
   } catch (error) {
     failure = error;
   }

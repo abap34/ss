@@ -45,6 +45,7 @@ class @FORMULA_CLASS@ < Formula
     EOS
 
     assert_match version.to_s, shell_output("#{bin}/ss --version")
-    system bin/"ss", "check", testpath/"slide.ss"
+    system bin/"ss", "render", testpath/"slide.ss", "--output", testpath/"slide.pdf"
+    assert_predicate testpath/"slide.pdf", :nonzero?
   end
 end

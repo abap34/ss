@@ -72,7 +72,6 @@ page wrapped
 end
 `;
     await writeFile(path.join(project, "slide.ss"), source);
-    success("check", "--quiet", "slide.ss");
     success("dump", "--quiet", "slide.ss", "--output", "dump.json");
     const dump = JSON.parse(await readFile(path.join(project, "dump.json"), "utf8"));
     assert.deepEqual(dump.diagnostics, []);
@@ -97,7 +96,7 @@ end
     success("render", "--quiet", "--format", "html", "slide.ss", "--output", `${name}.html`);
 
     await writeFile(path.join(project, "invalid.ss"), source.replaceAll(input, name === "icon" ? "fa-solid:absent-icon" : "missing.asset"));
-    const invalid = run("check", "--quiet", "invalid.ss");
+    const invalid = run("dump", "--quiet", "invalid.ss");
     assert.notEqual(invalid.status, 0);
     assert.match(invalid.stderr, name === "icon" ? /InvalidFontAwesomeIcon/ : /AssetNotFound/);
     assert.match(invalid.stderr, /invalid\.ss:/);

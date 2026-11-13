@@ -15,7 +15,6 @@ function run(...args) {
   assert.equal(result.status, 0, result.stderr);
 }
 try {
-  run("check", "--quiet", source);
   run("dump", "--quiet", source, "--output", "dump.json");
   const dump = JSON.parse(await readFile(path.join(output, "dump.json"), "utf8"));
   assert.deepEqual(dump.diagnostics, []);
@@ -104,7 +103,7 @@ try {
     ["negative-padding", `text!("Body", TextBlockStyle {} with { chrome.pad_x = -1 })`, "InvalidNativeDisplay"],
   ]) {
     await writeFile(path.join(output, `${name}.ss`), `import std:prelude as *\nimport std:text/style as { TextBlockStyle }\nimport std:assets/style as { AssetBlockStyle }\npage invalid\n  ${statements}\nend\n`);
-    const result = spawnSync(ssBin, ["check", "--quiet", `${name}.ss`], { cwd: output, encoding: "utf8", timeout: 60000 });
+    const result = spawnSync(ssBin, ["dump", "--quiet", `${name}.ss`], { cwd: output, encoding: "utf8", timeout: 60000 });
     assert.ifError(result.error);
     assert.notEqual(result.status, 0, name);
     assert.match(result.stderr, new RegExp(diagnostic), name);

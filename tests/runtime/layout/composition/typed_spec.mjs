@@ -15,7 +15,6 @@ function run(...args) {
 }
 const close = (a, b) => assert(Math.abs(a - b) < 0.1, `${a} != ${b}`);
 try {
-  run("check", "--quiet", source);
   run("dump", "--quiet", source, "--output", path.join(output, "dump.json"));
   const dump = JSON.parse(await readFile(path.join(output, "dump.json"), "utf8"));
   assert.deepEqual(dump.diagnostics, []);

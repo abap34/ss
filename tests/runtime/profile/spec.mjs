@@ -22,7 +22,7 @@ try {
   await writeFile(path.join(project, "slide.ss"), source);
   const version = await run(["--version"]);
   if (!version.stdout.includes("profiling: Perfetto")) {
-    const unavailable = await run(["check", "slide.ss", "--profile", path.join(project, "unavailable")]);
+    const unavailable = await run(["dump", "slide.ss", "--profile", path.join(project, "unavailable")]);
     assert.notEqual(unavailable.code, 0);
     assert.match(unavailable.stderr, /-Dprofiling=true/);
     console.log("profiling: disabled build rejects recording without fetching tools");
@@ -86,29 +86,29 @@ async function testCli() {
   assert.equal(nested.code, 0, nested.stderr);
   assert.equal(nested.stdout.trim().split(/\r?\n/).at(-1), "0", "readSource escaped analyzeFile");
   const manifest = await readFile(path.join(directory, "manifest.json"));
-  assert.notEqual((await run(["check", "slide.ss", "--profile", directory])).code, 0);
+  assert.notEqual((await run(["dump", "slide.ss", "--profile", directory])).code, 0);
   assert.deepEqual(await readFile(path.join(directory, "manifest.json")), manifest);
   for (const args of [["--profile-buffer-kb", "2"], ["--profile-buffer-kb", "64"], ["--profile", path.join(project, "invalid"), "--profile-buffer-kb", "1048577"]]) {
-    assert.notEqual((await run(["check", "slide.ss", ...args])).code, 0);
+    assert.notEqual((await run(["dump", "slide.ss", ...args])).code, 0);
   }
   const crowded = "import std:themes/default as *\n" + Array.from({ length: 100 }, (_, index) => `page p${index}\ntext!("Page ${index}")\nend\n`).join("");
   await writeFile(path.join(project, "crowded.ss"), crowded);
   const limitedDirectory = path.join(project, "limited");
-  const limitedRun = await run(["check", "crowded.ss", "--quiet", "--profile", limitedDirectory, "--profile-buffer-kb", "64"]);
+  const limitedRun = await run(["dump", "crowded.ss", "crowded.json", "--quiet", "--profile", limitedDirectory, "--profile-buffer-kb", "64"]);
   assert.equal(limitedRun.code, 0, limitedRun.stderr);
   const limited = await readRecording(limitedDirectory);
   assert.equal(limited.manifest.buffer_kb, 64);
   assert(limited.summary.partial && limited.summary.loss.length > 0, "overflow must be reported as incomplete data");
   await writeFile(path.join(project, "broken.ss"), "page broken\nlet x =\nend\n");
   const failedDirectory = path.join(project, "failed");
-  assert.notEqual((await run(["check", "broken.ss", "--profile", failedDirectory, "--quiet"])).code, 0);
+  assert.notEqual((await run(["dump", "broken.ss", "--profile", failedDirectory, "--quiet"])).code, 0);
   const failed = await readRecording(failedDirectory);
   assert(failed.summary.operations.some((op) => op.outcome === "failed"));
 }
 
 async function testWatch() {
   const directory = path.join(project, "watch");
-  const child = spawn(ssBin, ["watch", "check", "slide.ss", "--quiet", "--interval-ms", "50", "--profile", directory], { cwd: project, detached: true, stdio: ["ignore", "ignore", "pipe"] });
+  const child = spawn(ssBin, ["watch", "render", "slide.ss", "--quiet", "--interval-ms", "50", "--profile", directory], { cwd: project, detached: true, stdio: ["ignore", "ignore", "pipe"] });
   child.stderr.resume();
   const exited = new Promise((resolve, reject) => { child.once("error", reject); child.once("exit", resolve); });
   const timer = setTimeout(() => terminateProcessTree(child.pid), 30_000);
@@ -125,7 +125,7 @@ async function testWatch() {
   const watched = await readRecording(directory);
   assert(watched.manifest.checkpoints >= 2);
   assert.equal(watched.summary.completed, false);
-  assert(watched.summary.operations.filter((op) => op.name === "watch.check" && op.outcome === "success").length >= 2);
+  assert(watched.summary.operations.filter((op) => op.name === "watch.render" && op.outcome === "success").length >= 2);
   async function waitForBuilds(count) {
     const deadline = Date.now() + 15_000;
     while (Date.now() < deadline) {

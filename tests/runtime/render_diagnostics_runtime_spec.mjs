@@ -461,9 +461,9 @@ end
       "utf8",
     );
 
-    const result = await runSs(["check", "slide.ss"], project);
+    const result = await runSs(["render", "slide.ss"], project);
     const output = `${result.stdout}\n${result.stderr}`;
-    assert(result.code !== 0, "check should fail for a missing asset");
+    assert(result.code !== 0, "render should fail for a missing asset");
     assert(output.includes("AssetNotFound:"), `missing asset did not produce a diagnostic:\n${output}`);
     assert(output.includes("slide.ss:4:9"), `missing asset diagnostic did not point at the path literal:\n${output}`);
     assert(output.includes('| image!("missing.svg")'), `missing asset diagnostic omitted source excerpt:\n${output}`);

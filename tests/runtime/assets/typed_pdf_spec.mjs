@@ -31,7 +31,6 @@ function field(record, name) {
 try {
   await writeFile(path.join(project, "asset.pdf"), pdfAsset());
   await writeFile(path.join(project, "slide.ss"), source);
-  success("check", "--quiet", "slide.ss");
   success("dump", "--quiet", "slide.ss", "--output", "dump.json");
   const dump = JSON.parse(await readFile(path.join(project, "dump.json"), "utf8"));
   assert.equal(dump.page_order.length, 2);
@@ -89,14 +88,14 @@ try {
 
   for (const number of ["0", "-1", "1.5", "100000000000000000000"]) {
     await writeFile(path.join(project, "invalid.ss"), source.replace("asset.pdf_page = 2", `asset.pdf_page = ${number}`));
-    const result = run("check", "--quiet", "invalid.ss");
+    const result = run("dump", "--quiet", "invalid.ss");
     assert.notEqual(result.status, 0, `Invalid page number accepted: ${number}`);
     assert.match(result.stderr, /InvalidAsset/);
     assert.match(result.stderr, /positive integer/);
     assert.doesNotMatch(result.stderr, /panic:/);
   }
   await writeFile(path.join(project, "missing.ss"), source.replace('path = "asset.pdf"', 'path = "missing.pdf"'));
-  const missing = run("check", "--quiet", "missing.ss");
+  const missing = run("dump", "--quiet", "missing.ss");
   assert.notEqual(missing.status, 0);
   assert.match(missing.stderr, /AssetNotFound/);
   assert.match(missing.stderr, /missing\.pdf/);

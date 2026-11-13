@@ -4,14 +4,9 @@ const module_loader = @import("modules/loader.zig");
 const utils = @import("utils");
 pub const ImportCache = @import("watch/imports.zig").Cache;
 
-pub const Mode = enum {
-    check,
-    render,
-};
-
 pub const Options = struct {
     input_path: []const u8,
-    output_path: ?[]const u8 = null,
+    output_path: []const u8,
     asset_base_dir: []const u8,
     project_file: ?[]const u8 = null,
     highlight_languages: []const utils.highlight.Language = &.{},
@@ -82,11 +77,11 @@ pub const Fingerprint = struct {
 
     /// Retain the source generation inspected before compilation and the inputs
     /// observed before use. Changes made during compilation remain detectable.
-    pub fn withObservedInputs(self: Fingerprint, inputs: *utils.FileInputs, output_path: ?[]const u8) ?u64 {
+    pub fn withObservedInputs(self: Fingerprint, inputs: *utils.FileInputs, output_path: []const u8) ?u64 {
         if (!inputs.observations_complete) return null;
         var hash = self.sources;
         for (inputs.items()) |input| {
-            if (output_path) |output| if (std.mem.eql(u8, output, input.path)) continue;
+            if (std.mem.eql(u8, output_path, input.path)) continue;
             mixBytes(&hash, input.path);
             mixValue(u64, &hash, input.observation orelse return null);
         }
@@ -154,7 +149,7 @@ const FingerprintContext = struct {
     }
 };
 
-pub fn run(io: std.Io, allocator: std.mem.Allocator, mode: Mode, initial_options: Options) !void {
+pub fn run(io: std.Io, allocator: std.mem.Allocator, initial_options: Options) !void {
     if (initial_options.configuration) |configuration| {
         if (configuration.changed(io)) return;
     }
@@ -162,9 +157,8 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, mode: Mode, initial_options
     defer inputs.deinit();
     var options = initial_options;
     options.file_inputs = &inputs;
-    const output_path = if (options.output_path) |path| try std.fs.path.resolve(allocator, &.{path}) else null;
-    defer if (output_path) |path| allocator.free(path);
-    options.output_path = output_path;
+    options.output_path = try std.fs.path.resolve(allocator, &.{options.output_path});
+    defer allocator.free(options.output_path);
     var imports = ImportCache.init(allocator);
     defer imports.deinit();
     var inspection_arena = std.heap.ArenaAllocator.init(allocator);
@@ -190,8 +184,8 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, mode: Mode, initial_options
     var embedded_cache = module_loader.EmbeddedSyntaxCache.init(allocator);
     defer embedded_cache.deinit();
 
-    std.debug.print("watch: {s} {s} every {d}ms\n", .{ @tagName(mode), options.input_path, interval_ms });
-    runOnce(io, allocator, mode, options, &embedded_cache, &last_fingerprint);
+    std.debug.print("watch: render {s} every {d}ms\n", .{ options.input_path, interval_ms });
+    runOnce(io, allocator, options, &embedded_cache, &last_fingerprint);
 
     while (true) {
         _ = inspection_arena.reset(.retain_capacity);
@@ -206,7 +200,7 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, mode: Mode, initial_options
         if (next_fingerprint.complete == last_fingerprint.complete) continue;
         last_fingerprint = next_fingerprint;
         std.debug.print("watch: change detected\n", .{});
-        runOnce(io, allocator, mode, options, &embedded_cache, &last_fingerprint);
+        runOnce(io, allocator, options, &embedded_cache, &last_fingerprint);
     }
 }
 
@@ -315,9 +309,9 @@ fn fingerprintTargetLabel(target: FingerprintTarget) []const u8 {
     };
 }
 
-fn runOnce(io: std.Io, backing_allocator: std.mem.Allocator, mode: Mode, options: Options, embedded_cache: *module_loader.EmbeddedSyntaxCache, baseline: *Fingerprint) void {
+fn runOnce(io: std.Io, backing_allocator: std.mem.Allocator, options: Options, embedded_cache: *module_loader.EmbeddedSyntaxCache, baseline: *Fingerprint) void {
     var completed = false;
-    var profile_operation = utils.profile.Operation.begin(if (mode == .render) "watch.render" else "watch.check", .{});
+    var profile_operation = utils.profile.Operation.begin("watch.render", .{});
     defer {
         profile_operation.outcome = if (completed) .success else .failed;
         profile_operation.finish();
@@ -341,66 +335,42 @@ fn runOnce(io: std.Io, backing_allocator: std.mem.Allocator, mode: Mode, options
             baseline.complete = baseline.withObservedInputs(destination, options.output_path) orelse baseline.complete;
         }
     };
-    switch (mode) {
-        .check => {
-            app.checkFile(io, allocator, .{
-                .input_path = options.input_path,
-                .asset_base_dir = options.asset_base_dir,
-                .highlight_languages = options.highlight_languages,
-                .embedded_cache = embedded_cache,
-                .file_inputs = &inputs,
-            }, null) catch |err| {
-                reportRunError("check", err);
-                return;
-            };
-        },
-        .render => {
-            const output_path = options.output_path orelse {
-                std.debug.print("watch: render requires an output path\n", .{});
-                return;
-            };
-            var progress = if (options.quiet)
-                utils.progress.Progress.disabled(app.render_progress_steps)
-            else
-                utils.progress.Progress.init(app.render_progress_steps);
-            const render_options = app.RenderOptions{
-                .jobs = options.jobs,
-                .cache = options.cache,
-                .highlight_languages = options.highlight_languages,
-            };
-            const source = app.SourceRequest{
-                .input_path = options.input_path,
-                .asset_base_dir = options.asset_base_dir,
-                .layout_jobs = options.jobs,
-                .highlight_languages = options.highlight_languages,
-                .embedded_cache = embedded_cache,
-                .file_inputs = &inputs,
-            };
-            (switch (options.format) {
-                .pdf => app.writePdf(io, allocator, .{
-                    .source = source,
-                    .output_path = output_path,
-                    .options = .{ .render = render_options },
-                }, &progress),
-                .html => app.writeHtml(io, allocator, .{
-                    .source = source,
-                    .output_path = output_path,
-                    .options = .{ .render = render_options },
-                }, &progress),
-            }) catch |err| {
-                reportRunError("render", err);
-                return;
-            };
-        },
-    }
+    var progress = if (options.quiet)
+        utils.progress.Progress.disabled(app.render_progress_steps)
+    else
+        utils.progress.Progress.init(app.render_progress_steps);
+    const render_options = app.RenderOptions{
+        .jobs = options.jobs,
+        .cache = options.cache,
+        .highlight_languages = options.highlight_languages,
+    };
+    const source = app.SourceRequest{
+        .input_path = options.input_path,
+        .asset_base_dir = options.asset_base_dir,
+        .layout_jobs = options.jobs,
+        .highlight_languages = options.highlight_languages,
+        .embedded_cache = embedded_cache,
+        .file_inputs = &inputs,
+    };
+    (switch (options.format) {
+        .pdf => app.writePdf(io, allocator, .{
+            .source = source,
+            .output_path = options.output_path,
+            .options = .{ .render = render_options },
+        }, &progress),
+        .html => app.writeHtml(io, allocator, .{
+            .source = source,
+            .output_path = options.output_path,
+            .options = .{ .render = render_options },
+        }, &progress),
+    }) catch |err| {
+        if (!utils.err.isExpectedCliError(err)) {
+            var reason_buf: [256]u8 = undefined;
+            std.debug.print("watch: render failed: {s}\n", .{utils.err.formatErrorReason(&reason_buf, err)});
+        }
+        return;
+    };
     completed = true;
-}
-
-fn reportRunError(label: []const u8, err: anyerror) void {
-    if (!utils.err.isExpectedCliError(err)) {
-        var reason_buf: [256]u8 = undefined;
-        std.debug.print("watch: {s} failed: {s}\n", .{ label, utils.err.formatErrorReason(&reason_buf, err) });
-    }
 }
 
 pub fn fingerprint(io: std.Io, allocator: std.mem.Allocator, options: Options) !u64 {
@@ -505,7 +475,7 @@ fn mixAssetDirectory(io: std.Io, allocator: std.mem.Allocator, hash: *u64, optio
         mixBytes(hash, entry.path);
         mixValue(u64, hash, stat.size);
         mixValue(i96, hash, stat.mtime.nanoseconds);
-        mixValue(u8, hash, @intFromEnum(stat.kind));
+        mixValue(u8, hash, @backingInt(stat.kind));
     }
 }
 
@@ -607,7 +577,7 @@ fn mixStat(hash: *u64, stat: std.Io.Dir.Stat) void {
     mixValue(i96, hash, stat.mtime.nanoseconds);
     mixValue(i96, hash, stat.ctime.nanoseconds);
     mixValue(std.Io.File.INode, hash, stat.inode);
-    mixValue(u8, hash, @intFromEnum(stat.kind));
+    mixValue(u8, hash, @backingInt(stat.kind));
 }
 
 fn skipDirectory(name: []const u8) bool {
@@ -631,11 +601,10 @@ fn isTexResource(path: []const u8) bool {
 }
 
 fn isOutputPath(allocator: std.mem.Allocator, options: Options, relative_path: []const u8) bool {
-    const output_path = options.output_path orelse return false;
-    if (std.mem.eql(u8, output_path, relative_path)) return true;
+    if (std.mem.eql(u8, options.output_path, relative_path)) return true;
     const joined = std.fs.path.join(allocator, &.{ options.asset_base_dir, relative_path }) catch return false;
     defer allocator.free(joined);
-    return std.mem.eql(u8, output_path, joined);
+    return std.mem.eql(u8, options.output_path, joined);
 }
 
 fn mixValue(comptime T: type, hash: *u64, value: T) void {

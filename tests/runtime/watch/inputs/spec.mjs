@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { root } from "../../harness.mjs";
 import { WatchProcess, settle } from "../harness.mjs";
@@ -24,49 +24,50 @@ try {
   await writeFile(first, "First input");
   await writeFile(second, "Second input");
   await writeFile(source, deck("first"));
-  watch = new WatchProcess(project, ["check", "--quiet", "slide.ss"]);
-  await watch.waitFor(() => checks() >= 1, "initial check");
+  const output = path.join(project, "preview.html");
+  watch = new WatchProcess(project, ["render", "--format", "html", "--quiet", "slide.ss", output]);
+  const changes = () => watch.occurrences("watch: change detected");
+  const waitForText = text => watch.waitForOutput(output, bytes => bytes.includes(text), text);
+  await waitForText("First input");
   await settle();
-  const initialChecks = checks();
-  assert.equal(initialChecks, 1, `Newly observed inputs caused an extra initial check:\n${watch.log}`);
+  assert.equal(changes(), 0, watch.log);
   await writeFile(path.join(project, "unrelated.ss"), "page unused\nend\n");
   await writeFile(path.join(project, "unrelated.svg"), '<svg xmlns="http://www.w3.org/2000/svg"/>');
   await settle();
-  assert.equal(checks(), initialChecks, `Unused files caused a new check:\n${watch.log}`);
+  assert.equal(changes(), 0, watch.log);
 
   await writeFile(first, "Changed input outside the asset directory");
-  await watch.waitFor(() => checks() > initialChecks, "changed external input");
+  await waitForText("Changed input outside the asset directory");
   await settle();
-  const firstChecks = checks();
-  assert.equal(firstChecks, initialChecks + 1, `One input update caused extra checks:\n${watch.log}`);
+  assert.equal(changes(), 1, watch.log);
   await writeFile(source, deck("second"));
-  await watch.waitFor(() => checks() > firstChecks, "replacement dependency");
+  await waitForText("Second input");
   await settle();
-  const replacementChecks = checks();
-  assert.equal(replacementChecks, firstChecks + 1, `Replacing a dependency caused extra checks:\n${watch.log}`);
+  assert.equal(changes(), 2, watch.log);
   await writeFile(first, "No longer referenced");
   await settle();
-  assert.equal(checks(), replacementChecks, `An obsolete dependency caused a new check:\n${watch.log}`);
+  assert.equal(changes(), 2, watch.log);
 
   const errorsBefore = watch.occurrences("ReadlinesFailed:");
   await rm(second);
   await watch.waitFor(() => watch.occurrences("ReadlinesFailed:") > errorsBefore, "missing input diagnostic");
-  const beforeRecovery = checks();
+  assert((await readFile(output)).includes("Second input"), "a failed render replaced the preview");
   await writeFile(second, "Repaired input");
-  await watch.waitFor(() => checks() > beforeRecovery, "missing input recovery");
+  await waitForText("Repaired input");
   await settle();
 
   const diagram = path.join(outside, "diagram.svg");
   await writeFile(diagram, svg("red"));
-  const beforeDiagram = checks();
+  const beforeDiagram = changes();
+  const textPreview = await readFile(output);
   await writeFile(source,
     'import std:themes/default as *\npage main\nimage!("../outside/diagram.svg")\nend\n');
-  await watch.waitFor(() => checks() > beforeDiagram, "prepared image dependency");
+  await watch.waitForOutput(output, bytes => !bytes.equals(textPreview), "image preview");
   await settle();
-  const beforeImageChange = checks();
-  assert.equal(beforeImageChange, beforeDiagram + 1, `A new image dependency caused extra checks:\n${watch.log}`);
+  assert.equal(changes(), beforeDiagram + 1, watch.log);
+  const redPreview = await readFile(output);
   await writeFile(diagram, svg("blue"));
-  await watch.waitFor(() => checks() > beforeImageChange, "changed prepared image");
+  await watch.waitForOutput(output, bytes => !bytes.equals(redPreview), "changed image preview");
   console.log("Watch inputs: unused files, external reads, prepared images, replacement and recovery passed");
 } finally {
   await watch?.close();
@@ -75,8 +76,4 @@ try {
 
 function svg(color) {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="30"><rect width="40" height="30" fill="${color}"/></svg>`;
-}
-
-function checks() {
-  return watch.occurrences("ok ");
 }

@@ -15,7 +15,6 @@ function run(...args) {
   assert.equal(result.status, 0, result.stderr);
 }
 try {
-  run("check", "--quiet", source);
   run("dump", "--quiet", source, "--output", path.join(output, "dump.json"));
   const dump = JSON.parse(await readFile(path.join(output, "dump.json"), "utf8"));
   assert.deepEqual(dump.diagnostics, []);

@@ -22,7 +22,6 @@ try {
     await writeFile(path.join(directory, `frame-${number}.svg`),
       `<svg xmlns="http://www.w3.org/2000/svg" width="180" height="100"><rect width="180" height="100" fill="#2488aa"/><text x="10" y="50">Frame ${number}</text></svg>`);
   }
-  run("check", "--quiet", "slide.ss");
   run("dump", "--quiet", "slide.ss", "dump.json");
   const dump = JSON.parse(await readFile(path.join(directory, "dump.json"), "utf8"));
   const pages = dump.modules.find(module => module.kind === "project").program.pages;

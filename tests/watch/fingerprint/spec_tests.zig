@@ -27,6 +27,7 @@ test "watch spec: fingerprint changes when a missing explicit import appears out
     });
 
     const options = watch.Options{
+        .output_path = "deck.pdf",
         .input_path = entry_path,
         .asset_base_dir = project_dir,
     };
@@ -69,6 +70,7 @@ test "watch spec: fingerprint failures retain the exact watched path" {
     const blocked_input = try std.fs.path.join(allocator, &.{ input_blocker, "slide.ss" });
     defer allocator.free(blocked_input);
     try expectFingerprintFailure(.{
+        .output_path = "deck.pdf",
         .input_path = blocked_input,
         .asset_base_dir = root,
     }, .input_file, blocked_input);
@@ -78,6 +80,7 @@ test "watch spec: fingerprint failures retain the exact watched path" {
     const blocked_project = try std.fs.path.join(allocator, &.{ project_blocker, "ss.toml" });
     defer allocator.free(blocked_project);
     try expectFingerprintFailure(.{
+        .output_path = "deck.pdf",
         .input_path = entry_path,
         .asset_base_dir = root,
         .project_file = blocked_project,
@@ -88,6 +91,7 @@ test "watch spec: fingerprint failures retain the exact watched path" {
     const blocked_query = try std.fs.path.join(allocator, &.{ query_blocker, "highlights.scm" });
     defer allocator.free(blocked_query);
     try expectFingerprintFailure(.{
+        .output_path = "deck.pdf",
         .input_path = entry_path,
         .asset_base_dir = root,
         .highlight_languages = &.{.{
@@ -109,6 +113,7 @@ test "watch spec: fingerprint failures retain the exact watched path" {
     const blocked_import = try std.fs.path.join(allocator, &.{ import_blocker, "dep.ss" });
     defer allocator.free(blocked_import);
     try expectFingerprintFailure(.{
+        .output_path = "deck.pdf",
         .input_path = import_entry,
         .asset_base_dir = root,
     }, .imported_source, blocked_import);
@@ -118,6 +123,7 @@ test "watch spec: fingerprint failures retain the exact watched path" {
     const blocked_asset_base = try std.fs.path.join(allocator, &.{ asset_blocker, "assets" });
     defer allocator.free(blocked_asset_base);
     try expectFingerprintFailure(.{
+        .output_path = "deck.pdf",
         .input_path = entry_path,
         .asset_base_dir = blocked_asset_base,
     }, .asset_base, blocked_asset_base);
@@ -166,7 +172,7 @@ test "watch spec: unchanged inspections retain only cached import edges" {
     const allocator = accounting.allocator();
     var cache = watch.ImportCache.init(allocator);
     defer cache.deinit();
-    const options = watch.Options{ .input_path = entry_path, .asset_base_dir = root };
+    const options = watch.Options{ .output_path = "deck.pdf", .input_path = entry_path, .asset_base_dir = root };
     const first = try inspectWithCache(allocator, options, &cache);
     const retained = accounting.allocated_bytes - accounting.freed_bytes;
     for (0..100) |_| {
@@ -194,7 +200,7 @@ test "watch spec: import replacement evicts obsolete edges and malformed edits p
     try std.Io.Dir.cwd().createDirPath(testing.io, empty_assets);
     var cache = watch.ImportCache.init(allocator);
     defer cache.deinit();
-    const options = watch.Options{ .input_path = entry_path, .asset_base_dir = empty_assets };
+    const options = watch.Options{ .output_path = "deck.pdf", .input_path = entry_path, .asset_base_dir = empty_assets };
     for (0..30) |index| {
         const dependency = try std.fmt.allocPrint(allocator, "{s}/dependency_{d}.ss", .{ root, index });
         defer allocator.free(dependency);
@@ -308,6 +314,7 @@ test "watch spec: fingerprint changes when a missing include appears outside ass
     });
 
     const options = watch.Options{
+        .output_path = "deck.pdf",
         .input_path = entry_path,
         .asset_base_dir = project_dir,
     };

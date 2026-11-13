@@ -36,6 +36,7 @@ async function testCompletionPrintsScriptWithoutInstalling() {
 }
 
 function assertRenderFormatCompletion(script, shell) {
+  assert(!/\bcheck\b/.test(script), `${shell} still offers the removed check command`);
   assert(script.includes("--format") || script.includes("-l format"), `${shell} completion omitted --format`);
   assert(script.includes("pdf html"), `${shell} completion omitted PDF and HTML format values`);
 }

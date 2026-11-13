@@ -17,16 +17,11 @@ cd "$CACHE"
 test -s "$CACHE/version.out"
 test ! -s "$CACHE/version.err"
 
-"$SS_BIN" check "$FIXTURE/slide.ss"
-"$SS_BIN" check --project "$FIXTURE"
-"$SS_BIN" check --project "$FIXTURE/ss.toml"
-(cd "$FIXTURE" && "$SS_BIN" check)
-
 NO_PROJECT="$ROOT/.test-tmp/no-project-smoke"
 rm -rf "$NO_PROJECT"
 mkdir -p "$NO_PROJECT"
-if (cd "$NO_PROJECT" && "$SS_BIN" check >/dev/null 2>"$CACHE/no-input.err"); then
-  echo "ss check without input or project unexpectedly passed" >&2
+if (cd "$NO_PROJECT" && "$SS_BIN" dump >/dev/null 2>"$CACHE/no-input.err"); then
+  echo "ss dump without input or project unexpectedly passed" >&2
   exit 1
 fi
 grep -F "missing input path or --project" "$CACHE/no-input.err" >/dev/null
