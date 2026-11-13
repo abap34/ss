@@ -19,7 +19,7 @@ import { exercisePdfViewportLifecycle } from "./pdf-lifecycle.mjs";
 import { exercisePageWindow } from "./viewport.mjs";
 import { exercisePageNavigation } from "./navigation.mjs";
 import { exerciseSelectionClearing } from "./selection.mjs";
-import { exercisePdfUpdates } from "./updates.mjs";
+import { exerciseRetainedUpdates, exercisePdfUpdates } from "./updates.mjs";
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const source = path.join(repository, "editor/vscode/media/editor");
@@ -73,6 +73,7 @@ await writeFile(path.join(output, "thumbnails.html"),
   '<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="main.css">');
 
 await withBrowser(output, async (browser, baseUrl) => {
+  await exerciseRetainedUpdates(browser, baseUrl, editorSnapshot());
   await exercisePdfUpdates(browser, baseUrl, editorSnapshot());
   if (process.argv.includes("--updates-only")) {
     console.log("WYSIWYG retained update checks passed.");

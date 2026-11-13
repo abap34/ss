@@ -128,7 +128,11 @@ export class WorkspaceView {
     return main;
   }
 
-  reconcileRetainedSnapshot(previousSnapshot, translatedNodeIds = null) {
+  reconcileRetainedSnapshot(
+    previousSnapshot,
+    translatedNodeIds = null,
+    forceInteractionUpdate = false,
+  ) {
     const snapshot = this.state.snapshot;
     if (!this.root?.isConnected || !this.viewport?.isConnected ||
         previousSnapshot?.entry_path !== snapshot?.entry_path ||
@@ -154,6 +158,14 @@ export class WorkspaceView {
         entry.snapshot = snapshot;
       }
       retainedPages.push({ page, shell, preview, interaction });
+    }
+
+    if (!forceInteractionUpdate && translatedNodeIds instanceof Set &&
+        translatedNodeIds.size === 0 && sameEditingModel(previousSnapshot, snapshot)) {
+      for (const { page, shell } of retainedPages) this.syncPageChrome(shell, page);
+      this.updateBuildStatus();
+      this.syncToast();
+      return true;
     }
 
     const interactionPageIds = translatedInteractionPages(
@@ -229,6 +241,7 @@ export class WorkspaceView {
       const toast = this.root.querySelector(":scope > .toast");
       this.root.insertBefore(next, toast);
     }
+    this.positionObjectSheet();
     this.scheduleObjectSheetPosition();
   }
 
@@ -350,7 +363,10 @@ export class WorkspaceView {
       Number(selected.dataset.objectId) === this.state.selectedObjectId &&
       Number(selected.closest(".page-shell")?.dataset.pageId) === pageId
     )) {
-      this.syncObjectSheet();
+      if (Number(this.root.querySelector(":scope > .object-sheet")?.dataset.objectId) !==
+          this.state.selectedObjectId) {
+        this.syncObjectSheet();
+      }
       this.syncRelativeAdjustment();
       return true;
     }
@@ -400,20 +416,26 @@ export class WorkspaceView {
   syncPageChrome(shell, page) {
     const currentSource = shell.querySelector(":scope > .page-source-button");
     if (page.location?.path) {
-      const nextSource = sourceButton(page, this.actions.revealSource);
-      nextSource.classList.add("page-source-button");
-      nextSource.title = `Open ${page.name || `Page ${page.index}`} in Editor`;
-      nextSource.setAttribute("aria-label", nextSource.title);
-      if (currentSource) currentSource.replaceWith(nextSource);
-      else {
+      let source = currentSource;
+      if (!source) {
+        source = sourceButton(page, () => {
+          const current = this.state.snapshot?.layout.pages.find((item) => item.id === page.id);
+          if (current) this.actions.revealSource(current);
+        });
+        source.classList.add("page-source-button");
         const caption = shell.querySelector(":scope > .page-caption");
-        shell.insertBefore(nextSource, caption);
+        shell.insertBefore(source, caption);
+      }
+      const title = `Open ${page.name || `Page ${page.index}`} in Editor`;
+      if (source.title !== title) {
+        source.title = title;
+        source.setAttribute("aria-label", title);
       }
     } else {
       currentSource?.remove();
     }
     const caption = shell.querySelector(":scope > .page-caption");
-    if (caption) caption.textContent = page.name;
+    if (caption && caption.textContent !== page.name) caption.textContent = page.name;
   }
 
   toolbar() {
@@ -950,16 +972,10 @@ export class WorkspaceView {
       page, shell, surface, snapshot: this.state.snapshot, preview: null,
     });
     shell.append(surface);
-    if (page.location?.path) {
-      const open = sourceButton(page, this.actions.revealSource);
-      open.classList.add("page-source-button");
-      open.title = `Open ${page.name || `Page ${page.index}`} in Editor`;
-      open.setAttribute("aria-label", open.title);
-      shell.append(open);
-    }
     const caption = element("div", "page-caption");
     caption.textContent = page.name;
     shell.append(caption);
+    this.syncPageChrome(shell, page);
     return shell;
   }
 
@@ -1107,6 +1123,12 @@ function samePageEditingCapabilities(previous, current) {
       capability.insert_shapes === next.insert_shapes &&
       capability.insert_icons === next.insert_icons;
   });
+}
+
+function sameEditingModel(previous, current) {
+  return ["layout", "outline", "editing", "shape_editing"].every((key) =>
+    JSON.stringify(previous[key]) === JSON.stringify(current[key])
+  );
 }
 
 function translatedInteractionPages(previous, current, translatedNodeIds) {

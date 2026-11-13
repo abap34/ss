@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { pdfAsset } from "../../render/assets.mjs";
 import { withBrowser } from "../../render/capture.mjs";
 import { editorSnapshot, testDocument } from "../fixture.mjs";
-import { exercisePdfUpdates } from "../updates.mjs";
+import { exercisePdfUpdates, exerciseRetainedUpdates } from "../updates.mjs";
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const output = path.join(repository, ".test-tmp/editor-bundle-test");
@@ -33,7 +33,8 @@ await withBrowser(output, async (browser, baseUrl) => {
       return page;
     },
   };
+  await exerciseRetainedUpdates(observedBrowser, baseUrl, editorSnapshot());
   await exercisePdfUpdates(observedBrowser, baseUrl, editorSnapshot());
 });
 assert.deepEqual(separateRuntimes, [], "the compiled editor loaded a separately built PDF runtime");
-console.log("Compiled editor PDF checks passed.");
+console.log("Compiled editor PDF and retained update checks passed.");

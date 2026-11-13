@@ -115,6 +115,7 @@ export class EditorController implements vscode.Disposable {
   ) {
     this.view = new ViewResources(context.extensionUri);
     this.disposables.push(vscode.workspace.onDidChangeTextDocument((event) => {
+      if (event.contentChanges.length === 0) return;
       this.refreshAffected(event.document.uri);
     }));
     const sourceWatcher = vscode.workspace.createFileSystemWatcher("**/*.ss");

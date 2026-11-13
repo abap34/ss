@@ -66,6 +66,7 @@ await testOpenResolvesConfiguredEntryWithoutSsDocument();
 await testDisposingSessionCancelsSourceEditRequest();
 await testPendingOpenDoesNotSurviveDisposal();
 await testOpeningManualPreviewBuildsInitialSnapshot();
+await testDocumentMetadataDoesNotRebuildPreview();
 await testPreviewDiagnosticsPreserveEditorState();
 await testManualPositionEditRequestsReconciliation();
 await testNewSourceEditReschedulesReconciliation();
@@ -375,6 +376,29 @@ async function testOpeningManualPreviewBuildsInitialSnapshot() {
       initialBuildCount,
       "a later source edit ignored the manual-refresh setting",
     );
+  });
+}
+
+async function testDocumentMetadataDoesNotRebuildPreview() {
+  await withManualSession(async ({ session, requests, messages, change }) => {
+    for (const automatic of [false, true]) {
+      session.settings = {
+        ...session.settings,
+        refreshAutomatically: automatic,
+        debounceMs: 0,
+        maxWaitMs: 0,
+      };
+      const serial = session.serial;
+      const messageCount = messages.length;
+      mock.change(session.document, []);
+      assert.equal(session.serial, serial, "a metadata event invalidated the preview");
+      assert.equal(messages.length, messageCount, "a metadata event changed build status");
+      assert.equal(session.timer, undefined, "a metadata event scheduled a build");
+    }
+    change();
+    await waitFor(() => requests.some((request) => request.method === "ss/editorSnapshot"));
+    await waitFor(() => messages.some((message) => message.type === "snapshot"));
+    assert.equal(requests.length, 1, "a source edit did not build exactly once");
   });
 }
 
@@ -1381,8 +1405,8 @@ function vscodeMock() {
     openedDocuments,
     panels,
     warnings,
-    change(document) {
-      for (const listener of changeListeners) listener({ document });
+    change(document, contentChanges = [{ text: "updated" }]) {
+      for (const listener of changeListeners) listener({ document, contentChanges });
     },
     reset() {
       workspace.textDocuments.length = 0;

@@ -1,5 +1,94 @@
 import assert from "node:assert/strict";
 
+export async function exerciseRetainedUpdates(browser, baseUrl, snapshot) {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 1000 } });
+  let revision = 1;
+  let current = snapshot;
+  const postUpdate = async (model = current) => {
+    const next = {
+      ...model,
+      snapshot_id: `retained-update-${++revision}`,
+      display: {
+        schema: 3, kind: "translation_patch",
+        base_snapshot_id: current.snapshot_id, translations: [],
+      },
+    };
+    await postSnapshot(page, revision, next);
+    current = { ...next, display: snapshot.display };
+  };
+  try {
+    await page.goto(`${baseUrl}/index.html`, { waitUntil: "networkidle" });
+    await postSnapshot(page, revision, current);
+    await page.evaluate(() => {
+      document.querySelector('.object-hit[data-object-id="202"]')
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      document.querySelector('.sheet-toggle[aria-controls="object-202-bounds"]').click();
+      globalThis.__retainedUpdate = {
+        viewport: document.querySelector(".viewport"),
+        layer: document.querySelector('.page-shell[data-page-id="22"] .interaction-layer'),
+        sheet: document.querySelector(".object-sheet"),
+        source: document.querySelector('.page-shell[data-page-id="22"] .page-source-button'),
+        input: document.querySelector('.object-sheet input[aria-label="Component width"]'),
+      };
+      __retainedUpdate.source.focus();
+    });
+    await postUpdate();
+    assert.equal(await page.evaluate(() => document.activeElement === __retainedUpdate.source),
+      true, "an unchanged snapshot removed page source focus");
+    await page.evaluate(() => {
+      __retainedUpdate.input.value = "413";
+      __retainedUpdate.input.focus();
+    });
+    await postUpdate();
+    assert.equal(await page.evaluate(() => {
+      const saved = __retainedUpdate;
+      return saved.viewport === document.querySelector(".viewport") &&
+        saved.layer === document.querySelector('.page-shell[data-page-id="22"] .interaction-layer') &&
+        saved.sheet === document.querySelector(".object-sheet") &&
+        saved.source === document.querySelector('.page-shell[data-page-id="22"] .page-source-button') &&
+        saved.input === document.activeElement && saved.input.value === "413" &&
+        getComputedStyle(saved.sheet).visibility === "visible";
+    }), true, "an unchanged snapshot disturbed the selected object's controls");
+    await page.evaluate(() => document.querySelector('.object-hit[data-object-id="202"]')
+      .dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    assert.equal(await page.evaluate(() => __retainedUpdate.sheet === document.querySelector(".object-sheet")),
+      true, "selecting the current object recreated its controls");
+
+    const relocated = structuredClone(current);
+    const relocatedPage = relocated.layout.pages.find((item) => item.id === 22);
+    relocatedPage.location = { ...relocatedPage.location, start: 90, end: 160 };
+    relocated.editing.find((item) => item.node_id === 202).minimum_width = 12;
+    await postUpdate(relocated);
+    assert.equal(await page.evaluate(() => __retainedUpdate.source ===
+      document.querySelector('.page-shell[data-page-id="22"] .page-source-button')),
+    true, "updating a page source target replaced its button");
+    assert.equal(await page.locator('.page-shell[data-page-id="22"] .page-source-button')
+      .getAttribute("aria-label"), "Open Details in Editor");
+    assert.equal(await page.locator('.object-sheet input[aria-label="Component width"]').getAttribute("min"), "12",
+      "an empty display patch ignored changed editing capabilities");
+    await page.evaluate(() => __retainedUpdate.source.click());
+    assert.deepEqual(await page.evaluate(() => __messages.findLast((item) => item.type === "revealSource")), {
+      type: "revealSource", path: "/workspace/slide.ss", start: 90, end: 160,
+    }, "a retained page source button used obsolete source offsets");
+
+    await page.locator('.object-sheet input[aria-label="Component width"]').evaluate((input) => {
+      input.value = "420";
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await page.waitForSelector("[data-ss-pending-width]");
+    await page.evaluate(() => window.postMessage({
+      type: "componentWidthEditResult", status: "applied", documentVersion: 1,
+      requestId: __messages.findLast((item) => item.type === "resizeComponentWidth").requestId,
+    }, "*"));
+    await postUpdate();
+    assert.equal(await page.locator("[data-ss-pending-width]").count(), 0,
+      "an unchanged editing model retained a rejected optimistic width");
+    assert.match(await page.locator(".toast--error").textContent(), /did not reproduce/);
+  } finally {
+    await page.close();
+  }
+}
+
 export async function exercisePdfUpdates(browser, baseUrl, snapshot) {
   const page = await browser.newPage({ viewport: { width: 1200, height: 1000 } });
   try {

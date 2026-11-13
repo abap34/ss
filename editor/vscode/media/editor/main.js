@@ -250,6 +250,7 @@ function acceptSnapshot(message) {
   if (!preservesDisplay) disposePdfItems(app);
   state.revision = message.revision;
   state.snapshot = snapshot;
+  const pendingEditsBeforeReconciliation = hasPendingEdits();
   const editOutcome = translation.reconcile(
     snapshot,
     message.documentVersion,
@@ -319,10 +320,19 @@ function acceptSnapshot(message) {
   }
   const retained = preservesDisplay &&
     reconcileSidebarSnapshot(app, state, previousSnapshot) &&
-    workspace.reconcileRetainedSnapshot(previousSnapshot, translatedNodeIds);
+    workspace.reconcileRetainedSnapshot(
+      previousSnapshot,
+      translatedNodeIds,
+      pendingEditsBeforeReconciliation || hasPendingEdits(),
+    );
   if (!retained) render();
   revealRequestedPage();
   if (toastDuration != null) scheduleToastClear(toastDuration);
+}
+
+function hasPendingEdits() {
+  return translation.pending.size > 0 || componentWidth.pending.size > 0 ||
+    componentDeletion.pending.size > 0 || shape.isBusy() || icon.isBusy();
 }
 
 function deferSnapshot(message) {
