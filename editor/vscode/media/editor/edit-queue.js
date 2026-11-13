@@ -64,7 +64,7 @@ export class EditQueue {
       return null;
     }
     if (message.status === "stale") {
-      pending.phase = "queued";
+      pending.phase = "stale";
       return null;
     }
     const failure = this.fail(
@@ -80,7 +80,9 @@ export class EditQueue {
   reconcile(snapshot, documentVersion) {
     const pending = this.pending;
     if (!pending || snapshot.stale) return null;
-    if (pending.phase === "queued") {
+    if (pending.phase === "stale" &&
+        snapshot.snapshot_id === pending.message.snapshotId) return null;
+    if (pending.phase === "queued" || pending.phase === "stale") {
       const failure = this.policy.rebase(snapshot, pending);
       if (failure) return this.fail(failure.message, snapshot);
       this.send(pending, snapshot);
@@ -88,8 +90,9 @@ export class EditQueue {
     }
     if (pending.phase !== "applied" ||
         snapshot.snapshot_id === pending.message.snapshotId ||
-        (documentVersion != null && pending.documentVersion != null &&
-          documentVersion < pending.documentVersion)) return null;
+        (pending.documentVersion != null &&
+          (documentVersion == null || !Number.isSafeInteger(documentVersion) ||
+            documentVersion < pending.documentVersion))) return null;
     const outcome = this.policy.applied(snapshot, pending, documentVersion);
     if (!outcome) return null;
     if (outcome.status === "failed") return this.fail(outcome.message, snapshot);
@@ -105,7 +108,9 @@ export class EditQueue {
       this.policy.render();
       return true;
     }
-    if (this.pending?.phase !== "queued" || !predicate(this.pending)) return false;
+    if (!this.pending ||
+        (this.pending.phase !== "queued" && this.pending.phase !== "stale") ||
+        !predicate(this.pending)) return false;
     this.discardPending();
     this.promote(this.policy.snapshot());
     this.policy.render();

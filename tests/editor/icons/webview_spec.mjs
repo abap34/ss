@@ -143,7 +143,7 @@ state.snapshot = snapshot("after-insert", [{
   page_id: 11,
   binding: "icon_item",
 }]);
-assert.deepEqual(icons.reconcile(state.snapshot), { status: "applied" });
+assert.deepEqual(icons.reconcile(state.snapshot, 2), { status: "applied" });
 assert.equal(state.shapeTool, "select");
 assert.equal(icons.pendingInsertion(11), null);
 assert.deepEqual(selections, [{ nodeId: 101, pageId: 11 }]);

@@ -32,6 +32,7 @@ const vscode = acquireVsCodeApi();
 let persistedState = vscode.getState() || {};
 const state = {
   snapshot: null,
+  documentVersion: undefined,
   revision: -1,
   buildRevision: -1,
   buildStatus: "starting",
@@ -176,6 +177,7 @@ window.addEventListener("message", (event) => {
     if (state.snapshot) disposePages(state.snapshot);
     disposePdfItems(app);
     state.snapshot = null;
+    state.documentVersion = undefined;
     state.revision = message.revision;
     setBuildStatus("restarting", message.revision);
     clearToast();
@@ -193,27 +195,26 @@ window.addEventListener("message", (event) => {
         message.revision < state.buildRevision) return;
     state.revision = message.revision;
     setBuildStatus("failed", message.revision, message.buildDurationMs);
-    translation.cancel();
     showPersistentError(message.message || "WYSIWYG preview update failed.");
   } else if (message.type === "editResult") {
-    const editOutcome = translation.acceptResult(message);
+    const editOutcome = acceptEditResult(translation, message);
     if (editOutcome?.status === "applied") {
       showSuccess("Constraint applied to source.");
     } else if (editOutcome?.status === "failed") {
       showError(editFailureMessage(editOutcome.message));
     }
   } else if (message.type === "shapeEditResult") {
-    const editOutcome = shape.acceptResult(message);
+    const editOutcome = acceptEditResult(shape, message);
     if (editOutcome?.status === "failed") {
       showError(editFailureMessage(editOutcome.message));
     }
   } else if (message.type === "componentDeleteResult") {
-    const editOutcome = componentDeletion.acceptResult(message);
+    const editOutcome = acceptEditResult(componentDeletion, message);
     if (editOutcome?.status === "failed") {
       showError(editFailureMessage(editOutcome.message));
     }
   } else if (message.type === "componentWidthEditResult") {
-    const editOutcome = componentWidth.acceptResult(message);
+    const editOutcome = acceptEditResult(componentWidth, message);
     if (editOutcome?.status === "failed") {
       showError(editFailureMessage(editOutcome.message));
     }
@@ -222,7 +223,7 @@ window.addEventListener("message", (event) => {
     const outcome = icon.acceptCatalog(message);
     if (outcome?.status === "failed") showError(outcome.message);
   } else if (message.type === "iconEditResult") {
-    const outcome = icon.acceptResult(message);
+    const outcome = acceptEditResult(icon, message);
     if (outcome?.status === "failed") showError(editFailureMessage(outcome.message));
   } else if (message.type === "startPresentation") {
     presentation.start();
@@ -250,6 +251,7 @@ function acceptSnapshot(message) {
   if (!preservesDisplay) disposePdfItems(app);
   state.revision = message.revision;
   state.snapshot = snapshot;
+  state.documentVersion = message.documentVersion;
   const pendingEditsBeforeReconciliation = hasPendingEdits();
   const editOutcome = translation.reconcile(
     snapshot,
@@ -278,7 +280,7 @@ function acceptSnapshot(message) {
   if (renderStyle.textContent !== state.snapshot.display.css) {
     renderStyle.textContent = state.snapshot.display.css;
   }
-  navigation.reconcile(state.snapshot);
+  navigation.reconcile(state.snapshot, previousSnapshot);
   objectLocks.reconcile(state.snapshot);
   const shapeOutcome = shape.reconcile(state.snapshot, message.documentVersion);
   const iconOutcome = icon.reconcile(state.snapshot, message.documentVersion);
@@ -331,8 +333,28 @@ function acceptSnapshot(message) {
 }
 
 function hasPendingEdits() {
-  return translation.pending.size > 0 || componentWidth.pending.size > 0 ||
-    componentDeletion.pending.size > 0 || shape.isBusy() || icon.isBusy();
+  return pendingEditCount() > 0;
+}
+
+function pendingEditCount() {
+  return translation.pending.size + componentWidth.pending.size +
+    componentDeletion.pending.size + Number(shape.isBusy()) + Number(icon.isBusy());
+}
+
+function acceptEditResult(controller, message) {
+  const countBefore = pendingEditCount();
+  const outcome = controller.acceptResult(message);
+  // A snapshot can arrive before the acknowledgement for the source edit.
+  // Reconcile it again now that the applied document version is known.
+  const reconciled = state.snapshot
+    ? controller.reconcile(state.snapshot, state.documentVersion)
+    : null;
+  if (!state.presentation.active &&
+      (reconciled || countBefore !== pendingEditCount())) {
+    if (workspace.isPointerOperationActive() ||
+        !workspace.reconcileRetainedSnapshot(state.snapshot, null, true)) render();
+  }
+  return reconciled?.status === "failed" ? reconciled : outcome || reconciled;
 }
 
 function deferSnapshot(message) {
@@ -365,7 +387,8 @@ function reportSnapshotResources(observedSnapshotId) {
 }
 
 function editFailureMessage(fallback) {
-  return buildFailureMessage(state.snapshot) || fallback ||
+  return buildFailureMessage(state.snapshot) ||
+    (state.buildStatus === "failed" && state.toast?.kind === "error" ? state.toast.message : null) || fallback ||
     "The source edit could not be applied.";
 }
 
@@ -437,7 +460,8 @@ function acceptBuildStatus(message) {
   ) &&
     state.toast?.kind === "error";
   if (clearedError) clearToast();
-  if (clearedError || !workspace.updateBuildStatus()) render();
+  workspace.updateBuildStatus();
+  syncToast();
 }
 
 function setBuildStatus(status, revision, durationMs = null) {
@@ -459,14 +483,19 @@ function validBuildDuration(value) {
 }
 
 function showSuccess(message) {
+  if (state.buildStatus === "failed") return;
   state.toast = { kind: "success", message };
   syncToast();
   scheduleToastClear(successToastDuration);
 }
 
 function showError(message) {
+  if (state.buildStatus === "failed") {
+    showPersistentError(message);
+    return;
+  }
   state.toast = { kind: "error", message };
-  render();
+  syncToast();
   scheduleToastClear(errorToastDuration);
 }
 
@@ -474,7 +503,8 @@ function showPersistentError(message) {
   if (toastTimer != null) clearTimeout(toastTimer);
   toastTimer = null;
   state.toast = { kind: "error", message };
-  render();
+  workspace.updateBuildStatus();
+  syncToast();
 }
 
 function clearToast() {

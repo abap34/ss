@@ -157,6 +157,112 @@ export async function exercisePdfUpdates(browser, baseUrl, snapshot) {
   }
 }
 
+export async function exerciseContinuousEdits(browser, baseUrl, snapshot) {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 1000 } });
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(String(error)));
+  let current = structuredClone(snapshot);
+  let revision = 1;
+  try {
+    await page.goto(`${baseUrl}/index.html`, { waitUntil: "networkidle" });
+    await postSnapshot(page, revision, current);
+    await page.evaluate(() => {
+      document.querySelector('.object-hit[data-object-id="202"]')
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      document.querySelector('.sheet-toggle[aria-controls="object-202-bounds"]').click();
+    });
+    for (let step = 0; step < 12; step++) {
+      const width = 400 + step * 10;
+      await page.locator('.object-sheet input[aria-label="Component width"]').evaluate((input, value) => {
+        input.value = String(value);
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      }, width);
+      const request = await page.evaluate(() => __messages.findLast((item) => item.type === "resizeComponentWidth"));
+      assert.equal(request.snapshotId, current.snapshot_id,
+        "a continuous edit used an obsolete snapshot");
+      const result = {
+        type: "componentWidthEditResult", requestId: request.requestId,
+        status: "applied", documentVersion: step + 2,
+      };
+      const next = structuredClone(current);
+      next.snapshot_id = `continuous-${step}`;
+      const previousId = current.editing.find((item) => item.binding === "detail").node_id;
+      const nextId = 500 + step;
+      const item = next.layout.objects.find((item) => item.id === previousId);
+      item.width = width;
+      item.id = nextId;
+      next.outline.find((item) => item.id === previousId).id = nextId;
+      next.editing.find((item) => item.binding === "detail").node_id = nextId;
+      const previousWidth = current.layout.objects.find((item) => item.id === previousId).width;
+      next.display.html = next.display.html.replace(`width:${previousWidth}pt`, `width:${width}pt`);
+      next.display.html = next.display.html.replace(`data-ss-node-id="${previousId}"`, `data-ss-node-id="${nextId}"`);
+      if (step % 2 === 0) {
+        await postMessage(page, result);
+        assert.equal(await page.locator(".toast--error").count(), 0,
+          "an acknowledgement was reconciled against its request snapshot");
+        await postSnapshot(page, ++revision, next, step + 2);
+      } else {
+        await postSnapshot(page, ++revision, next, step + 2);
+        await page.evaluate(() => { globalThis.__continuousViewport = document.querySelector(".viewport"); });
+        await postMessage(page, result);
+        await page.waitForFunction(() => !document.querySelector("[data-ss-pending-width]"));
+        assert(await page.evaluate(() => __continuousViewport === document.querySelector(".viewport")),
+          "a late acknowledgement rebuilt the preview");
+      }
+      current = next;
+      assert.equal(await page.locator(`.object-hit[data-object-id="${nextId}"].is-selected`).count(), 1,
+        "a source identifier change lost the selected binding");
+      await page.waitForFunction(() => !document.querySelector("[data-ss-pending-width]"));
+      assert.equal(await page.locator('.object-sheet input[aria-label="Component width"]').inputValue(), String(width));
+      await page.locator('.object-sheet input[aria-label="Component width"]').waitFor({ state: "visible" });
+      assert.equal(await page.locator(".toast--error").count(), 0,
+        "continuous edits produced a reconciliation failure");
+      await postMessage(page, { ...result, status: "rejected", message: "Obsolete duplicate response" });
+      assert.equal(await page.locator(".toast--error").count(), 0,
+        "a duplicate acknowledgement changed a completed edit");
+    }
+    await page.locator('.object-sheet input[aria-label="Component width"]').evaluate((input) => {
+      input.value = "520";
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    const finalRequest = await page.evaluate(() => __messages.findLast((item) => item.type === "resizeComponentWidth"));
+    const final = structuredClone(current);
+    final.snapshot_id = "continuous-presentation";
+    final.layout.objects.find((item) => item.id === 511).width = 520;
+    final.display.html = final.display.html.replace("width:510pt", "width:520pt");
+    await postSnapshot(page, ++revision, final, 14);
+    await page.getByRole("button", { name: "Start presentation from the beginning", exact: true }).click();
+    await page.waitForSelector(".presentation-stage");
+    await page.evaluate(() => { globalThis.__continuousStage = document.querySelector(".presentation-stage"); });
+    await postMessage(page, {
+      type: "componentWidthEditResult", requestId: finalRequest.requestId,
+      status: "applied", documentVersion: 14,
+    });
+    assert(await page.evaluate(() => __continuousStage === document.querySelector(".presentation-stage")),
+      "a late edit acknowledgement recreated the presentation");
+    await postMessage(page, { type: "buildStatus", revision: ++revision, status: "building" });
+    assert(await page.evaluate(() => __continuousStage === document.querySelector(".presentation-stage")),
+      "a background build status recreated the active presentation");
+    await postMessage(page, { type: "error", revision: ++revision, message: "Temporary build failure" });
+    assert(await page.evaluate(() => __continuousStage === document.querySelector(".presentation-stage")),
+      "a build failure recreated the active presentation");
+    assert.deepEqual(errors, []);
+  } finally {
+    await page.close();
+  }
+}
+
+async function postMessage(page, message) {
+  await page.evaluate((value) => new Promise((resolve) => {
+    window.postMessage(value, "*");
+    window.addEventListener("message", function observed(event) {
+      if (event.data.type !== value.type || event.data.requestId !== value.requestId) return;
+      window.removeEventListener("message", observed);
+      resolve();
+    });
+  }), message);
+}
+
 async function postSnapshot(page, revision, snapshot, documentVersion = 1) {
   await page.evaluate((message) => window.postMessage(message, "*"), {
     type: "snapshot", revision, documentVersion, snapshot,

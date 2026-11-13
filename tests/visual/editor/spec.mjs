@@ -19,7 +19,7 @@ import { exercisePdfViewportLifecycle } from "./pdf-lifecycle.mjs";
 import { exercisePageWindow } from "./viewport.mjs";
 import { exercisePageNavigation } from "./navigation.mjs";
 import { exerciseSelectionClearing } from "./selection.mjs";
-import { exerciseRetainedUpdates, exercisePdfUpdates } from "./updates.mjs";
+import { exerciseRetainedUpdates, exercisePdfUpdates, exerciseContinuousEdits } from "./updates.mjs";
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const source = path.join(repository, "editor/vscode/media/editor");
@@ -75,6 +75,7 @@ await writeFile(path.join(output, "thumbnails.html"),
 await withBrowser(output, async (browser, baseUrl) => {
   await exerciseRetainedUpdates(browser, baseUrl, editorSnapshot());
   await exercisePdfUpdates(browser, baseUrl, editorSnapshot());
+  await exerciseContinuousEdits(browser, baseUrl, editorSnapshot());
   if (process.argv.includes("--updates-only")) {
     console.log("WYSIWYG retained update checks passed.");
     return;
@@ -1404,7 +1405,7 @@ await withBrowser(output, async (browser, baseUrl) => {
         message: "expected an expression after '='",
       },
     ];
-    await postSnapshot(page, 108, failed, 6);
+    await postSnapshot(page, 109, failed, 6);
     await page.waitForSelector(".toast--error");
     await expectBuildStatus(page, "failed", "Build failed");
     assert.equal(
@@ -1427,7 +1428,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     );
     await page.keyboard.press("Escape");
     await page.keyboard.press("Escape");
-    await postSnapshot(page, 109, failed, 6);
+    await postSnapshot(page, 110, failed, 6);
     assert.equal(
       await page.locator(".toast--error").count(),
       1,
@@ -1629,12 +1630,12 @@ await withBrowser(output, async (browser, baseUrl) => {
       "hidden",
       "the previous shape rendering remained visible below its queued style",
     );
-    await postBuildStatus(page, 110, "building");
+    await postBuildStatus(page, 111, "building");
     await page.waitForFunction(() => !document.querySelector(".toast--error"));
     await expectBuildStatus(page, "building", "Building…");
     assert.equal(await page.locator(".build-status-duration").count(), 0,
       "a new build retained the previous build duration");
-    await postSnapshot(page, 110, finalSnapshot, 7);
+    await postSnapshot(page, 111, finalSnapshot, 7);
     await page.waitForFunction(() => !document.querySelector(".toast--error"));
     await expectBuildStatus(page, "complete", "Build complete");
     await page.waitForFunction((count) =>
@@ -1741,7 +1742,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     await page.evaluate(() => {
       window.postMessage({
         type: "error",
-        revision: 111,
+        revision: 112,
         buildDurationMs: 456,
         message: "WYSIWYG preview update failed.",
       }, "*");
@@ -1749,7 +1750,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     await page.waitForSelector(".toast--error");
     await expectBuildStatus(page, "failed", "Build failed");
     assert.equal(await page.locator(".build-status-duration").textContent(), "456 ms");
-    await postSnapshot(page, 112, finalSnapshot, 7);
+    await postSnapshot(page, 113, finalSnapshot, 7);
     await page.waitForFunction(() => !document.querySelector(".toast--error"));
     await expectBuildStatus(page, "complete", "Build complete");
     await page.locator('.page-shell[data-page-id="11"] .ss-pdf > canvas')
@@ -1765,7 +1766,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     await page.evaluate(() => {
       window.postMessage({
         type: "error",
-        revision: 111,
+        revision: 112,
         buildDurationMs: 1,
         message: "obsolete preview failure",
       }, "*");
@@ -1780,7 +1781,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     const staleReconciliation = structuredClone(finalSnapshot);
     staleReconciliation.stale = true;
     staleReconciliation.build_diagnostics = failed.build_diagnostics;
-    await postSnapshot(page, 113, staleReconciliation, 8);
+    await postSnapshot(page, 114, staleReconciliation, 8);
     await page.locator(
       '.page-shell[data-page-id="11"] .object-hit[data-object-id="101"]',
     ).click();
@@ -1797,7 +1798,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     missingShapeTarget.shape_editing = missingShapeTarget.shape_editing.filter((target) =>
       target.binding !== "summary"
     );
-    await postSnapshot(page, 114, missingShapeTarget, 9);
+    await postSnapshot(page, 115, missingShapeTarget, 9);
     await page.waitForFunction(() => document.querySelector(".toast--error")?.textContent ===
       "The target shape changed before the edit could be applied.");
     assert.equal(
@@ -1807,22 +1808,22 @@ await withBrowser(output, async (browser, baseUrl) => {
     );
     await page.keyboard.press("Escape");
     await page.keyboard.press("Escape");
-    await postSnapshot(page, 115, finalSnapshot, 9);
+    await postSnapshot(page, 116, finalSnapshot, 9);
     await page.waitForFunction(() => !document.querySelector(".toast--error"));
     await page.locator('.page-shell[data-page-id="11"] .ss-pdf > canvas')
       .evaluate((canvas) => {
         canvas.dataset.identity = "retained-through-status";
       });
 
-    await postBuildStatus(page, 116, "building");
+    await postBuildStatus(page, 117, "building");
     await expectBuildStatus(page, "building", "Building…");
-    await postBuildStatus(page, 116, "unavailable");
+    await postBuildStatus(page, 117, "unavailable");
     await expectBuildStatus(
       page,
       "unavailable",
       "Language server unavailable",
     );
-    await postBuildStatus(page, 115, "building");
+    await postBuildStatus(page, 116, "building");
     await expectBuildStatus(
       page,
       "unavailable",
@@ -1871,9 +1872,9 @@ await withBrowser(output, async (browser, baseUrl) => {
     restarted.generation = 1;
     restarted.snapshot_id = "1-restarted";
     restarted.layout.pages[1].name = "Restarted";
-    await postBuildStatus(page, 117, "building");
+    await postBuildStatus(page, 118, "building");
     await expectBuildStatus(page, "building", "Building…");
-    await postSnapshot(page, 117, restarted, 9);
+    await postSnapshot(page, 118, restarted, 9);
     await expectBuildStatus(page, "complete", "Build complete");
     await page.waitForFunction(() => [...document.querySelectorAll(".page-caption")]
       .some((caption) => caption.textContent === "Restarted"));

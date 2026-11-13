@@ -122,6 +122,65 @@ assert.deepEqual(
   "cancelling a component edit retained its provisional translation",
 );
 
+translation.cancel();
+state.snapshot = snapshot("ordered-initial", [firstObject, secondObject]);
+translation.submit(edit(state.snapshot, firstObject, 30, 20));
+const orderedRequest = messages.at(-1);
+translation.acceptResult({ requestId: orderedRequest.requestId, status: "applied", documentVersion: 10 });
+const countBeforeNextEdit = messages.length;
+translation.submit(edit(state.snapshot, secondObject, 10, 10));
+translation.reconcile(state.snapshot, 10);
+assert.equal(messages.length, countBeforeNextEdit,
+  "an edit submitted after acknowledgement bypassed authoritative reconciliation");
+state.snapshot = snapshot("ordered-applied", [movedFirst, secondObject]);
+translation.reconcile(state.snapshot, 9);
+assert.equal(messages.length, countBeforeNextEdit,
+  "an older document version released a queued translation");
+translation.reconcile(state.snapshot, 10);
+assert.equal(messages.length, countBeforeNextEdit + 1);
+const staleRequest = messages.at(-1);
+translation.acceptResult({ requestId: staleRequest.requestId, status: "stale" });
+translation.reconcile(state.snapshot, 10);
+assert.equal(messages.length, countBeforeNextEdit + 1,
+  "a stale translation retried its original snapshot");
+state.snapshot = snapshot("ordered-retry", [movedFirst, secondObject]);
+translation.reconcile(state.snapshot, 10);
+const retry = messages.at(-1);
+assert.notEqual(retry.requestId, staleRequest.requestId);
+translation.acceptResult({ requestId: staleRequest.requestId, status: "rejected" });
+assert.equal(translation.inFlight.sent.requestId, retry.requestId,
+  "a delayed response cancelled a newer translation attempt");
+translation.cancel();
+
+// A source edit can change node identifiers while preserving a binding.
+state.snapshot = snapshot("binding-initial", [firstObject, secondObject]);
+state.snapshot.editing = [{ node_id: 101, page_id: 11, binding: "first" }];
+translation.submit(edit(state.snapshot, firstObject, 30, 20));
+const reboundRequest = messages.at(-1);
+translation.submit(edit(state.snapshot, firstObject, 50, 30));
+const rebound = object(303, 11, 130, 140);
+state.snapshot = snapshot("binding-rebuilt", [rebound, secondObject]);
+state.snapshot.editing = [{ node_id: 303, page_id: 11, binding: "first" }];
+translation.reconcile(state.snapshot, 11);
+translation.acceptResult({ requestId: reboundRequest.requestId, status: "applied", documentVersion: 11 });
+translation.reconcile(state.snapshot, 11);
+assert.equal(messages.at(-1).nodeId, 303);
+assert.deepEqual(position(messages.at(-1).fromBounds), { x: 130, y: 140 });
+assert.deepEqual(position(messages.at(-1).toBounds), { x: 150, y: 150 });
+assert.equal(translation.cancelNode(303), true);
+
+state.snapshot = snapshot("disappearing-initial", [firstObject, secondObject]);
+translation.submit(edit(state.snapshot, firstObject, 30, 20));
+const disappearing = messages.at(-1);
+translation.submit(edit(state.snapshot, secondObject, 10, 10));
+state.snapshot = snapshot("disappearing-rebuilt", [secondObject]);
+translation.reconcile(state.snapshot, 12);
+translation.acceptResult({ requestId: disappearing.requestId, status: "applied", documentVersion: 12 });
+assert.equal(translation.reconcile(state.snapshot, 12)?.status, "failed");
+assert.equal(messages.at(-1).nodeId, secondObject.id,
+  "a disappearing target permanently blocked later translations");
+translation.cancel();
+
 function snapshot(id, objects) {
   return {
     snapshot_id: id,

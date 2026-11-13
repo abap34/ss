@@ -166,10 +166,9 @@ export class IconController {
     const message = "Icon catalog request timed out. Use Restart WYSIWYG if retrying does not help.";
     this.state.iconCatalogPending = false;
     this.state.iconCatalogError = message;
+    this.actions.render();
     if (typeof this.actions.reportError === "function") {
       this.actions.reportError(message);
-    } else {
-      this.actions.render();
     }
     return true;
   }

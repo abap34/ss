@@ -1,10 +1,15 @@
 import { element } from "./dom.js";
 import { formatNumber, previewFrame } from "./geometry.js";
 import { toolIcon } from "./tool-icons.js";
+import { editingTargetByNode, editingTargetKey } from "./editing-target.js";
 import { strokeStyleSelect } from "./shape-style.js";
 
 export function renderObjectSheet(state, object, actions) {
-  const selectionKey = `${state.snapshot.entry_path}:${object.id}`;
+  const target = editingTargetByNode(state.snapshot, object.id);
+  const selectionKey = JSON.stringify([
+    state.snapshot.entry_path,
+    target ? editingTargetKey(target) : object.id,
+  ]);
   if (state.objectSheetSelection !== selectionKey) {
     state.objectSheetSelection = selectionKey;
     state.objectSheetSections = {};

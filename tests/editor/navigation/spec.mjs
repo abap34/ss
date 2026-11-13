@@ -93,3 +93,28 @@ const groupedSnapshot = {
 assert.equal(editableAncestorNodeId(groupedSnapshot, 50), 50);
 assert.equal(editableAncestorNodeId(groupedSnapshot, 52), 50);
 assert.equal(editableAncestorNodeId(groupedSnapshot, 60), null);
+
+const previous = { ...state.snapshot,
+  editing: [{ node_id: selectedObject.id, page_id: secondPage.id, binding: "selected" }],
+};
+state.selectedObjectId = selectedObject.id;
+state.snapshot = {
+  layout: { pages: [firstPage, secondPage], objects: [
+    { id: 100, page_id: secondPage.id }, selectedObject,
+  ] },
+  editing: [
+    { node_id: 100, page_id: secondPage.id, binding: "selected" },
+    { node_id: selectedObject.id, page_id: secondPage.id, binding: "other" },
+  ],
+};
+navigation.reconcile(state.snapshot, previous);
+assert.equal(state.selectedObjectId, 100,
+  "a changed node identifier selected a different source binding");
+const beforeRemoval = state.snapshot;
+state.snapshot = {
+  layout: { pages: [firstPage, secondPage], objects: [{ id: 100, page_id: secondPage.id }] },
+  editing: [{ node_id: 100, page_id: secondPage.id, binding: "replacement" }],
+};
+navigation.reconcile(state.snapshot, beforeRemoval);
+assert.equal(state.selectedObjectId, null,
+  "removing a binding left another object selected under its reused identifier");

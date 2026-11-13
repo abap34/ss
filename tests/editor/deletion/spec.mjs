@@ -116,6 +116,27 @@ assert.deepEqual(deletion.acceptResult({
 });
 
 let keydown;
+state.snapshot = snapshot("retry-initial", [{ nodeId: 70, binding: "retry" }]);
+state.selectedObjectId = 70;
+assert(deletion.deleteSelected());
+const retryOriginal = messages.at(-1);
+deletion.acceptResult({ requestId: retryOriginal.requestId, status: "stale" });
+const retryCount = messages.length;
+deletion.reconcile(state.snapshot, 4);
+assert.equal(messages.length, retryCount, "a stale deletion retried the same snapshot");
+state.snapshot = snapshot("retry-rebased", [{ nodeId: 80, binding: "retry" }]);
+deletion.reconcile(state.snapshot, 4);
+const retryAttempt = messages.at(-1);
+assert.notEqual(retryAttempt.requestId, retryOriginal.requestId,
+  "a deletion retry reused an earlier request identifier");
+deletion.acceptResult({ requestId: retryOriginal.requestId, status: "applied", documentVersion: 5 });
+assert.equal(deletion.inFlight.requestId, retryAttempt.requestId,
+  "a delayed response consumed a newer deletion attempt");
+deletion.acceptResult({ requestId: retryAttempt.requestId, status: "applied", documentVersion: 5 });
+state.snapshot = snapshot("retry-deleted", []);
+assert.deepEqual(deletion.reconcile(state.snapshot, 5), { status: "applied" });
+assert.equal(deletion.pending.size, 0);
+
 globalThis.window = {
   addEventListener(type, handler) {
     if (type === "keydown") keydown = handler;

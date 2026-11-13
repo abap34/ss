@@ -16,7 +16,7 @@ export type EditResult = Extract<HostMessage, { type: "shapeEditResult" | "iconE
 export interface EditIntent {
   message: EditRequest;
   selection: Selection | null;
-  phase?: "queued" | "requested" | "applied";
+  phase?: "queued" | "requested" | "applied" | "stale";
   documentVersion?: number;
 }
 export interface QueuePolicy<Intent extends EditIntent, Outcome extends Applied> {

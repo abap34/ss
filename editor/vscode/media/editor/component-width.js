@@ -68,7 +68,8 @@ export class ComponentWidthController {
 
   acceptResult(message) {
     const pending = this.inFlight;
-    if (!pending || message.requestId !== pending.sent?.requestId) return null;
+    if (!pending || pending.phase !== "requested" ||
+        message.requestId !== pending.sent?.requestId) return null;
     if (message.status === "applied") {
       pending.phase = "applied";
       pending.appliedDocumentVersion = message.documentVersion;
@@ -76,8 +77,7 @@ export class ComponentWidthController {
       return null;
     }
     if (message.status === "stale") {
-      pending.phase = "queued";
-      pending.sent = null;
+      pending.phase = "stale";
       this.inFlight = null;
       return null;
     }
@@ -96,7 +96,8 @@ export class ComponentWidthController {
     let failure = null;
     let applied = false;
     for (const pending of [...this.pending.values()]) {
-      if (pending.phase === "requested") continue;
+      if ((pending.phase === "applied" || pending.phase === "stale") &&
+          snapshot.snapshot_id === pending.sent?.snapshotId) continue;
       if (pending.phase === "applied" &&
           (!Number.isSafeInteger(documentVersion) ||
             documentVersion < pending.appliedDocumentVersion)) continue;
@@ -110,9 +111,10 @@ export class ComponentWidthController {
         candidate.id === pending.pageId
       );
       const object = target && snapshot.layout.objects.find((candidate) =>
-        candidate.id === target.node_id
+        candidate.id === target.node_id && candidate.page_id === pending.pageId
       );
       if (!target || !page || !object) {
+        if (pending.phase === "requested") continue;
         this.pending.delete(pending.key);
         failure ??= {
           status: "failed",
@@ -122,6 +124,7 @@ export class ComponentWidthController {
       }
 
       pending.nodeId = target.node_id;
+      if (pending.phase === "requested") continue;
       const authoritative = previewFrame(page, object);
       if (sameWidth(authoritative, pending.desired)) {
         if (pending.phase === "applied") applied = true;
@@ -137,8 +140,9 @@ export class ComponentWidthController {
         pending.sent = null;
         continue;
       }
-      if (pending.phase === "queued") {
+      if (pending.phase === "queued" || pending.phase === "stale") {
         pending.base = authoritative;
+        pending.phase = "queued";
         pending.sent = null;
         continue;
       }
@@ -197,7 +201,9 @@ export class ComponentWidthController {
   }
 
   dispatch() {
-    if (this.inFlight || !this.state.snapshot || this.state.snapshot.stale) return;
+    if (this.inFlight || !this.state.snapshot || this.state.snapshot.stale ||
+        [...this.pending.values()].some((candidate) =>
+          candidate.phase === "applied" || candidate.phase === "stale")) return;
     const pending = [...this.pending.values()].find((candidate) =>
       candidate.phase === "queued"
     );

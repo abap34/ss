@@ -28,7 +28,7 @@ export class ComponentDeletionController {
     this.pending.set(key, {
       key,
       phase: "queued",
-      requestId: this.nextRequestId++,
+      requestId: null,
       snapshotId: null,
       pageId: target.page_id,
       binding: target.binding,
@@ -48,7 +48,8 @@ export class ComponentDeletionController {
 
   acceptResult(message) {
     const pending = this.inFlight;
-    if (!pending || message.requestId !== pending.requestId) return null;
+    if (!pending || pending.phase !== "requested" ||
+        message.requestId !== pending.requestId) return null;
     this.inFlight = null;
     if (message.status === "applied") {
       pending.phase = "applied";
@@ -75,7 +76,13 @@ export class ComponentDeletionController {
     let failure = null;
 
     for (const pending of [...this.pending.values()]) {
-      if (pending.phase === "requested") continue;
+      if (pending.phase === "requested") {
+        const target = this.findTarget(snapshot, pending);
+        if (target) this.updateTarget(snapshot, pending, target);
+        continue;
+      }
+      if (pending.phase === "stale" &&
+          snapshot.snapshot_id === pending.snapshotId) continue;
       if (pending.phase === "applied") {
         if (snapshot.snapshot_id === pending.snapshotId ||
             !Number.isSafeInteger(documentVersion) ||
@@ -143,6 +150,7 @@ export class ComponentDeletionController {
     if (!target) return;
     this.updateTarget(this.state.snapshot, pending, target);
     pending.phase = "requested";
+    pending.requestId = this.nextRequestId++;
     pending.snapshotId = this.state.snapshot.snapshot_id;
     this.inFlight = pending;
     this.actions.post({

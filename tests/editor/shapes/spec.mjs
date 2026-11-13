@@ -67,7 +67,7 @@ state.snapshot = snapshot("after-insert", [{
   fill: { ...defaultShapeStyle.fill },
   stroke: { ...defaultShapeStyle.stroke },
 }]);
-assert.deepEqual(shape.reconcile(state.snapshot), {
+assert.deepEqual(shape.reconcile(state.snapshot, 2), {
   status: "applied",
   operation: "insert",
 });

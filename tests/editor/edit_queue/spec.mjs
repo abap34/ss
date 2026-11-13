@@ -31,6 +31,9 @@ for (const kind of ["shape", "icon"]) {
   assert(insert());
   const original = messages.at(-1);
   controller.acceptResult(result(original, "stale"));
+  controller.reconcile(state.snapshot, 1);
+  controller.reconcile(state.snapshot, 1);
+  assert.equal(messages.length, 1, `${kind}: a stale request retried the same snapshot`);
   assert.equal(controller.acceptResult(result(original, "rejected")), null,
     `${kind}: a duplicate response discarded a queued retry`);
   state.snapshot = snapshot("rebased");
@@ -47,6 +50,8 @@ for (const kind of ["shape", "icon"]) {
   assert.equal(controller.acceptResult(result(retried, "stale")), null,
     `${kind}: a duplicate response restarted an applied edit`);
   state.snapshot = snapshot("before-edit-version");
+  assert.equal(controller.reconcile(state.snapshot), null);
+  assert.equal(messages.length, 2, `${kind}: an unversioned snapshot completed an edit`);
   assert.equal(controller.reconcile(state.snapshot, 3), null);
   assert.equal(messages.length, 2, `${kind}: the next edit started before the applied version`);
   state.snapshot = snapshot("failed-build", [12]);
@@ -99,6 +104,17 @@ for (const kind of ["shape", "icon"]) {
   state.snapshot = snapshot("after-restart");
   controller.reconcile(state.snapshot, 9);
   assert.equal(messages.length, countBeforeReset);
+
+  state.shapeTool = kind === "shape" ? "rectangle" : "icon";
+  assert(insert());
+  const cancelledRetry = messages.at(-1);
+  controller.acceptResult(result(cancelledRetry, "stale"));
+  assert.equal(controller.cancel(), true, `${kind}: a stale insertion could not be cancelled`);
+  assert.equal(controller.isBusy(), false);
+  const countAfterCancel = messages.length;
+  state.snapshot = snapshot("after-cancelled-retry");
+  controller.reconcile(state.snapshot, 10);
+  assert.equal(messages.length, countAfterCancel, `${kind}: a cancelled retry was sent after rebuilding`);
 }
 
 function snapshot(id, pageIds = [11, 12]) {

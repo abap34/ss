@@ -1,4 +1,5 @@
 import { previewFrame, subtreeNodeIds } from "./geometry.js";
+import { editingTargetByBinding, editingTargetByNode, editingTargetKey } from "./editing-target.js";
 
 const positionTolerance = 0.25;
 
@@ -18,7 +19,10 @@ export class TranslationController {
   }
 
   submit(edit) {
-    const existing = this.pending.get(edit.nodeId);
+    const target = editingTargetByNode(this.state.snapshot, edit.nodeId);
+    if (target && target.page_id !== edit.pageId) return false;
+    const key = target ? editingTargetKey(target) : JSON.stringify([edit.pageId, edit.nodeId]);
+    const existing = this.pending.get(key);
     if (existing) {
       if (existing.pageId !== edit.pageId) return false;
       existing.desired = { ...edit.toBounds };
@@ -27,6 +31,8 @@ export class TranslationController {
     }
 
     const pending = {
+      key,
+      binding: target?.binding ?? null,
       nodeId: edit.nodeId,
       pageId: edit.pageId,
       nodeIds: new Set(subtreeNodeIds(this.state.snapshot, edit.nodeId)),
@@ -36,14 +42,15 @@ export class TranslationController {
       phase: "queued",
       sent: null,
     };
-    this.pending.set(edit.nodeId, pending);
+    this.pending.set(key, pending);
     this.dispatch();
     return true;
   }
 
   acceptResult(message) {
     const pending = this.inFlight;
-    if (!pending || message.requestId !== pending.sent?.requestId) {
+    if (!pending || pending.phase !== "requested" ||
+        message.requestId !== pending.sent?.requestId) {
       return null;
     }
     if (message.status === "applied") {
@@ -59,7 +66,7 @@ export class TranslationController {
     }
 
     const error = message.message || "The edit could not be applied.";
-    this.pending.delete(pending.nodeId);
+    this.pending.delete(pending.key);
     this.inFlight = null;
     this.dispatch();
     return { status: "failed", message: error };
@@ -70,6 +77,8 @@ export class TranslationController {
     if (snapshot.stale) return null;
     let failure = null;
     for (const pending of [...this.pending.values()]) {
+      if ((pending.phase === "applied" || pending.phase === "stale") &&
+          snapshot.snapshot_id === pending.sent?.snapshotId) continue;
       if (
         pending.phase === "applied" &&
         (!Number.isSafeInteger(documentVersion) ||
@@ -79,11 +88,18 @@ export class TranslationController {
       const page = snapshot.layout.pages.find((candidate) =>
         candidate.id === pending.pageId
       );
+      const target = pending.binding == null ? null : editingTargetByBinding(
+        snapshot, pending.pageId, pending.binding,
+      );
+      const nodeId = pending.binding == null ? pending.nodeId : target?.node_id;
       const object = snapshot.layout.objects.find((candidate) =>
-        candidate.id === pending.nodeId
+        candidate.id === nodeId && candidate.page_id === pending.pageId
       );
       if (!page || !object) {
-        this.pending.delete(pending.nodeId);
+        // Keep the request owned until its response arrives, even if its
+        // target disappears in a snapshot that overtakes the response.
+        if (pending.phase === "requested") continue;
+        this.pending.delete(pending.key);
         failure ??= {
           status: "failed",
           message: "The updated object is no longer present in the preview.",
@@ -91,6 +107,8 @@ export class TranslationController {
         continue;
       }
 
+      pending.nodeId = object.id;
+      pending.nodeIds = new Set(subtreeNodeIds(snapshot, pending.nodeId));
       const authoritative = previewFrame(page, object);
       if (pending.phase === "requested") {
         if (snapshot.snapshot_id !== pending.sent?.snapshotId) {
@@ -100,7 +118,7 @@ export class TranslationController {
         continue;
       }
       if (samePosition(authoritative, pending.desired)) {
-        this.pending.delete(pending.nodeId);
+        this.pending.delete(pending.key);
         continue;
       }
       if (pending.phase === "applied" && samePosition(
@@ -121,7 +139,7 @@ export class TranslationController {
         continue;
       }
 
-      this.pending.delete(pending.nodeId);
+      this.pending.delete(pending.key);
       failure ??= {
         status: "failed",
         message: "The updated source did not reproduce the requested position.",
@@ -139,9 +157,9 @@ export class TranslationController {
   }
 
   cancelNode(nodeId) {
-    const pending = this.pending.get(nodeId);
+    const pending = [...this.pending.values()].find((candidate) => candidate.nodeId === nodeId);
     if (!pending) return false;
-    this.pending.delete(nodeId);
+    this.pending.delete(pending.key);
     if (this.inFlight === pending) this.inFlight = null;
     this.dispatch();
     return true;
@@ -189,7 +207,9 @@ export class TranslationController {
   }
 
   dispatch() {
-    if (this.inFlight || !this.state.snapshot || this.state.snapshot.stale) {
+    if (this.inFlight || !this.state.snapshot || this.state.snapshot.stale ||
+        [...this.pending.values()].some((candidate) =>
+          candidate.phase === "applied" || candidate.phase === "stale")) {
       return;
     }
     const pending = [...this.pending.values()].find((candidate) =>

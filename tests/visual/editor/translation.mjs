@@ -336,12 +336,22 @@ export async function exerciseTranslationLifecycle(page, current) {
   const failedBuildRequest = await lastMessage(page, "translate");
   await settleLayout(page);
   const failedBuildDesiredBox = await previewTarget.boundingBox();
+  await page.evaluate(() => { globalThis.__failedBuildViewport = document.querySelector(".viewport"); });
+  await postEditResult(page, {
+    type: "error", revision: 105, message: "Snapshot request failed temporarily.",
+  });
+  await page.waitForSelector(".toast--error");
   await postEditResult(page, {
     type: "editResult",
     requestId: failedBuildRequest.requestId,
     status: "applied",
     documentVersion: 4,
   });
+  await settleLayout(page);
+  assert.equal(await page.locator(".toast--error").textContent(), "Snapshot request failed temporarily.",
+    "a delayed acknowledgement replaced a build diagnostic with success");
+  assert(await page.evaluate(() => __failedBuildViewport === document.querySelector(".viewport")),
+    "a temporary snapshot failure recreated the editing viewport");
   const failedBuild = structuredClone(finalSnapshot);
   failedBuild.stale = true;
   failedBuild.build_diagnostics = [{
@@ -353,7 +363,7 @@ export async function exerciseTranslationLifecycle(page, current) {
     code: "ConstraintConflict",
     message: "the generated source did not satisfy its constraints",
   }];
-  await postSnapshot(page, 105, failedBuild, 4);
+  await postSnapshot(page, 106, failedBuild, 4);
   await page.waitForSelector(".toast--error");
   const failedPendingCount = await page.locator(
     "[data-ss-pending-translation]",
@@ -375,7 +385,7 @@ export async function exerciseTranslationLifecycle(page, current) {
     failedBuildRequest.toBounds,
     "14-recovered-after-failed-build",
   );
-  await postSnapshot(page, 106, recoveredAfterFailedBuild, 5);
+  await postSnapshot(page, 107, recoveredAfterFailedBuild, 5);
   await page.waitForFunction(() => !document.querySelector(".toast--error"));
   await page.waitForFunction(() =>
     !document.querySelector("[data-ss-pending-translation]")
@@ -392,7 +402,7 @@ export async function exerciseTranslationLifecycle(page, current) {
     base_snapshot_id: recoveredAfterFailedBuild.snapshot_id,
     translations: [],
   };
-  await postSnapshot(page, 107, unchangedSnapshot, 6);
+  await postSnapshot(page, 108, unchangedSnapshot, 6);
   await page.waitForFunction(() =>
     document.querySelector('[data-ss-cache-identity="retained"]') !== null
   );

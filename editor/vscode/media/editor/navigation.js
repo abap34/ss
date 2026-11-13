@@ -1,3 +1,5 @@
+import { editingTargetByBinding, editingTargetByNode } from "./editing-target.js";
+
 export class EditorNavigation {
   constructor(state) {
     this.state = state;
@@ -19,9 +21,14 @@ export class EditorNavigation {
       : null;
   }
 
-  reconcile(snapshot) {
+  reconcile(snapshot, previousSnapshot = null) {
     const pages = snapshot.layout.pages || [];
     const objects = snapshot.layout.objects || [];
+    const previousTarget = editingTargetByNode(previousSnapshot, this.state.selectedObjectId);
+    if (previousTarget) {
+      const target = editingTargetByBinding(snapshot, previousTarget.page_id, previousTarget.binding);
+      this.state.selectedObjectId = target?.node_id ?? null;
+    }
     const selected = objects.find((object) =>
       object.id === this.state.selectedObjectId
     );
