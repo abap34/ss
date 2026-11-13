@@ -35,7 +35,7 @@ import { ViewResources } from "./view";
 type ClientProvider = () => LanguageClient | undefined;
 type SourceEditMessage = Exclude<
   WebviewMessage,
-  { type: "ready" | "restart" | "refreshFull" | "snapshotResources" | "revealSource" | "queryIcons" }
+  { type: "ready" | "restart" | "refreshFull" | "snapshotResources" | "revealSource" | "queryIcons" | "pdfPreviewError" }
 >;
 
 const immediateRefreshDelayMs = 0;
@@ -394,6 +394,10 @@ export class EditorController implements vscode.Disposable {
     session: Session,
     message: WebviewMessage,
   ): Promise<void> {
+    if (message.type === "pdfPreviewError") {
+      if (!session.disposed) this.output.appendLine(`[editor] PDF preview failed: ${JSON.stringify(message)}`);
+      return;
+    }
     if (message.type === "restart") {
       await this.restartServer();
       return;

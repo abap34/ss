@@ -59,6 +59,9 @@ export function renderPage(snapshot, pageId, thumbnail = false) {
     thumbnail,
     textLayer: false,
     annotationLayer: false,
+  }, {
+    snapshotId: snapshot.snapshot_id,
+    template: page,
   }).catch((error) => {
     preview.dataset.error = error instanceof Error ? error.message : String(error);
   });

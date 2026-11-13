@@ -467,6 +467,7 @@ export type WebviewMessage =
   | { type: "ready" }
   | { type: "refreshFull" }
   | { type: "restart" }
+  | { type: "pdfPreviewError"; snapshotId?: string; message: string; diagnostics?: unknown }
   | {
     type: "snapshotResources";
     observedSnapshotId: string;

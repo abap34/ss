@@ -1,6 +1,8 @@
 import { PdfRenderController } from "@ss/pdf/controller";
 import { PdfService } from "@ss/pdf/service";
 
+export const pdfRuntimeSource = import.meta.url;
+
 const controllers = new WeakMap();
 const activeControllers = new Set();
 const services = new Map();

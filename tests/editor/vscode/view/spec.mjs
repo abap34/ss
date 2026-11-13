@@ -18,13 +18,18 @@ const output = await esbuild.build({
     setup(build) {
       build.onResolve({ filter: /^vscode$/ }, () => ({ path: "vscode", namespace: "test" }));
       build.onLoad({ filter: /.*/, namespace: "test" }, () => ({
-        contents: "export const Uri = { file: (fsPath) => ({ fsPath }) }; export const workspace = { getWorkspaceFolder: () => undefined };",
+        contents: "export const Uri = { file: (fsPath) => ({ fsPath }), joinPath: (base, ...parts) => ({ fsPath: [base.fsPath, ...parts].join('/') }) }; export const workspace = { getWorkspaceFolder: () => undefined };",
       }));
     },
   }],
 });
 const { ViewResources } = await import(`data:text/javascript;base64,${Buffer.from(output.outputFiles[0].text).toString("base64")}`);
 const view = new ViewResources({});
+const html = new ViewResources({ fsPath: "/extension" }).html({
+  cspSource: "webview:", asWebviewUri: (uri) => uri.fsPath,
+});
+assert.match(html, /src="\/extension\/out\/editor\/main\.js"/,
+  "the webview bypassed its compiled PDF runtime");
 const resolved = [];
 const webview = {
   asWebviewUri(uri) {

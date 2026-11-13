@@ -60,7 +60,7 @@ export class ViewResources {
   html(webview: vscode.Webview): string {
     const nonce = randomNonce();
     const script = webview.asWebviewUri(
-      vscode.Uri.joinPath(this.extensionUri, "media", "editor", "main.js"),
+      vscode.Uri.joinPath(this.extensionUri, "out", "editor", "main.js"),
     );
     const style = webview.asWebviewUri(
       vscode.Uri.joinPath(this.extensionUri, "media", "editor", "main.css"),

@@ -76,4 +76,10 @@ pub fn register(ctx: project.Context, modules: project.ProjectModules, build_opt
     editor_ui.step.dependOn(&checks.vscode_packages.step);
     const editor_ui_step = b.step("test-editor-ui", "Exercise VS Code editor webview interactions locally with Chromium");
     editor_ui_step.dependOn(&editor_ui.step);
+
+    const editor_bundle = steps.node(b, &checks.node.step, "tests/visual/editor/bundle/spec.mjs", null);
+    editor_bundle.step.dependOn(editor_build);
+    editor_bundle.step.dependOn(&checks.visual_test_packages.step);
+    addFocusedTestStep(b, "test-editor-bundle", "Check the packaged editor and PDF runtime together", &editor_bundle.step);
+    editor_ui_step.dependOn(&editor_bundle.step);
 }

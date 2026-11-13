@@ -146,7 +146,19 @@ const workspace = new WorkspaceView(state, actions);
 const resizeObserver = new ResizeObserver(() => workspace.updateScale());
 
 app.addEventListener("ss-pdf-error", (event) => {
-  showError(event.detail?.message || "PDF preview rendering failed.");
+  vscode.postMessage({
+    type: "pdfPreviewError",
+    snapshotId: state.snapshot?.snapshot_id,
+    message: event.detail?.message || "PDF preview rendering failed.",
+    diagnostics: event.detail?.diagnostics,
+  });
+  // Replacing the viewport would retry a failed PDF and repeat this event.
+  state.toast = {
+    kind: "error",
+    message: event.detail?.message || "PDF preview rendering failed.",
+  };
+  syncToast();
+  scheduleToastClear(errorToastDuration);
 });
 
 window.addEventListener("message", (event) => {
@@ -471,7 +483,15 @@ function scheduleToastClear(duration) {
 }
 
 function syncToast() {
-  if (!workspace.syncToast()) render();
+  if (workspace.syncToast()) return;
+  const current = app.querySelector(":scope > .toast");
+  const next = workspace.toast();
+  if (current) {
+    if (next) current.replaceWith(next);
+    else current.remove();
+  } else if (next) {
+    app.append(next);
+  }
 }
 
 function render() {

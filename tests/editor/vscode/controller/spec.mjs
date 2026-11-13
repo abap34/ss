@@ -66,6 +66,7 @@ await testOpenResolvesConfiguredEntryWithoutSsDocument();
 await testDisposingSessionCancelsSourceEditRequest();
 await testPendingOpenDoesNotSurviveDisposal();
 await testOpeningManualPreviewBuildsInitialSnapshot();
+await testPreviewDiagnosticsPreserveEditorState();
 await testManualPositionEditRequestsReconciliation();
 await testNewSourceEditReschedulesReconciliation();
 await testSourceEditsAreSerializedAcrossOperations();
@@ -374,6 +375,25 @@ async function testOpeningManualPreviewBuildsInitialSnapshot() {
       initialBuildCount,
       "a later source edit ignored the manual-refresh setting",
     );
+  });
+}
+
+async function testPreviewDiagnosticsPreserveEditorState() {
+  await withManualSession(async ({ controller, session, requests, messages, outputLines }) => {
+    const serial = session.serial;
+    const sourceEditQueue = session.sourceEditQueue;
+    const message = {
+      type: "pdfPreviewError", snapshotId: "initial", message: "missing PDF display layer",
+      diagnostics: { thumbnail: false, beforeMount: [{ annotationLayers: 1 }], atError: [{ annotationLayers: 0 }] },
+    };
+    await controller.handleMessage(session, message);
+    assert.equal(session.serial, serial, "preview diagnostics invalidated the snapshot");
+    assert.equal(session.sourceEditQueue, sourceEditQueue, "preview diagnostics entered the source edit queue");
+    assert.equal(requests.length, 0, "preview diagnostics requested another build");
+    assert.equal(messages.length, 0, "preview diagnostics changed the webview");
+    assert.equal(outputLines.length, 1, "preview diagnostics were not logged exactly once");
+    assert.deepEqual(JSON.parse(outputLines[0].slice(outputLines[0].indexOf("{"))), message,
+      "preview diagnostics lost the original and failing PDF structures");
   });
 }
 
@@ -1008,6 +1028,7 @@ automatic = false
     const requests = [];
     const notifications = [];
     const messages = [];
+    const outputLines = [];
     const session = {
       document,
       settings: settingsResponse(slide, true).settings.wysiwyg,
@@ -1106,7 +1127,7 @@ automatic = false
     };
     const controller = new EditorController(
       { extensionUri: mock.Uri.file(fixture) },
-      { appendLine() {} },
+      { appendLine(line) { outputLines.push(line); } },
       () => client,
       async () => { session.restartCalls = (session.restartCalls ?? 0) + 1; },
     );
@@ -1123,6 +1144,7 @@ automatic = false
       requests,
       messages,
       notifications,
+      outputLines,
       change() {
         document.version += 1;
         mock.change(document);

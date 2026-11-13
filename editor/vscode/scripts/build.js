@@ -20,14 +20,14 @@ const buildOptions = {
   sourcesContent: false,
 };
 
-const webviewCheckOptions = {
+const webviewOptions = {
   entryPoints: [path.join(root, "media", "editor", "main.js")],
   bundle: true,
-  write: false,
+  outfile: path.join(outDir, "editor", "main.js"),
   format: "esm",
   platform: "browser",
   target: "chrome120",
-  external: ["../../out/render/pdf.js", "../../out/pdfjs/pdf.mjs"],
+  external: ["../../out/pdfjs/pdf.mjs"],
 };
 
 const pdfSourceRoot = path.join(repoRoot, "src", "render", "html", "pdf");
@@ -53,6 +53,17 @@ const pdfRuntimeOptions = {
   target: "chrome120",
   plugins: [pdfRuntimeImports],
 };
+
+// Compile the webview and its PDF controller together so their DOM contracts
+// cannot come from different builds, including when an old out/ tree exists.
+webviewOptions.plugins = [pdfRuntimeImports, {
+  name: "ss-webview-pdf-runtime",
+  setup(build) {
+    build.onResolve({ filter: /^\.\.\/\.\.\/out\/render\/pdf\.js$/ }, () => ({
+      path: path.join(pdfSourceRoot, "index.js"),
+    }));
+  },
+}];
 
 const presentationOptions = {
   entryPoints: [path.join(repoRoot, "src/render/html/presentation.js")],
@@ -122,17 +133,19 @@ async function main() {
     const extensionContext = await esbuild.context(buildOptions);
     const presentationContext = await esbuild.context(presentationOptions);
     const pdfRuntimeContext = await esbuild.context(pdfRuntimeOptions);
+    const webviewContext = await esbuild.context(webviewOptions);
     await Promise.all([
       extensionContext.watch(),
       presentationContext.watch(),
       pdfRuntimeContext.watch(),
+      webviewContext.watch(),
     ]);
     console.log("Watching VS Code extension sources.");
     return;
   }
 
   typecheck();
-  await esbuild.build(webviewCheckOptions);
+  await esbuild.build(webviewOptions);
   await esbuild.build(pdfRuntimeOptions);
   await esbuild.build(buildOptions);
 }
