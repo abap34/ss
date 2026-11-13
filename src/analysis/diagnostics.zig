@@ -2,6 +2,7 @@ const std = @import("std");
 const core = @import("core");
 const utils = @import("utils");
 const shared = @import("diagnostic");
+const ast = @import("ast");
 const syntax = @import("../syntax.zig");
 const source = utils.source;
 
@@ -18,15 +19,16 @@ pub fn addUserReport(state: ?*core.DocumentState, origin: core.SourceOrigin, cod
     });
 }
 
-pub fn addSyntaxHoles(bag: *DiagnosticBag, path: []const u8, text: []const u8, holes: syntax.HoleTable) !void {
+pub fn addSyntaxHoles(bag: *DiagnosticBag, path: []const u8, text: []const u8, files: []const ast.SourceFile, holes: syntax.HoleTable) !void {
     if (holes.diagnostics.len == 0) return;
-    const source_id = try bag.registerSource(path, text);
     for (holes.diagnostics) |diagnostic| {
+        const location = ast.SourceFile.locate(files, path, text, diagnostic.span);
+        const source_id = try bag.registerSource(location.path, location.source);
         var message_buf: [256]u8 = undefined;
         const message = utils.err.formatParseDiagnostic(&message_buf, diagnostic);
         try bag.addAt(source_id, .@"error", utils.err.parseDiagnosticCode(diagnostic.err), message, .{
-            .start = diagnostic.span.start,
-            .end = diagnostic.span.end,
+            .start = location.span.start,
+            .end = location.span.end,
         }, diagnostic.caused_by);
     }
 }

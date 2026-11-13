@@ -80,18 +80,27 @@ fn parseWithSourceNameInner(allocator: Allocator, text: []const u8, source_name:
 }
 
 pub fn parseRecoveringWithOptions(allocator: Allocator, text: []const u8, source_name: []const u8, options: ParseOptions) !ParseResult {
-    if (options.failure) |out| out.* = .{};
-    if (options.cancellation) |cancellation| try cancellation.check();
     var builder = hole.Builder{ .allocator = allocator };
     errdefer builder.deinit();
 
+    var module = try parseRecoveringInto(allocator, text, source_name, options, &builder, 0);
+    errdefer module.deinit(allocator);
+    return .{ .module = module, .holes = try builder.finish() };
+}
+
+// Included files share hole IDs with their entry module. Only diagnostics use
+// virtual offsets here; the include expander relocates the AST spans separately.
+pub fn parseRecoveringInto(allocator: Allocator, text: []const u8, source_name: []const u8, options: ParseOptions, builder: *hole.Builder, source_offset: usize) !Module {
+    if (options.failure) |out| out.* = .{};
+    if (options.cancellation) |cancellation| try cancellation.check();
     var parser = initParser(allocator, text, source_name);
+    parser.hole_offset = source_offset;
     parser.cancellation = options.cancellation;
     parser.recovering = true;
     parser.reject_empty_args = true;
-    parser.holes = &builder;
+    parser.holes = builder;
 
-    var module = parser.parseModule() catch |err| {
+    return parser.parseModule() catch |err| {
         if (options.failure) |out| out.diagnostic = .{
             .err = err,
             .span = parser.error_span orelse .{ .start = @min(parser.error_pos, text.len), .end = @min(parser.error_pos + 1, text.len) },
@@ -101,9 +110,6 @@ pub fn parseRecoveringWithOptions(allocator: Allocator, text: []const u8, source
         };
         return err;
     };
-    errdefer module.deinit(allocator);
-    const holes = try builder.finish();
-    return .{ .module = module, .holes = holes };
 }
 
 fn initParser(allocator: Allocator, text: []const u8, source_name: []const u8) Parser {
@@ -135,6 +141,7 @@ const Parser = struct {
     recovering: bool,
     reject_empty_args: bool,
     holes: ?*hole.Builder,
+    hole_offset: usize = 0,
     cancellation: ?utils.Cancellation = null,
 
     fn checkCanceled(self: *const Parser) !void {
@@ -315,7 +322,7 @@ const Parser = struct {
 
     fn addHole(self: *Parser, kind: hole.HoleKind, expected: hole.ExpectedSyntax, span: ast.Span, err: anyerror, found: ?[]const u8) !ast.HoleId {
         const builder = self.holes orelse return err;
-        const id = try builder.add(kind, expected, span, err, found);
+        const id = try builder.add(kind, expected, .{ .start = span.start + self.hole_offset, .end = span.end + self.hole_offset }, err, found);
         for (builder.diagnostics.items) |*diagnostic| {
             if (diagnostic.hole_id != id) continue;
             diagnostic.expected = diagnostics.expected(err) orelse diagnostic.expected;

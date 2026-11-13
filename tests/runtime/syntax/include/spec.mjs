@@ -90,13 +90,41 @@ try {
       assert(Math.abs(updated.x - 140) < 0.1 && Math.abs(updated.y - 160) < 0.1, JSON.stringify(updated));
     }
   });
+  // Open only chapter files. An error in one must not discard shared imports
+  // or turn valid calls in its sibling into UnknownFunction diagnostics.
+  await writeFile(path.join(directory, "ss.toml"), '[project]\nentry = "main.ss"\n');
+  const sibling = path.join(directory, "parts/sibling.ss");
+  const siblingSource = 'page Other\n  text!(suffix())\nend\n';
+  await writeFile(sibling, siblingSource);
+  await writeFile(main, source + 'include "parts/sibling.ss"\n');
+  await withLspClient({ cwd: directory }, async (client) => {
+    await client.initialize();
+    const uri = pathToFileURL(child).href;
+    const siblingUri = pathToFileURL(sibling).href;
+    const broken = body.replace("let item =", "item =");
+    const clean = client.waitForDiagnostics(uri);
+    client.openDocument({ uri, text: body });
+    assert.deepEqual((await clean).params.diagnostics, []);
+    const error = client.waitForDiagnostics(uri, (items) => items.some((item) => item.code === "AssignmentRequiresLet"));
+    client.changeDocument({ uri, version: 2, text: broken });
+    const diagnostics = (await error).params.diagnostics;
+    assert(!diagnostics.some((item) => item.code === "UnknownFunction"), JSON.stringify(diagnostics));
+    const assignment = diagnostics.find((item) => item.code === "AssignmentRequiresLet");
+    assert.equal(assignment.range.start.line, broken.split("\n").findIndex((line) => line.includes("item =")));
+    const ready = client.waitForDiagnostics(siblingUri);
+    client.openDocument({ uri: siblingUri, text: siblingSource });
+    assert.deepEqual((await ready).params.diagnostics, []);
+    const def = await client.request("textDocument/definition", { textDocument: { uri: siblingUri }, position: { line: 1, character: 10 } });
+    assert.equal(def?.[0]?.uri, pathToFileURL(path.join(directory, "parts/helper.ss")).href);
+  });
+  await writeFile(main, source);
   await writeFile(child, "page Broken\n  let value = missing_name\nend\n");
   assert.match(run(["dump", "--quiet", main], false).stderr, /parts\/body\.ss:2:/);
   await writeFile(child, 'import ./missing as *\n');
   assert.match(run(["dump", "--quiet", main], false).stderr, /parts\/body\.ss:1:/);
   await writeFile(child, 'page Broken\n  let value =\nend\n');
   const syntaxError = run(["dump", "--quiet", main], false).stderr;
-  assert.match(syntaxError, /parts\/body\.ss:3:/);
+  assert.match(syntaxError, /parts\/body\.ss:2:14: ExpectedExpression/);
   assert.doesNotMatch(syntaxError, /unexpected failure/);
   await writeFile(main, 'import ./library as *\npage Main\n  text!(caption())\nend\n');
   await writeFile(path.join(directory, "library.ss"), 'const title: String = "Library"\ninclude "parts/body.ss"\n');

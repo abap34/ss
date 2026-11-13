@@ -11,6 +11,7 @@ pub const IncludeResolver = includes.Resolver;
 
 pub const Failure = staging.Failure;
 pub const Options = struct {
+    recovery: ?*@import("hole.zig").Builder = null,
     expand_stages: bool = true,
     expand_includes: bool = true,
     include_resolver: ?IncludeResolver = null,
@@ -31,7 +32,7 @@ pub fn desugar(allocator: std.mem.Allocator, input: *const surface.Module, optio
     if (options.expand_includes and input.includes.items.len != 0) {
         const resolver = options.include_resolver orelse return error.IncludeRequiresSourceLoader;
         var span: ?ast.Span = null;
-        expanded = includes.expand(allocator, input, options.source_name, options.source_length, resolver, &span, options.cancellation) catch |err| {
+        expanded = includes.expand(allocator, input, options.source_name, options.source_length, resolver, &span, options.cancellation, options.recovery) catch |err| {
             if (options.failure) |failure| failure.span = span;
             return err;
         };

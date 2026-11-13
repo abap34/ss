@@ -11,8 +11,8 @@ pub const Resolver = struct {
     report: ?*const fn (*anyopaque, []const u8, []const u8, anyerror, ?parser.ParseDiagnostic) anyerror!void = null,
 };
 
-pub fn expand(allocator: std.mem.Allocator, input: *const surface.Module, path: []const u8, length: usize, resolver: Resolver, failure: *?ast.Span, cancellation: ?utils.Cancellation) !surface.Module {
-    var context = Context{ .allocator = allocator, .resolver = resolver, .next_offset = length + 1, .cancellation = cancellation };
+pub fn expand(allocator: std.mem.Allocator, input: *const surface.Module, path: []const u8, length: usize, resolver: Resolver, failure: *?ast.Span, cancellation: ?utils.Cancellation, recovery: ?*@import("../hole.zig").Builder) !surface.Module {
+    var context = Context{ .allocator = allocator, .resolver = resolver, .recovery = recovery, .next_offset = length + 1, .cancellation = cancellation };
     defer {
         for (context.files.items) |*file| file.deinit(allocator);
         context.files.deinit(allocator);
@@ -35,6 +35,7 @@ pub fn expand(allocator: std.mem.Allocator, input: *const surface.Module, path: 
 const Context = struct {
     allocator: std.mem.Allocator,
     resolver: Resolver,
+    recovery: ?*@import("../hole.zig").Builder,
     files: std.ArrayList(surface.SourceFile) = .empty,
     stack: std.ArrayList([]const u8) = .empty,
     next_offset: usize,
@@ -75,7 +76,10 @@ const Context = struct {
         try self.stack.append(self.allocator, file.path);
         defer _ = self.stack.pop();
         var failure: parser.ParseFailure = .{};
-        var child = parser.parseWithSourceNameAndFailure(self.allocator, file.source, file.path, &failure) catch |err| {
+        var child = (if (self.recovery) |builder|
+            parser.parseRecoveringInto(self.allocator, file.source, file.path, .{ .failure = &failure, .cancellation = self.cancellation }, builder, file.offset)
+        else
+            parser.parseWithSourceNameAndFailure(self.allocator, file.source, file.path, &failure)) catch |err| {
             if (self.resolver.report) |report| try report(self.resolver.context, file.path, file.source, err, failure.diagnostic);
             return err;
         };

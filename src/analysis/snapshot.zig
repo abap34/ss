@@ -845,7 +845,7 @@ fn loadSnapshotModules(allocator: std.mem.Allocator, sources: *const SourceSet, 
     }) catch |err| {
         if (err == error.Canceled) return err;
         if (err != error.DiagnosticsFailed and err != error.UnknownImport and !module_loader.isImportReadFailure(err)) return err;
-        try diagnostics.addSyntaxHoles(diagnostic_bag, entry_path, entry_source, parse_holes);
+        try diagnostics.addSyntaxHoles(diagnostic_bag, entry_path, entry_source, program.source_files.items, parse_holes);
         try addLoadDiagnostics(diagnostic_bag, &load_diagnostics);
         if (err == error.DiagnosticsFailed) {
             if (load_diagnostics.items.items.len != 0) {

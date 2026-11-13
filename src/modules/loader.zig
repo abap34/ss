@@ -471,16 +471,17 @@ const Builder = struct {
         }
     }
 
-    fn addParseHoleDiagnostics(self: *Builder, path: []const u8, text: []const u8, hole_diagnostics: []const syntax_hole.Diagnostic) !void {
+    fn addParseHoleDiagnostics(self: *Builder, path: []const u8, text: []const u8, files: []const ast.SourceFile, hole_diagnostics: []const syntax_hole.Diagnostic) !void {
         const diagnostics = self.diagnostics orelse return;
         if (hole_diagnostics.len == 0) return;
-        const source_id = try diagnostics.registerSource(path, text);
         for (hole_diagnostics) |diagnostic| {
+            const location = ast.SourceFile.locate(files, path, text, diagnostic.span);
+            const source_id = try diagnostics.registerSource(location.path, location.source);
             var message_buf: [256]u8 = undefined;
             const message = error_report.formatParseDiagnostic(&message_buf, diagnostic);
             try diagnostics.addAt(source_id, .@"error", error_report.parseDiagnosticCode(diagnostic.err), message, .{
-                .start = diagnostic.span.start,
-                .end = diagnostic.span.end,
+                .start = location.span.start,
+                .end = location.span.end,
             }, null);
         }
     }
@@ -528,7 +529,7 @@ const Builder = struct {
                 };
                 errdefer result.module.deinit(self.allocator);
                 errdefer result.holes.deinit(self.allocator);
-                try self.addParseHoleDiagnostics(parse_path, text, result.holes.diagnostics);
+                try self.addParseHoleDiagnostics(parse_path, text, result.module.source_files.items, result.holes.diagnostics);
                 try self.recovery_holes.append(self.allocator, .{ .module_id = module_id, .result = result.holes });
                 break :recover result.module;
             } else syntax.parseWithOptions(self.allocator, text, parse_path, .{ .failure = &parse_failure, .cancellation = self.cancellation, .include_resolver = include_loader.resolver() }) catch |err| {
