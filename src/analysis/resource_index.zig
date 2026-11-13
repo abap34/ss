@@ -22,7 +22,7 @@ pub const ResourceWriterIndex = struct {
     objects: Entries = .empty,
     any_owner: NamedEntries = .{},
     document_owner: NamedEntries = .{},
-    page_owner: NamedEntries = .{},
+    page_owner: PageEntries = .{},
     object_owners: ObjectEntries = .{},
 
     pub fn init(allocator: Allocator) ResourceWriterIndex {
@@ -51,7 +51,7 @@ pub const ResourceWriterIndex = struct {
             .property => |property| switch (property.owner) {
                 .any => try self.any_owner.add(self.allocator, property.key.indexName(), entry),
                 .document => try self.document_owner.add(self.allocator, property.key.indexName(), entry),
-                .page => try self.page_owner.add(self.allocator, property.key.indexName(), entry),
+                .page => |id| try self.page_owner.add(self.allocator, id, property.key.indexName(), entry),
                 .object => try self.object_owners.add(self.allocator, entry),
             },
         }
@@ -82,11 +82,11 @@ pub const ResourceWriterIndex = struct {
                 switch (property.owner) {
                     .any => {
                         try self.document_owner.visit(key, visitor);
-                        try self.page_owner.visit(key, visitor);
+                        try self.page_owner.visit(null, key, visitor);
                         try self.object_owners.all.visit(key, visitor);
                     },
                     .document => try self.document_owner.visit(key, visitor),
-                    .page => try self.page_owner.visit(key, visitor),
+                    .page => |id| try self.page_owner.visit(id, key, visitor),
                     .object => |owner| try self.object_owners.visit(owner, key, visitor),
                 }
             },
@@ -143,6 +143,33 @@ const NamedEntries = struct {
         } else {
             var values = self.named.valueIterator();
             while (values.next()) |entries| try visitEntries(entries.items, visitor);
+        }
+    }
+};
+
+// Unknown-page writes can reach every page. Concrete reads probe only their
+// own bucket and the unknown writers, regardless of the number of slides.
+const PageEntries = struct {
+    unknown: NamedEntries = .{},
+    concrete: std.AutoHashMapUnmanaged(u32, NamedEntries) = .{},
+
+    fn deinit(self: *PageEntries, allocator: Allocator) void {
+        self.unknown.deinit(allocator);
+        deinitValues(allocator, &self.concrete);
+    }
+
+    fn add(self: *PageEntries, allocator: Allocator, id: ?u32, key: ?[]const u8, entry: WriteEntry) !void {
+        const keys = if (id) |n| try getBucket(allocator, &self.concrete, n) else &self.unknown;
+        try keys.add(allocator, key, entry);
+    }
+
+    fn visit(self: *const PageEntries, id: ?u32, key: ?[]const u8, visitor: anytype) !void {
+        try self.unknown.visit(key, visitor);
+        if (id) |n| {
+            if (self.concrete.getPtr(n)) |keys| try keys.visit(key, visitor);
+        } else {
+            var values = self.concrete.valueIterator();
+            while (values.next()) |keys| try keys.visit(key, visitor);
         }
     }
 };

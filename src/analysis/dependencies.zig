@@ -1,3 +1,5 @@
+const control = @import("flow.zig");
+const settings = @import("setting_facts.zig");
 const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
@@ -23,13 +25,20 @@ pub const Resource = resource_model.Resource;
 
 pub const AccessSummary = struct {
     allocator: std.mem.Allocator,
+    // Reads still needed on entry, writes possible on any path, and settings
+    // defined on every successful exit of this execution unit or function.
     reads: std.ArrayList(Resource),
     writes: std.ArrayList(Resource),
+    defined_settings: settings.Facts = .{},
+    // Entry reads that can also precede an overlapping write on the same path.
+    // All entry reads still depend on writers in other execution units.
+    reads_before_write: std.ArrayList(Resource) = .empty,
     selection_reads: std.ArrayList(Resource),
     escaped_objects: std.ArrayList(ObjectIdentity) = .empty,
     placements: std.ArrayList(PlacementDefinition) = .empty,
     drawings: std.ArrayList(DrawingDefinition) = .empty,
 
+    depends_on_caller_scope: bool = false,
     writes_layout_input: bool = false,
     places_objects: bool = false,
     invalid_selection_mutation: ?InvalidSelectionMutation = null,
@@ -75,6 +84,8 @@ pub const AccessSummary = struct {
         self.escaped_objects.deinit(self.allocator);
         self.reads.deinit(self.allocator);
         self.writes.deinit(self.allocator);
+        self.defined_settings.deinit(self.allocator);
+        self.reads_before_write.deinit(self.allocator);
         self.selection_reads.deinit(self.allocator);
     }
 
@@ -82,7 +93,45 @@ pub const AccessSummary = struct {
         try appendUnique(self.allocator, &self.reads, resource);
     }
 
+    fn closeSettingReads(self: *AccessSummary, prior: settings.Facts) void {
+        if (prior.entries.items.len == 0) return;
+        closeReads(&self.reads, prior);
+        closeReads(&self.reads_before_write, prior);
+    }
+
+    fn closeReads(list: *std.ArrayList(Resource), prior: settings.Facts) void {
+        var kept: usize = 0;
+        for (list.items) |read| {
+            if (prior.satisfies(read)) continue;
+            list.items[kept] = read;
+            kept += 1;
+        }
+        list.shrinkRetainingCapacity(kept);
+    }
+
+    fn checkLaterWrite(self: *AccessSummary, write: Resource, reads: []const Resource) !void {
+        if (write != .property or write.property.owner == .object) return;
+        for (reads) |read| {
+            if (read.intersects(write) and settings.Key.fromResource(read) != null)
+                try appendUnique(self.allocator, &self.reads_before_write, read);
+        }
+    }
+
+    pub fn needsOwnWrite(self: AccessSummary, read: Resource) bool {
+        // Broad owners and objects retain the conservative graph rule.
+        if (settings.Key.fromResource(read) == null) return true;
+        for (self.reads_before_write.items) |pending| if (pending.eql(read)) return true;
+        return false;
+    }
+
+    // Along alternative paths, may-effects are unioned and must facts intersect.
+    fn mergeArm(self: *AccessSummary, other: AccessSummary, first: bool) !void {
+        if (first) try self.defined_settings.include(self.allocator, other.defined_settings) else self.defined_settings.intersect(other.defined_settings);
+        try self.mergeEffects(other);
+    }
+
     pub fn addWrite(self: *AccessSummary, resource: Resource) !void {
+        try self.checkLaterWrite(resource, self.reads.items);
         try appendUnique(self.allocator, &self.writes, resource);
     }
 
@@ -98,7 +147,7 @@ pub const AccessSummary = struct {
 
     pub fn addDrawing(self: *AccessSummary, key: u64, origin: core.SourceOrigin, condition: AccessSummary) std.mem.Allocator.Error!void {
         for (self.drawings.items) |*existing| if (existing.key == key) {
-            try existing.condition.merge(condition);
+            try existing.condition.mergeArm(condition, false);
             return;
         };
         const copy = try self.allocator.create(AccessSummary);
@@ -109,31 +158,58 @@ pub const AccessSummary = struct {
     }
 
     pub fn merge(self: *AccessSummary, other: AccessSummary) !void {
+        // No evaluation order is promised by this composition.
+        for (self.writes.items) |write| try self.checkLaterWrite(write, other.reads.items);
+        for (other.writes.items) |write| try self.checkLaterWrite(write, self.reads.items);
+        try self.defined_settings.include(self.allocator, other.defined_settings);
+        try self.mergeEffects(other);
+    }
+
+    // Only use for operations that the evaluator executes in this order.
+    fn appendSequential(self: *AccessSummary, other: AccessSummary) !void {
+        for (other.writes.items) |write| try self.checkLaterWrite(write, self.reads.items);
+        try self.mergeEffectsAfter(other, self.defined_settings);
+        try self.defined_settings.include(self.allocator, other.defined_settings);
+    }
+
+    // Union effects of alternative paths, or of fragments whose order has
+    // already been accounted for. Do not manufacture a read/write pair here.
+    fn mergeEffects(self: *AccessSummary, other: AccessSummary) !void {
+        try self.mergeEffectsAfter(other, .{});
+    }
+
+    fn mergeEffectsAfter(self: *AccessSummary, other: AccessSummary, prior: settings.Facts) !void {
         for (other.drawings.items) |drawing| try self.addDrawing(drawing.key, drawing.origin, drawing.condition.*);
         for (other.placements.items) |placement| try self.addPlacement(placement);
         for (other.escaped_objects.items) |identity| try self.addEscapedObject(identity);
         try self.reads.ensureUnusedCapacity(self.allocator, other.reads.items.len);
         try self.writes.ensureUnusedCapacity(self.allocator, other.writes.items.len);
         try self.selection_reads.ensureUnusedCapacity(self.allocator, other.selection_reads.items.len);
-        for (other.reads.items) |resource| try self.addRead(resource);
-        for (other.writes.items) |resource| try self.addWrite(resource);
+        for (other.reads.items) |resource| if (!prior.satisfies(resource)) try self.addRead(resource);
+        for (other.reads_before_write.items) |read| {
+            if (!prior.satisfies(read)) try appendUnique(self.allocator, &self.reads_before_write, read);
+        }
+        for (other.writes.items) |resource| try appendUnique(self.allocator, &self.writes, resource);
         for (other.selection_reads.items) |resource| try self.addSelectionRead(resource);
+        self.depends_on_caller_scope = self.depends_on_caller_scope or other.depends_on_caller_scope;
         self.writes_layout_input = self.writes_layout_input or other.writes_layout_input;
         self.places_objects = self.places_objects or other.places_objects;
         if (self.invalid_selection_mutation == null) self.invalid_selection_mutation = other.invalid_selection_mutation;
         if (self.invalid_drawing_condition == null) self.invalid_drawing_condition = other.invalid_drawing_condition;
     }
 
-    fn hasConcreteMembershipScope(self: AccessSummary) bool {
+    fn hasConcreteScope(self: AccessSummary) bool {
+        if (self.depends_on_caller_scope) return true;
         for ([_][]const Resource{ self.reads.items, self.writes.items, self.selection_reads.items }) |resources| {
             for (resources) |resource| {
+                if (resource == .property and resource.property.owner == .page and resource.property.owner.page != null) return true;
                 if (resource == .objects and (resource.objects.page_scope != .any or !resource.objects.placement.eql(.{}))) return true;
             }
         }
-        for (self.drawings.items) |drawing| if (drawing.condition.hasConcreteMembershipScope()) return true;
+        for (self.drawings.items) |drawing| if (drawing.condition.hasConcreteScope()) return true;
         for (self.placements.items) |placement| {
             if (placement.page_scope != .any) return true;
-            for (placement.steps.items) |step| if (step.hasConcreteMembershipScope()) return true;
+            for (placement.steps.items) |step| if (step.hasConcreteScope()) return true;
         }
         return false;
     }
@@ -148,8 +224,11 @@ pub const AccessSummary = struct {
         try copied.selection_reads.ensureTotalCapacity(allocator, @intCast(self.selection_reads.items.len));
         copied.reads.appendSliceAssumeCapacity(self.reads.items);
         copied.writes.appendSliceAssumeCapacity(self.writes.items);
+        try copied.reads_before_write.appendSlice(allocator, self.reads_before_write.items);
+        try copied.defined_settings.entries.appendSlice(allocator, self.defined_settings.entries.items);
         copied.selection_reads.appendSliceAssumeCapacity(self.selection_reads.items);
         try copied.escaped_objects.appendSlice(allocator, self.escaped_objects.items);
+        copied.depends_on_caller_scope = self.depends_on_caller_scope;
         copied.writes_layout_input = self.writes_layout_input;
         copied.places_objects = self.places_objects;
         copied.invalid_selection_mutation = self.invalid_selection_mutation;
@@ -161,7 +240,7 @@ pub const AccessSummary = struct {
         for (self.placements.items) |*existing| {
             if (existing.call_id != definition.call_id) continue;
             std.debug.assert(existing.steps.items.len == definition.steps.items.len);
-            for (existing.steps.items, definition.steps.items) |*step, other| try step.merge(other);
+            for (existing.steps.items, definition.steps.items) |*step, other| try step.mergeArm(other, false);
             if (!resourceScopeEql(existing.page_scope, definition.page_scope)) existing.page_scope = .any;
             return;
         }
@@ -304,6 +383,10 @@ pub fn appendResource(
             try appendPropertyOwner(allocator, out, property.owner, options);
             try out.appendSlice(allocator, ", key=");
             try appendOptionalNameOrAny(allocator, out, property.key.displayName());
+            if (property.unless_defined_on) |id| {
+                try out.appendSlice(allocator, ", unless defined on ");
+                try appendScope(allocator, out, .{ .page = id }, options.pages_scope_displays);
+            }
             try out.append(allocator, ')');
         },
     }
@@ -377,7 +460,7 @@ fn appendPropertyOwner(
     switch (owner) {
         .any => try out.appendSlice(allocator, "*"),
         .document => try out.appendSlice(allocator, "document"),
-        .page => try out.appendSlice(allocator, "page"),
+        .page => |id| if (id) |n| try appendScope(allocator, out, .{ .page = n }, options.variable_scope_displays) else try out.appendSlice(allocator, "page"),
         .object => |object_owner| {
             try out.appendSlice(allocator, "object");
             if (object_owner.identity) |identity| {
@@ -439,6 +522,7 @@ pub const RunCache = struct {
     return_facts: std.StringHashMap(ReturnFact),
     type_facts: std.HashMap(TypeFactKey, ValueFacts, TypeFactContext, std.hash_map.default_max_load_percentage),
     type_storage: std.heap.ArenaAllocator,
+    page_ids: std.AutoHashMapUnmanaged(core.placement_inputs.PageKey, ?core.NodeId) = .{},
     // Borrowed from the graph; cached and returned summaries share these bytes.
     string_allocator: std.mem.Allocator,
     return_body_analyses: usize = 0,
@@ -459,6 +543,7 @@ pub const RunCache = struct {
     }
 
     pub fn deinit(self: *RunCache) void {
+        self.page_ids.deinit(self.allocator);
         self.type_facts.deinit();
         self.type_storage.deinit();
         var iter = self.summaries.iterator();
@@ -514,8 +599,8 @@ const PropertyTarget = struct {
         return .{ .owner = .document };
     }
 
-    fn page() PropertyTarget {
-        return .{ .owner = .page };
+    fn page(id: ?core.NodeId) PropertyTarget {
+        return .{ .owner = .{ .page = id } };
     }
 
     fn object() PropertyTarget {
@@ -533,17 +618,14 @@ const PropertyTarget = struct {
     }
 };
 
-const CallbackArgBinding = struct {
-    values: ValueFacts = .{},
-    string_literal: ?[]const u8 = null,
-    property_target: ?PropertyTarget = null,
-};
-
 // Immutable value facts carry callable candidates and object identities through
 // records and captures. Type-derived facts live in the run cache when present.
 const max_value_fact_depth = 128;
 const max_effect_analysis_depth = 128;
+const Alternatives = control.Alternatives;
 const ValueFacts = struct {
+    truth: Alternatives = .bottom,
+    present: Alternatives = .bottom,
     id: usize = 0,
     candidates: []const Callable = &.{},
     fields: []const Field = &.{},
@@ -564,6 +646,7 @@ const ValueFacts = struct {
 
     fn eql(left: ValueFacts, right: ValueFacts, depth: usize) bool {
         if (depth >= max_value_fact_depth) return false;
+        if (left.truth != right.truth or left.present != right.present) return false;
         if (left.candidates.len != right.candidates.len or left.fields.len != right.fields.len or
             !resourceScopeEql(left.page_scope, right.page_scope) or !left.placement.eql(right.placement)) return false;
         if (!sameTarget(left.property_target, right.property_target)) return false;
@@ -690,7 +773,14 @@ pub const Analyzer = struct {
     }
 
     pub fn documentStatements(self: *Analyzer, items: []const ast.Statement) anyerror!AccessSummary {
-        return try self.analyzeStatements(items, .scheduled);
+        var summary = AccessSummary.init(self.allocator);
+        errdefer summary.deinit();
+        for (items) |stmt| {
+            var unit = try self.statement(stmt);
+            defer unit.deinit();
+            try summary.merge(unit);
+        }
+        return summary;
     }
 
     pub fn statement(self: *Analyzer, stmt: ast.Statement) anyerror!AccessSummary {
@@ -769,26 +859,25 @@ pub const Analyzer = struct {
     }
 
     const ReturnedValues = struct {
+        collect: bool = true,
         values: ValueFacts = .{},
-        continues: bool = true,
+        exits: control.Exits = .{},
     };
 
-    fn analyzeStatements(self: *Analyzer, items: []const ast.Statement, let_policy: LetPolicy) anyerror!AccessSummary {
-        return self.analyzeStatementsWithReturns(items, let_policy, null);
-    }
-
-    fn analyzeStatementsWithReturns(self: *Analyzer, items: []const ast.Statement, let_policy: LetPolicy, returned: ?*ReturnedValues) anyerror!AccessSummary {
+    fn analyzeStatementsWithReturns(self: *Analyzer, items: []const ast.Statement, let_policy: LetPolicy, returned: ?*ReturnedValues, entry: settings.Facts, exits_out: ?*SettingExits) anyerror!AccessSummary {
         const first_local = self.localObjectCounter().*;
         var parts = std.ArrayList(AccessSummary).empty;
         defer {
             for (parts.items) |*part| part.deinit();
             parts.deinit(self.allocator);
         }
-        for (items) |stmt| {
-            var nested = try self.analyzeStatementWithReturns(stmt, let_policy, if (returned) |result| if (result.continues) result else null else null);
-            errdefer nested.deinit();
-            try parts.append(self.allocator, nested);
-        }
+        var pass = AccessBlock{ .analyzer = self, .let_policy = let_policy, .returned = returned, .parts = &parts };
+        defer pass.fallthrough.deinit(self.allocator);
+        defer pass.open_reads.deinit(self.allocator);
+        defer pass.returns.deinit(self.allocator);
+        try pass.fallthrough.include(self.allocator, entry);
+        const exits = try control.block(&pass, items);
+        if (returned) |result| result.exits = exits;
         const end_local = self.localObjectCounter().*;
         // A fresh local object's defaults are closed only while the object stays
         // inside this execution unit. Escaping objects may receive definitions
@@ -842,7 +931,17 @@ pub const Analyzer = struct {
         }
         var summary = AccessSummary.init(self.allocator);
         errdefer summary.deinit();
-        for (parts.items) |part| try summary.merge(part);
+        for (parts.items) |part| try summary.mergeEffects(part);
+        if (exits_out) |out| {
+            if (exits.next) {
+                try out.next.add(self.allocator, pass.fallthrough);
+                try addOpenReads(self.allocator, &out.next_reads, pass.open_reads.items, .{});
+            }
+            if (exits.returned) try out.returned.add(self.allocator, pass.returns.facts);
+        } else {
+            if (exits.next) try pass.returns.add(self.allocator, pass.fallthrough);
+            try summary.defined_settings.include(self.allocator, pass.returns.facts);
+        }
         self.closeRegisteredStructureReads(&summary);
         var write_index: usize = 0;
         while (write_index < summary.writes.items.len) {
@@ -862,13 +961,130 @@ pub const Analyzer = struct {
         return summary;
     }
 
-    fn analyzeStatement(self: *Analyzer, stmt: ast.Statement, let_policy: LetPolicy) anyerror!AccessSummary {
-        return self.analyzeStatementWithReturns(stmt, let_policy, null);
+    const SettingExits = struct {
+        // Only continuing paths reach the next source statement. Both kinds of
+        // exit count when publishing the postcondition of a function call.
+        next: settings.Join = .{},
+        returned: settings.Join = .{},
+        next_reads: std.ArrayList(Resource) = .empty,
+
+        fn deinit(self: *SettingExits, allocator: std.mem.Allocator) void {
+            self.next.deinit(allocator);
+            self.returned.deinit(allocator);
+            self.next_reads.deinit(allocator);
+        }
+    };
+
+    fn addOpenReads(allocator: std.mem.Allocator, open: *std.ArrayList(Resource), reads: []const Resource, prior: settings.Facts) !void {
+        for (reads) |read| {
+            if (settings.Key.fromResource(read) != null and !prior.satisfies(read)) try appendUnique(allocator, open, read);
+        }
     }
 
-    fn analyzeStatementWithReturns(self: *Analyzer, stmt: ast.Statement, let_policy: LetPolicy, returned: ?*ReturnedValues) anyerror!AccessSummary {
+    const AccessBlock = struct {
+        analyzer: *Analyzer,
+        let_policy: LetPolicy,
+        returned: ?*ReturnedValues,
+        parts: *std.ArrayList(AccessSummary),
+        fallthrough: settings.Facts = .{},
+        open_reads: std.ArrayList(Resource) = .empty,
+        returns: settings.Join = .{},
+
+        pub fn visit(pass: *@This(), stmt: ast.Statement, _: bool) anyerror!control.Exits {
+            const allocator = pass.analyzer.allocator;
+            var effects = AccessSummary.init(pass.analyzer.allocator);
+            errdefer effects.deinit();
+            var paths = SettingExits{};
+            defer paths.deinit(allocator);
+            const exits = try pass.analyzer.statementEffects(stmt, pass.let_policy, pass.returned, &effects, pass.fallthrough, &paths);
+            effects.closeSettingReads(pass.fallthrough);
+            for (effects.writes.items) |write| try effects.checkLaterWrite(write, pass.open_reads.items);
+            if (exits.next) try addOpenReads(allocator, &pass.open_reads, if (stmt.kind == .if_stmt) paths.next_reads.items else effects.reads.items, pass.fallthrough);
+            if (stmt.kind == .if_stmt) {
+                if (exits.returned) try pass.returns.add(allocator, paths.returned.facts);
+                std.mem.swap(settings.Facts, &pass.fallthrough, &paths.next.facts);
+            } else {
+                try pass.fallthrough.include(allocator, effects.defined_settings);
+                if (exits.returned) try pass.returns.add(allocator, pass.fallthrough);
+            }
+            try pass.parts.append(allocator, effects);
+            return exits;
+        }
+    };
+
+    fn analyzeStatement(self: *Analyzer, stmt: ast.Statement, let_policy: LetPolicy) anyerror!AccessSummary {
         var summary = AccessSummary.init(self.allocator);
         errdefer summary.deinit();
+        var paths = SettingExits{};
+        defer paths.deinit(self.allocator);
+        const exits = try self.statementEffects(stmt, let_policy, null, &summary, .{}, &paths);
+        if (stmt.kind == .if_stmt) {
+            if (exits.next) try paths.returned.add(self.allocator, paths.next.facts);
+            std.mem.swap(settings.Facts, &summary.defined_settings, &paths.returned.facts);
+        }
+        return summary;
+    }
+
+    fn statementEffects(self: *Analyzer, stmt: ast.Statement, policy: LetPolicy, returned: ?*ReturnedValues, effects: *AccessSummary, entry: settings.Facts, paths: *SettingExits) anyerror!control.Exits {
+        var arms = AccessSummary.init(self.allocator);
+        defer arms.deinit();
+        var pass = AccessFlow{ .analyzer = self, .policy = policy, .returned = returned, .effects = effects, .arms = &arms, .entry = entry, .paths = paths };
+        defer pass.arm_entry.deinit(self.allocator);
+        const exits = try control.statement(&pass, stmt);
+        if (stmt.kind == .if_stmt) {
+            if (exits.next) try addOpenReads(self.allocator, &paths.next_reads, effects.reads.items, entry);
+            try effects.appendSequential(arms);
+        }
+        return exits;
+    }
+
+    const AccessFlow = struct {
+        analyzer: *Analyzer,
+        policy: LetPolicy,
+        returned: ?*ReturnedValues,
+        effects: *AccessSummary,
+        arms: *AccessSummary,
+        entry: settings.Facts,
+        arm_entry: settings.Facts = .{},
+        paths: *SettingExits,
+
+        pub fn condition(pass: *@This(), expr: ast.Expr) !Alternatives {
+            var facts = try pass.analyzer.analyzeCallArgFacts(expr);
+            defer facts.deinit();
+            try pass.effects.merge(facts.summary);
+            try pass.arm_entry.include(pass.analyzer.allocator, pass.entry);
+            try pass.arm_entry.include(pass.analyzer.allocator, facts.summary.defined_settings);
+            return facts.values.truth;
+        }
+
+        pub fn arm(pass: *@This(), body: []const ast.Statement, _: usize) anyerror!control.Exits {
+            var branch = ReturnedValues{ .collect = if (pass.returned) |result| result.collect else false };
+            var snapshot = try pass.analyzer.pushLocalFacts();
+            defer snapshot.restore();
+            var effects = try pass.analyzer.analyzeStatementsWithReturns(body, .local, &branch, pass.arm_entry, pass.paths);
+            defer effects.deinit();
+            try pass.arms.mergeEffects(effects);
+            if (pass.returned) |result| result.values = try pass.analyzer.joinValueFacts(result.values, branch.values);
+            return branch.exits;
+        }
+
+        pub fn onReturn(pass: *@This(), value: ?ast.Expr) !void {
+            const expr = value orelse return;
+            var facts = try pass.analyzer.analyzeCallArgFacts(expr);
+            defer facts.deinit();
+            try pass.effects.merge(facts.summary);
+            try pass.analyzer.addEscapedObjects(pass.effects, facts.values);
+            if (pass.returned) |result| if (result.collect) {
+                result.values = try pass.analyzer.joinValueFacts(result.values, facts.values);
+            };
+        }
+
+        pub fn simple(pass: *@This(), stmt: ast.Statement) !void {
+            return pass.analyzer.simpleStatement(stmt, pass.policy, pass.effects);
+        }
+    };
+
+    fn simpleStatement(self: *Analyzer, stmt: ast.Statement, let_policy: LetPolicy, summary: *AccessSummary) !void {
         switch (stmt.kind) {
             .hole => {},
             .let_binding => |binding| {
@@ -898,27 +1114,14 @@ pub const Analyzer = struct {
                     try self.variable_bindings.put(binding.name, let_policy);
                 }
             },
-            .return_expr => |expr| {
-                var facts = try self.analyzeCallArgFacts(expr);
-                defer facts.deinit();
-                try summary.merge(facts.summary);
-                try self.addEscapedObjects(&summary, facts.values);
-                if (returned) |result| {
-                    result.values = try self.joinValueFacts(result.values, facts.values);
-                    result.continues = false;
-                }
-            },
-            .return_void => if (returned) |result| {
-                result.continues = false;
-            },
             .property_set => |property_set| {
                 var target_expr = try self.analyzeExpr(property_set.target);
                 defer target_expr.deinit();
                 try summary.merge(target_expr);
-                var value_expr = try self.analyzeExpr(property_set.value);
-                defer value_expr.deinit();
-                try summary.merge(value_expr);
-                try self.addEscapedObjects(&summary, try self.valueFacts(property_set.value));
+                var value_facts = try self.analyzeCallArgFacts(property_set.value);
+                defer value_facts.deinit();
+                try summary.appendSequential(value_facts.summary);
+                try self.addEscapedObjects(summary, value_facts.values);
                 var base = property_set.target;
                 var path = property_set.path.items;
                 var target = try self.propertyTargetExpr(base);
@@ -930,34 +1133,20 @@ pub const Analyzer = struct {
                     target = try self.propertyTargetExpr(base);
                 }
                 const property_name = if (path.len == 0) null else try ownString(self, try ast.formatRecordPath(self.allocator, path));
-                try summary.addWrite(Resource.makeProperty((target orelse PropertyTarget.any()).owner, property_name));
+                const owner = (target orelse PropertyTarget.any()).owner;
+                try summary.addWrite(Resource.makeProperty(owner, property_name));
+                if (property_name) |name| try summary.defined_settings.define(self.allocator, owner, name, value_facts.values.present == .yes);
                 summary.writes_layout_input = true;
             },
-            .if_stmt => |if_stmt| {
-                var condition = try self.analyzeExpr(if_stmt.condition);
-                defer condition.deinit();
-                try summary.merge(condition);
-                var then_returns = ReturnedValues{};
-                var else_returns = ReturnedValues{};
-                var then_summary = try self.withLocalSnapshot(if_stmt.then_statements.items, if (returned != null) &then_returns else null);
-                defer then_summary.deinit();
-                try summary.merge(then_summary);
-                var else_summary = try self.withLocalSnapshot(if_stmt.else_statements.items, if (returned != null) &else_returns else null);
-                defer else_summary.deinit();
-                try summary.merge(else_summary);
-                if (returned) |result| {
-                    result.values = try self.joinValueFacts(result.values, try self.joinValueFacts(then_returns.values, else_returns.values));
-                    result.continues = then_returns.continues or else_returns.continues;
-                }
-            },
+            .if_stmt, .return_expr, .return_void => unreachable,
             .expr_stmt => |expr| {
                 var nested = try self.analyzeExpr(expr);
                 defer nested.deinit();
                 try summary.merge(nested);
             },
             .constrain => |decl| {
-                try self.addAnchorReads(&summary, decl.target);
-                if (decl.source) |source| try self.addAnchorReads(&summary, source);
+                try self.addAnchorReads(summary, decl.target);
+                if (decl.source) |source| try self.addAnchorReads(summary, source);
                 if (decl.offset) |offset| {
                     var nested = try self.analyzeExpr(offset);
                     defer nested.deinit();
@@ -966,13 +1155,6 @@ pub const Analyzer = struct {
                 summary.writes_layout_input = true;
             },
         }
-        return summary;
-    }
-
-    fn withLocalSnapshot(self: *Analyzer, statements: []const ast.Statement, returned: ?*ReturnedValues) !AccessSummary {
-        var state = try self.pushLocalFacts();
-        defer state.restore();
-        return try self.analyzeStatementsWithReturns(statements, .local, returned);
     }
 
     fn bindingPropertyTarget(self: *Analyzer, name: []const u8, target: ?PropertyTarget, let_policy: LetPolicy) !?PropertyTarget {
@@ -990,6 +1172,18 @@ pub const Analyzer = struct {
                 break :blk bound;
             },
             .any, .document, .page => value,
+        };
+    }
+
+    fn guardFallback(self: *Analyzer, target: ast.Expr, fallback: *AccessSummary) !void {
+        if (target != .member) return;
+        const read = (try self.propertyMemberRead(target.member)) orelse return;
+        if (read.target.owner != .page or read.target.owner.page == null or self.sema.settingsField(read.key) == null) return;
+        for ([_][]Resource{ fallback.reads.items, fallback.reads_before_write.items }) |reads| for (reads) |*item| {
+            if (item.* != .property or item.property.owner != .document or item.property.unless_defined_on != null) continue;
+            if (item.property.key.displayName()) |key| if (std.mem.eql(u8, key, read.key)) {
+                item.property.unless_defined_on = read.target.owner.page;
+            };
         };
     }
 
@@ -1027,13 +1221,13 @@ pub const Analyzer = struct {
                         defer self.sema = previous;
                         var nested = try self.analyzeExpr(default.*);
                         defer nested.deinit();
-                        try summary.merge(nested);
+                        try summary.appendSequential(nested);
                     }
                 }
                 for (record.fields.items) |field| {
                     var nested = try self.analyzeExpr(field.value);
                     defer nested.deinit();
-                    try summary.merge(nested);
+                    try summary.appendSequential(nested);
                 }
                 break :blk summary;
             },
@@ -1043,7 +1237,7 @@ pub const Analyzer = struct {
                 for (update.fields.items) |field| {
                     var nested = try self.analyzeExpr(field.value);
                     defer nested.deinit();
-                    try summary.merge(nested);
+                    try summary.appendSequential(nested);
                 }
                 break :blk summary;
             },
@@ -1053,10 +1247,10 @@ pub const Analyzer = struct {
                 const callable = try self.valueFacts(apply.callee.*);
                 var args = try self.argumentFacts(apply.args.items);
                 defer self.deinitCallArgFacts(&args);
-                for (args.items) |arg| try summary.merge(arg.summary);
+                for (args.items) |arg| try summary.appendSequential(arg.summary);
                 var invoked = try self.invokeValueFacts(callable, args.items);
                 defer invoked.deinit();
-                try summary.merge(invoked);
+                try summary.appendSequential(invoked);
                 break :blk summary;
             },
             .member => |member| blk: {
@@ -1068,13 +1262,15 @@ pub const Analyzer = struct {
                 if (try self.propertyMemberRead(member)) |read| {
                     var summary = try self.analyzeExpr(read.base);
                     errdefer summary.deinit();
-                    try summary.addRead(Resource.makeProperty(read.target.owner, read.key));
+                    const resource = Resource.makeProperty(read.target.owner, read.key);
+                    if (!summary.defined_settings.satisfies(resource)) try summary.addRead(resource);
                     break :blk summary;
                 }
                 var summary = try self.analyzeExpr(member.target.*);
                 errdefer summary.deinit();
                 if (try self.propertyTargetExpr(member.target.*)) |target| {
-                    try summary.addRead(Resource.makeProperty(target.owner, member.name));
+                    const resource = Resource.makeProperty(target.owner, member.name);
+                    if (!summary.defined_settings.satisfies(resource)) try summary.addRead(resource);
                 }
                 break :blk summary;
             },
@@ -1082,9 +1278,13 @@ pub const Analyzer = struct {
             .coalesce => |coalesce| blk: {
                 var summary = try self.analyzeExpr(coalesce.target.*);
                 errdefer summary.deinit();
+                const route = control.coalesce((try self.valueFacts(coalesce.target.*)).present);
+                if (route == .left) break :blk summary;
                 var fallback = try self.analyzeExpr(coalesce.fallback.*);
                 defer fallback.deinit();
-                try summary.merge(fallback);
+                try self.guardFallback(coalesce.target.*, &fallback);
+                if (route == .both) fallback.defined_settings.clear();
+                try summary.appendSequential(fallback);
                 break :blk summary;
             },
             .call => |call| try self.analyzeCall(call),
@@ -1130,7 +1330,7 @@ pub const Analyzer = struct {
             kept_fields[field_index] = field;
             field_index += 1;
         }
-        return .{ .id = id, .candidates = try allocator.dupe(ValueFacts.Callable, candidates), .fields = kept_fields };
+        return .{ .id = id, .present = if (candidates.len != 0) .yes else .bottom, .candidates = try allocator.dupe(ValueFacts.Callable, candidates), .fields = kept_fields };
     }
 
     fn addEscapedObjects(self: *Analyzer, summary: *AccessSummary, facts: ValueFacts) anyerror!void {
@@ -1189,6 +1389,7 @@ pub const Analyzer = struct {
             if (!found) try fields.append(allocator, field);
         }
         var result = try self.withPropertyTarget(try self.newValueFacts(candidates.items, fields.items), joinPropertyTargets(left.property_target, right.property_target));
+        result = self.withAlternatives(result, left.truth.join(right.truth), left.present.join(right.present));
         result.page_scope = if (resourceScopeEql(left.page_scope, right.page_scope)) left.page_scope else .any;
         result.placement = left.placement.join(right.placement);
         if (left.children) |left_children| if (right.children) |right_children| {
@@ -1215,7 +1416,9 @@ pub const Analyzer = struct {
             if (!std.mem.eql(u8, field.name, path[0].name)) try fields.append(allocator, field);
         }
         try fields.append(allocator, .{ .name = path[0].name, .value = try self.updateValueField(value.field(path[0].name), path[1..], replacement) });
-        return self.newValueFacts(value.candidates, fields.items);
+        var result = try self.newValueFacts(value.candidates, fields.items);
+        result.children = value.children;
+        return self.withAlternatives(result, .bottom, .yes);
     }
 
     fn callableValue(self: *Analyzer, name: ast.CallableName) anyerror!ValueFacts {
@@ -1231,10 +1434,24 @@ pub const Analyzer = struct {
                 const previous = self.sema;
                 self.sema = self.sema.forModule(resolved.module_id);
                 defer self.sema = previous;
+                const caller = self.variable_scope;
+                self.variable_scope = .{ .document = resolved.module_id };
+                defer self.variable_scope = caller;
                 break :blk try self.valueFacts(resolved.decl.value);
             },
             else => .{},
         };
+    }
+
+    fn withAlternatives(self: *Analyzer, value: ValueFacts, truth: Alternatives, present: Alternatives) ValueFacts {
+        if (value.truth == truth and value.present == present) return value;
+        const counter = if (self.run_cache) |cache| &cache.next_value_fact_id else &self.next_value_fact_id;
+        var result = value;
+        result.id = counter.*;
+        counter.* += 1;
+        result.truth = truth;
+        result.present = present;
+        return result;
     }
 
     fn valueFacts(self: *Analyzer, expr: ast.Expr) anyerror!ValueFacts {
@@ -1242,6 +1459,10 @@ pub const Analyzer = struct {
         self.value_fact_depth += 1;
         defer self.value_fact_depth -= 1;
         return switch (expr) {
+            .boolean => |flag| self.withAlternatives(.{}, .from(flag), .yes),
+            .number, .color, .enum_case, .string => self.withAlternatives(.{}, .bottom, .yes),
+            .none => self.withAlternatives(.{}, .bottom, .no),
+            .optional_check => |check| self.withAlternatives(.{}, (try self.valueFacts(check.target.*)).present, .yes),
             .ident => |ident| try self.withPropertyTarget(try self.callableValue(ident.reference()), self.property_target_bindings.get(ident.name)),
             .lambda => |lambda| blk: {
                 const allocator = self.value_storage.allocator();
@@ -1259,7 +1480,13 @@ pub const Analyzer = struct {
                 }
                 break :blk try self.newValueFacts(&.{.{ .closure = .{ .module_id = self.sema.module_id, .lambda = lambda, .bindings = bindings.items } }}, &.{});
             },
-            .coalesce => |value| try self.joinValueFacts(try self.valueFacts(value.target.*), try self.valueFacts(value.fallback.*)),
+            .coalesce => |value| blk: {
+                const target = try self.valueFacts(value.target.*);
+                const route = control.coalesce(target.present);
+                if (route == .left) break :blk target;
+                const fallback = try self.valueFacts(value.fallback.*);
+                break :blk if (route == .right) fallback else try self.joinValueFacts(self.withAlternatives(target, target.truth, .yes), fallback);
+            },
             .member => |member| try self.memberValueFacts(member),
             .record => |record| blk: {
                 var fields = std.ArrayList(ValueFacts.Field).empty;
@@ -1282,7 +1509,7 @@ pub const Analyzer = struct {
                         }
                     }
                 }
-                break :blk try self.newValueFacts(&.{}, fields.items);
+                break :blk self.withAlternatives(try self.newValueFacts(&.{}, fields.items), .bottom, .yes);
             },
             .record_update => |update| blk: {
                 var result = try self.valueFacts(update.target.*);
@@ -1293,10 +1520,8 @@ pub const Analyzer = struct {
                 switch (try self.valueBinding(call.callee)) {
                     .primitive => |primitive| break :blk try self.primitiveValueFacts(call, primitive, null),
                     .unknown => break :blk .{},
-                    .function => |named| switch (named.decl.result_type.kind) {
-                        .function, .record, .group, .optional, .any, .placed, .placement, .page, .document, .selection => {},
-                        else => break :blk try self.withPropertyTarget(.{}, try self.propertyTargetCall(call)),
-                    },
+                    .function => |named| if (!control.needsValueFlow(named.decl.result_type))
+                        break :blk self.withAlternatives(.{}, .bottom, control.presence(named.decl.result_type)),
                     else => {},
                 }
                 const value = try self.callableValue(call.callee);
@@ -1338,13 +1563,19 @@ pub const Analyzer = struct {
             if (value.id != 0) try fields.append(allocator, .{ .name = field.name, .value = value });
         }
         var result = try self.newValueFacts(candidates, fields.items);
+        result = self.withAlternatives(result, input.truth, input.present);
         if (input.reference) |reference| switch (reference) {
             .unknown => result = try self.withPropertyTarget(result, PropertyTarget.any()),
             .document => result = try self.withPropertyTarget(result, PropertyTarget.document()),
-            .page => result = try self.withPropertyTarget(result, PropertyTarget.page()),
+            .page => |page| {
+                const id: ?core.NodeId = if (self.run_cache != null and page != null) self.run_cache.?.page_ids.get(page.?) orelse null else null;
+                result = try self.withPropertyTarget(result, PropertyTarget.page(id));
+                if (id) |n| result.page_scope = .{ .page = n };
+            },
             .placement => |placement| {
                 result = try self.withPropertyTarget(result, PropertyTarget.object());
                 result.placement = .exact(placement.call, placement.path);
+                result.page_scope = result.field("page").page_scope;
             },
         };
         const children = try allocator.alloc(ValueFacts, input.children.len);
@@ -1368,9 +1599,13 @@ pub const Analyzer = struct {
 
     fn primitiveValueFacts(self: *Analyzer, call: ast.CallExpr, primitive: registry.PrimitiveDescriptor, arg_facts: ?[]const CallArgFacts) anyerror!ValueFacts {
         var result = try self.withPropertyTarget(.{}, try self.propertyTargetCall(call));
+        var result_type = primitive.result_type;
         switch (primitive.op) {
+            .logical_not => result = self.withAlternatives(result, (try self.callArgumentValue(call, arg_facts, 0)).truth.negate(), .yes),
             .pagectx => result.page_scope = if (self.variable_scope == .page) self.variable_scope else .any,
             .select => if (call.args.items.len > 0) {
+                // Named queries have their own result types, including optionals.
+                result_type = if (call.type_args.items.len != 0) primitive.result_type else ast.Type.any;
                 const scope = try self.callArgumentValue(call, arg_facts, 0);
                 if (call.type_args.items.len == 1 and call.args.items.len == 1) {
                     if (self.sema.state) |state| {
@@ -1385,23 +1620,31 @@ pub const Analyzer = struct {
                     result.page_scope = scope.page_scope;
                     result.placement = if (scope.placement.call != null) scope.placement.descendants() else .{};
                 } else if (try literalStringArg(self, call, 1)) |name| {
-                    if (registry.lookupQueryOp(name)) |query| switch (query.op) {
-                        .self_placement => result = scope,
-                        .children, .descendants => {
-                            if (scope.children) |children| {
-                                result = .{};
-                                for (children) |child| result = try self.joinValueFacts(result, child);
-                                if (query.op == .descendants) result.placement.depth.max = null;
-                            } else {
-                                result.page_scope = scope.page_scope;
-                                result.placement = if (query.op == .children) scope.placement.children() else scope.placement.descendants();
-                            }
-                        },
-                        else => {},
-                    };
+                    if (registry.lookupQueryOp(name)) |query| {
+                        result_type = query.output_type;
+                        switch (query.op) {
+                            .self_placement => result = scope,
+                            .children, .descendants => {
+                                if (scope.children) |children| {
+                                    result = .{};
+                                    for (children) |child| result = try self.joinValueFacts(result, child);
+                                    if (query.op == .descendants) result.placement.depth.max = null;
+                                } else {
+                                    result.page_scope = scope.page_scope;
+                                    result.placement = if (query.op == .children) scope.placement.children() else scope.placement.descendants();
+                                }
+                            },
+                            else => {},
+                        }
+                    }
                 }
             },
-            .fold => return self.foldValueFacts(call, null),
+            .fold => {
+                if (arg_facts) |args| return self.foldValueFacts(args, null);
+                var args = try self.collectCallArgFacts(call);
+                defer self.deinitCallArgFacts(&args);
+                return self.foldValueFacts(args.items, null);
+            },
             .first, .selection_filter, .draw_when => if (call.args.items.len > 0) {
                 result = try self.callArgumentValue(call, arg_facts, 0);
             },
@@ -1436,6 +1679,10 @@ pub const Analyzer = struct {
             },
             else => {},
         }
+        if (result_type) |ty| {
+            if (ty.kind == .boolean and result.truth == .bottom) return self.withAlternatives(result, .either, .yes);
+            if (result.present == .bottom) return self.withAlternatives(result, result.truth, control.presence(ty));
+        }
         return result;
     }
 
@@ -1455,14 +1702,15 @@ pub const Analyzer = struct {
 
     fn memberValueFacts(self: *Analyzer, member: ast.MemberExpr) anyerror!ValueFacts {
         const receiver = try self.valueFacts(member.target.*);
-        const field_facts = receiver.field(member.name);
-        if (field_facts.id != 0) return field_facts;
-        const target = receiver.property_target orelse return .{};
-        if (target.owner == .document or target.owner == .page) {
-            const field = self.sema.settingsField(member.name) orelse return .{};
-            return self.valueFactsForType(field.value_type, 0);
+        if (member.optional and receiver.present == .no) return self.withAlternatives(.{}, .bottom, .no);
+        var field = receiver.field(member.name);
+        if (field.id == 0) {
+            field = self.withAlternatives(.{}, .either, .either);
+            if (receiver.property_target) |target| if (target.owner == .document or target.owner == .page) {
+                if (self.sema.settingsField(member.name)) |descriptor| field = try self.valueFactsForType(descriptor.value_type, 0);
+            };
         }
-        return .{};
+        return self.withAlternatives(field, field.truth, control.memberPresence(receiver.present, field.present, member.optional));
     }
 
     fn restoreCapturedBindings(self: *Analyzer, bindings: []const CapturedBinding) !void {
@@ -1490,9 +1738,15 @@ pub const Analyzer = struct {
     }
 
     fn buildTypeFacts(self: *Analyzer, ty: ast.Type, depth: usize, allocator: std.mem.Allocator) anyerror!ValueFacts {
-        if (self.propertyTargetForType(ty)) |target| return self.withPropertyTarget(.{}, target);
-        if (ty.kind == .optional) return if (ty.optional_child) |child| self.valueFactsForType(child.*, depth + 1) else .{};
-        if (ty.kind != .record) return .{};
+        if (ty.kind == .boolean) return self.withAlternatives(.{}, .either, .yes);
+        if (ty.kind == .optional) {
+            const child = ty.optional_child orelse return .{};
+            const payload = try self.valueFactsForType(child.*, depth + 1);
+            return self.withAlternatives(payload, payload.truth, .either);
+        }
+        const scalar = self.withAlternatives(.{}, .bottom, control.presence(ty));
+        if (self.propertyTargetForType(ty)) |target| return self.withPropertyTarget(scalar, target);
+        if (ty.kind != .record) return scalar;
         const record = self.sema.record(ty.nominal_module_id, ty.class_name orelse return .{}) orelse return .{};
         var fields = std.ArrayList(ValueFacts.Field).empty;
         for (record.decl.fields.items) |field| {
@@ -1501,7 +1755,7 @@ pub const Analyzer = struct {
             const value = try self.valueFactsForType(field_type, depth + 1);
             if (value.id != 0) try fields.append(allocator, .{ .name = field.name, .value = value });
         }
-        return self.newValueFactsIn(allocator, &.{}, fields.items);
+        return self.withAlternatives(try self.newValueFactsIn(allocator, &.{}, fields.items), .bottom, .yes);
     }
 
     fn bindParamFacts(self: *Analyzer, param: ast.ParamDecl, facts: anytype) !void {
@@ -1530,7 +1784,7 @@ pub const Analyzer = struct {
                 // Defaults execute even when the function body ignores the value.
                 var facts = try self.analyzeCallArgFacts(default.*);
                 defer facts.deinit();
-                try defaults.merge(facts.summary);
+                try defaults.appendSequential(facts.summary);
                 try self.bindParamFacts(param, facts);
             } else {
                 try self.bindParamFacts(param, CallArgFacts{ .summary = AccessSummary.init(self.allocator) });
@@ -1549,7 +1803,7 @@ pub const Analyzer = struct {
         defer self.effect_analysis_depth -= 1;
         var summary = AccessSummary.init(self.allocator);
         errdefer summary.deinit();
-        for (value.candidates) |candidate| {
+        for (value.candidates, 0..) |candidate, index| {
             var body = switch (candidate) {
                 .named => |named| try self.functionCallWithReturns(named.key, named.module_id, named.decl, args, returned),
                 .closure => |closure| blk: {
@@ -1564,18 +1818,18 @@ pub const Analyzer = struct {
                     if (returned) |output| {
                         var body = try self.analyzeCallArgFacts(closure.lambda.body.*);
                         defer body.deinit();
-                        try defaults.merge(body.summary);
+                        try defaults.appendSequential(body.summary);
                         output.* = try self.joinValueFacts(output.*, body.values);
                     } else {
                         var body = try self.analyzeExpr(closure.lambda.body.*);
                         defer body.deinit();
-                        try defaults.merge(body);
+                        try defaults.appendSequential(body);
                     }
                     break :blk defaults;
                 },
             };
             defer body.deinit();
-            try summary.merge(body);
+            try summary.mergeArm(body, index == 0);
         }
         return summary;
     }
@@ -1589,11 +1843,8 @@ pub const Analyzer = struct {
             defer self.sema = previous;
             const returned = switch (candidate) {
                 .named => |named| blk: {
-                    // Scalar results contain neither callables nor object identities.
-                    switch (named.decl.result_type.kind) {
-                        .function, .record, .group, .optional, .any, .placed, .placement, .page, .document, .selection => {},
-                        else => break :blk ValueFacts{},
-                    }
+                    if (!control.needsValueFlow(named.decl.result_type))
+                        break :blk self.withAlternatives(.{}, .bottom, control.presence(named.decl.result_type));
                     const already_visiting = self.visiting.contains(named.key);
                     if (!already_visiting) try self.visiting.put(named.key, {});
                     defer if (!already_visiting) {
@@ -1603,7 +1854,7 @@ pub const Analyzer = struct {
                     var defaults = try self.bindValueParams(named.decl.params.items, args);
                     defer defaults.deinit();
                     var returned = ValueFacts{};
-                    _ = try self.collectValueReturns(named.decl.statements.items, &returned);
+                    _ = try self.scanReturns(.value, named.decl.statements.items, &returned);
                     break :blk returned;
                 },
                 .closure => |closure| blk: {
@@ -1619,40 +1870,6 @@ pub const Analyzer = struct {
         return result;
     }
 
-    fn collectValueReturns(self: *Analyzer, statements: []const ast.Statement, result: *ValueFacts) anyerror!bool {
-        for (statements) |stmt| switch (stmt.kind) {
-            .return_expr => |expr| {
-                result.* = try self.joinValueFacts(result.*, try self.valueFacts(expr));
-                return false;
-            },
-            .return_void => return false,
-            .if_stmt => |branch| {
-                const then_continues = blk: {
-                    var facts = try self.pushLocalFacts();
-                    defer facts.restore();
-                    break :blk try self.collectValueReturns(branch.then_statements.items, result);
-                };
-                const else_continues = blk: {
-                    var facts = try self.pushLocalFacts();
-                    defer facts.restore();
-                    break :blk try self.collectValueReturns(branch.else_statements.items, result);
-                };
-                if (!then_continues and !else_continues) return false;
-            },
-            .let_binding => |binding| {
-                const values = try self.valueFacts(binding.expr);
-                const string = try literalStringExpr(self, binding.expr);
-                const target = try self.propertyTargetExpr(binding.expr);
-                try self.value_bindings.put(binding.name, values);
-                if (string) |value| try self.string_bindings.put(binding.name, value);
-                if (target) |value| try self.property_target_bindings.put(binding.name, value);
-                try self.variable_bindings.put(binding.name, .local);
-            },
-            else => {},
-        };
-        return true;
-    }
-
     fn analyzeCall(self: *Analyzer, call: ast.CallExpr) anyerror!AccessSummary {
         return self.analyzeCallWithReturns(call, null);
     }
@@ -1663,7 +1880,7 @@ pub const Analyzer = struct {
             .local, .constant => blk: {
                 var args = try self.collectCallArgFacts(call);
                 defer self.deinitCallArgFacts(&args);
-                var summary = try self.callArgFactsSummary(args.items);
+                var summary = AccessSummary.init(self.allocator);
                 errdefer summary.deinit();
                 switch (try self.valueBinding(call.callee)) {
                     .constant => |resolved| {
@@ -1673,10 +1890,11 @@ pub const Analyzer = struct {
                     },
                     else => try self.addVariableRead(&summary, call.callee.name),
                 }
+                for (args.items) |arg| try summary.appendSequential(arg.summary);
                 const value = try self.callableValue(call.callee);
                 var invoked = try self.invokeValueFactsWithReturns(value, args.items, returned);
                 defer invoked.deinit();
-                try summary.merge(invoked);
+                try summary.appendSequential(invoked);
                 break :blk summary;
             },
             .function => |resolved| blk: {
@@ -1686,7 +1904,7 @@ pub const Analyzer = struct {
                 errdefer summary.deinit();
                 var invoked = try self.functionCallWithReturns(resolved.key, resolved.module_id, resolved.decl, arg_facts.items, returned);
                 defer invoked.deinit();
-                try summary.merge(invoked);
+                try summary.appendSequential(invoked);
                 break :blk summary;
             },
             .primitive => |primitive| try self.primitiveCall(call, primitive, returned),
@@ -1717,21 +1935,14 @@ pub const Analyzer = struct {
     };
 
     const StringArgFacts = struct {
+        values: ValueFacts = .{},
         string_literal: ?[]const u8 = null,
     };
 
     const StaticCallArgFacts = struct {
+        values: ValueFacts = .{},
         string_literal: ?[]const u8 = null,
         property_target: ?PropertyTarget = null,
-    };
-
-    const IndexedCallArgFacts = struct {
-        index: usize,
-        facts: CallArgFacts,
-
-        fn deinit(self: *IndexedCallArgFacts) void {
-            self.facts.deinit();
-        }
     };
 
     fn analyzeCallArgFacts(self: *Analyzer, arg: ast.Expr) anyerror!CallArgFacts {
@@ -1746,10 +1957,10 @@ pub const Analyzer = struct {
                 try facts.summary.merge(callee.summary);
                 var args = try self.argumentFacts(apply.args.items);
                 defer self.deinitCallArgFacts(&args);
-                for (args.items) |argument| try facts.summary.merge(argument.summary);
+                for (args.items) |argument| try facts.summary.appendSequential(argument.summary);
                 var invoked = try self.invokeValueFactsWithReturns(callee.values, args.items, &facts.values);
                 defer invoked.deinit();
-                try facts.summary.merge(invoked);
+                try facts.summary.appendSequential(invoked);
             },
             .record => |record| {
                 var fields = std.ArrayList(ValueFacts.Field).empty;
@@ -1765,17 +1976,17 @@ pub const Analyzer = struct {
                         defer self.sema = previous;
                         var nested = try self.analyzeCallArgFacts(default.*);
                         defer nested.deinit();
-                        try facts.summary.merge(nested.summary);
+                        try facts.summary.appendSequential(nested.summary);
                         if (nested.values.id != 0) try fields.append(allocator, .{ .name = field.name, .value = nested.values });
                     }
                 }
                 for (record.fields.items) |field| {
                     var nested = try self.analyzeCallArgFacts(field.value);
                     defer nested.deinit();
-                    try facts.summary.merge(nested.summary);
+                    try facts.summary.appendSequential(nested.summary);
                     if (nested.values.id != 0) try fields.append(allocator, .{ .name = field.name, .value = nested.values });
                 }
-                facts.values = try self.newValueFacts(&.{}, fields.items);
+                facts.values = self.withAlternatives(try self.newValueFacts(&.{}, fields.items), .bottom, .yes);
             },
             .record_update => |update| {
                 var original = try self.analyzeCallArgFacts(update.target.*);
@@ -1785,18 +1996,25 @@ pub const Analyzer = struct {
                 for (update.fields.items) |field| {
                     var nested = try self.analyzeCallArgFacts(field.value);
                     defer nested.deinit();
-                    try facts.summary.merge(nested.summary);
+                    try facts.summary.appendSequential(nested.summary);
                     facts.values = try self.updateValueField(facts.values, field.path.items, nested.values);
                 }
             },
             .coalesce => |coalesce| {
                 var target = try self.analyzeCallArgFacts(coalesce.target.*);
                 defer target.deinit();
-                var fallback = try self.analyzeCallArgFacts(coalesce.fallback.*);
-                defer fallback.deinit();
                 try facts.summary.merge(target.summary);
-                try facts.summary.merge(fallback.summary);
-                facts.values = try self.joinValueFacts(target.values, fallback.values);
+                const route = control.coalesce(target.values.present);
+                if (route == .left) {
+                    facts.values = target.values;
+                } else {
+                    var fallback = try self.analyzeCallArgFacts(coalesce.fallback.*);
+                    defer fallback.deinit();
+                    try self.guardFallback(coalesce.target.*, &fallback.summary);
+                    if (route == .both) fallback.summary.defined_settings.clear();
+                    try facts.summary.appendSequential(fallback.summary);
+                    facts.values = if (route == .right) fallback.values else try self.joinValueFacts(self.withAlternatives(target.values, target.values.truth, .yes), fallback.values);
+                }
             },
             else => {
                 facts.summary = try self.analyzeExpr(arg);
@@ -1809,11 +2027,22 @@ pub const Analyzer = struct {
     }
 
     fn analyzeStringArgFacts(self: *Analyzer, arg: ast.Expr) anyerror!StringArgFacts {
-        return .{ .string_literal = try literalStringExpr(self, arg) };
+        return .{ .values = self.conditionFacts(arg), .string_literal = try literalStringExpr(self, arg) };
+    }
+
+    // Return-fact queries need only the control discriminant, not a second
+    // recursive analysis of every argument of a value-producing call.
+    fn conditionFacts(self: *Analyzer, arg: ast.Expr) ValueFacts {
+        return switch (arg) {
+            .boolean => |flag| self.withAlternatives(.{}, .from(flag), .yes),
+            .ident => |ident| self.value_bindings.get(ident.name) orelse .{},
+            else => .{},
+        };
     }
 
     fn analyzeStaticCallArgFacts(self: *Analyzer, arg: ast.Expr) anyerror!StaticCallArgFacts {
         return .{
+            .values = self.conditionFacts(arg),
             .string_literal = try literalStringExpr(self, arg),
             .property_target = try self.propertyTargetExpr(arg),
         };
@@ -1829,20 +2058,6 @@ pub const Analyzer = struct {
         try facts.ensureTotalCapacity(self.allocator, args.len);
         for (args) |arg| {
             facts.appendAssumeCapacity(try self.analyzeCallArgFacts(arg));
-        }
-        return facts;
-    }
-
-    fn collectCallArgFactsSkipping(self: *Analyzer, call: ast.CallExpr, skip_index: usize) anyerror!std.ArrayList(IndexedCallArgFacts) {
-        var facts = std.ArrayList(IndexedCallArgFacts).empty;
-        errdefer self.deinitIndexedCallArgFacts(&facts);
-        try facts.ensureTotalCapacity(self.allocator, call.args.items.len);
-        for (call.args.items, 0..) |arg, index| {
-            if (index == skip_index) continue;
-            facts.appendAssumeCapacity(.{
-                .index = index,
-                .facts = try self.analyzeCallArgFacts(arg),
-            });
         }
         return facts;
     }
@@ -1866,30 +2081,11 @@ pub const Analyzer = struct {
         facts.deinit(self.allocator);
     }
 
-    fn deinitIndexedCallArgFacts(self: *Analyzer, facts: *std.ArrayList(IndexedCallArgFacts)) void {
-        for (facts.items) |*fact| fact.deinit();
-        facts.deinit(self.allocator);
-    }
-
     fn callArgFactsSummary(self: *Analyzer, facts: []const CallArgFacts) !AccessSummary {
         var summary = AccessSummary.init(self.allocator);
         errdefer summary.deinit();
-        for (facts) |fact| try summary.merge(fact.summary);
+        for (facts) |fact| try summary.appendSequential(fact.summary);
         return summary;
-    }
-
-    fn indexedCallArgFactsSummary(self: *Analyzer, facts: []const IndexedCallArgFacts) !AccessSummary {
-        var summary = AccessSummary.init(self.allocator);
-        errdefer summary.deinit();
-        for (facts) |fact| try summary.merge(fact.facts.summary);
-        return summary;
-    }
-
-    fn findIndexedCallArgFacts(facts: []const IndexedCallArgFacts, index: usize) ?*const CallArgFacts {
-        for (facts) |*item| {
-            if (item.index == index) return &item.facts;
-        }
-        return null;
     }
 
     fn functionCallWithReturns(
@@ -1900,9 +2096,9 @@ pub const Analyzer = struct {
         arg_facts: []const CallArgFacts,
         returned: ?*ValueFacts,
     ) anyerror!AccessSummary {
-        const needs_returns = returned != null and switch (func.result_type.kind) {
-            .function, .record, .group, .optional, .any, .placed, .placement, .page, .document, .selection => true,
-            else => false,
+        const needs_returns = returned != null and control.needsValueFlow(func.result_type);
+        if (returned) |result| if (!needs_returns) {
+            result.* = try self.joinValueFacts(result.*, self.withAlternatives(.{}, .bottom, control.presence(func.result_type)));
         };
         if (self.effect_analysis_depth >= max_effect_analysis_depth) return error.FunctionAnalysisLimitExceeded;
         self.effect_analysis_depth += 1;
@@ -1947,13 +2143,13 @@ pub const Analyzer = struct {
         var body = try self.bindValueParams(func.params.items, arg_facts);
         errdefer body.deinit();
         var result = ReturnedValues{};
-        var statements = try self.analyzeStatementsWithReturns(func.statements.items, .local, if (needs_returns) &result else null);
+        var statements = try self.analyzeStatementsWithReturns(func.statements.items, .local, if (needs_returns) &result else null, body.defined_settings, null);
         defer statements.deinit();
-        try body.merge(statements);
+        try body.appendSequential(statements);
         if (returned) |output| output.* = try self.joinValueFacts(output.*, result.values);
         // Pure value helpers and page-independent effects can be shared across
         // pages; only concrete membership scopes require the caller-page key.
-        if (cache_key) |owned| try self.run_cache.?.putSummary(if (body.hasConcreteMembershipScope()) owned else shared_key.?, body);
+        if (cache_key) |owned| try self.run_cache.?.putSummary(if (body.hasConcreteScope()) owned else shared_key.?, body);
         return body;
     }
 
@@ -1981,9 +2177,13 @@ pub const Analyzer = struct {
         self.sema = self.sema.forModule(resolved.module_id);
         defer self.sema = previous;
 
+        const caller = self.variable_scope;
+        self.variable_scope = .{ .document = resolved.module_id };
+        defer self.variable_scope = caller;
         var nested = try self.analyzeExpr(resolved.decl.value);
         defer nested.deinit();
         try summary.merge(nested);
+        summary.defined_settings.clear();
         if (cache_key) |owned| try self.run_cache.?.putSummary(owned, summary);
         return summary;
     }
@@ -2222,51 +2422,22 @@ pub const Analyzer = struct {
         for (resources.items) |resource| try summary.addSelectionRead(resource);
     }
 
-    fn callbackArgBindingsFromFacts(
+    // Each selection callback receives an item, any other supplied parameters
+    // (e.g. the enumeration index), and the caller's extra arguments. The
+    // returned slice borrows summaries from args and must only free the slice.
+    fn selectionCallbackArgs(
         self: *Analyzer,
-        descriptor: registry.PrimitiveDescriptor,
-        callback_spec: registry.PrimitiveCallbackSpec,
-        call_arg_count: usize,
-        arg_facts: []const IndexedCallArgFacts,
-    ) !std.ArrayList(CallbackArgBinding) {
-        var bindings = std.ArrayList(CallbackArgBinding).empty;
-        errdefer bindings.deinit(self.allocator);
-
-        const item_target = callbackSelectionElementTargetFromFacts(arg_facts);
-        const item_index = callbackSelectionArgIndex(descriptor.op);
-        for (0..callback_spec.supplied_arg_count) |index| {
-            var binding = CallbackArgBinding{};
-            if (item_index != null and index == item_index.?) {
-                binding.property_target = item_target orelse PropertyTarget.any();
-                if (findIndexedCallArgFacts(arg_facts, 0)) |selection| binding.values = selection.values;
-            }
-            try bindings.append(self.allocator, binding);
-        }
-
-        const extra_start = callback_spec.function_arg_index + 1;
-        var index = extra_start;
-        while (index < call_arg_count) : (index += 1) {
-            const facts = findIndexedCallArgFacts(arg_facts, index) orelse continue;
-            try bindings.append(self.allocator, .{ .values = facts.values, .string_literal = facts.string_literal, .property_target = facts.property_target });
-        }
-        return bindings;
-    }
-
-    fn callbackSelectionElementTargetFromFacts(arg_facts: []const IndexedCallArgFacts) ?PropertyTarget {
-        const facts = findIndexedCallArgFacts(arg_facts, 0) orelse return null;
-        return facts.property_target orelse PropertyTarget.any();
-    }
-
-    fn callbackSelectionArgIndex(op: registry.PrimitiveCall) ?usize {
-        return switch (op) {
-            .foreach,
-            .selection_filter,
-            .foreach_enumerate,
-            .join,
-            => 0,
-            .fold => 1,
-            else => null,
-        };
+        spec: registry.PrimitiveCallbackSpec,
+        args: []const CallArgFacts,
+    ) ![]CallArgFacts {
+        const extras = args[spec.function_arg_index + 1 ..];
+        const params = try self.allocator.alloc(CallArgFacts, spec.supplied_arg_count + extras.len);
+        @memset(params[0..spec.supplied_arg_count], .{ .summary = AccessSummary.init(self.allocator) });
+        params[0] = args[0];
+        params[0].string_literal = null;
+        params[0].property_target = args[0].property_target orelse PropertyTarget.any();
+        @memcpy(params[spec.supplied_arg_count..], extras);
+        return params;
     }
 
     fn addAnchorReads(self: *Analyzer, summary: *AccessSummary, anchor: ast.AnchorRef) !void {
@@ -2319,6 +2490,18 @@ pub const Analyzer = struct {
         errdefer summary.deinit();
         if (descriptor.places_objects) summary.places_objects = true;
         switch (descriptor.op) {
+            .pagectx => summary.depends_on_caller_scope = true,
+            .define_theme => {
+                summary.depends_on_caller_scope = true;
+                const owner: PropertyOwner = switch (self.variable_scope) {
+                    .document => .document,
+                    .page => |n| .{ .page = n },
+                    .any => .any,
+                };
+                try summary.addWrite(Resource.makeProperty(owner, "theme"));
+                try summary.defined_settings.define(self.allocator, owner, "theme", true);
+                summary.writes_layout_input = true;
+            },
             .page_index, .page_count => try summary.addRead(Resource.makePages(null)),
             .new_page => {
                 try summary.addWrite(Resource.makePages(null));
@@ -2415,14 +2598,17 @@ pub const Analyzer = struct {
         inputs[0] = args[1].values;
         for (plan.steps.items, 0..) |step, index| {
             switch (step.target) {
-                .native => steps.appendAssumeCapacity(AccessSummary.init(self.allocator)),
                 .group => {
                     steps.appendAssumeCapacity(AccessSummary.init(self.allocator));
                     for (step.children.items, 0..) |child_index, position| {
                         inputs[child_index] = if (inputs[index].children) |children| if (position < children.len) children[position] else .{} else .{};
                     }
                 },
-                .function => |key| {
+                .native, .function => {
+                    const key = if (step.target == .function) step.target.function else step.target.native.resolve orelse {
+                        steps.appendAssumeCapacity(AccessSummary.init(self.allocator));
+                        continue;
+                    };
                     const state = self.sema.state.?;
                     const function = try self.newValueFacts(&.{.{ .named = .{ .key = key, .module_id = key.module_id, .decl = state.functions.get(key).? } }}, &.{});
                     var receiver = try self.newValueFacts(&.{}, &.{
@@ -2434,8 +2620,12 @@ pub const Analyzer = struct {
                     receiver.placement = .exact(call_id, step.path);
                     var argument = CallArgFacts{ .summary = AccessSummary.init(self.allocator), .values = receiver };
                     defer argument.deinit();
+                    const caller = self.variable_scope;
+                    self.variable_scope = page_scope;
+                    defer self.variable_scope = caller;
                     var output = ValueFacts{};
                     steps.appendAssumeCapacity(try self.invokeValueFactsWithReturns(function, &.{argument}, &output));
+                    if (step.target == .native) continue;
                     std.debug.assert(step.children.items.len == 1);
                     inputs[step.children.items[0]] = output;
                 },
@@ -2488,68 +2678,59 @@ pub const Analyzer = struct {
         };
     }
 
-    fn foldValueFacts(self: *Analyzer, call: ast.CallExpr, summary: ?*AccessSummary) anyerror!ValueFacts {
-        if (call.args.items.len < 3) return .{};
-        const callback = try self.valueFacts(call.args.items[2]);
-        var args = std.ArrayList(CallArgFacts).empty;
-        defer self.deinitCallArgFacts(&args);
-        try args.ensureTotalCapacity(self.allocator, call.args.items.len - 1);
-        args.appendAssumeCapacity(try self.analyzeCallArgFacts(call.args.items[1]));
-        args.appendAssumeCapacity(try self.analyzeCallArgFacts(call.args.items[0]));
-        for (call.args.items[3..]) |argument| args.appendAssumeCapacity(try self.analyzeCallArgFacts(argument));
+    fn foldValueFacts(self: *Analyzer, supplied: []const CallArgFacts, summary: ?*AccessSummary) anyerror!ValueFacts {
+        if (supplied.len < 3) return .{};
+        const callback = supplied[2].values;
+        // Callback arguments borrow the already evaluated inputs. Only the
+        // accumulator's selection reads change during iteration.
+        const args = try self.allocator.alloc(CallArgFacts, supplied.len - 1);
+        defer self.allocator.free(args);
+        args[0] = supplied[1];
+        args[0].summary = AccessSummary.init(self.allocator);
+        defer args[0].summary.deinit();
+        for (supplied[1].summary.selection_reads.items) |read| try args[0].summary.addSelectionRead(read);
+        args[1] = supplied[0];
+        @memcpy(args[2..], supplied[3..]);
         for (0..max_value_fact_depth) |_| {
             var returned = ValueFacts{};
-            var invoked = try self.invokeValueFactsWithReturns(callback, args.items, &returned);
+            var invoked = try self.invokeValueFactsWithReturns(callback, args, &returned);
             defer invoked.deinit();
-            if (summary) |effects| try effects.merge(invoked);
-            const previous_reads = args.items[0].summary.selection_reads.items.len;
-            for (invoked.selection_reads.items) |resource| try args.items[0].summary.addSelectionRead(resource);
-            const combined = try self.joinValueFacts(args.items[0].values, returned);
-            if (combined.eql(args.items[0].values, 0) and previous_reads == args.items[0].summary.selection_reads.items.len) return combined;
-            args.items[0].values = combined;
-            args.items[0].property_target = combined.property_target;
-            args.items[0].string_literal = null;
+            if (summary) |effects| try effects.mergeEffects(invoked);
+            const previous_reads = args[0].summary.selection_reads.items.len;
+            for (invoked.selection_reads.items) |resource| try args[0].summary.addSelectionRead(resource);
+            const combined = try self.joinValueFacts(args[0].values, returned);
+            if (combined.eql(args[0].values, 0) and previous_reads == args[0].summary.selection_reads.items.len) return combined;
+            args[0].values = combined;
+            args[0].property_target = combined.property_target;
+            args[0].string_literal = null;
         }
         return error.FunctionAnalysisLimitExceeded;
     }
 
     fn primitiveCallbackCall(self: *Analyzer, call: ast.CallExpr, descriptor: registry.PrimitiveDescriptor, returned: ?*ValueFacts) anyerror!AccessSummary {
         const callback_spec = descriptor.callback orelse unreachable;
-        var arg_facts = try self.collectCallArgFactsSkipping(call, callback_spec.function_arg_index);
-        defer self.deinitIndexedCallArgFacts(&arg_facts);
+        var arg_facts = try self.collectCallArgFacts(call);
+        defer self.deinitCallArgFacts(&arg_facts);
 
-        var summary = try self.indexedCallArgFactsSummary(arg_facts.items);
+        var summary = try self.callArgFactsSummary(arg_facts.items);
         errdefer summary.deinit();
-        var callback_arg_bindings = try self.callbackArgBindingsFromFacts(descriptor, callback_spec, call.args.items.len, arg_facts.items);
-        defer callback_arg_bindings.deinit(self.allocator);
 
         var callback_summary = AccessSummary.init(self.allocator);
         defer callback_summary.deinit();
         if (descriptor.op == .fold) {
-            const values = try self.foldValueFacts(call, &callback_summary);
+            const values = try self.foldValueFacts(arg_facts.items, &callback_summary);
             if (returned) |output| output.* = values;
         } else if (call.args.items.len > callback_spec.function_arg_index) {
-            const expr = call.args.items[callback_spec.function_arg_index];
-            var evaluation = try self.analyzeCallArgFacts(expr);
-            defer evaluation.deinit();
-            try summary.merge(evaluation.summary);
-            const value = evaluation.values;
-            var args = std.ArrayList(CallArgFacts).empty;
-            defer self.deinitCallArgFacts(&args);
-            for (callback_arg_bindings.items) |binding| try args.append(self.allocator, .{
-                .summary = AccessSummary.init(self.allocator),
-                .values = binding.values,
-                .string_literal = binding.string_literal,
-                .property_target = binding.property_target,
-            });
-            callback_summary = try self.invokeValueFacts(value, args.items);
+            const params = try self.selectionCallbackArgs(callback_spec, arg_facts.items);
+            defer self.allocator.free(params);
+            callback_summary = try self.invokeValueFacts(arg_facts.items[callback_spec.function_arg_index].values, params);
         }
 
         if (descriptor.op != .fold) {
             if (returned) |output| output.* = if (descriptor.op == .selection_filter and call.args.items.len > 0)
-                findIndexedCallArgFacts(arg_facts.items, 0).?.values
+                arg_facts.items[0].values
             else
-                try self.primitiveValueFacts(call, descriptor, null);
+                try self.primitiveValueFacts(call, descriptor, arg_facts.items);
         }
 
         for (summary.selection_reads.items) |selection_resource| {
@@ -2564,7 +2745,11 @@ pub const Analyzer = struct {
             }
             if (summary.invalid_selection_mutation != null) break;
         }
-        try summary.merge(callback_summary);
+        // A selection may be empty, or it may invoke the callback repeatedly.
+        // Reads in one invocation can precede writes in a later invocation.
+        for (callback_summary.writes.items) |write| try callback_summary.checkLaterWrite(write, callback_summary.reads.items);
+        callback_summary.defined_settings.clear();
+        try summary.appendSequential(callback_summary);
         return summary;
     }
 
@@ -2629,7 +2814,8 @@ pub const Analyzer = struct {
         return switch (descriptor) {
             .primitive => |primitive| switch (primitive.op) {
                 .docctx => PropertyTarget.document(),
-                .pagectx, .new_page => PropertyTarget.page(),
+                .pagectx => PropertyTarget.page(if (self.variable_scope == .page) self.variable_scope.page else null),
+                .new_page => PropertyTarget.page(null),
                 .group, .group_placed => if (self.isAdoption(call)) PropertyTarget.freshObject() else null,
                 .place_on => PropertyTarget.freshObject(),
                 .foreach, .selection_filter, .foreach_enumerate, .draw_when => if (call.args.items.len > 0)
@@ -2668,7 +2854,7 @@ pub const Analyzer = struct {
         const query_name = (try literalStringArg(self, call, 1)) orelse return PropertyTarget.any();
         const query = registry.lookupQueryOp(query_name) orelse return PropertyTarget.any();
         return switch (query.op) {
-            .document_pages, .previous_page => PropertyTarget.page(),
+            .document_pages, .previous_page => PropertyTarget.page(null),
             .children, .descendants => PropertyTarget.object(),
             .self_placement => if (call.args.items.len > 0)
                 (try self.propertyTargetExpr(call.args.items[0])) orelse PropertyTarget.any()
@@ -2689,6 +2875,9 @@ pub const Analyzer = struct {
         self.sema = self.sema.forModule(resolved.module_id);
         defer self.sema = previous;
 
+        const caller = self.variable_scope;
+        self.variable_scope = .{ .document = resolved.module_id };
+        defer self.variable_scope = caller;
         var target = (try self.propertyTargetExpr(resolved.decl.value)) orelse return null;
         if (target.owner == .object and target.fresh) {
             target.owner.object.identity = .{
@@ -2720,47 +2909,69 @@ pub const Analyzer = struct {
         };
     }
 
-    fn collectReturnFacts(self: *Analyzer, comptime kind: ReturnFactKind, statements: []const ast.Statement, result: *?ReturnedFact(kind)) anyerror!bool {
-        for (statements) |stmt| {
-            switch (stmt.kind) {
-                .return_expr => |expr| {
-                    const value = try self.returnExprFact(kind, expr);
-                    const joined = if (result.*) |previous|
-                        if (kind == .property_target) joinPropertyTargets(previous.value, value) else semantic_types.joinStringLiteral(previous.value, value)
-                    else
-                        value;
-                    result.* = .{ .value = joined };
-                    return false;
-                },
-                .return_void => {
-                    result.* = .{ .value = null };
-                    return false;
-                },
-                .if_stmt => |branch| {
-                    const then_continues = blk: {
-                        var snapshot = try self.pushLocalFacts();
-                        defer snapshot.restore();
-                        break :blk try self.collectReturnFacts(kind, branch.then_statements.items, result);
-                    };
-                    const else_continues = blk: {
-                        var snapshot = try self.pushLocalFacts();
-                        defer snapshot.restore();
-                        break :blk try self.collectReturnFacts(kind, branch.else_statements.items, result);
-                    };
-                    if (!then_continues and !else_continues) return false;
-                },
-                .let_binding => |binding| {
-                    if (names.isDiscardBindingName(binding.name)) continue;
-                    const string = try literalStringExpr(self, binding.expr);
-                    const target = if (kind == .property_target) try self.propertyTargetExpr(binding.expr) else null;
-                    if (string) |value| try self.string_bindings.put(binding.name, value) else _ = self.string_bindings.remove(binding.name);
-                    if (target) |value| try self.property_target_bindings.put(binding.name, value) else _ = self.property_target_bindings.remove(binding.name);
-                    try self.variable_bindings.put(binding.name, .local);
-                },
-                else => {},
+    const ReturnQuery = enum { value, string_literal, property_target };
+
+    fn Result(comptime query: ReturnQuery) type {
+        return switch (query) {
+            .value => ValueFacts,
+            .string_literal => ?ReturnedFact(.string_literal),
+            .property_target => ?ReturnedFact(.property_target),
+        };
+    }
+
+    fn scanReturns(self: *Analyzer, comptime query: ReturnQuery, body: []const ast.Statement, result: *Result(query)) anyerror!control.Exits {
+        var pass = ReturnFlow(query){ .analyzer = self, .result = result };
+        return control.block(&pass, body);
+    }
+
+    fn ReturnFlow(comptime query: ReturnQuery) type {
+        return struct {
+            analyzer: *Analyzer,
+            result: *Result(query),
+
+            pub fn visit(pass: *@This(), stmt: ast.Statement, _: bool) anyerror!control.Exits {
+                return control.statement(pass, stmt);
             }
-        }
-        return true;
+
+            pub fn condition(pass: *@This(), expr: ast.Expr) !Alternatives {
+                return (try pass.analyzer.valueFacts(expr)).truth;
+            }
+
+            pub fn arm(pass: *@This(), body: []const ast.Statement, _: usize) anyerror!control.Exits {
+                var snapshot = try pass.analyzer.pushLocalFacts();
+                defer snapshot.restore();
+                return control.block(pass, body);
+            }
+
+            pub fn onReturn(pass: *@This(), expr: ?ast.Expr) !void {
+                const self = pass.analyzer;
+                if (query == .value) {
+                    if (expr) |value| pass.result.* = try self.joinValueFacts(pass.result.*, try self.valueFacts(value));
+                } else {
+                    const kind: ReturnFactKind = if (query == .property_target) .property_target else .string_literal;
+                    const found = if (expr) |value| try self.returnExprFact(kind, value) else null;
+                    const joined = if (pass.result.*) |old|
+                        if (kind == .property_target) joinPropertyTargets(old.value, found) else semantic_types.joinStringLiteral(old.value, found)
+                    else
+                        found;
+                    pass.result.* = .{ .value = joined };
+                }
+            }
+
+            pub fn simple(pass: *@This(), stmt: ast.Statement) !void {
+                if (stmt.kind != .let_binding) return;
+                const binding = stmt.kind.let_binding;
+                if (names.isDiscardBindingName(binding.name)) return;
+                const self = pass.analyzer;
+                const value = if (query == .value) try self.valueFacts(binding.expr) else self.conditionFacts(binding.expr);
+                const string = try literalStringExpr(self, binding.expr);
+                const target = if (query != .string_literal) try self.propertyTargetExpr(binding.expr) else null;
+                if (string) |literal| try self.string_bindings.put(binding.name, literal) else _ = self.string_bindings.remove(binding.name);
+                if (target) |resolved| try self.property_target_bindings.put(binding.name, resolved) else _ = self.property_target_bindings.remove(binding.name);
+                try self.value_bindings.put(binding.name, value);
+                try self.variable_bindings.put(binding.name, .local);
+            }
+        };
     }
 
     fn propertyTargetFunctionCall(
@@ -2771,7 +2982,20 @@ pub const Analyzer = struct {
         return self.functionReturnFact(.property_target, resolved, call);
     }
 
+    fn mayReturnFact(comptime kind: ReturnFactKind, ty: ast.Type) bool {
+        return switch (ty.kind) {
+            .any, .parameter, .unresolved, .hole => true,
+            .optional => if (ty.optional_child) |child| mayReturnFact(kind, child.*) else true,
+            .string, .color, .enum_type => kind == .string_literal,
+            .page, .document, .placed, .placement, .selection => kind == .property_target,
+            else => false,
+        };
+    }
+
     fn functionReturnFact(self: *Analyzer, comptime kind: ReturnFactKind, resolved: semantic_env.ResolvedFunction, call: ast.CallExpr) anyerror!?FactValue(kind) {
+        // Effects are computed separately. A type that cannot carry the queried
+        // fact needs no traversal, environment or cache entry.
+        if (!mayReturnFact(kind, resolved.decl.result_type)) return null;
         const fallback = if (kind == .property_target) self.propertyTargetForType(resolved.decl.result_type) else null;
         if (self.visiting.contains(resolved.key)) {
             self.return_fact_recursions += 1;
@@ -2785,7 +3009,7 @@ pub const Analyzer = struct {
             .string_literal => try self.collectStringArgFacts(call),
         };
         defer arg_facts.deinit(self.allocator);
-        const key = if (self.run_cache != null) try buildReturnFactKey(self.allocator, kind, resolved.key, arg_facts.items) else null;
+        const key = if (self.run_cache != null) try buildReturnFactKey(self.allocator, kind, resolved.key, arg_facts.items, self.variable_scope) else null;
         defer if (key) |value| self.allocator.free(value);
         if (key) |value| if (self.run_cache.?.return_facts.get(value)) |cached| return @field(cached, @tagName(kind));
 
@@ -2797,7 +3021,7 @@ pub const Analyzer = struct {
         try self.bindStaticParams(std.meta.Child(@TypeOf(arg_facts.items)), resolved.decl.params.items, arg_facts.items);
         if (self.run_cache) |cache| cache.return_body_analyses += 1;
         var result: ?ReturnedFact(kind) = null;
-        _ = try self.collectReturnFacts(kind, resolved.decl.statements.items, &result);
+        _ = try self.scanReturns(if (kind == .property_target) .property_target else .string_literal, resolved.decl.statements.items, &result);
         const value = if (result) |fact| fact.value orelse fallback else fallback;
         // Recursive fallbacks depend on the active call chain, not just arguments.
         if (key) |cache_key| if (self.return_fact_recursions == recursions_before) {
@@ -2812,10 +3036,10 @@ pub const Analyzer = struct {
     fn propertyTargetForType(self: *Analyzer, ty: ast.Type) ?PropertyTarget {
         return switch (ty.kind) {
             .document => PropertyTarget.document(),
-            .page => PropertyTarget.page(),
+            .page => PropertyTarget.page(null),
             .placed, .placement => PropertyTarget.object(),
             .selection => switch (ty.selectionItem().kind) {
-                .page => PropertyTarget.page(),
+                .page => PropertyTarget.page(null),
                 .any => PropertyTarget.object(),
                 .placed, .placement => PropertyTarget.object(),
                 else => null,
@@ -2826,13 +3050,15 @@ pub const Analyzer = struct {
     }
 };
 
-fn buildReturnFactKey(allocator: std.mem.Allocator, comptime kind: Analyzer.ReturnFactKind, key: core.FunctionKey, facts: anytype) ![]const u8 {
+fn buildReturnFactKey(allocator: std.mem.Allocator, comptime kind: Analyzer.ReturnFactKind, key: core.FunctionKey, facts: anytype, scope: ResourceScope) ![]const u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
+    try appendResourceScopeKey(allocator, &out, scope);
     try appendKeyBytes(allocator, &out, @tagName(kind));
     try appendFunctionKey(allocator, &out, key);
     try appendKeyInt(allocator, &out, facts.len);
     for (facts) |fact| {
+        try appendCompositionKey(allocator, &out, fact.values);
         try appendOptionalBytesKey(allocator, &out, fact.string_literal);
         if (@hasField(@TypeOf(fact), "property_target")) try appendOptionalPropertyTargetKey(allocator, &out, fact.property_target);
     }
@@ -2863,10 +3089,7 @@ fn buildFunctionCallSummaryKey(
     try appendFunctionKey(allocator, &out, key);
     try appendKeyInt(allocator, &out, facts.len);
     for (facts) |fact| {
-        try appendKeyInt(allocator, &out, if (fact.values.candidates.len != 0 or fact.values.fields.len != 0) fact.values.id else 0);
         try appendOptionalBytesKey(allocator, &out, fact.string_literal);
-        try appendResourceScopeKey(allocator, &out, fact.values.page_scope);
-        try appendPlacementScopeKey(allocator, &out, fact.values.placement);
         try appendCompositionKey(allocator, &out, fact.values);
         try appendOptionalPropertyTargetKey(allocator, &out, fact.property_target);
         try appendResourceListKey(allocator, &out, fact.summary.selection_reads.items);
@@ -2878,6 +3101,7 @@ fn appendCompositionKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), v
     try appendKeyInt(allocator, out, if (value.candidates.len != 0 or value.fields.len != 0) value.id else 0);
     try appendResourceScopeKey(allocator, out, value.page_scope);
     try appendPlacementScopeKey(allocator, out, value.placement);
+    try out.appendSlice(allocator, &.{ @backingInt(value.truth), @backingInt(value.present) });
     if (value.children) |children| {
         try out.append(allocator, 'c');
         try appendKeyInt(allocator, out, children.len);
@@ -2944,6 +3168,7 @@ fn appendResourceKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), reso
         .property => |property| {
             try out.append(allocator, 'p');
             try appendPropertyOwnerKey(allocator, out, property.owner);
+            try appendResourceScopeKey(allocator, out, if (property.unless_defined_on) |n| .{ .page = n } else .any);
             try appendPropertyKeyKey(allocator, out, property.key);
         },
     }
@@ -3019,7 +3244,10 @@ fn appendPropertyOwnerKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8),
     switch (owner) {
         .any => try out.append(allocator, '*'),
         .document => try out.append(allocator, 'd'),
-        .page => try out.append(allocator, 'p'),
+        .page => |id| {
+            try out.append(allocator, 'p');
+            try appendResourceScopeKey(allocator, out, if (id) |n| .{ .page = n } else .any);
+        },
         .object => |object_owner| {
             try out.append(allocator, 'o');
             if (object_owner.identity) |identity| {

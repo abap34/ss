@@ -1,0 +1,3 @@
+[project]
+entry = "{s}"
+asset_base_dir = "."

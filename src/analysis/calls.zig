@@ -1,3 +1,4 @@
+const control = @import("flow.zig");
 const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
@@ -112,6 +113,8 @@ const ValueFacts = struct {
 
     allocator: std.mem.Allocator,
     labels: *const Labels = &.{},
+    truth: input_facts.Alternatives = .bottom,
+    present: input_facts.Alternatives = .bottom,
     fields: *const Fields = &.{},
     children: []const ValueFacts = &.{},
     objects: *const Objects = &.{},
@@ -127,15 +130,21 @@ const ValueFacts = struct {
         return .{ .allocator = allocator };
     }
 
+    fn presentValue(allocator: std.mem.Allocator) ValueFacts {
+        return .{ .allocator = allocator, .present = .yes };
+    }
+
     fn unknownValue(allocator: std.mem.Allocator) ValueFacts {
         var value = init(allocator);
+        value.truth = .either;
+        value.present = .either;
         value.unknown = true;
         value.unknown_objects = true;
         return value;
     }
 
     fn singleton(allocator: std.mem.Allocator, label: Label) !ValueFacts {
-        var value = init(allocator);
+        var value = presentValue(allocator);
         var labels: Labels = .empty;
         try labels.put(allocator, label, {});
         value.labels = try value.freeze(labels);
@@ -149,13 +158,13 @@ const ValueFacts = struct {
     }
 
     fn isEmpty(self: ValueFacts) bool {
-        return !self.unknown and !self.unknown_objects and !self.unknown_string and !self.unknown_reference and self.labels.count() == 0 and
+        return self.truth == .bottom and self.present == .bottom and !self.unknown and !self.unknown_objects and !self.unknown_string and !self.unknown_reference and self.labels.count() == 0 and
             self.objects.count() == 0 and self.fields.count() == 0 and self.children.len == 0 and
             self.reference == null and self.string_literal == null and self.selected_types.len == 0;
     }
 
     fn sameSnapshot(self: ValueFacts, other: ValueFacts) bool {
-        return self.labels == other.labels and self.fields == other.fields and self.objects == other.objects and
+        return self.truth == other.truth and self.present == other.present and self.labels == other.labels and self.fields == other.fields and self.objects == other.objects and
             self.children.ptr == other.children.ptr and self.children.len == other.children.len and
             self.selected_types.ptr == other.selected_types.ptr and self.selected_types.len == other.selected_types.len and
             self.unknown == other.unknown and self.unknown_objects == other.unknown_objects and
@@ -176,13 +185,16 @@ const ValueFacts = struct {
             return true;
         }
         var next = self.*;
-        var changed = false;
+        next.truth = self.truth.join(other.truth);
+        next.present = self.present.join(other.present);
+        var changed = next.truth != self.truth or next.present != self.present;
         for (other.selected_types) |ty| {
             if (try next.addSelectedType(ty)) changed = true;
         }
-        next.unknown_reference = self.unknown_reference or other.unknown_reference or !referenceEql(self.reference, other.reference);
+        const pages = self.reference != null and other.reference != null and self.reference.? == .page and other.reference.? == .page;
+        next.unknown_reference = self.unknown_reference or other.unknown_reference or (!pages and !referenceEql(self.reference, other.reference));
         next.unknown_string = self.unknown_string or other.unknown_string or !optionalStringEql(self.string_literal, other.string_literal);
-        next.reference = if (next.unknown_reference) null else other.reference;
+        next.reference = if (next.unknown_reference) null else if (pages and !referenceEql(self.reference, other.reference)) .{ .page = null } else other.reference;
         next.string_literal = if (next.unknown_string) null else other.string_literal;
         changed = changed or self.unknown_reference != next.unknown_reference or self.unknown_string != next.unknown_string or
             !referenceEql(self.reference, next.reference) or !optionalStringEql(self.string_literal, next.string_literal);
@@ -396,9 +408,9 @@ const Analyzer = struct {
     capture_index: captures.Index,
     require_known_calls: bool = false,
     current_origin: ?core.SourceOrigin = null,
+    current_page: ?input_facts.PageKey = null,
     call_depth: usize = 0,
     checking_display: bool = false,
-    types_checked: bool = true,
     object_properties: std.ArrayList(ValueFacts) = .empty,
     unknown_properties: ValueFacts,
     collecting_inputs: bool = false,
@@ -458,12 +470,13 @@ const Analyzer = struct {
 
     fn checkExecutedRoots(self: *Analyzer) !void {
         // Actual arguments are checked independently of open declarations.
-        if (self.types_checked) try self.collectPlacementInputs();
-        self.require_known_calls = self.types_checked;
+        if (self.state.displays.call_targets.count() != 0 or self.state.displays.adoptions.count() != 0)
+            try self.collectPlacementInputs();
+        self.require_known_calls = true;
         self.clearPass();
         try self.checkRoots();
         try self.checkDisplayFunctions();
-        if (self.types_checked) try self.publishInputs();
+        try self.publishInputs();
     }
 
     fn clearPass(self: *Analyzer) void {
@@ -518,16 +531,22 @@ const Analyzer = struct {
             self.sema = self.sema.forModule(module_id);
             {
                 defer self.sema = previous;
-                var document_env = FunctionEnv.init(self.allocator);
-                var document_returns = ValueFacts.init(self.allocator);
-                try self.analyzeStatements(module.syntax.document_statements.items, &document_env, &document_returns, null);
-                for (module.syntax.pages.items) |page| {
-                    var page_env = FunctionEnv.init(self.allocator);
-                    var page_returns = ValueFacts.init(self.allocator);
-                    try self.analyzeStatements(page.statements.items, &page_env, &page_returns, null);
+                try self.scanRoot(module.syntax.document_statements.items);
+                for (module.syntax.pages.items, 0..) |page, index| {
+                    self.current_page = .{ .module_id = module_id, .index = index };
+                    defer self.current_page = null;
+                    try self.scanRoot(page.statements.items);
                 }
             }
         }
+    }
+
+    fn scanRoot(self: *Analyzer, statements: []const ast.Statement) !void {
+        // Source order determines lexical visibility, not execution order.
+        var env = FunctionEnv.init(self.allocator);
+        var returns = ValueFacts.init(self.allocator);
+        var pass = CallFlow{ .analyzer = self, .env = &env, .returns = &returns, .owner = null };
+        for (statements) |stmt| _ = try pass.visit(stmt, false);
     }
 
     fn namedLabel(_: *Analyzer, key: core.FunctionKey) Label {
@@ -547,7 +566,7 @@ const Analyzer = struct {
         }
         self.call_depth += 1;
         defer self.call_depth -= 1;
-        const key = try self.activationKey(activation);
+        const key = try self.activationKey(activation, self.current_page);
         defer self.key_allocator.free(key);
         const frame_index = self.effect_frames.items.len;
         const frame = if (activation.label == .function)
@@ -593,7 +612,7 @@ const Analyzer = struct {
                 // Every activation owns its parameter environment. Captures
                 // are copied when the activation is created, not again here.
                 var env = activation.env;
-                try self.analyzeStatements(func.statements.items, &env, &result, func);
+                _ = try self.analyzeStatements(func.statements.items, &env, &result, func);
             },
             .lambda => |lambda_key| {
                 const lambda = self.lambda_exprs.get(lambda_key) orelse return ValueFacts.init(self.allocator);
@@ -617,46 +636,65 @@ const Analyzer = struct {
         env: *FunctionEnv,
         returns: *ValueFacts,
         owner: ?ast.FunctionDecl,
-    ) anyerror!void {
-        const previous_origin = self.current_origin;
-        defer self.current_origin = previous_origin;
-        for (statements) |stmt| {
+    ) anyerror!control.Exits {
+        var pass = CallFlow{ .analyzer = self, .env = env, .returns = returns, .owner = owner };
+        return control.block(&pass, statements);
+    }
+
+    const CallFlow = struct {
+        analyzer: *Analyzer,
+        env: *FunctionEnv,
+        returns: *ValueFacts,
+        owner: ?ast.FunctionDecl,
+
+        pub fn visit(pass: *@This(), stmt: ast.Statement, _: bool) anyerror!control.Exits {
+            const self = pass.analyzer;
+            const previous = self.current_origin;
             self.current_origin = self.state.sourceOrigin(self.sema.module_id, stmt.span);
+            defer self.current_origin = previous;
+            return control.statement(pass, stmt);
+        }
+
+        pub fn onReturn(pass: *@This(), value: ?ast.Expr) !void {
+            if (value) |expr| try pass.returns.unionWith(try pass.analyzer.exprFacts(expr, pass.env, pass.owner));
+        }
+
+        pub fn condition(pass: *@This(), expr: ast.Expr) !control.Alternatives {
+            return (try pass.analyzer.exprFacts(expr, pass.env, pass.owner)).truth;
+        }
+
+        pub fn arm(pass: *@This(), body: []const ast.Statement, _: usize) anyerror!control.Exits {
+            var env = try pass.env.clone();
+            var branch = pass.*;
+            branch.env = &env;
+            return control.block(&branch, body);
+        }
+
+        pub fn simple(pass: *@This(), stmt: ast.Statement) !void {
+            const self = pass.analyzer;
+            const env = pass.env;
+            const owner = pass.owner;
             switch (stmt.kind) {
                 .hole => {},
                 .let_binding => |binding| {
-                    const labels = try self.exprFacts(binding.expr, env, owner);
-                    if (language_names.isDiscardBindingName(binding.name)) continue;
-                    try env.bind(binding.name, labels);
+                    const value = try self.exprFacts(binding.expr, env, owner);
+                    if (!language_names.isDiscardBindingName(binding.name)) try env.bind(binding.name, value);
                 },
-                .return_expr => |expr| {
-                    const labels = try self.exprFacts(expr, env, owner);
-                    try returns.unionWith(labels);
-                },
-                .return_void => {},
-                .property_set => |property_set| {
+                .property_set => |assignment| {
                     if (self.checking_display) return self.rejectDisplayWrite();
-                    const target = try self.exprFacts(property_set.target, env, owner);
-                    const value = try self.exprFacts(property_set.value, env, owner);
-                    try self.writeProperty(target, property_set.path.items, value);
-                },
-                .if_stmt => |if_stmt| {
-                    _ = try self.exprFacts(if_stmt.condition, env, owner);
-                    var then_env = try env.clone();
-                    try self.analyzeStatements(if_stmt.then_statements.items, &then_env, returns, owner);
-                    var else_env = try env.clone();
-                    try self.analyzeStatements(if_stmt.else_statements.items, &else_env, returns, owner);
+                    const target = try self.exprFacts(assignment.target, env, owner);
+                    const value = try self.exprFacts(assignment.value, env, owner);
+                    try self.writeProperty(target, assignment.path.items, value);
                 },
                 .constrain => |decl| {
                     if (self.checking_display) return self.rejectDisplayWrite();
                     if (decl.offset) |expr| _ = try self.exprFacts(expr, env, owner);
                 },
-                .expr_stmt => |expr| {
-                    _ = try self.exprFacts(expr, env, owner);
-                },
+                .expr_stmt => |expr| _ = try self.exprFacts(expr, env, owner),
+                .return_expr, .return_void, .if_stmt => unreachable,
             }
         }
-    }
+    };
 
     fn exprFacts(self: *Analyzer, expr: ast.Expr, env: *const FunctionEnv, owner: ?ast.FunctionDecl) anyerror!ValueFacts {
         try self.state.checkAnalysisCanceled();
@@ -672,11 +710,13 @@ const Analyzer = struct {
                 }
             },
             .string => |literal| {
-                var value = ValueFacts.init(self.allocator);
+                var value = ValueFacts.presentValue(self.allocator);
                 value.string_literal = literal.text;
                 return value;
             },
-            .color, .number, .boolean, .none, .enum_case => return ValueFacts.init(self.allocator),
+            .boolean => |flag| return .{ .allocator = self.allocator, .truth = .from(flag), .present = .yes },
+            .none => return .{ .allocator = self.allocator, .present = .no },
+            .color, .number, .enum_case => return ValueFacts.presentValue(self.allocator),
             .lambda => |lambda| {
                 const label = try self.registerLambda(lambda, env);
                 return try ValueFacts.singleton(self.allocator, label);
@@ -709,6 +749,7 @@ const Analyzer = struct {
                         try fields.put(self.allocator, field.name, provided);
                     }
                 }
+                value.present = .yes;
                 if (fields.count() != 0) value.fields = try value.freeze(fields);
                 return value;
             },
@@ -726,20 +767,26 @@ const Analyzer = struct {
                 return try self.invokeValue(callee_labels, arg_labels.items, owner);
             },
             .member => |member| {
-                // Immutable local records can be inspected without copying
-                // every sibling field at each step of a member path.
-                if (borrowLocalFacts(env, member.target.*)) |target| return self.memberFacts(target, member.name);
-                const value = try self.exprFacts(member.target.*, env, owner);
-                return self.memberFacts(value, member.name);
+                // Borrow locals without losing optional access on an intermediate receiver.
+                const target = borrowLocalFacts(env, member.target.*) orelse try self.exprFacts(member.target.*, env, owner);
+                if (member.optional and target.present == .no) return .{ .allocator = self.allocator, .present = .no };
+                var value = try self.memberFacts(target, member.name);
+                value.present = control.memberPresence(target.present, value.present, member.optional);
+                return value;
             },
             .optional_check => |check| {
-                _ = try self.exprFacts(check.target.*, env, owner);
-                return ValueFacts.init(self.allocator);
+                return .{ .allocator = self.allocator, .truth = (try self.exprFacts(check.target.*, env, owner)).present, .present = .yes };
             },
             .coalesce => |coalesce| {
                 var target = try self.exprFacts(coalesce.target.*, env, owner);
-                const fallback = try self.exprFacts(coalesce.fallback.*, env, owner);
-                try target.unionWith(fallback);
+                switch (control.coalesce(target.present)) {
+                    .left => return target,
+                    .right => return self.exprFacts(coalesce.fallback.*, env, owner),
+                    .both => {
+                        target.present = .yes;
+                        try target.unionWith(try self.exprFacts(coalesce.fallback.*, env, owner));
+                    },
+                }
                 return target;
             },
         }
@@ -748,7 +795,7 @@ const Analyzer = struct {
     fn borrowLocalFacts(env: *const FunctionEnv, expr: ast.Expr) ?ValueFacts {
         return switch (expr) {
             .ident => |ident| if (!ident.reference().isQualified()) env.get(ident.name) else null,
-            .member => |member| if (borrowLocalFacts(env, member.target.*)) |target| target.fields.get(member.name) else null,
+            .member => |member| if (member.optional) null else (borrowLocalFacts(env, member.target.*) orelse return null).fields.get(member.name),
             else => null,
         };
     }
@@ -819,7 +866,7 @@ const Analyzer = struct {
     fn primitiveFacts(self: *Analyzer, primitive: registry.PrimitiveDescriptor, call: ast.CallExpr, argument_facts: []const ValueFacts) !ValueFacts {
         const args = argument_facts[0 .. argument_facts.len - @intFromBool(call.callee.composition != null)];
         if (primitive.op == .group_placed or (primitive.op == .group and call.callee.call_id != null and self.state.displays.adoptions.contains(call.callee.call_id.?))) {
-            var receiver = ValueFacts.init(self.allocator);
+            var receiver = ValueFacts.presentValue(self.allocator);
             if (call.callee.call_id) |id| receiver.reference = .{ .placement = .{ .call = id, .path = &.{} } };
             var input = ValueFacts.init(self.allocator);
             const group_type = if (call.callee.call_id) |id| self.state.displays.adoptions.get(id) else null;
@@ -847,25 +894,25 @@ const Analyzer = struct {
             }
             try receiver.putField("value", input);
             if (args.len != 0) try receiver.putField("page", args[0].getField("page"));
-            var document = ValueFacts.init(self.allocator);
+            var document = ValueFacts.presentValue(self.allocator);
             document.reference = .document;
             try receiver.putField("document", document);
             if (self.collecting_inputs) if (call.callee.call_id) |id| if (self.state.displays.adoptions.get(id)) |ty| try self.rememberInput(ty, receiver);
             return receiver;
         }
         if (primitive.op == .group) {
-            var value = ValueFacts.init(self.allocator);
+            var value = ValueFacts.presentValue(self.allocator);
             value.children = try self.allocator.dupe(ValueFacts, args);
             return value;
         }
         switch (primitive.op) {
-            .docctx, .pagectx => {
-                var value = ValueFacts.init(self.allocator);
-                value.reference = if (primitive.op == .docctx) .document else .page;
+            .logical_not => return .{ .allocator = self.allocator, .present = .yes, .truth = args[0].truth.negate() },
+            .docctx, .pagectx, .new_page => {
+                var value = ValueFacts.presentValue(self.allocator);
+                value.reference = if (primitive.op == .docctx) .document else .{ .page = if (primitive.op == .pagectx) self.current_page else null };
                 return value;
             },
             .select => {
-                if (!self.types_checked) return ValueFacts.unknownValue(self.allocator);
                 if (call.type_args.items.len == 1) {
                     var result = try self.selectedInput(call.type_args.items[0]);
                     _ = try result.addSelectedType(call.type_args.items[0]);
@@ -886,11 +933,11 @@ const Analyzer = struct {
         switch (primitive.result_policy) {
             .placement => {
                 if (call.callee.call_id) |id| if (self.state.displays.call_targets.get(id)) |plan| {
-                    var receiver = ValueFacts.init(self.allocator);
+                    var receiver = ValueFacts.presentValue(self.allocator);
                     receiver.reference = .{ .placement = .{ .call = id, .path = &.{} } };
                     try receiver.putField("value", args[primitive.result_arg_index]);
                     try receiver.putField("page", args[0]);
-                    var document = ValueFacts.init(self.allocator);
+                    var document = ValueFacts.presentValue(self.allocator);
                     document.reference = .document;
                     try receiver.putField("document", document);
                     if (self.collecting_inputs or self.require_known_calls) try self.typed_displays.append(self.allocator, .{ .plan = plan, .receiver = receiver, .origin = self.current_origin });
@@ -906,6 +953,9 @@ const Analyzer = struct {
             .first_arg => if (args.len >= 1) return args[0],
             else => {},
         }
+        if (primitive.result_type) |ty| if (primitive.result_policy == .declared and !control.needsValueFlow(ty) or ty.kind == .boolean) {
+            return .{ .allocator = self.allocator, .present = control.presence(ty), .truth = if (ty.kind == .boolean) .either else .bottom };
+        };
         return ValueFacts.unknownValue(self.allocator);
     }
 
@@ -928,6 +978,7 @@ const Analyzer = struct {
         // Explicit record updates refine even an otherwise unknown record.
         if (target.fields.get(name)) |field| return field;
         if (target.unknown_objects) return ValueFacts.unknownValue(self.allocator);
+        if (target.reference) |ref| if ((ref == .page or ref == .document) and self.sema.settingsField(name) != null) return ValueFacts.unknownValue(self.allocator);
         if (target.objects.count() == 0) return target.getField(name);
         // Construction units are scheduled independently of source order. Only
         // display checking can read the completed store as a fixed set of facts.
@@ -959,6 +1010,10 @@ const Analyzer = struct {
         self.returns.clearRetainingCapacity();
         for (self.typed_displays.items) |registration| {
             self.current_origin = registration.origin;
+            const page = registration.receiver.getField("page").reference;
+            const previous_page = self.current_page;
+            self.current_page = if (page != null and page.? == .page) page.?.page else null;
+            defer self.current_page = previous_page;
             const plan = self.state.displays.plans.items[registration.plan];
             const receivers = try self.allocator.alloc(ValueFacts, plan.steps.items.len);
             defer self.allocator.free(receivers);
@@ -966,11 +1021,13 @@ const Analyzer = struct {
             for (plan.steps.items, 0..) |step, index| {
                 if (self.collecting_inputs) try self.rememberInput(step.input, receivers[index]);
                 switch (step.target) {
-                    .native => {},
+                    .native => |native| if (native.resolve) |key| {
+                        _ = try self.invokeNamed(self.namedLabel(key), key.module_id, self.state.functions.get(key).?, &.{receivers[index]});
+                    },
                     .group => {
                         const input = receivers[index].getField("value");
                         for (step.children.items, 0..) |child_index, position| {
-                            var receiver = ValueFacts.init(self.allocator);
+                            var receiver = ValueFacts.presentValue(self.allocator);
                             const value = if (position < input.children.len) input.children[position] else ValueFacts.unknownValue(self.allocator);
                             receiver.reference = if (registration.receiver.reference) |reference| switch (reference) {
                                 .placement => |placement| .{ .placement = .{ .call = placement.call, .path = plan.steps.items[child_index].path } },
@@ -984,7 +1041,7 @@ const Analyzer = struct {
                     },
                     .function => |key| {
                         const output = try self.invokeNamed(self.namedLabel(key), key.module_id, self.state.functions.get(key).?, &.{receivers[index]});
-                        var receiver = ValueFacts.init(self.allocator);
+                        var receiver = ValueFacts.presentValue(self.allocator);
                         receiver.reference = if (registration.receiver.reference) |reference| switch (reference) {
                             .placement => |placement| .{ .placement = .{ .call = placement.call, .path = plan.steps.items[step.children.items[0]].path } },
                             else => null,
@@ -1160,6 +1217,10 @@ const Analyzer = struct {
         self.sema = self.sema.forModule(resolved.module_id);
         defer self.sema = previous;
 
+        // Constant initializers execute in document scope, even when first used by a page.
+        const previous_page = self.current_page;
+        self.current_page = null;
+        defer self.current_page = previous_page;
         const env = FunctionEnv.init(self.allocator);
         const frame_index = self.effect_frames.items.len;
         try self.effect_frames.append(self.allocator, .{});
@@ -1184,7 +1245,7 @@ const Analyzer = struct {
             const references = try self.capture_index.lambdaNames(lambda);
             for (references) |name| if (env.get(name)) |value| try captured.bind(name, value);
         }
-        const key = try self.activationKey(.{ .label = label, .env = captured, .owner = null });
+        const key = try self.activationKey(.{ .label = label, .env = captured, .owner = null }, null);
         defer self.key_allocator.free(key);
         if (self.capture_keys.get(key)) |existing| return existing;
         label.lambda.capture_id = self.capture_keys.count() + 1;
@@ -1242,19 +1303,28 @@ const Analyzer = struct {
         } else null;
         const selected_types = try allocator.alloc(ast.Type, value.selected_types.len);
         for (value.selected_types, selected_types) |ty, *output| output.* = try ty.clone(allocator);
-        return .{ .selected_types = selected_types, .unknown = value.unknown, .candidates = candidates, .fields = fields, .children = children, .reference = reference, .string_literal = if (value.string_literal) |literal| try allocator.dupe(u8, literal) else null };
+        return .{ .truth = value.truth, .present = value.present, .selected_types = selected_types, .unknown = value.unknown, .candidates = candidates, .fields = fields, .children = children, .reference = reference, .string_literal = if (value.string_literal) |literal| try allocator.dupe(u8, literal) else null };
     }
 
-    fn activationKey(self: *Analyzer, activation: Activation) ![]const u8 {
+    fn activationKey(self: *Analyzer, activation: Activation, page: ?input_facts.PageKey) ![]const u8 {
         const measure_start = profile.start();
         defer profile.recordAnalysis(.semantics_call_keys, measure_start);
         var scratch = KeyScratch{};
         defer scratch.deinit(self.key_allocator);
         var out = std.ArrayList(u8).empty;
         errdefer out.deinit(self.key_allocator);
+        try self.appendPage(&out, page);
         try self.appendLabel(&out, activation.label);
         try self.appendBindings(&out, &scratch, &activation.env.values);
         return try out.toOwnedSlice(self.key_allocator);
+    }
+
+    fn appendPage(self: *Analyzer, out: *std.ArrayList(u8), page: ?input_facts.PageKey) !void {
+        try out.append(self.key_allocator, @intFromBool(page != null));
+        if (page) |key| {
+            try self.appendInteger(out, key.module_id);
+            try self.appendInteger(out, key.index);
+        }
     }
 
     fn appendBindings(self: *Analyzer, out: *std.ArrayList(u8), scratch: *KeyScratch, bindings: anytype) anyerror!void {
@@ -1294,9 +1364,11 @@ const Analyzer = struct {
         try out.appendSlice(self.key_allocator, &.{
             @intFromBool(value.unknown),        @intFromBool(value.unknown_objects),
             @intFromBool(value.unknown_string), @intFromBool(value.unknown_reference),
+            @backingInt(value.truth),           @backingInt(value.present),
         });
         if (value.reference) |reference| {
             try out.append(self.key_allocator, @as(u8, @backingInt(reference)) + 1);
+            if (reference == .page) try self.appendPage(out, reference.page);
             if (reference == .placement) {
                 try self.appendInteger(out, @intCast(reference.placement.call));
                 try self.appendInteger(out, reference.placement.path.len);
@@ -1375,15 +1447,7 @@ const Analyzer = struct {
     }
 };
 
-pub fn checkFunctionCallGraphBeforeTypes(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) anyerror!void {
-    return checkCallGraph(allocator, state, sema, false);
-}
-
 pub fn checkFunctionCallGraph(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) anyerror!void {
-    return checkCallGraph(allocator, state, sema, true);
-}
-
-fn checkCallGraph(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv, types_checked: bool) !void {
     // These checks share no facts. Release each one's temporary store before
     // starting the next, rather than retaining all three until analysis ends.
     const Pass = enum { declarations, displays, roots };
@@ -1391,7 +1455,6 @@ fn checkCallGraph(allocator: std.mem.Allocator, state: *core.DocumentState, sema
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
         var analyzer = Analyzer.init(arena.allocator(), allocator, state, sema);
-        analyzer.types_checked = types_checked;
         switch (pass) {
             .declarations => try analyzer.checkDeclarations(),
             .displays => try analyzer.checkDeclaredDisplays(),
@@ -1448,7 +1511,8 @@ fn referenceEql(left: ?input_facts.Value.Reference, right: ?input_facts.Value.Re
         const other = right orelse return false;
         if (std.meta.activeTag(value) != std.meta.activeTag(other)) return false;
         return switch (value) {
-            .unknown, .page, .document => true,
+            .unknown, .document => true,
+            .page => |key| std.meta.eql(key, other.page),
             .placement => |placement| placement.call == other.placement.call and std.mem.eql(usize, placement.path, other.placement.path),
         };
     }

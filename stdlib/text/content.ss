@@ -1,3 +1,4 @@
+import std:theme as { theme_for }
 import std:text/style as { TextBlockStyle, default_text_style }
 import std:text/types as { TextSemantics }
 import std:math/types as { LatexConfig }
@@ -19,6 +20,10 @@ end
 
 type Text {
   content: TextContent
-  style: TextBlockStyle = default_text_style
+  style: TextBlockStyle? = none
   semantics: TextSemantics = TextSemantics {}
 }
+
+fn display(self: Placed<Text>) -> Text
+  return self.value with { style = self.value.style ?? theme_for(self.page).body }
+end

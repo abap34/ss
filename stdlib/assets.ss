@@ -2,11 +2,11 @@ import std:assets/content as { Image, Pdf, Icon, ImageSource, ImageSourceKind, i
 import std:assets/style as { AssetBlockStyle, default_icon_style }
 import std:assets/types as { PdfPageBox, AssetStyle }
 
-fn/! image(path: String, style: AssetBlockStyle = AssetBlockStyle {}) -> Image
+fn/! image(path: String, style: AssetBlockStyle? = none) -> Image
   return Image { source = image_source(path) style = style }
 end
 
-fn/! pdf(path: String, style: AssetBlockStyle = AssetBlockStyle {}) -> Pdf
+fn/! pdf(path: String, style: AssetBlockStyle? = none) -> Pdf
   return Pdf { path = path style = style }
 end
 

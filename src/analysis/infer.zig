@@ -1,3 +1,4 @@
+const control = @import("flow.zig");
 const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
@@ -46,12 +47,6 @@ fn addUserReportAtSpan(
     const precise_origin = if (origin.span != null) origin.withSpan(span.?) else origin;
 
     return addUserReport(state, precise_origin, code, fmt, args);
-}
-
-fn rejectDuplicateBinding(state: ?*core.DocumentState, env: *const TypeEnv, name: []const u8, origin: core.SourceOrigin) !void {
-    if (!env.contains(name)) return;
-    try addUserReport(state, origin, "DuplicateBinding", "binding '{s}' is already defined in this scope", .{name});
-    return error.DuplicateBinding;
 }
 
 fn checkedLetBindingInfo(
@@ -757,7 +752,7 @@ fn instantiateBoundFunction(
     for (arguments, bindings) |*argument, binding| argument.* = binding.replacement;
     const instance_key = core.function_instances.Key{ .definition = definition.key, .arguments = arguments };
     if (state.instantiations.isChecking(definition.key)) {
-        try addUserReport(state, origin, "RecursiveInstantiation", "cannot establish termination of generic function '{s}'", .{func.name});
+        try addUserReport(state, origin, "RecursiveFunction", "recursive call to generic function '{s}'", .{func.name});
         return error.InvalidType;
     }
     const instance = state.instantiations.find(instance_key) orelse create: {
@@ -811,7 +806,15 @@ pub fn prepareDisplay(
             try addUserReport(state, origin, "InvalidNativeDisplay", "native display type '{s}' does not satisfy its rendering contract", .{label});
             return err;
         };
-        return .{ .native = kind };
+        const resolve = if (sema.displayForType(input) != null) blk: {
+            const function = try prepareDisplayFunction(allocator, state, sema, input, origin, context);
+            if (!Type.eql(input, function.decl.result_type)) {
+                try addUserReport(state, origin, "InvalidNativeDisplay", "a native display must return its own input type", .{});
+                return error.InvalidNativeDisplay;
+            }
+            break :blk function.key;
+        } else null;
+        return .{ .native = .{ .kind = kind, .resolve = resolve } };
     }
     return .{ .function = (try prepareDisplayFunction(allocator, state, sema, input, origin, context)).key };
 }
@@ -1158,16 +1161,16 @@ fn inferUserFunctionReturnInfo(
     if (context.get(key)) |cached| return cached;
     context.body_analyses += 1;
     var returns: ?TypeInfo = null;
-    _ = try inferReturnInfoFromStatements(
-        allocator,
-        state,
-        sema,
-        originPathForModule(sema),
-        .{ .context = context, .validate_contracts = false },
-        &env,
-        func.statements.items,
-        &returns,
-    );
+    var pass = TypeReturnFlow{
+        .allocator = allocator,
+        .state = state,
+        .sema = sema,
+        .origin_path = originPathForModule(sema),
+        .options = .{ .context = context, .validate_contracts = false },
+        .env = &env,
+        .result = &returns,
+    };
+    _ = try control.block(&pass, func.statements.items);
     var result = returns orelse infoFromType(func.result_type);
     result.ty = func.result_type;
     // A result that used a recursive fallback depends on the active call chain.
@@ -1175,58 +1178,50 @@ fn inferUserFunctionReturnInfo(
     return result;
 }
 
-fn inferReturnInfoFromStatements(
+// The declaration checker has already checked statement contracts. A return
+// query needs only the expressions which supply bindings and returned values.
+const TypeReturnFlow = struct {
     allocator: std.mem.Allocator,
     state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     origin_path: []const u8,
     options: InferenceOptions,
     env: *TypeEnv,
-    statements: []const ast.Statement,
     result: *?TypeInfo,
-) anyerror!bool {
-    for (statements) |stmt| {
-        const origin = core.SourceOrigin.at(origin_path, stmt.span);
+    origin: core.SourceOrigin = .{},
 
-        switch (stmt.kind) {
-            .hole => {},
-            .let_binding => |binding| {
-                const binds_name = !language_names.isDiscardBindingName(binding.name);
-                if (binds_name) try rejectDuplicateBinding(state, env, binding.name, origin);
-                const inferred = try exprInfoWithOptions(allocator, state, sema, env, binding.expr, origin, options);
-                const info = try checkedLetBindingInfo(allocator, state, binding, inferred, origin);
-                if (!binds_name) continue;
-                try env.put(binding.name, info);
-            },
-            .return_expr => |expr| {
-                const info = try exprInfoWithOptions(allocator, state, sema, env, expr, origin, options);
-                result.* = if (result.*) |previous| try joinTypeInfo(allocator, previous, info) else info;
-                return false;
-            },
-            .return_void => return false,
-            .property_set => |property_set| {
-                try validatePropertySetStatementWithOptions(allocator, state, sema, env, property_set.target, property_set.path.items, property_set.value, origin, options);
-            },
-            .if_stmt => |if_stmt| {
-                _ = try exprInfoWithOptions(allocator, state, sema, env, if_stmt.condition, origin, options);
-                var then_env = try env.clone();
-                defer then_env.deinit();
-                const then_continues = try inferReturnInfoFromStatements(allocator, state, sema, origin_path, options, &then_env, if_stmt.then_statements.items, result);
-                var else_env = try env.clone();
-                defer else_env.deinit();
-                const else_continues = try inferReturnInfoFromStatements(allocator, state, sema, origin_path, options, &else_env, if_stmt.else_statements.items, result);
-                if (!then_continues and !else_continues) return false;
-            },
-            .expr_stmt => |expr| {
-                _ = try exprInfoWithOptions(allocator, state, sema, env, expr, origin, options);
-            },
-            .constrain => |decl| {
-                if (decl.offset) |expr| _ = try exprInfoWithOptions(allocator, state, sema, env, expr, origin, options);
-            },
-        }
+    pub fn visit(self: *@This(), stmt: ast.Statement, _: bool) anyerror!control.Exits {
+        self.origin = core.SourceOrigin.at(self.origin_path, stmt.span);
+        return control.statement(self, stmt);
     }
-    return true;
-}
+
+    pub fn condition(_: *@This(), expr: ast.Expr) !control.Alternatives {
+        return if (expr == .boolean) .from(expr.boolean) else .either;
+    }
+
+    pub fn arm(self: *@This(), body: []const ast.Statement, _: usize) anyerror!control.Exits {
+        var env = try self.env.clone();
+        defer env.deinit();
+        var branch = self.*;
+        branch.env = &env;
+        return control.block(&branch, body);
+    }
+
+    pub fn simple(self: *@This(), stmt: ast.Statement) !void {
+        if (stmt.kind != .let_binding) return;
+        const binding = stmt.kind.let_binding;
+        if (language_names.isDiscardBindingName(binding.name)) return;
+        const inferred = try exprInfoWithOptions(self.allocator, self.state, self.sema, self.env, binding.expr, self.origin, self.options);
+        const info = try checkedLetBindingInfo(self.allocator, self.state, binding, inferred, self.origin);
+        try self.env.put(binding.name, info);
+    }
+
+    pub fn onReturn(self: *@This(), value: ?ast.Expr) !void {
+        const expr = value orelse return;
+        const info = try exprInfoWithOptions(self.allocator, self.state, self.sema, self.env, expr, self.origin, self.options);
+        self.result.* = if (self.result.*) |old| try joinTypeInfo(self.allocator, old, info) else info;
+    }
+};
 
 fn primitiveResultTypeInfo(
     allocator: std.mem.Allocator,
@@ -1512,20 +1507,7 @@ pub fn validatePropertySetStatement(
     value: ast.Expr,
     origin: core.SourceOrigin,
 ) !void {
-    return validatePropertySetStatementWithOptions(allocator, state, sema, env, target, path, value, origin, .{ .context = context });
-}
-
-fn validatePropertySetStatementWithOptions(
-    allocator: std.mem.Allocator,
-    state: ?*core.DocumentState,
-    sema: *const SemanticEnv,
-    env: *const TypeEnv,
-    target: ast.Expr,
-    path: []const ast.RecordPathSegment,
-    value: ast.Expr,
-    origin: core.SourceOrigin,
-    options: InferenceOptions,
-) !void {
+    const options = InferenceOptions{ .context = context };
     if (path.len == 0) return;
     var receiver = target;
     while (receiver == .member) {
@@ -1538,7 +1520,6 @@ fn validatePropertySetStatementWithOptions(
     const object_info = try exprInfoWithOptions(allocator, state, sema, env, target, origin, options);
     if (object_info.hole != null) return;
     const value_info = try exprInfoWithOptions(allocator, state, sema, env, value, origin, options);
-    if (!options.validate_contracts) return;
     if (!isPropertyTarget(object_info)) {
         try validateMemberTargetPropertySetPath(allocator, state, sema, object_info, path, value_info, origin);
         return;

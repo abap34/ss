@@ -11,14 +11,17 @@ type ThemeOptions {
   muted_color: Color? = none
 }
 
+const heading_default: TextBlockStyle = TextBlockStyle {} with { text.size = 36 }
+
 type Theme {
-  body: TextBlockStyle = TextBlockStyle {}
-  h1: TextBlockStyle = TextBlockStyle {}
-  h2: TextBlockStyle = TextBlockStyle {}
-  h3: TextBlockStyle = TextBlockStyle {}
-  h4: TextBlockStyle = TextBlockStyle {}
-  h5: TextBlockStyle = TextBlockStyle {}
-  h6: TextBlockStyle = TextBlockStyle {}
+  background_fill: Color? = none
+  body: TextBlockStyle = default_text_style
+  h1: TextBlockStyle = heading_default
+  h2: TextBlockStyle = heading_default
+  h3: TextBlockStyle = heading_default
+  h4: TextBlockStyle = heading_default
+  h5: TextBlockStyle = heading_default
+  h6: TextBlockStyle = heading_default
   note: TextBlockStyle = TextBlockStyle {}
   byline: TextBlockStyle = TextBlockStyle {}
   label: TextBlockStyle = TextBlockStyle {}

@@ -6,7 +6,9 @@ const fontawesome = @import("fontawesome.zig");
 pub const Kind = model.NativeDisplayKind;
 pub const Target = union(enum) {
     function: model.FunctionKey,
-    native: Kind,
+    // A native input can define display(self) -> Self to finalize its render
+    // value in page context. It remains a leaf with the original identity.
+    native: struct { kind: Kind, resolve: ?model.FunctionKey = null },
     group,
 };
 
@@ -159,7 +161,8 @@ pub fn validateType(state: anytype, ty: ast.Type, kind: Kind) !void {
     }
     for (expected.record_fields) |record| {
         const field = index.recordField(id, record.field) orelse return error.InvalidNativeDisplay;
-        const field_type = if (record.optional) blk: {
+        const deferred_style = kind != .path_shape and std.mem.eql(u8, record.field, "style") and field.value_type.kind == .optional;
+        const field_type = if (record.optional or deferred_style) blk: {
             if (field.value_type.kind != .optional) return error.InvalidNativeDisplay;
             break :blk (field.value_type.optional_child orelse return error.InvalidNativeDisplay).*;
         } else field.value_type;

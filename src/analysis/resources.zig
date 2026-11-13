@@ -52,14 +52,14 @@ pub const ObjectOwner = struct {
 pub const PropertyOwner = union(enum) {
     any,
     document,
-    page,
+    page: ?core.NodeId,
     object: ObjectOwner,
 
     pub fn eql(self: PropertyOwner, other: PropertyOwner) bool {
         return switch (self) {
             .any => other == .any,
             .document => other == .document,
-            .page => other == .page,
+            .page => |id| other == .page and id == other.page,
             .object => |owner| other == .object and owner.eql(other.object),
         };
     }
@@ -71,8 +71,9 @@ pub const PropertyOwner = union(enum) {
                 .any, .document => true,
                 .page, .object => false,
             },
-            .page => switch (other) {
-                .any, .page => true,
+            .page => |id| switch (other) {
+                .any => true,
+                .page => |other_id| id == null or other_id == null or id == other_id,
                 .document, .object => false,
             },
             .object => |left| switch (other) {
@@ -91,9 +92,9 @@ pub const PropertyOwner = union(enum) {
                 .document => .document,
                 .page, .object => .any,
             },
-            .page => switch (other) {
+            .page => |id| switch (other) {
                 .any => .any,
-                .page => .page,
+                .page => |other_id| .{ .page = if (id == other_id) id else null },
                 .document, .object => .any,
             },
             .object => |left| switch (other) {
@@ -108,7 +109,8 @@ pub const PropertyOwner = union(enum) {
         return switch (self) {
             .any => true,
             .object => |owner| owner.isUnknown(),
-            .document, .page => false,
+            .document => false,
+            .page => |id| id == null,
         };
     }
 };
@@ -266,6 +268,9 @@ pub const Resource = union(ResourceKind) {
     property: struct {
         owner: PropertyOwner,
         key: PropertyKey,
+        // A fallback read is needed only if this page lacks a definitely
+        // supplied value for the same setting. It is always a may-read.
+        unless_defined_on: ?core.NodeId = null,
     },
 
     pub fn eql(self: Resource, other: Resource) bool {
@@ -273,7 +278,7 @@ pub const Resource = union(ResourceKind) {
             .variable => |variable| other == .variable and resourceScopeEql(variable.scope, other.variable.scope) and std.mem.eql(u8, variable.name, other.variable.name),
             .pages => |scope| other == .pages and resourceScopeEql(scope, other.pages),
             .objects => |left| other == .objects and left.placement.eql(other.objects.placement) and optionalTypeEql(left.input_type, other.objects.input_type) and left.owner.eql(other.objects.owner) and resourceScopeEql(left.page_scope, other.objects.page_scope),
-            .property => |property| other == .property and property.owner.eql(other.property.owner) and optionalNameEql(property.key.displayName(), other.property.key.displayName()),
+            .property => |property| other == .property and property.unless_defined_on == other.property.unless_defined_on and property.owner.eql(other.property.owner) and optionalNameEql(property.key.displayName(), other.property.key.displayName()),
         };
     }
 

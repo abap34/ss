@@ -6,6 +6,7 @@ import std:layout/types
 import std:code/types
 import std:text/types
 import std:graphics/paint/types
+import std:theme as { theme!, document_theme, theme_for }
 import std:theme/types
 import std:layout as {
   place!,

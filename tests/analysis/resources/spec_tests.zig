@@ -66,7 +66,7 @@ test "resource index: candidates equal pairwise intersections across scopes owne
         }
     }
     try resources.append(testing.allocator, Resource.makeObjects());
-    for ([_]Owner{ .any, .document, .page }) |owner| {
+    for ([_]Owner{ .any, .document, .{ .page = null }, .{ .page = 1 }, .{ .page = 2 } }) |owner| {
         for (keys) |key| try resources.append(testing.allocator, .{ .property = .{ .owner = owner, .key = key } });
     }
     for (identities) |identity| {
@@ -93,11 +93,12 @@ test "resource index: unrelated pages and owners do not increase candidate count
     for ([_]usize{ 1, 32, 128, 512 }) |count| {
         var index = resource_index.ResourceWriterIndex.init(testing.allocator);
         defer index.deinit();
-        const seen = try testing.allocator.alloc(bool, count * 4);
+        const seen = try testing.allocator.alloc(bool, count * 5);
         defer testing.allocator.free(seen);
         for (0..count) |position| {
             const page_id: u32 = @intCast(position);
             try index.addWrite(position, Resource.makeVariable(.{ .page = page_id }, "title"));
+            try index.addWrite(count * 4 + position, Resource.makeProperty(.{ .page = page_id }, "theme"));
             try index.addWrite(count + position, Resource.makeProperty(.{ .object = .{
                 .identity = .{ .scope = .{ .page = page_id }, .name = "title" },
             } }, "x"));
@@ -115,6 +116,7 @@ test "resource index: unrelated pages and owners do not increase candidate count
                     .identity = .{ .scope = .{ .page = page_id }, .name = "title" },
                 } }, "x"),
                 Resource.makePages(page_id),
+                Resource.makeProperty(.{ .page = page_id }, "theme.body"),
                 Resource.makeProperty(.{ .object = .{
                     .identity = .{ .scope = .{ .page = page_id }, .name = "other" },
                 } }, "x"),
@@ -127,7 +129,7 @@ test "resource index: unrelated pages and owners do not increase candidate count
                 total += visitor.count;
             }
         }
-        try testing.expectEqual(count * 4, total);
+        try testing.expectEqual(count * 5, total);
     }
 }
 
@@ -141,7 +143,9 @@ test "resource index: allocation failures release every partially built bucket" 
         Resource{ .objects = .{ .input_type = compiler.language.Type.recordType("Heading").inModule(1) } },
         Resource.makeProperty(.any, null),
         Resource.makeProperty(.document, "x"),
-        Resource.makeProperty(.page, "layout_h_center_offset"),
+        Resource.makeProperty(.{ .page = null }, "layout_h_center_offset"),
+        Resource.makeProperty(.{ .page = 42 }, "layout_h_center_offset"),
+        Resource.makeProperty(.{ .page = 42 }, null),
         Resource.makeProperty(.{ .object = .{} }, "x"),
         Resource.makeProperty(.{ .object = .{ .identity = .{ .scope = .{ .page = 1 }, .name = "other" } } }, "x"),
         Resource.makeProperty(.{ .object = .{ .identity = .{ .scope = .{ .page = 1 }, .name = "title" } } }, null),
@@ -204,7 +208,7 @@ fn verifyDisplayTreeRegions(allocator: std.mem.Allocator) !void {
     const paths = [_][]const usize{ &.{}, &.{0}, &.{ 0, 0 }, &.{1}, &.{ 1, 0 }, &.{2}, &.{ 0, 0, 0 } };
     for (parents, paths, 0..) |parent, path, index| {
         const target: compiler.core.native_display.Target = if (index == 4 or index == 5 or index == 6)
-            .{ .native = .text }
+            .{ .native = .{ .kind = .text } }
         else
             .{ .function = .{ .module_id = 0, .name = "display" } };
         try testing.expectEqual(index, try plan.append(compiler.language.Type.recordType("Content"), target, parent));

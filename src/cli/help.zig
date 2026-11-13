@@ -192,6 +192,8 @@ fn init(output: Output) void {
         \\{s}Usage:{s}
         \\  {s}ss init [dir]{s}
         \\
+        \\Create a sample deck with components.ss and theme.ss beside the entry file.
+        \\
         \\{s}Options:{s}
         \\  {s}--entry FILE{s}            Entry file to create
         \\  {s}--force{s}                 Overwrite generated files

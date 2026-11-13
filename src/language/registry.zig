@@ -5,6 +5,7 @@ const Type = types.Type;
 
 pub const PrimitiveCall = enum {
     pagectx,
+    define_theme,
     docctx,
     select,
     anchor,
@@ -59,6 +60,7 @@ pub const PrimitiveCall = enum {
 // Exhaustive classification makes new primitives declare their effect here.
 pub fn primitiveAllowsDisplayEvaluation(op: PrimitiveCall) bool {
     return switch (op) {
+        .define_theme,
         .new_page,
         .place_on,
         .draw_when,
@@ -185,6 +187,7 @@ pub fn selectionPlacementItem(op: PrimitiveCall, left: Type, right: Type) ?Type 
 }
 
 const primitive_descriptors = [_]PrimitiveDescriptor{
+    .{ .op = .define_theme, .name = "define_theme!", .min_arity = 1, .max_arity = 1, .arg_names = &.{"theme"}, .arg_types = &.{Type.recordType("Theme")}, .type_module = "std:theme/types", .result_type = .{ .kind = .void }, .summary = "Define the theme of the enclosing document or page" },
     .{ .op = .pagectx, .name = "pagectx", .min_arity = 0, .max_arity = 0, .arg_names = &.{}, .arg_types = &.{}, .result_type = Type.page, .context = .page, .summary = "Return the current page context" },
     .{ .op = .docctx, .name = "docctx", .min_arity = 0, .max_arity = 0, .arg_names = &.{}, .arg_types = &.{}, .result_type = Type.document, .summary = "Return the current document context" },
     .{ .op = .select, .name = "select", .min_arity = 1, .max_arity = 255, .arg_names = &.{ "scope", "query_name" }, .arg_types = &.{ Type.any, Type.string }, .type_parameter_count = 1, .result_type = Type.selection(.any), .result_policy = .select_query, .summary = "Select typed placements within a document, page, or placement subtree" },

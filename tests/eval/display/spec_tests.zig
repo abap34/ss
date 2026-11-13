@@ -360,7 +360,7 @@ test "native display: exactly three kinds validate structured text and image inp
     for (roots) |root| {
         const node = try nativeLeaf(&state, root);
         const kind = node.placement.?.display.native;
-        var value = try node.placement.?.value.clone(testing.allocator);
+        var value = try node.placement.?.renderValue().clone(testing.allocator);
         defer value.deinit(testing.allocator);
         try core.native_display.validateValue(&state, value, kind);
         for (value.record.fields.items) |*field| {
@@ -409,12 +409,12 @@ test "native text display: a user display reaches Markdown preparation through i
     const parent = try register(&state, page, input, "content", .{ .string = "# Overview\n\n**Typed** text" });
     var evaluation = try compiler.evaluation.EvalContext.init(testing.allocator, &state, &graph, .{ .io = testing.io });
     defer evaluation.deinit();
-    try testing.expectError(error.InvalidNativeDisplay, evaluation.expandDisplayTarget(parent, .{ .native = .text }));
+    try testing.expectError(error.InvalidNativeDisplay, evaluation.expandDisplayTarget(parent, .{ .native = .{ .kind = .text } }));
     try testing.expect(state.getNode(parent).?.placement.?.display == .pending);
     try testing.expectError(error.UnexpandedDisplay, core.prepared.prepare(testing.allocator, &state));
     const child = (try evaluation.expandDisplayTarget(parent, target))[0];
     const native = try prepareTarget(&state, state.getNode(child).?.placement.?.value.record.ty);
-    try testing.expectEqual(core.native_display.Kind.text, native.native);
+    try testing.expectEqual(core.native_display.Kind.text, native.native.kind);
     const count = state.nodeCount();
     try testing.expectEqual(@as(usize, 0), (try evaluation.expandDisplayTarget(child, native)).len);
     try testing.expectEqual(@as(usize, 0), (try evaluation.expandDisplayTarget(child, native)).len);
@@ -451,7 +451,7 @@ test "native image display: immutable inputs retain asset styles and independent
         \\}
         \\page first
         \\  let first = place!(picture)
-        \\  let second = place!(picture with { style.asset.scale = 0.25 })
+        \\  let second = place!(picture with { style = (picture.style ?? assets::AssetBlockStyle {}) with { asset.scale = 0.25 } })
         \\end
         \\page second
         \\  let wrapped = place!(Picture { image = picture })
@@ -510,7 +510,7 @@ test "native code display: source, language and styles remain immutable across p
         \\}
         \\page first
         \\  let highlighted = place!(sample)
-        \\  let plain = place!(sample with { language = "plain" style.text.size = 22 })
+        \\  let plain = place!(sample with { language = "plain" style = (sample.style ?? code_api::CodeBlockStyle {}) with { text.size = 22 } })
         \\end
         \\page second
         \\  let wrapped = place!(Example { code = sample })
@@ -632,7 +632,7 @@ test "native asset display: local names and incomplete inputs cannot impersonate
         const native_type = Type.recordType(case.name).inModule(native_module.id);
         const target = try prepareTarget(&state, native_type);
         if (std.mem.eql(u8, case.name, "Image")) {
-            try testing.expectEqual(case.kind, target.native);
+            try testing.expectEqual(case.kind, target.native.kind);
         } else try testing.expect(target == .function);
         var value = core.Value{ .record = .init(native_type) };
         defer value.deinit(testing.allocator);
@@ -677,7 +677,7 @@ test "native text display: nominal identity and complete input are required" {
     try testing.expectError(error.InvalidType, prepareTarget(&state, local));
     const native_module = state.moduleByPathOrSpec("std:text/content").?;
     const native_type = Type.recordType("Text").inModule(native_module.id);
-    try testing.expectEqual(core.native_display.Kind.text, (try prepareTarget(&state, native_type)).native);
+    try testing.expectEqual(core.native_display.Kind.text, (try prepareTarget(&state, native_type)).native.kind);
     var value = core.Value{ .record = .init(native_type) };
     defer value.deinit(testing.allocator);
     try value.record.fields.append(testing.allocator, .{ .name = "content", .value = .{ .string = "Missing style" } });
@@ -835,7 +835,7 @@ test "display plan: nested generic wrappers terminate at the native Text type" {
     try testing.expect(Type.eql(outer, plan.steps.items[0].input));
     try testing.expect(Type.eql(inner, plan.steps.items[1].input));
     try testing.expect(Type.eql(message_type, plan.steps.items[2].input));
-    try testing.expectEqual(core.native_display.Kind.text, plan.steps.items[3].target.native);
+    try testing.expectEqual(core.native_display.Kind.text, plan.steps.items[3].target.native.kind);
     try testing.expect(!plan.steps.items[0].target.function.eql(plan.steps.items[1].target.function));
     var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
     defer graph.deinit();
@@ -1753,7 +1753,7 @@ test "native path display: nominal contracts and finite positive dimensions are 
     try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
     try testing.expect(core.native_display.kindForType(&state, Type.recordType("PathShape").inModule(0)) == null);
     const node = state.getNode(state.placementRootsOf(state.graph.page_order.items[0])[0]).?;
-    var value = try node.placement.?.value.clone(testing.allocator);
+    var value = try node.placement.?.renderValue().clone(testing.allocator);
     defer value.deinit(testing.allocator);
     for (value.record.fields.items) |*field| {
         if (std.mem.eql(u8, field.name, "width") or std.mem.eql(u8, field.name, "height")) {
@@ -1924,7 +1924,7 @@ test "native text display: public constructors preserve explicit TeX configurati
         \\import std:text as words
         \\const config: LatexConfig = LatexConfig { engine = LatexEngine.lualatex preamble = "explicit" }
         \\const original: words::Text = words::text("**Shared**", default_text_style, config)
-        \\const changed: words::Text = original with { content.config.preamble = "changed" style.text.size = 31 }
+        \\const changed: words::Text = original with { content.config.preamble = "changed" style = default_text_style with { text.size = 31 } }
         \\page main
         \\  let first: Placed<words::Text> = place!(original)
         \\  let second: Placed<words::Text> = place!(changed)

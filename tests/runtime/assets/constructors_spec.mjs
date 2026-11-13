@@ -54,7 +54,7 @@ fn display(self: Placed<Wrapped>) -> a::${type} = a::${name}(self.value.source)
 page first
   let count = selection_count(select<a::${type}>(pagectx()))
   let direct: Placed<a::${type}> = a::${name}!("${input}")
-  let changed = place!(value with { style.asset.scale = 0.5 })
+  let changed = place!(value with { style = a::AssetBlockStyle {} with { asset.scale = 0.5 } })
   ~ direct.left == page.left + count * 32
   ~ direct.top == page.top - 64
   ~ changed.left == direct.right + 32

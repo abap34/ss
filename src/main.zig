@@ -415,36 +415,7 @@ fn parseDoctorOptions(args: []const []const u8) !DoctorOptions {
 }
 
 fn projectTemplate(allocator: std.mem.Allocator, entry: []const u8) ![]u8 {
-    return std.fmt.allocPrint(allocator,
-        \\[project]
-        \\entry = "{s}"
-        \\asset_base_dir = "."
-        \\
-    , .{entry});
-}
-
-fn starterSlideTemplate() []const u8 {
-    return
-    \\import std:themes/default as *
-    \\
-    \\page title
-    \\text!("Hello, ss", default_theme().h1)
-    \\text!("Write slides as programs.", default_theme().h2)
-    \\text!("ss init", default_theme().byline)
-    \\end
-    \\
-    \\page body
-    \\let title = heading! "First slide"
-    \\let body = text! <<
-    \\- Edit slide.ss.
-    \\- Run `ss render --project . --output deck.pdf`.
-    \\>>
-    \\
-    \\~ body.top == title.bottom - 32
-    \\pageno!()
-    \\end
-    \\
-    ;
+    return std.fmt.allocPrint(allocator, @embedFile("cli/templates/ss.toml"), .{entry});
 }
 
 fn initProject(io: std.Io, allocator: std.mem.Allocator, options: InitOptions) !void {
@@ -459,6 +430,28 @@ fn initProject(io: std.Io, allocator: std.mem.Allocator, options: InitOptions) !
     defer allocator.free(project_path);
     const entry_path = try std.fs.path.join(allocator, &.{ options.dir, options.entry });
     defer allocator.free(entry_path);
+    const entry_dir = std.fs.path.dirname(entry_path) orelse options.dir;
+    const components_path = try std.fs.path.join(allocator, &.{ entry_dir, "components.ss" });
+    defer allocator.free(components_path);
+    const theme_path = try std.fs.path.join(allocator, &.{ entry_dir, "theme.ss" });
+    defer allocator.free(theme_path);
+
+    const normalized_entry = try std.fs.path.resolve(allocator, &.{entry_path});
+    defer allocator.free(normalized_entry);
+    for ([_][]const u8{ project_path, components_path, theme_path }) |reserved_path| {
+        const normalized_reserved = try std.fs.path.resolve(allocator, &.{reserved_path});
+        defer allocator.free(normalized_reserved);
+        if (std.mem.eql(u8, normalized_entry, normalized_reserved)) {
+            std.debug.print("init: --entry conflicts with generated file: {s}\n", .{reserved_path});
+            return error.InitEntryConflictsWithTemplate;
+        }
+    }
+
+    const files = [_]struct { path: []const u8, source: []const u8 }{
+        .{ .path = entry_path, .source = @embedFile("cli/templates/slide.ss") },
+        .{ .path = components_path, .source = @embedFile("cli/templates/components.ss") },
+        .{ .path = theme_path, .source = @embedFile("cli/templates/theme.ss") },
+    };
 
     if (!options.force) {
         var failed = false;
@@ -466,25 +459,27 @@ fn initProject(io: std.Io, allocator: std.mem.Allocator, options: InitOptions) !
             std.debug.print("init: {s} already exists; pass --force to overwrite it\n", .{project_path});
             failed = true;
         }
-        if (try utils.fs.fileExists(allocator, entry_path)) {
-            std.debug.print("init: {s} already exists; pass --force to overwrite it\n", .{entry_path});
-            failed = true;
+        for (files) |file| {
+            if (try utils.fs.fileExists(allocator, file.path)) {
+                std.debug.print("init: {s} already exists; pass --force to overwrite it\n", .{file.path});
+                failed = true;
+            }
         }
         if (failed) return error.InitTargetExists;
     }
 
-    if (std.fs.path.dirname(entry_path)) |entry_dir| {
-        try std.Io.Dir.cwd().createDirPath(io, entry_dir);
-    }
+    try std.Io.Dir.cwd().createDirPath(io, entry_dir);
 
     const project_source = try projectTemplate(allocator, options.entry);
     defer allocator.free(project_source);
     try utils.fs.writeFile(io, project_path, project_source);
-    try utils.fs.writeFile(io, entry_path, starterSlideTemplate());
+    for (files) |file| try utils.fs.writeFile(io, file.path, file.source);
 
     std.debug.print("created ss project: {s}\n", .{options.dir});
-    std.debug.print("  {s}\n", .{project_path});
-    std.debug.print("  {s}\n", .{entry_path});
+    std.debug.print("  {s} (project settings)\n", .{project_path});
+    std.debug.print("  {s} (deck content)\n", .{entry_path});
+    std.debug.print("  {s} (reusable components)\n", .{components_path});
+    std.debug.print("  {s} (colors and typography)\n", .{theme_path});
     std.debug.print("\nnext:\n  ss render --project {s} --output deck.pdf\n", .{options.dir});
 }
 

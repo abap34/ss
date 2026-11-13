@@ -330,7 +330,11 @@ pub fn resolve(state: anytype, node: *const Node) ResolvedRender {
 pub fn resolvePageBackground(state: anytype, page: *const Node) ?Color {
     if (parseColorProperty(state, page, "background_fill")) |color| return color;
     const document = state.getNode(state.graph.document_id) orelse return null;
-    return parseColorProperty(state, document, "background_fill");
+    if (parseColorProperty(state, document, "background_fill")) |color| return color;
+    for ([_]*const Node{ page, document }) |owner| {
+        if (model.nodeField(owner, "theme")) |theme| if (theme == .record) return recordColor(theme.record, "background_fill");
+    }
+    return null;
 }
 
 pub fn resolveKind(node: *const Node) RenderKind {

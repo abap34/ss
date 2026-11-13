@@ -294,7 +294,7 @@ test "analysis completion: visible function prefers imported module definitions 
     const item = resolve_query.valueBinding(null, snapshot, module.id, "text", null, .function) orelse return error.ExpectedFunction;
 
     try testing.expectEqualStrings("text", item.name);
-    try testing.expectEqualStrings("text(content: String, style: TextBlockStyle = default_text_style, config: LatexConfig = LatexConfig {  }) -> Text", item.signature);
+    try testing.expectEqualStrings("text(content: String, style: TextBlockStyle? = none, config: LatexConfig = LatexConfig {  }) -> Text", item.signature);
 }
 
 test "analysis completion: visible variables and definitions use shared scope resolution" {

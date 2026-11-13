@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { root, ssBin } from "../harness.mjs";
 
@@ -57,6 +57,39 @@ try {
   assert.equal(numbered.nodes.filter(node => node.placement?.input.type.name === "Heading").length, 2);
   assert(!texts.includes("Unused"));
   run("render", "--quiet", numbering, "--output", path.join(output, "numbering.pdf"));
+
+  // Check the drawn rows, not just the string produced by the heading query.
+  // Also cover two contents pages that use different theme providers.
+  const hasPdfText = spawnSync("pdftotext", ["-v"], { timeout: 5000 }).status === 0;
+  await writeFile(path.join(output, "contents.ss"), `import std:themes/default as base
+page overview
+  toc!("Contents")
+end
+page styled
+  theme!(base::default_theme())
+  toc!("Agenda")
+end
+page design
+  heading!("Design")
+  heading!("Detail", 2)
+end
+page decision
+  heading!("Decision")
+end`);
+  run("dump", "--quiet", "contents.ss", "--output", "contents.json");
+  const rows = JSON.parse(await readFile(path.join(output, "contents.json"), "utf8")).nodes
+    .filter(n => n.placement?.display.kind === "text" && n.content === "Design ... 3/4\nDecision ... 4/4");
+  assert.equal(rows.length, 2);
+  for (const row of rows) assert(row.height >= 2 * row.render.text.font_size, "TOC entries must occupy two rows");
+  run("render", "--quiet", "contents.ss", "--output", "contents.pdf");
+  if (hasPdfText) for (const page of ["1", "2"]) {
+    const r = spawnSync("pdftotext", ["-f", page, "-l", page, "-layout", "contents.pdf", "-"],
+      { cwd: output, encoding: "utf8", timeout: 15000 });
+    assert.ifError(r.error);
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(r.stdout.trim().split(/\n+/).slice(1).map(line => line.trim()),
+      ["Design ... 3/4", "Decision ... 4/4"]);
+  }
 } finally {
   await rm(output, { recursive: true, force: true });
 }

@@ -43,12 +43,6 @@ fn checkFunctionDefinitionsWithEnv(
     state: *core.DocumentState,
     sema: *const SemanticEnv,
 ) !void {
-    {
-        const measure_start = utils.profile.start();
-        defer utils.profile.recordAnalysis(.semantics_call_graph, measure_start);
-        try calls.checkFunctionCallGraphBeforeTypes(allocator, state, sema);
-    }
-
     const bodies_start = utils.profile.start();
     defer utils.profile.recordAnalysis(.semantics_function_bodies, bodies_start);
     var had_diagnostics = false;
@@ -145,6 +139,8 @@ fn analyzeDocumentStateSemantics(
     try checkDocumentDeclarations(allocator, state, &sema);
     try checkDocumentBodies(&inference_context, allocator, state, &sema);
     // Effects of overloaded constructors require the checked argument types.
+    const call_start = utils.profile.start();
+    defer utils.profile.recordAnalysis(.semantics_call_graph, call_start);
     try calls.checkFunctionCallGraph(allocator, state, &sema);
     return declaration_index;
 }

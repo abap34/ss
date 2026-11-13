@@ -8,6 +8,7 @@ const path_eval = @import("path.zig");
 pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.PrimitiveDescriptor) anyerror!core.Value {
     try ctx.checkArityRange(call.args.items.len - @intFromBool(call.callee.composition != null), descriptor.min_arity, descriptor.max_arity);
     return switch (descriptor.op) {
+        .define_theme => ctx.defineTheme(call),
         .pagectx => ctx.currentPageValue(),
         .docctx => ctx.currentDocumentValue(),
         .select => try ctx.runSelectCall(call),

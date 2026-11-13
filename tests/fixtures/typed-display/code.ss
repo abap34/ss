@@ -21,7 +21,7 @@ def twice(n):
 page languages
   let title = place!(text_api::Text { content = text_api::TextContent { source = "# Highlighted and plain source" } })
   let highlighted = place!(sample)
-  let plain = place!(sample with { language = "plain" style.text.size = 22 })
+  let plain = place!(sample with { language = "plain" style = (sample.style ?? code_api::CodeBlockStyle {}) with { text.size = 22 } })
   ~ title.left == page.left + 64
   ~ title.top == page.top - 48
   ~ highlighted.left == title.left
@@ -33,9 +33,11 @@ end
 page wrapped
   let palette = code_api::code_theme_github_dark()
   let dark = sample with {
-    style.highlight = palette
-    style.chrome.fill = palette.fill
-    style.chrome.stroke = palette.stroke
+    style = (sample.style ?? code_api::CodeBlockStyle {}) with {
+      highlight = palette
+      chrome.fill = palette.fill
+      chrome.stroke = palette.stroke
+    }
   }
   let title = place!(text_api::Text { content = text_api::TextContent { source = "# Code returned by a user display" } })
   let example = place!(Example { code = dark })

@@ -64,7 +64,7 @@ page constructors
   let unused = c::code("UNPLACED")
   let first: Placed<c::Code> = c::code!("return 17\n", "python")
   let second: Placed<c::Code> = c::code_file!("snippet.py", "python")
-  let third = place!(reusable with { style.text.size = 22 })
+  let third = place!(reusable with { style = c::CodeBlockStyle {} with { text.size = 22 } })
   ~ first.left == page.left + 64
   ~ first.top == page.top - 64
   ~ second.left == first.left

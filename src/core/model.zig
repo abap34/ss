@@ -398,6 +398,8 @@ pub const NativeDisplayKind = enum { text, image, path_shape };
 /// Page is fixed at registration. A page root may acquire one group parent.
 pub const Placement = struct {
     value: Value,
+    // Authored input stays immutable even after the native display has run.
+    native_output: ?Value = null,
     adopted_group: bool = false,
     parent_id: NodeId,
     page_id: NodeId,
@@ -411,6 +413,10 @@ pub const Placement = struct {
             child: NodeId,
         },
     } = .pending,
+
+    pub fn renderValue(self: Placement) Value {
+        return self.native_output orelse self.value;
+    }
 };
 
 pub const Node = struct {
@@ -428,7 +434,10 @@ pub const Node = struct {
     property_definitions: std.ArrayList(PropertyDefinition) = .empty,
 
     pub fn deinit(self: *Node, allocator: Allocator) void {
-        if (self.placement) |*placement| placement.value.deinit(allocator);
+        if (self.placement) |*placement| {
+            placement.value.deinit(allocator);
+            if (placement.native_output) |*output| output.deinit(allocator);
+        }
         for (self.fields.items) |*field| field.deinit(allocator);
         self.fields.deinit(allocator);
         for (self.property_definitions.items) |definition| allocator.free(definition.path);
@@ -864,17 +873,17 @@ pub const TypeMismatchCode = enum {
 pub fn nodeField(node: *const Node, key: []const u8) ?Value {
     if (node.placement) |placement| {
         if (placement.display == .native) {
-            const style = placement.value.record.field("style") orelse return null;
+            const style = placement.renderValue().record.field("style") orelse return null;
             if (style != .record) return null;
             if (std.mem.eql(u8, key, "layout")) return style.record.field(key);
             return switch (placement.display.native) {
                 .path_shape => blk: {
-                    if (std.mem.eql(u8, key, "path") or std.mem.eql(u8, key, "marker_start") or std.mem.eql(u8, key, "marker_end")) break :blk placement.value.record.field(key);
+                    if (std.mem.eql(u8, key, "path") or std.mem.eql(u8, key, "marker_start") or std.mem.eql(u8, key, "marker_end")) break :blk placement.renderValue().record.field(key);
                     if (std.mem.eql(u8, key, "fill") or std.mem.eql(u8, key, "stroke")) break :blk style.record.field(key);
                     break :blk null;
                 },
                 .text => blk: {
-                    if (std.mem.eql(u8, key, "semantics")) break :blk placement.value.record.field(key);
+                    if (std.mem.eql(u8, key, "semantics")) break :blk placement.renderValue().record.field(key);
                     if (std.mem.eql(u8, key, "text") or std.mem.eql(u8, key, "underline") or std.mem.eql(u8, key, "chrome")) break :blk style.record.field(key);
                     if (std.mem.eql(u8, key, "markdown_headings")) break :blk style.record.field("headings");
                     const content = nodeTextContent(node) orelse break :blk null;
@@ -885,7 +894,7 @@ pub fn nodeField(node: *const Node, key: []const u8) ?Value {
                     }
                     break :blk null;
                 },
-                .image => if (std.mem.eql(u8, key, "asset") or std.mem.eql(u8, key, "chrome")) style.record.field(key) else if (std.mem.eql(u8, key, "image_source")) placement.value.record.field("source") else null,
+                .image => if (std.mem.eql(u8, key, "asset") or std.mem.eql(u8, key, "chrome")) style.record.field(key) else if (std.mem.eql(u8, key, "image_source")) placement.renderValue().record.field("source") else null,
             };
         }
     }
@@ -916,7 +925,7 @@ pub const ImageSourceKind = enum { file, pdf, icon, latex };
 pub fn nodeTextContent(node: *const Node) ?RecordValue {
     const placement = node.placement orelse return null;
     if (placement.display != .native or placement.display.native != .text) return null;
-    const value = placement.value.record.field("content") orelse return null;
+    const value = placement.renderValue().record.field("content") orelse return null;
     return if (value == .record) value.record else null;
 }
 
@@ -929,7 +938,7 @@ pub fn nodeTextContentKind(node: *const Node) ?TextContentKind {
 pub fn nodeImageSource(node: *const Node) ?RecordValue {
     const placement = node.placement orelse return null;
     if (placement.display != .native or placement.display.native != .image) return null;
-    const value = placement.value.record.field("source") orelse return null;
+    const value = placement.renderValue().record.field("source") orelse return null;
     return if (value == .record) value.record else null;
 }
 

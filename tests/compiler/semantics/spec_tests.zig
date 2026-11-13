@@ -788,7 +788,7 @@ test "compiler semantics: implicit prelude does not propagate through bare-name 
         \\
     ,
         \\fn place!(obj: Text) -> Placed<Text>
-        \\  return place_on!(pagectx(), obj with { style.text.size = 41 })
+        \\  return place_on!(pagectx(), obj with { style = default_text_style with { text.size = 41 } })
         \\end
         \\
     );
@@ -3522,14 +3522,38 @@ test "compiler semantics: constants are evaluated once as value bindings" {
     , "pages=2");
 }
 
-test "compiler semantics: constants cannot require a page context" {
-    try expectDiagnostic(
-        \\const current: Page = pagectx()
-        \\
+test "compiler semantics: constant initializers use document scope when forced" {
+    try buildSource(
+        \\const unused: Page = pagectx()
         \\page ok
         \\end
-        \\
-    , "case.ss:bytes:", "NoCurrentPage: 'pagectx' is only valid inside a page block");
+    );
+    try expectLoweringErrorDiagnostic(
+        \\const current: Page = pagectx()
+        \\page ok
+        \\  let invalid = current
+        \\end
+    , "NoCurrentPage: 'pagectx' is only valid inside a page block");
+}
+
+test "compiler semantics: page context is checked only in the executed branch or closure" {
+    try expectObjectContent(
+        \\fn choose(flag: Bool) -> Number
+        \\  if flag
+        \\    return page_index(pagectx())
+        \\  end
+        \\  return 42
+        \\end
+        \\const deferred: () -> Page = () |-> pagectx()
+        \\document
+        \\  let unused = () |-> pagectx()
+        \\  let target = new_page(docctx(), "Result")
+        \\  place_on!(target, text(str(choose(false))))
+        \\end
+        \\page ok
+        \\  let valid = deferred()
+        \\end
+    , "42");
 }
 
 test "compiler semantics: returned lambdas are directly applicable" {
@@ -4439,11 +4463,29 @@ test "compiler semantics: record return joins retain recursive fields after know
         \\    return box
         \\  end
         \\end
-        \\fn recursive(x: Number) -> Number = choose(Box { f = recursive }, true).f(x)
+        \\fn recursive(x: Number) -> Number = choose(Box { f = recursive }, x == 1).f(x)
         \\page main
         \\  let value = recursive(1)
         \\end
     , "case.ss:bytes:", "RecursiveFunction");
+}
+
+test "compiler semantics: a known branch discards unreachable recursive fields" {
+    try expectObjectContent(
+        \\type Box { f: Number -> Number }
+        \\fn inc(x: Number) -> Number = x + 1
+        \\fn choose(box: Box, flag: Bool) -> Box
+        \\  if flag
+        \\    return Box { f = inc }
+        \\  else
+        \\    return box
+        \\  end
+        \\end
+        \\fn recursive(x: Number) -> Number = choose(Box { f = recursive }, true).f(x)
+        \\page main
+        \\  text!(str(recursive(1)))
+        \\end
+    , "2");
 }
 
 test "compiler semantics: record return joins retain recursive fields before known fields" {
@@ -4629,7 +4671,7 @@ test "compiler semantics: return type inference sees branch-local bindings" {
 }
 
 test "compiler semantics: page-only primitives are rejected in document context" {
-    try expectDiagnostic(
+    try expectLoweringErrorDiagnostic(
         \\import std:themes/default as *
         \\
         \\document
@@ -4639,9 +4681,9 @@ test "compiler semantics: page-only primitives are rejected in document context"
         \\page ok
         \\end
         \\
-    , "case.ss:bytes:", "NoCurrentPage: 'pagectx' is only valid inside a page block");
+    , "NoCurrentPage: 'pagectx' is only valid inside a page block");
 
-    try expectDiagnostic(
+    try expectLoweringErrorDiagnostic(
         \\import std:themes/default as *
         \\
         \\document
@@ -4651,9 +4693,9 @@ test "compiler semantics: page-only primitives are rejected in document context"
         \\page ok
         \\end
         \\
-    , "case.ss:bytes:", "NoCurrentPage");
+    , "NoCurrentPage");
 
-    try expectDiagnostic(
+    try expectLoweringErrorDiagnostic(
         \\import std:themes/default as *
         \\
         \\document
@@ -4663,7 +4705,7 @@ test "compiler semantics: page-only primitives are rejected in document context"
         \\page ok
         \\end
         \\
-    , "case.ss:bytes:", "NoCurrentPage");
+    , "NoCurrentPage");
 }
 
 test "compiler semantics: missing page relationships return none" {
@@ -4707,7 +4749,7 @@ test "compiler semantics: document callbacks may use explicit pages without curr
 }
 
 test "compiler semantics: document callbacks reject current page access" {
-    try expectDiagnostic(
+    try expectLoweringErrorDiagnostic(
         \\import std:themes/default as *
         \\
         \\document
@@ -4720,9 +4762,9 @@ test "compiler semantics: document callbacks reject current page access" {
         \\page ok
         \\end
         \\
-    , "case.ss:bytes:", "NoCurrentPage: 'pagectx' is only valid inside a page block");
+    , "NoCurrentPage: 'pagectx' is only valid inside a page block");
 
-    try expectDiagnostic(
+    try expectLoweringErrorDiagnostic(
         \\import std:themes/default as *
         \\
         \\fn make_implicit!() -> Placed<Heading>
@@ -4739,7 +4781,7 @@ test "compiler semantics: document callbacks reject current page access" {
         \\page ok
         \\end
         \\
-    , "case.ss:bytes:", "NoCurrentPage");
+    , "NoCurrentPage");
 }
 
 test "compiler semantics: ordinary presentation values do not allocate placements" {
@@ -5463,12 +5505,12 @@ test "compiler semantics: page requirement follows the selected callable" {
         \\page main
         \\end
     );
-    try expectDiagnostic(
+    try expectLoweringErrorDiagnostic(
         \\document
         \\  let f = (n: Number) |-> pagectx()
         \\  let result = f(1)
         \\end
-    , "case.ss:bytes:", "NoCurrentPage");
+    , "NoCurrentPage");
 }
 
 test "compiler semantics: constants shadow enum receivers in expressions" {
@@ -6449,7 +6491,7 @@ test "compiler semantics: explicit constraint registration rejects page anchor m
 }
 
 test "compiler semantics: functions with constraint statements require a current page" {
-    try expectDiagnostic(
+    try expectLoweringErrorDiagnostic(
         \\fn pin(item: Placement) -> Void
         \\  ~ item.left == page.left + 40
         \\end
@@ -6458,7 +6500,7 @@ test "compiler semantics: functions with constraint statements require a current
         \\  let item = place_on!(target, text("Item"))
         \\  pin(item)
         \\end
-    , "case.ss:bytes:", "NoCurrentPage");
+    , "NoCurrentPage");
 }
 
 test "compiler semantics: function constraint anchors are checked without invocation" {
@@ -6831,7 +6873,7 @@ test "compiler semantics: returned initialized values retain fields derived from
         \\type Item { input: Text label: String }
         \\fn make() -> Item
         \\  let input = text("A", default_text_style with { text.size = 123 })
-        \\  return Item { input = input label = str(input.style.text.size) }
+        \\  return Item { input = input label = str((input.style ?? default_text_style).text.size) }
         \\end
         \\page main
         \\  let result = make()
@@ -7531,7 +7573,7 @@ test "compiler semantics: typed displays reject writes through ordinary helpers"
         \\type A { value: Number }
         \\type Output { value: Number }
         \\fn change_owner(item: Placed<A>) -> Number
-        \\  item.page.layout.x = 12
+        \\  item.page.layout_h_center_offset = 12
         \\  return item.value.value
         \\end
         \\fn display(self: Placed<A>) -> Output

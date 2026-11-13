@@ -42,7 +42,8 @@ end
   assert(raw.width > 20 && raw.height > 10, "Literal text must have rendered dimensions");
   assert.equal(raw.placement.input.type.name, 'Text');
   assert.equal(raw.placement.input.fields.find(f => f.name === 'style').value.fields.find(f => f.name === 'text').value.fields.find(f => f.name === 'parse').value.case, 'plain');
-  assert.equal(formatted.placement.input.fields.find(f => f.name === 'style').value.fields.find(f => f.name === 'text').value.fields.find(f => f.name === 'parse').value.case, 'block');
+  assert.equal(formatted.placement.input.fields.find(f => f.name === 'style').value.kind, 'none');
+  assert(formatted.blocks?.length, "the default display style parses Markdown");
   assert(!literal.nodes.some(n => n.content === 'Unplaced'));
   const headingInput = literal.nodes.find(n => n.placement?.input.type?.name === 'Heading').placement.input;
   assert.equal(headingInput.fields.find(f => f.name === 'level').value.value, 3);

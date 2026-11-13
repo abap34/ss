@@ -210,14 +210,30 @@ pub const EvalContext = struct {
                 _ = try self.expandDisplay(id, function);
                 return self.state.childrenOf(id) orelse return error.InvalidDisplayPlan;
             },
-            .native => |kind| {
+            .native => |native| {
                 try checkCancellation(self);
-                const node = self.state.getNode(id) orelse return error.UnknownNode;
-                if (node.discarded) return error.InvalidPlacementParent;
-                const placement = if (node.placement) |*value| value else return error.InvalidValueTag;
-                core.native_display.validateValue(self.state, placement.value, kind) catch |err| switch (err) {
+                const kind = native.kind;
+                const initial_node = self.state.getNode(id) orelse return error.UnknownNode;
+                if (initial_node.discarded) return error.InvalidPlacementParent;
+                const initial = initial_node.placement orelse return error.InvalidValueTag;
+                if (initial.value != .record or core.native_display.kindForType(self.state, initial.value.record.ty) != kind) return error.InvalidNativeDisplay;
+                switch (initial.display) {
+                    .pending => {},
+                    .native => |existing| {
+                        if (existing != kind) return error.DisplayTargetMismatch;
+                        return &.{};
+                    },
+                    .running => return error.DisplayExpansionCycle,
+                    .expanded, .group => return error.DisplayTargetMismatch,
+                }
+                var resolved: ?core.Value = if (native.resolve) |key| try self.displayValue(id, key) else null;
+                errdefer if (resolved) |*value| value.deinit(self.allocator);
+                const node = self.state.getNode(id).?;
+                const placement = &node.placement.?;
+                const output = resolved orelse placement.value;
+                core.native_display.validateValue(self.state, output, kind) catch |err| switch (err) {
                     error.InvalidFontAwesomeIcon => {
-                        const source = placement.value.record.field("source").?.record.field("source").?.string;
+                        const source = output.record.field("source").?.record.field("source").?.string;
                         const origin = core.ContentProvenance.originForSpan(self.state.stringProvenance(source), 0, source.len) orelse node.origin;
                         try self.state.addValidationDiagnostic(.@"error", placement.page_id, id, origin, .{
                             .user_report = .{
@@ -229,16 +245,7 @@ pub const EvalContext = struct {
                     },
                     else => return err,
                 };
-                switch (placement.display) {
-                    .pending => {},
-                    .native => |existing| {
-                        if (existing != kind) return error.DisplayTargetMismatch;
-                        return &.{};
-                    },
-                    .running => return error.DisplayExpansionCycle,
-                    .expanded, .group => return error.DisplayTargetMismatch,
-                }
-                const input = if (kind == .image) placement.value.record.field("source").?.record else null;
+                const input = if (kind == .image) output.record.field("source").?.record else null;
                 const image_kind = if (input) |source| std.meta.stringToEnum(core.ImageSourceKind, source.field("kind").?.enum_case.case_name) orelse return error.InvalidNativeDisplay else null;
                 if (image_kind == .file or image_kind == .pdf) {
                     const payload_kind: core.PayloadKind = if (image_kind == .pdf) .pdf_ref else .image_ref;
@@ -254,6 +261,7 @@ pub const EvalContext = struct {
                         });
                     }
                 }
+                placement.native_output = resolved;
                 placement.display = .{ .native = kind };
                 return &.{};
             },
@@ -700,7 +708,7 @@ fn evalExpr(
             const sema = SemanticEnv.init(state, evaluation.declarations, functions).forModule(evaluation.module_id);
             switch (try evaluation.name_resolution_cache.resolveValue(&sema, core.Value, ident.reference(), env.get(name))) {
                 .local => |value| break :blk try value.clone(state.allocator),
-                .constant => |resolved| break :blk try evalConstValue(evaluation, page_id, scope, current_origin, resolved),
+                .constant => |resolved| break :blk try evalConstValue(evaluation, current_origin, resolved),
                 .function => |resolved| break :blk .{ .function = .{ .name = resolved.decl.name, .module_id = resolved.module_id } },
                 .primitive, .unknown => {},
             }
@@ -754,12 +762,10 @@ fn registerStringLiteralProvenance(evaluation: *EvalContext, literal: ast.String
 
 fn evalConstValue(
     evaluation: *EvalContext,
-    page_id: core.NodeId,
-    scope: EvalScope,
     current_origin: core.SourceOrigin,
     resolved: semantic_env.ResolvedConst,
 ) anyerror!core.Value {
-    const value = try borrowConstValue(evaluation, page_id, scope, current_origin, resolved);
+    const value = try borrowConstValue(evaluation, current_origin, resolved);
     return value.clone(evaluation.state.allocator);
 }
 
@@ -768,8 +774,6 @@ fn evalConstValue(
 // grow that map, while the cached aggregate's backing storage stays valid.
 fn borrowConstValue(
     evaluation: *EvalContext,
-    page_id: core.NodeId,
-    scope: EvalScope,
     current_origin: core.SourceOrigin,
     resolved: semantic_env.ResolvedConst,
 ) anyerror!core.Value {
@@ -792,10 +796,13 @@ fn borrowConstValue(
     defer evaluation.module_id = previous_module_id;
 
     const start_node_count = state.nodeCount();
-    var value = try evalExpr(evaluation, page_id, scope, &local_env, current_origin, resolved.decl.value);
+    // A document constant has one store entry. The page that forces it cannot
+    // provide an implicit page for its initializer; a closure gets one at call time.
+    const document = state.graph.document_id;
+    var value = try evalExpr(evaluation, document, .document, &local_env, current_origin, resolved.decl.value);
     var value_moved = false;
     errdefer if (!value_moved) value.deinit(state.allocator);
-    try value_contracts.ensureValueConformsToType(state, page_id, value, resolved.decl.value_type, current_origin, .UnmatchedReturnType);
+    try value_contracts.ensureValueConformsToType(state, document, value, resolved.decl.value_type, current_origin, .UnmatchedReturnType);
     try markReturnedValueOrigins(state, value, start_node_count, current_origin);
     try state.constants.values.put(resolved.key, value);
     value_moved = true;
@@ -836,7 +843,7 @@ fn borrowValue(
             const sema = SemanticEnv.init(evaluation.state, evaluation.declarations, evaluation.functions).forModule(evaluation.module_id);
             break :blk switch (try evaluation.name_resolution_cache.resolveValue(&sema, core.Value, ident.reference(), env.get(ident.name))) {
                 .local => |value| value,
-                .constant => |resolved| try borrowConstValue(evaluation, page_id, scope, current_origin, resolved),
+                .constant => |resolved| try borrowConstValue(evaluation, current_origin, resolved),
                 else => null,
             };
         },
@@ -1140,7 +1147,7 @@ fn evalCall(
             break :blk try invokeFunctionRef(evaluation, page_id, scope, func_ref, current_origin, args.items(.value));
         },
         .constant => |resolved| blk: {
-            var const_value = try evalConstValue(evaluation, page_id, scope, current_origin, resolved);
+            var const_value = try evalConstValue(evaluation, current_origin, resolved);
             defer const_value.deinit(state.allocator);
             const function = switch (const_value) {
                 .function => |function| function,
@@ -1254,8 +1261,16 @@ const BuiltinContext = struct {
         try validateArityRange(self.state, actual, min, max, self.current_origin);
     }
 
+    pub fn defineTheme(self: *BuiltinContext, call: CallExpr) !core.Value {
+        var value = try self.evalExprValue(call.args.items[0]);
+        defer value.deinit(self.state.allocator);
+        const owner = if (self.scope == .page) self.page_id else self.state.graph.document_id;
+        try writeNodeFieldValue(self.state, owner, "theme", value, self.current_origin, self.evaluation.frames.depth);
+        return .{ .void = {} };
+    }
+
     pub fn currentPageValue(self: *const BuiltinContext) !core.Value {
-        if (self.scope != .page) return error.NoCurrentPage;
+        std.debug.assert(self.scope == .page);
         return .{ .page = self.page_id };
     }
 
@@ -1431,6 +1446,13 @@ fn evalPrimitiveCall(
     descriptor: registry.PrimitiveDescriptor,
 ) anyerror!core.Value {
     const state = evaluation.state;
+    if (descriptor.context == .page and scope != .page) {
+        const origin = if (call.callee.span) |span| state.sourceOrigin(evaluation.module_id, span) else current_origin;
+        try state.addValidationDiagnostic(.@"error", null, null, origin, .{
+            .user_report = .{ .code = "NoCurrentPage", .message = try std.fmt.allocPrint(state.allocator, "'{s}' is only valid inside a page block", .{descriptor.name}) },
+        });
+        return error.NoCurrentPage;
+    }
     var ctx = BuiltinContext{
         .evaluation = evaluation,
         .state = state,
@@ -1919,7 +1941,10 @@ fn executeStatement(
             }
         },
         .constrain => |decl| {
-            if (scope != .page) return error.NoCurrentPage;
+            if (scope != .page) {
+                try reportLowerError(state, error.NoCurrentPage, origin);
+                return error.NoCurrentPage;
+            }
             const target = try resolveAnchorRef(state, env, origin, page_id, decl.target, true);
             const source_value: ?core.AnchorValue = if (decl.source) |source_ref|
                 try resolveAnchorRef(state, env, origin, page_id, source_ref, false)

@@ -1,3 +1,4 @@
+import std:theme as { theme_for }
 import std:assets/style as { AssetBlockStyle, default_icon_style }
 import std:assets/types as { PdfPageBox }
 import std:math/types as { LatexConfig }
@@ -19,12 +20,12 @@ end
 
 type Image {
   source: ImageSource
-  style: AssetBlockStyle = AssetBlockStyle {}
+  style: AssetBlockStyle? = none
 }
 
 type Pdf {
   path: String
-  style: AssetBlockStyle = AssetBlockStyle {}
+  style: AssetBlockStyle? = none
 }
 
 type Icon {
@@ -32,15 +33,20 @@ type Icon {
   style: AssetBlockStyle = default_icon_style
 }
 
+fn display(self: Placed<Image>) -> Image
+  return self.value with { style = self.value.style ?? theme_for(self.page).image }
+end
+
 fn display(self: Placed<Pdf>) -> Image
+  let style = self.value.style ?? theme_for(self.page).pdf
   return Image {
     source = ImageSource {
       kind = ImageSourceKind.pdf
       source = self.value.path
-      pdf_page = self.value.style.asset.pdf_page
-      pdf_box = self.value.style.asset.pdf_box
+      pdf_page = style.asset.pdf_page
+      pdf_box = style.asset.pdf_box
     }
-    style = self.value.style
+    style = style
   }
 end
 

@@ -30,6 +30,35 @@ fn objectSemantic(ir: *const render.Ir, index: usize) *const render.SemanticNode
     return ir.semantics.find(ir.pages[0].reading_order[index]).?;
 }
 
+test "prepared backgrounds use the same page theme fallback as display functions" {
+    var state = try document(
+        \\page inherited
+        \\end
+        \\page local
+        \\  theme!(Theme {} with { background_fill = c"#00ff00" })
+        \\end
+        \\page absent
+        \\  pagectx().theme = none
+        \\end
+        \\page explicit
+        \\  pagectx().background_fill = c"#0000ff"
+        \\end
+        \\document
+        \\  theme!(Theme {} with { background_fill = c"#ff0000" })
+        \\end
+    );
+    defer state.deinit();
+    try evaluate(&state);
+    var pages = try core.prepared.prepare(testing.allocator, &state);
+    defer pages.deinit(testing.allocator);
+    const expected = [_][3]f32{ .{ 1, 0, 0 }, .{ 0, 1, 0 }, .{ 1, 0, 0 }, .{ 0, 0, 1 } };
+    try testing.expectEqual(expected.len, pages.pages.len);
+    for (pages.pages, expected) |page, rgb| {
+        const color = page.background orelse return error.MissingBackground;
+        try testing.expectEqual(rgb, [3]f32{ color.r, color.g, color.b });
+    }
+}
+
 test "typed headings and user displays preserve semantic attributes without role classes" {
     var state = try document(
         \\type Caption { content: String }

@@ -2,10 +2,40 @@ const std = @import("std");
 const ast = @import("ast");
 const model = @import("model");
 
+/// A small may-analysis shared by the call checker and the scheduler. Bottom
+/// means no evidence has arrived; runtime values of unknown truth are both.
+pub const Alternatives = enum(u2) {
+    bottom = 0,
+    no = 1,
+    yes = 2,
+    either = 3,
+
+    pub fn from(value: bool) Alternatives {
+        return if (value) .yes else .no;
+    }
+
+    pub fn join(a: Alternatives, b: Alternatives) Alternatives {
+        return @fromBackingInt(@intCast(@backingInt(a) | @backingInt(b)));
+    }
+
+    pub fn negate(self: Alternatives) Alternatives {
+        return switch (self) {
+            .no => .yes,
+            .yes => .no,
+            else => self,
+        };
+    }
+};
+
+// Page index after stage expansion, before the execution graph assigns node IDs.
+pub const PageKey = struct { module_id: u32, index: usize };
+
 // Generation-owned immutable input facts shared by call and dependency analysis.
 // Closures borrow syntax from the same generation and own their captured facts.
 pub const Value = struct {
     unknown: bool = false,
+    truth: Alternatives = .bottom,
+    present: Alternatives = .bottom,
     candidates: []const Callable = &.{},
     fields: []const Field = &.{},
     children: []const Value = &.{},
@@ -18,7 +48,7 @@ pub const Value = struct {
     pub const Reference = union(enum) {
         unknown,
         document,
-        page,
+        page: ?PageKey,
         placement: struct { call: u64, path: []const usize },
     };
 };

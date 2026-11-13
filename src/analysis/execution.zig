@@ -114,7 +114,9 @@ pub const ExecutionGraph = struct {
             .source_order = 0,
             .page_id_mode = options.page_id_mode,
         };
-        try builder.collectExecutionUnits(state.projectModule());
+        defer builder.blocks.deinit(allocator);
+        try builder.collectBlocks(state.projectModule());
+        for (builder.blocks.items) |block| try builder.summarizeBlock(block);
         try graph.appendDisplayUnits(state);
         try graph.appendDrawingUnits(state);
         try validateExecutionUnits(state, graph.units.items);
@@ -243,15 +245,27 @@ const GraphBuilder = struct {
     synthetic_page_count: core.NodeId = 0,
     page_id_mode: PageIdMode,
 
-    fn collectExecutionUnits(self: *GraphBuilder, module: *const core.SourceModule) !void {
+    // Register all static page identities before interpreting any initializer:
+    // a reference may name a placement in a module or page appearing later.
+    blocks: std.ArrayList(Block) = .empty,
+    const Block = struct {
+        module: *const core.SourceModule,
+        statements: []const ast.Statement,
+        statement_start: usize,
+        source_order: usize,
+        page_id: ?core.NodeId = null,
+        stage_label: ?[]const u8 = null,
+    };
+
+    fn collectBlocks(self: *GraphBuilder, module: *const core.SourceModule) !void {
         if (module.kind == .library) {
             if (self.collected_modules.contains(module.id)) return;
             try self.collected_modules.put(module.id, {});
         }
 
         if (module.syntax.top_level_items.items.len == 0) {
-            try self.appendDocumentStatementUnits(module, 0, module.syntax.document_statements.items.len);
-            for (module.syntax.pages.items) |page| try self.appendPageStatementUnits(module, page);
+            try self.queueDocument(module, 0, module.syntax.document_statements.items.len);
+            for (0..module.syntax.pages.items.len) |index| try self.queuePage(module, index);
             return;
         }
 
@@ -261,84 +275,64 @@ const GraphBuilder = struct {
                     if (import_index >= module.resolved_import_ids.items.len) continue;
                     const import_id = module.resolved_import_ids.items[import_index];
                     const imported = self.state.moduleById(import_id) orelse continue;
-                    try self.collectExecutionUnits(imported);
+                    try self.collectBlocks(imported);
                 },
                 .document => |document_index| {
                     if (document_index >= module.syntax.document_blocks.items.len) continue;
                     const block = module.syntax.document_blocks.items[document_index];
-                    try self.appendDocumentStatementUnits(module, block.statement_start, block.statement_count);
+                    try self.queueDocument(module, block.statement_start, block.statement_count);
                 },
                 .page => |page_index| {
                     if (page_index >= module.syntax.pages.items.len) continue;
-                    try self.appendPageStatementUnits(module, module.syntax.pages.items[page_index]);
+                    try self.queuePage(module, page_index);
                 },
             }
         }
     }
 
-    fn appendDocumentStatementUnits(
-        self: *GraphBuilder,
-        module: *const core.SourceModule,
-        statement_start: usize,
-        statement_count: usize,
-    ) !void {
-        const sema = SemanticEnv.init(self.state, self.declarations, self.functions).forModule(module.id);
-        var analyzer = dependencies.Analyzer.initWithScopeAndCache(self.allocator, &sema, .{ .document = sema.module_id }, self.run_cache);
-        defer analyzer.deinit();
-        try analyzer.bindPrecedingStatements(module.syntax.document_statements.items[0..statement_start]);
-        const statement_end = @min(statement_start + statement_count, module.syntax.document_statements.items.len);
-        for (module.syntax.document_statements.items[statement_start..statement_end], statement_start..) |stmt, stmt_index| {
-            const summary = try self.statementSummary(&analyzer, module, stmt);
-            errdefer {
-                var owned = summary;
-                owned.deinit();
-            }
-            try self.units.append(self.allocator, .{
-                .module_id = module.id,
-                .source = module.source,
-                .path = module.path orelse module.spec,
-                .source_order = self.source_order,
-                .span = stmt.span,
-                .summary = summary,
-                .kind = .{ .document_statement = .{
-                    .stmt = stmt,
-                    .index = stmt_index,
-                } },
-            });
-            self.source_order += 1;
-        }
+    fn queueDocument(self: *GraphBuilder, module: *const core.SourceModule, start: usize, count: usize) !void {
+        const statements = module.syntax.document_statements.items[start..][0..count];
+        try self.blocks.append(self.allocator, .{ .module = module, .statements = statements, .statement_start = start, .source_order = self.source_order });
+        self.source_order += count;
     }
 
-    fn appendPageStatementUnits(
-        self: *GraphBuilder,
-        module: *const core.SourceModule,
-        page: ast.PageDecl,
-    ) !void {
-        const page_id = try self.nextPageId(module, page);
+    fn queuePage(self: *GraphBuilder, module: *const core.SourceModule, index: usize) !void {
+        const page = module.syntax.pages.items[index];
+        const id = try self.nextPageId(module, page);
+        const slot = try self.run_cache.page_ids.getOrPut(self.allocator, .{ .module_id = module.id, .index = index });
+        // The same syntax may be composed more than once; keep such references open.
+        slot.value_ptr.* = if (slot.found_existing) null else id;
+        try self.blocks.append(self.allocator, .{
+            .module = module,
+            .statements = page.statements.items,
+            .statement_start = 0,
+            .source_order = self.source_order,
+            .page_id = id,
+            .stage_label = if (page.stage_index != null) page.name else null,
+        });
+        self.source_order += page.statements.items.len;
+    }
+
+    fn summarizeBlock(self: *GraphBuilder, block: Block) !void {
+        const module = block.module;
         const sema = SemanticEnv.init(self.state, self.declarations, self.functions).forModule(module.id);
-        var analyzer = dependencies.Analyzer.initWithScopeAndCache(self.allocator, &sema, .{ .page = page_id }, self.run_cache);
+        const scope: dependencies.ResourceScope = if (block.page_id) |id| .{ .page = id } else .{ .document = module.id };
+        var analyzer = dependencies.Analyzer.initWithScopeAndCache(self.allocator, &sema, scope, self.run_cache);
         defer analyzer.deinit();
-        for (page.statements.items, 0..) |stmt, stmt_index| {
-            const summary = try self.statementSummary(&analyzer, module, stmt);
-            errdefer {
-                var owned = summary;
-                owned.deinit();
-            }
+        if (block.statement_start != 0) try analyzer.bindPrecedingStatements(module.syntax.document_statements.items[0..block.statement_start]);
+        for (block.statements, 0..) |stmt, i| {
+            var summary = try self.statementSummary(&analyzer, module, stmt);
+            errdefer summary.deinit();
             try self.units.append(self.allocator, .{
                 .module_id = module.id,
                 .source = module.source,
                 .path = module.path orelse module.spec,
-                .source_order = self.source_order,
+                .source_order = block.source_order + i,
                 .span = stmt.span,
                 .summary = summary,
-                .stage_label = if (page.stage_index != null) page.name else null,
-                .kind = .{ .page_statement = .{
-                    .stmt = stmt,
-                    .page_id = page_id,
-                    .index = stmt_index,
-                } },
+                .stage_label = block.stage_label,
+                .kind = if (block.page_id) |id| .{ .page_statement = .{ .stmt = stmt, .index = i, .page_id = id } } else .{ .document_statement = .{ .stmt = stmt, .index = block.statement_start + i } },
             });
-            self.source_order += 1;
         }
     }
 
@@ -406,17 +400,27 @@ fn buildDependencyEdges(allocator: std.mem.Allocator, units: []const ExecutionUn
 
     var writer_index = resource_index.ResourceWriterIndex.init(allocator);
     defer writer_index.deinit();
+    const Setting = @import("setting_facts.zig").Key;
+    var present = std.HashMap(Setting, void, Setting.Context, std.hash_map.default_max_load_percentage).init(allocator);
+    defer present.deinit();
     for (units, 0..) |writer, unit_index| {
+        for (writer.summary.defined_settings.entries.items) |fact| {
+            if (fact.key.page != null and fact.present) try present.put(fact.key, {});
+        }
         for (writer.summary.writes.items) |write| try writer_index.addWrite(unit_index, write);
     }
 
     for (units, 0..) |reader, reader_index| {
         if (reader.summary.reads.items.len == 0) continue;
         for (reader.summary.reads.items) |read| {
+            if (read == .property) if (read.property.unless_defined_on) |page| {
+                if (read.property.key.displayName()) |name| if (present.contains(.{ .page = page, .name = name })) continue;
+            };
             var visitor = EdgeVisitor{
                 .allocator = allocator,
                 .read = read,
                 .reader_index = reader_index,
+                .needs_own_write = reader.summary.needsOwnWrite(read),
                 .edges = edges,
                 .edge_index = &edge_index,
             };
@@ -449,10 +453,12 @@ const EdgeVisitor = struct {
     allocator: std.mem.Allocator,
     read: dependencies.Resource,
     reader_index: usize,
+    needs_own_write: bool,
     edges: *std.ArrayList(DependencyEdge),
     edge_index: *EdgeIndex,
 
     pub fn visit(self: *EdgeVisitor, entry: resource_index.WriteEntry) !void {
+        if (entry.unit_index == self.reader_index and !self.needs_own_write) return;
         if (entry.resource.intersects(self.read)) {
             try addDependencyEdge(self.allocator, self.edges, self.edge_index, entry.unit_index, self.reader_index);
         }
@@ -573,17 +579,17 @@ fn addCycleDiagnostic(allocator: std.mem.Allocator, state: *core.DocumentState, 
             if (edge.from == from_index and edge.to == to_index) break edge.reason;
         } else unreachable; // The cycle is recovered from these edges.
         switch (reason) {
-            .resource => try appendDependencyReason(allocator, &message, from.summary, to.summary),
+            .resource => try appendDependencyReason(allocator, &message, from.summary, to.summary, from_index == to_index),
             .display_input => try message.appendSlice(allocator, "display expansion input"),
         }
     }
     try addUnitErrorDiagnostic(state, units[cycle[first]], "ExecutionDependencyCycle", message.items);
 }
 
-fn appendDependencyReason(allocator: std.mem.Allocator, out: *std.ArrayList(u8), writer: dependencies.AccessSummary, reader: dependencies.AccessSummary) !void {
+fn appendDependencyReason(allocator: std.mem.Allocator, out: *std.ArrayList(u8), writer: dependencies.AccessSummary, reader: dependencies.AccessSummary, same_unit: bool) !void {
     for (writer.writes.items) |write| {
         for (reader.reads.items) |read| {
-            if (!write.intersects(read)) continue;
+            if (!write.intersects(read) or (same_unit and !reader.needsOwnWrite(read))) continue;
             try dependencies.appendResource(allocator, out, write, .{});
             if (!write.eql(read)) {
                 try out.appendSlice(allocator, " (read as ");

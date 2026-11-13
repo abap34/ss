@@ -1,5 +1,6 @@
 import std:prelude as *
 import std:text/style as { TextBlockStyle }
+import std:assets/style as { AssetBlockStyle }
 import std:code/style as { CodeBlockStyle }
 
 const plain: TextBlockStyle = TextBlockStyle {} with { text.parse = TextParseMode.plain }
@@ -36,7 +37,7 @@ page equal_three_texts
 end
 
 page padded_image
-  let padded = picture with { style.chrome.pad_x = 12 }
+  let padded = picture with { style = AssetBlockStyle {} with { chrome.pad_x = 12 } }
   let content = place!(short || padded)
 end
 
@@ -99,8 +100,8 @@ page shape_text
 end
 
 page different_padding
-  let a = short with { style.chrome.pad_x = 12 }
-  let b = short with { style.chrome.pad_x = 20 }
+  let a = short with { style = plain with { chrome.pad_x = 12 } }
+  let b = short with { style = plain with { chrome.pad_x = 20 } }
   let content = place!(a || b)
 end
 
@@ -110,7 +111,7 @@ page nested_fixed_width
 end
 
 page scaled_subpoint_image
-  let content = place!(picture with { style.asset.scale = 0.001 })
+  let content = place!(picture with { style = AssetBlockStyle {} with { asset.scale = 0.001 } })
 end
 
 page constrained_subpoint_image

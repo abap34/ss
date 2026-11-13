@@ -88,7 +88,7 @@ end
 
 fn/! ultra_big(content: String) -> Text
   let t = default::text(content)
-  let styled = t with { style.text.size = 64 }
+  let styled = t with { style = default_text_style with { text.size = 64 } }
   return styled
 end
 `;
@@ -97,7 +97,7 @@ end
     const libraryDiagnostics = await libraryDiagnosticsPromise;
     assert(libraryDiagnostics.params.diagnostics.length === 0, `library valid diagnostics: ${JSON.stringify(libraryDiagnostics.params.diagnostics)}`);
 
-    const libraryBrokenSource = libraryValidSource.replace('let styled = t with { style.text.size = 64 }', "t.");
+    const libraryBrokenSource = libraryValidSource.replace('let styled = t with { style = default_text_style with { text.size = 64 } }', "t.");
     const libraryBrokenDiagnostics = client.waitForDiagnostics(partsUri);
     client.changeDocument({ uri: partsUri, version: 2, text: libraryBrokenSource });
     const libraryMemberCompletion = await requestCompleteCompletion(client, {
@@ -174,7 +174,7 @@ end
 
 fn/! ultra_big(content: String) -> Text
   let t = default::text(content)
-  let styled = t with { style.text.size = 64 }
+  let styled = t with { style = default_text_style with { text.size = 64 } }
   return styled
 end
 `;
@@ -183,7 +183,7 @@ end
     const unimportedDiagnostics = await unimportedDiagnosticsPromise;
     assert(unimportedDiagnostics.params.diagnostics.length === 0, `unimported library valid diagnostics: ${JSON.stringify(unimportedDiagnostics.params.diagnostics)}`);
 
-    const unimportedLibraryBrokenSource = unimportedLibraryValidSource.replace('let styled = t with { style.text.size = 64 }', "t.");
+    const unimportedLibraryBrokenSource = unimportedLibraryValidSource.replace('let styled = t with { style = default_text_style with { text.size = 64 } }', "t.");
     const unimportedBrokenDiagnostics = client.waitForDiagnostics(themeTempUri);
     client.changeDocument({ uri: themeTempUri, version: 2, text: unimportedLibraryBrokenSource });
     const unimportedBrokenCompletion = await requestCompleteCompletion(client, {
@@ -276,7 +276,7 @@ end
       position: positionAt(memberValidSource, "text(", 1),
     });
     assert(
-      textHover?.contents?.value?.includes("text(content: String, style: TextBlockStyle = default_text_style, config: LatexConfig = LatexConfig {  }) -> Text"),
+      textHover?.contents?.value?.includes("text(content: String, style: TextBlockStyle? = none, config: LatexConfig = LatexConfig {  }) -> Text"),
       `text hover did not show themed signature: ${JSON.stringify(textHover)}`,
     );
 
@@ -620,7 +620,7 @@ import std:text as *
 
 fn/! ultra_big(content: String) -> Text
   let t = default::text(content)
-  let styled = t with { style.text.size = 64 }
+  let styled = t with { style = default_text_style with { text.size = 64 } }
   return styled
 end
 

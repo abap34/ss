@@ -119,6 +119,25 @@ test "return facts: function arguments preserve their individual labels" {
     try testing.expectEqual(@as(usize, 2), analysis.context.body_analyses);
 }
 
+test "return facts: only reachable returns contribute to a literal query" {
+    var analysis = try Analysis.init(testing.allocator,
+        \\fn label() -> String
+        \\  if false
+        \\    return "dead"
+        \\  end
+        \\  if true
+        \\    return "label"
+        \\  end
+        \\  return "also dead"
+        \\end
+        \\document
+        \\  let name = label()
+        \\end
+    );
+    defer analysis.deinit();
+    try testing.expectEqualStrings("label", (try analysis.expression(0)).string_literal.?);
+}
+
 test "return facts: module identity participates in the cache key" {
     var analysis = try Analysis.init(testing.allocator,
         \\fn value() -> String
@@ -196,11 +215,11 @@ test "dependency return facts share repeated function bodies" {
         defer analyzer.deinit();
         var summary = try analyzer.documentStatements(analysis.syntax.document_statements.items);
         defer summary.deinit();
-        // String and property-target facts each analyze every body once.
-        try testing.expectEqual(2 * (depth + 1), cache.return_body_analyses);
+        // Only the string query needs the body; the result type rules out a resource.
+        try testing.expectEqual(depth + 1, cache.return_body_analyses);
         var repeated = try analyzer.documentStatements(analysis.syntax.document_statements.items);
         defer repeated.deinit();
-        try testing.expectEqual(2 * (depth + 1), cache.return_body_analyses);
+        try testing.expectEqual(depth + 1, cache.return_body_analyses);
     }
 }
 

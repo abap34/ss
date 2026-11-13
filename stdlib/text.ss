@@ -7,6 +7,6 @@ import std:text/types as { SemanticRole, TextSemantics, TextParseMode, FontStyle
 const NEWLINE: String = "
 "
 
-fn/! text(content: String, style: TextBlockStyle = default_text_style, config: LatexConfig = LatexConfig {}) -> Text
+fn/! text(content: String, style: TextBlockStyle? = none, config: LatexConfig = LatexConfig {}) -> Text
   return Text { content = text_content(content, config) style = style }
 end

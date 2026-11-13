@@ -503,7 +503,7 @@ test "dependency summary deduplication preserves overlapping resources in either
     const typed: deps.Resource = .{ .objects = .{ .input_type = text_type } };
     const placed: deps.Resource = .{ .objects = .{ .input_type = text_type, .placement = .exact(1, &.{}) } };
     const pairs = [_][2]deps.Resource{
-        .{ deps.Resource.makeProperty(.page, "layout_h_center_offset"), deps.Resource.makeProperty(.any, "layout_h_center_offset") },
+        .{ deps.Resource.makeProperty(.{ .page = null }, "layout_h_center_offset"), deps.Resource.makeProperty(.any, "layout_h_center_offset") },
         .{ deps.Resource.makeProperty(.document, "layout_h_center_offset"), deps.Resource.makeProperty(.document, null) },
         .{ typed, .{ .objects = .{} } },
         .{ placed, typed },

@@ -29,6 +29,7 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
         .{ .path = "tests/runtime/math/formula/spec.mjs", .name = "test-typed-math", .description = "Check typed formula construction, composition, and rendering" },
         .{ .path = "tests/runtime/document/typed_page_numbers_spec.mjs", .name = "test-typed-document", .description = "Check typed page numbers, contents, and references in a multi-page document" },
         .{ .path = "tests/runtime/cli_diagnostics_runtime_spec.mjs" },
+        .{ .path = "tests/runtime/cli/init/spec.mjs", .name = "test-init", .description = "Check generated project content, imports, customization, and overwrite protection" },
         .{ .path = "tests/runtime/completion_runtime_spec.mjs" },
         .{ .path = "tests/runtime/debug_runtime_spec.mjs" },
         .{ .path = "tests/runtime/doctor_runtime_spec.mjs" },
@@ -82,6 +83,7 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
         .{ .path = "tests/runtime/syntax/expand/spec.mjs", .name = "test-expand", .description = "Check expanded AST source output and parse-only CLI behavior" },
         .{ .path = "tests/runtime/syntax/formatting/spec.mjs", .name = "test-syntax-formatting", .description = "Compare generated formatting variants through evaluation and layout" },
         .{ .path = "tests/runtime/theme/spec.mjs" },
+        .{ .path = "tests/runtime/theme/scopes_spec.mjs", .name = "test-scoped-themes", .description = "Check page and document themes, display resolution, and exact scheduling dependencies" },
     };
     for (specs) |spec| {
         const run = steps.node(b, &suite.checks.node.step, spec.path, exe);
