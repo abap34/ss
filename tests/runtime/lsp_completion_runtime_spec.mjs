@@ -144,6 +144,32 @@ end
     const libraryRestoredDiagnostics = await libraryRestoredDiagnosticsPromise;
     assert(libraryRestoredDiagnostics.params.diagnostics.length === 0, `library restored diagnostics: ${JSON.stringify(libraryRestoredDiagnostics.params.diagnostics)}`);
 
+    const updates = libraryValidSource
+      .replace("t with { style.text.size = 64 }", "t with {}")
+      .replace("    text.size = 24\n    text.color = color_name", "    ") + `
+fn/! very_small_text(content: String, style: TextBlockStyle = default_theme().body) -> Text
+  return default::text(content, style with { text.size = 16 text.line_height = 18  })
+end
+`;
+    client.changeDocument({ uri: partsUri, version: 6, text: updates });
+    const blockFields = ["text", "layout", "underline", "headings", "chrome"];
+    for (const [cursor, fields] of [
+      ["t with {", ["content", "style", "semantics"]],
+      ["default_theme().body with {\n    ", blockFields],
+      ["text.size = 16 ", blockFields],
+      ["text.line_height = 18", blockFields],
+      ["text.line_height = 18 ", blockFields],
+      ["text.line_height = 18  ", blockFields],
+    ]) {
+      const params = { textDocument: { uri: partsUri }, position: positionAfter(updates, cursor), context: { triggerKind: 1 } };
+      const first = await client.request("textDocument/completion", params);
+      const onlyOwnFields = (items) => items.every(item => item.kind === 10 && fields.includes(item.label));
+      assert(onlyOwnFields(first.items), `unrelated names after ${JSON.stringify(cursor)}: ${first.items.map(item => item.label)}`);
+      const result = first.isIncomplete ? await requestCompleteCompletion(client, params) : first;
+      assertUniqueCompletionLabels(result, cursor);
+      assert(onlyOwnFields(result.items) && result.items.length === fields.length, `wrong fields after ${JSON.stringify(cursor)}: ${result.items.map(item => item.label)}`);
+    }
+
     const unimportedLibraryValidSource = `import std:text as default
 
 fn/! ultra_big(content: String) -> Text
@@ -664,6 +690,7 @@ function assertPlacedCompletion(completion, label) {
 
 function assertTextBlockCompletion(completion, label) {
   assertUniqueCompletionLabels(completion, label);
+  assert(completion.items.every(item => item.kind === 10), `${label}: expected only properties`);
   assertCompletionHas(completion, "text", label);
   assertCompletionHas(completion, "layout", label);
   assertCompletionHas(completion, "headings", label);
@@ -672,6 +699,7 @@ function assertTextBlockCompletion(completion, label) {
 
 function assertTextStyleRecordCompletion(completion, label) {
   assertUniqueCompletionLabels(completion, label);
+  assert(completion.items.every(item => item.kind === 10), `${label}: expected only properties`);
   assertCompletionHas(completion, "size", label);
   assertCompletionHas(completion, "color", label);
   assertCompletionMissing(completion, ["page", "String", "body"], label);

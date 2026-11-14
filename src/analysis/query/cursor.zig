@@ -820,7 +820,10 @@ fn recordUpdateCompletionInExpr(budget: ?QueryBudget, expr: ast.Expr, offset: us
                 };
                 if (spanContainsOffset(field.value_span, offset)) {
                     if (recordUpdateCompletionInExpr(budget, field.value, offset)) |target| break :blk target;
-                    break :blk null;
+                    // At the end of a name the author may still be typing it.
+                    // After a finished literal or closing delimiter a new key can start.
+                    if (offset < field.value_span.end or field.value_unfinished or
+                        sourceNameInExpr(budget, field.value, offset) != null) break :blk null;
                 }
             }
             if (spanContainsOffset(update.body_span, offset)) break :blk .{

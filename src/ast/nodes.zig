@@ -640,6 +640,7 @@ pub fn Tree(comptime surface: bool) type {
             path_span: Span,
             value: Expr,
             value_span: Span,
+            value_unfinished: bool = false,
 
             pub fn deinit(self: *RecordUpdateFieldExpr, allocator: Allocator) void {
                 for (self.path.items) |*segment| segment.deinit(allocator);
@@ -660,6 +661,7 @@ pub fn Tree(comptime surface: bool) type {
                     .path_span = self.path_span,
                     .value = try self.value.clone(allocator),
                     .value_span = self.value_span,
+                    .value_unfinished = self.value_unfinished,
                 };
             }
         };

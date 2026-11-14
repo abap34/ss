@@ -45,6 +45,69 @@ const Declaration = struct {
     span: utils.source.ByteSpan,
 };
 
+// Only the innermost delimiter can own a field name. A completed assignment is
+// followed by another field after a comma, a newline, or an adjacent name.
+const UpdatePosition = struct {
+    const Slot = enum { expression, field, value_start, value };
+    parents: [Limits.tokens]Slot = undefined,
+    depth: usize = 0,
+    slot: Slot = .expression,
+    previous: []const u8 = "",
+    line: usize = 0,
+    can_end_value: bool = false,
+
+    fn consume(self: *UpdatePosition, item: scanner.Token, word: []const u8, offset: usize) bool {
+        if (self.slot == .value and self.can_end_value and
+            (item.line != self.line or (item.kind == .identifier and !std.mem.eql(u8, word, "with"))))
+            self.slot = .field;
+        // At the start of a token the cursor is still before it.
+        if (item.span.start >= offset) return true;
+        const ch = if (word.len == 1) word[0] else 0;
+        switch (ch) {
+            '{', '(', '[' => {
+                if (self.depth == self.parents.len) return false;
+                self.parents[self.depth] = if (self.slot == .value_start) .value else self.slot;
+                self.depth += 1;
+                self.slot = if (ch == '{' and std.mem.eql(u8, self.previous, "with")) .field else .expression;
+            },
+            '}', ')', ']' => {
+                self.slot = if (self.depth == 0) .expression else blk: {
+                    self.depth -= 1;
+                    break :blk self.parents[self.depth];
+                };
+            },
+            '=' => if (self.slot == .field) {
+                self.slot = .value_start;
+            },
+            ',' => if (self.slot != .expression) {
+                self.slot = .field;
+            },
+            else => if (self.slot == .value_start) {
+                self.slot = .value;
+            },
+        }
+        self.can_end_value = switch (item.kind) {
+            .identifier => !std.mem.eql(u8, word, "with"),
+            .string, .color_string, .number => true,
+            else => ch == ')' or ch == '}' or ch == ']' or ch == '?',
+        };
+        self.previous = word;
+        self.line = item.line;
+        return true;
+    }
+
+    fn atField(self: *const UpdatePosition, last: ?scanner.Token, next: ?scanner.Token, text: []const u8, offset: usize) bool {
+        if (self.slot != .value or !self.can_end_value) return self.slot == .field;
+        const token = last orelse return false;
+        if (offset < token.span.end or (offset == token.span.end and token.kind == .identifier)) return false;
+        // A following operator, call or member access still belongs to this
+        // value. Only a field name, a delimiter, or EOF can follow a full value.
+        const following = next orelse return true;
+        const word = text[following.span.start..following.span.end];
+        return if (following.kind == .identifier) !std.mem.eql(u8, word, "with") else std.mem.eql(u8, word, ",") or std.mem.eql(u8, word, "}");
+    }
+};
+
 const Context = struct {
     req: types.SourceRequest,
     text: []const u8,
@@ -54,6 +117,7 @@ const Context = struct {
     name: []const u8 = "",
     qualifier: ?[]const u8 = null,
     member: bool = false,
+    update_field: bool = false,
     suppressed: bool = false,
 
     fn init(req: types.SourceRequest, work: *Work) Context {
@@ -64,10 +128,28 @@ const Context = struct {
         const end = @min(req.source.len, @min(start +| Limits.source_bytes, offset +| 512));
         var self = Context{ .req = req, .text = req.source[start..end], .start = start };
         var tokens = scanner.tokens(self.text);
+        var position = UpdatePosition{};
+        const local_offset = offset - start;
+        var last: ?scanner.Token = null;
+        var next: ?scanner.Token = null;
+        var reached_cursor = false;
         var scanned: usize = 0;
         while (true) : (scanned += 1) {
-            if (scanned % 8 == 0 and !work.step()) break;
-            const token = tokens.next() orelse break;
+            if (scanned % 8 == 0 and !work.step()) {
+                if (!reached_cursor) self.suppressed = true;
+                break;
+            }
+            const token = tokens.nextWithPunctuation() orelse break;
+            if (next == null and token.span.start >= local_offset) next = token;
+            if (!reached_cursor) {
+                if (token.span.start <= local_offset and !position.consume(token, self.word(token), local_offset)) {
+                    self.suppressed = true;
+                    break;
+                }
+                reached_cursor = token.span.end >= local_offset;
+                if (token.span.start < local_offset) last = token;
+            }
+            if (token.kind == .punctuation) continue;
             if (self.len == self.tokens.len) {
                 const retained = self.tokens.len / 2;
                 std.mem.copyForwards(scanner.Token, self.tokens[0..retained], self.tokens[retained..]);
@@ -76,7 +158,7 @@ const Context = struct {
             self.tokens[self.len] = token;
             self.len += 1;
         }
-        const local_offset = offset - start;
+        self.update_field = position.atField(last, next, self.text, local_offset);
         var name_start = local_offset;
         for (self.tokens[0..self.len]) |token| {
             if (!work.step()) break;
@@ -114,15 +196,6 @@ const Context = struct {
             while (begin > 0 and isNameByte(self.text[begin - 1])) : (begin -= 1) {}
             if (begin < previous - 2) self.qualifier = self.text[begin .. previous - 2];
         }
-        if (!self.member and self.qualifier == null) {
-            for (self.tokens[0..self.len]) |token| {
-                if (!work.step()) break;
-                if (token.span.end > local_offset) break;
-                if (!std.mem.eql(u8, self.word(token), "with")) continue;
-                const tail = self.text[token.span.end..local_offset];
-                if (std.mem.indexOfScalar(u8, tail, '{') != null and std.mem.indexOfScalar(u8, tail, '}') == null) self.member = true;
-            }
-        }
         return self;
     }
 
@@ -154,7 +227,7 @@ const Context = struct {
                 const tail = self.text[next.span.start..next.line_end];
                 const annotation = std.mem.trim(u8, tail[0 .. std.mem.indexOfScalar(u8, tail, '=') orelse tail.len], " \t\r");
                 if (annotation.len <= Limits.label_bytes) label = annotation;
-            } else if (std.mem.eql(u8, gap, "=") and
+            } else if (std.mem.eql(u8, gap, "=") and next.span.end <= next.line_end and
                 std.mem.trim(u8, self.text[next.span.end..next.line_end], " \t\r").len == 0)
             {
                 label = switch (next.kind) {
@@ -173,6 +246,14 @@ const Context = struct {
     }
 };
 
+/// A surrounding parse error can erase the entire update from the syntax tree.
+/// In that case there is no receiver type to supply field names.
+pub fn isUpdateField(req: types.SourceRequest, budget: types.QueryBudget) bool {
+    var work = Work{ .budget = budget };
+    const context = Context.init(req, &work);
+    return context.update_field;
+}
+
 const Candidates = struct {
     items: [Limits.names]types.CompletionCandidate = undefined,
     len: usize = 0,
@@ -190,7 +271,9 @@ pub fn complete(allocator: std.mem.Allocator, snapshot: *const snapshot_api.Anal
     if (work.budget.canceled()) return .{ .items = try allocator.alloc(types.CompletionCandidate, 0) };
     var out = Candidates{};
     const context = Context.init(req, &work);
-    if (!context.suppressed) {
+    // An update needs the receiver's fields. Leave the incomplete list empty
+    // until the typed query can identify them.
+    if (!context.suppressed and !context.update_field) {
         if (context.member) {
             // Unknown receivers admit fields from ordinary types.
             for (snapshot.record_fields) |field| {
@@ -237,7 +320,7 @@ pub fn hover(allocator: std.mem.Allocator, snapshot: *const snapshot_api.Analysi
     const context = Context.init(req, &work);
     if (context.suppressed or context.name.len == 0 or context.name.len > Limits.label_bytes or work.budget.canceled()) return null;
     var label: ?[]const u8 = null;
-    if (!context.member and context.qualifier == null) {
+    if (!context.update_field and !context.member and context.qualifier == null) {
         for (0..context.len) |index| {
             if (!work.step()) {
                 label = "Any";
@@ -248,7 +331,7 @@ pub fn hover(allocator: std.mem.Allocator, snapshot: *const snapshot_api.Analysi
             label = if (label) |previous| if (std.mem.eql(u8, previous, decl.type_label)) previous else "Any" else decl.type_label;
         }
     }
-    if (label == null and !context.member) {
+    if (label == null and !context.update_field and !context.member) {
         const modules = visibleModules(snapshot, req.path, context.qualifier, &work);
         var signature: ?[]const u8 = null;
         var matches: usize = 0;
@@ -280,7 +363,7 @@ pub fn definition(allocator: std.mem.Allocator, snapshot: *const snapshot_api.An
     const context = Context.init(req, &work);
     var targets: [Limits.definitions]types.DefinitionTarget = undefined;
     var len: usize = 0;
-    if (!context.suppressed and context.name.len > 0 and !context.member) {
+    if (!context.suppressed and context.name.len > 0 and !context.update_field and !context.member) {
         if (context.qualifier == null) {
             var i = context.len;
             while (i > 0 and len < targets.len and work.step()) {

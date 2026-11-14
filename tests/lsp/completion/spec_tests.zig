@@ -43,13 +43,13 @@ test "analysis queries: every deadline selects the independent lexical completio
     var case = try CompletionCase.init(
         \\import std:text
         \\type Label {
-        \\  title: String,
-        \\  subtitle: String,
+        \\  title: String
+        \\  subtitle: String
         \\  body: String
         \\}
         \\page main
         \\  let value = Label { title = "Title", subtitle = "Subtitle", body = "Body" }
-        \\  let copy = value with { title = "Changed" }
+        \\  let copy = value with {}
         \\  let t = text!("Body")
         \\  text::text("Title")
         \\  ~ t.left == page.left + 20
@@ -57,20 +57,29 @@ test "analysis queries: every deadline selects the independent lexical completio
     );
     defer case.deinit();
     const snapshot = try case.snapshotFor(case.source);
-    for ([_][]const u8{ "page main\n", "text::", "t.", "with { " }) |needle| {
+    for ([_][]const u8{ "page main\n", "text::", "t.", "with {" }) |needle| {
         const req = query_types.SourceRequest{ .path = case.path, .source = case.source, .offset = offsetAfter(case.source, needle) };
         var clock = DeadlineClock{};
         var full = try snapshot_api.completeAt(testing.allocator, snapshot, req, clock.options());
         defer full.deinit(testing.allocator);
         try testing.expect(!full.is_incomplete);
         try testing.expect(full.items.len > 1);
+        const empty_update = std.mem.eql(u8, needle, "with {");
+        if (empty_update) {
+            try expectOnlyKind(full, .property);
+            try testing.expectEqual(@as(usize, 3), full.items.len);
+            for ([_][]const u8{ "title", "subtitle", "body" }) |field| try expectHas(full, field);
+        }
         const steps = clock.calls;
         clock = .{};
         var fast_options = clock.options();
         fast_options.budget_ms = 0;
         var fast = try snapshot_api.completeAt(testing.allocator, snapshot, req, fast_options);
         defer fast.deinit(testing.allocator);
-        try testing.expect(fast.items.len > 0);
+        if (empty_update) {
+            try expectOnlyKind(fast, .property);
+            for (fast.items) |item| try expectHas(full, item.label);
+        } else try testing.expect(fast.items.len > 0);
         // Expiration before parsing and during traversal both select the same
         // separate analysis, rather than whichever candidates were accumulated.
         for (1..33) |part| {
@@ -648,6 +657,107 @@ test "analysis completion: record update paths complete record fields" {
         try expectUnique(result);
         try expectMissing(result, "page_number");
         try expectHas(result, "page");
+    }
+}
+
+test "analysis completion: completed update values make room for the next field on the same line" {
+    var case = try CompletionCase.init(
+        \\type Pair { first: Number second: Number }
+        \\fn pick(n: Number) -> Number = n
+        \\fn changed(pair: Pair, amount: Number) -> Pair
+        \\  return pair with { first = amount + 16  second = pick(18)  }
+        \\end
+    );
+    defer case.deinit();
+    const snapshot = try case.snapshotFor(case.source);
+    var clock = DeadlineClock{};
+    for ([_][]const u8{ "+ 16", "+ 16 ", "pick(18)", "pick(18)  " }) |needle| {
+        var result = try snapshot_api.completeAt(case.allocator, snapshot, .{
+            .path = case.path,
+            .source = case.source,
+            .offset = offsetAfter(case.source, needle),
+        }, clock.options());
+        defer result.deinit(case.allocator);
+        try expectOnlyKind(result, .property);
+        try expectHas(result, "first");
+        try expectHas(result, "second");
+        try testing.expectEqual(@as(usize, 2), result.items.len);
+    }
+    for ([_][]const u8{ "first = amount", "first = amount ", "amount + ", "pick(1" }) |needle| {
+        var result = try snapshot_api.completeAt(case.allocator, snapshot, .{
+            .path = case.path,
+            .source = case.source,
+            .offset = offsetAfter(case.source, needle),
+        }, clock.options());
+        defer result.deinit(case.allocator);
+        try expectKind(result, "amount", .variable);
+    }
+}
+
+test "analysis completion: whitespace after a missing operand is still a value position" {
+    var case = try CompletionCase.init(
+        \\type Pair { left_size: Number }
+        \\fn changed(pair: Pair, amount: Number) -> Pair
+        \\  return pair with { left_size = amount +  }
+        \\end
+    );
+    defer case.deinit();
+    for ([_][]const u8{ "amount +", "amount + ", "amount +  " }) |needle| {
+        var result = try case.completeAfter(needle);
+        defer result.deinit(case.allocator);
+        try expectKind(result, "amount", .variable);
+        try expectMissing(result, "left_size");
+    }
+}
+
+test "analysis completion: an unresolved update target or path has no field candidates" {
+    var case = try CompletionCase.init(
+        \\type Style { size: Number = 12 }
+        \\page main
+        \\  let style = Style {}
+        \\  let a = missing with { size = 1 }
+        \\  let b = style with { typo.size = 2 }
+        \\  let c = style with { size.name = 3 }
+        \\end
+    );
+    defer case.deinit();
+    const snapshot = try case.snapshotFor(case.source);
+    var clock = DeadlineClock{};
+    for ([_][]const u8{ "missing with { ", "typo.", "size." }) |needle| {
+        var result = try snapshot_api.completeAt(case.allocator, snapshot, .{
+            .path = case.path,
+            .source = case.source,
+            .offset = offsetAfter(case.source, needle),
+        }, clock.options());
+        defer result.deinit(case.allocator);
+        try testing.expect(!result.is_incomplete);
+        try testing.expectEqual(@as(usize, 0), result.items.len);
+    }
+}
+
+test "analysis completion: missing closing delimiters cannot turn an update key into a global name" {
+    const prefix =
+        \\type Style { size: Number = 12 }
+        \\page main
+        \\  let style = Style {}
+        \\
+    ;
+    var case = try CompletionCase.init(prefix ++ "end\n");
+    defer case.deinit();
+    for ([_][]const u8{ "  let edited = style with {\n    si", "  text(\"Title\", style with { si\nend\n" }) |tail| {
+        const source = try std.mem.concat(case.allocator, u8, &.{ prefix, tail });
+        for ([_][]const u8{ case.source, source }) |snapshot_source| {
+            const snapshot = try case.snapshotFor(snapshot_source);
+            var clock = DeadlineClock{};
+            var result = try snapshot_api.completeAt(case.allocator, snapshot, .{
+                .path = case.path,
+                .source = source,
+                .offset = offsetAfter(source, "with {"),
+            }, clock.options());
+            defer result.deinit(case.allocator);
+            try testing.expect(!result.is_incomplete);
+            try expectOnlyKind(result, .property);
+        }
     }
 }
 

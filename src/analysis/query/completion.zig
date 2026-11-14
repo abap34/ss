@@ -34,7 +34,7 @@ pub fn at(
     var parsed = try source_query.ParsedSource.init(allocator, snapshot, req, budget);
     defer parsed.deinit(allocator);
     if (budget.expired()) return fallback.complete(allocator, snapshot, req, opts);
-    complete(&builder, snapshot, req, parsed.module()) catch |err| switch (err) {
+    complete(&builder, snapshot, req, &parsed) catch |err| switch (err) {
         error.QueryExpired => return fallback.complete(allocator, snapshot, req, opts),
         else => return err,
     };
@@ -42,7 +42,8 @@ pub fn at(
     return builder.finish(false);
 }
 
-fn complete(builder: *CandidateBuilder, snapshot: anytype, req: types.SourceRequest, parsed_module: ?*const ast.Module) !void {
+fn complete(builder: *CandidateBuilder, snapshot: anytype, req: types.SourceRequest, parsed: *const source_query.ParsedSource) !void {
+    const parsed_module = parsed.module();
     if (try completeRecordUpdateAt(builder, snapshot, req, parsed_module)) return;
     if (try completeRecordConstructionAt(builder, snapshot, req, parsed_module)) return;
     try builder.checkBudget();
@@ -50,6 +51,8 @@ fn complete(builder: *CandidateBuilder, snapshot: anytype, req: types.SourceRequ
     try builder.checkBudget();
     if (try completeMemberAccessAt(builder, snapshot, req, parsed_module)) return;
     try builder.checkBudget();
+    const has_holes = if (parsed.owned) |p| p.holes.holes.len != 0 else snapshot.holes.len != 0;
+    if ((parsed_module == null or has_holes) and fallback.isUpdateField(req, builder.budget)) return;
     try completeRegular(builder, snapshot, req, parsed_module);
 }
 
@@ -154,9 +157,8 @@ fn completeRecordUpdateAt(builder: *CandidateBuilder, snapshot: anytype, req: ty
     const parsed = program orelse return false;
     const target = cursor.recordUpdateCompletionAt(budget, parsed, req.offset) orelse return false;
     const scratch = builder.scratch.allocator();
-    const base = (try recordTypeForCompletionExpr(scratch, budget, snapshot, req, parsed, target.target, 0)) orelse return false;
-    const ty = (try resolve_query.typeAfterPath(scratch, budget, snapshot, base, target.path_prefix)) orelse return false;
-    if (ty.kind != .group and resolve_query.recordIdForType(ty) == null) return false;
+    const base = (try recordTypeForCompletionExpr(scratch, budget, snapshot, req, parsed, target.target, 0)) orelse return true;
+    const ty = (try resolve_query.typeAfterPath(scratch, budget, snapshot, base, target.path_prefix)) orelse return true;
     try appendProperties(builder, snapshot, .{ .record = ty });
     return true;
 }

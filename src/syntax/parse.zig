@@ -1723,14 +1723,22 @@ const Parser = struct {
             const ParsedRecordUpdateValue = struct {
                 expr: Expr,
                 span: ast.Span,
+                unfinished: bool,
             };
             const value: ParsedRecordUpdateValue = if (!self.eof() and self.source[self.pos] == '=') blk: {
                 self.pos += 1;
                 const value_start = self.pos;
+                const hole_count = if (self.holes) |holes| holes.holes.items.len else 0;
                 const parsed_value = try self.parseExpr();
+                const span = self.trimExpressionSpan(value_start, self.pos);
+                // A trailing operand or member that is still missing belongs to
+                // the value, including the whitespace where it can be typed.
+                const new_holes = if (self.holes) |holes| holes.holes.items[hole_count..] else &.{};
+                const unfinished = new_holes.len != 0 and new_holes[new_holes.len - 1].span.start >= span.end;
                 break :blk .{
                     .expr = parsed_value,
-                    .span = ast.Span{ .start = value_start, .end = self.pos },
+                    .span = if (unfinished) .{ .start = value_start, .end = self.pos } else span,
+                    .unfinished = unfinished,
                 };
             } else blk: {
                 if (!self.recovering) return self.fail(error.ExpectedChar);
@@ -1739,6 +1747,7 @@ const Parser = struct {
                 break :blk .{
                     .expr = try self.makeHoleExpr(.expr, .expression, span, error.ExpectedExpression, foundAt(self.source, self.pos, source.lineAt(self.source, self.pos).span.end)),
                     .span = span,
+                    .unfinished = true,
                 };
             };
             fields.appendAssumeCapacity(.{
@@ -1746,6 +1755,7 @@ const Parser = struct {
                 .path_span = path_span,
                 .value = value.expr,
                 .value_span = value.span,
+                .value_unfinished = value.unfinished,
             });
             if (self.recovering and fields.items[fields.items.len - 1].value == .hole) {
                 var close_probe = self.pos;

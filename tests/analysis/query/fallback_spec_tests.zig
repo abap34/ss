@@ -115,6 +115,50 @@ test "fallback analysis: an unknown receiver admits known fields without type re
     }
 }
 
+test "fallback analysis: update keys wait for their receiver type while values remain expressions" {
+    var snapshot = emptySnapshot();
+    defer snapshot.deinit();
+    var fields = [_]api.RecordFieldFact{.{ .name = @constCast("size"), .record_name = @constCast("Style"), .type_label = @constCast("Number"), .module_id = 0 }};
+    var cases = [_]api.EnumCaseFact{.{ .name = @constCast("center"), .enum_name = @constCast("Align"), .module_id = 0 }};
+    snapshot.record_fields = &fields;
+    snapshot.enum_cases = &cases;
+    defer snapshot.record_fields = &.{};
+    defer snapshot.enum_cases = &.{};
+
+    const source =
+        \\let local = 1
+        \\let copy = base with {
+        \\  label = "}" ;; } with {
+        \\  size = local
+        \\  description = <<
+        \\    with { brace = "}"
+        \\  >>
+        \\  caption = "first
+        \\    } with {"
+        \\  scale = 1
+        \\  first = 16 second = 18  next = local  final = choose(1)  last = 0
+        \\  sum = 10 + local
+        \\  format = style with { alignment = Align.center }, metrics.size = 12
+        \\  other = choose(local, local)
+        \\}
+        \\let next = local
+    ;
+    for ([_][]const u8{ "base with {", ";; } with {\n  ", "\n  si", "\n  cap", "\n  sc", "style with { al", "}, ", "metrics.", "first = 16 ", "second = 18", "second = 18 ", "second = 18  ", "next = local ", "final = choose(1)" }) |needle| {
+        var result = try api.completeAt(testing.allocator, &snapshot, .{ .path = "fields.ss", .source = source, .offset = after(source, needle) }, options);
+        defer result.deinit(testing.allocator);
+        try testing.expect(result.is_incomplete);
+        try testing.expectEqual(@as(usize, 0), result.items.len);
+    }
+    for ([_][]const u8{ "size = ", "size = loc", "choose(local, ", "sum = 10 ", "sum = 10 + ", "let next = " }) |needle| {
+        var result = try api.completeAt(testing.allocator, &snapshot, .{ .path = "fields.ss", .source = source, .offset = after(source, needle) }, options);
+        defer result.deinit(testing.allocator);
+        try testing.expectEqual(.variable, (try candidate(result, "local")).kind);
+    }
+    var member = try api.completeAt(testing.allocator, &snapshot, .{ .path = "fields.ss", .source = source, .offset = after(source, "Align.") }, options);
+    defer member.deinit(testing.allocator);
+    try testing.expectEqual(.enum_case, (try candidate(member, "center")).kind);
+}
+
 test "fallback analysis: comments and strings do not introduce declarations or hover targets" {
     var snapshot = emptySnapshot();
     defer snapshot.deinit();

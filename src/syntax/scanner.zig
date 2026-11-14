@@ -9,6 +9,7 @@ pub const TokenKind = enum {
     color_string,
     number,
     operator,
+    punctuation,
 };
 
 pub const Token = struct {
@@ -42,6 +43,14 @@ pub const TokenIterator = struct {
     cursor: usize = 0,
 
     pub fn next(self: *TokenIterator) ?Token {
+        return self.read(false);
+    }
+
+    pub fn nextWithPunctuation(self: *TokenIterator) ?Token {
+        return self.read(true);
+    }
+
+    fn read(self: *TokenIterator, comptime punctuation: bool) ?Token {
         while (true) {
             const line_value = self.currentLine() orelse return null;
             if (self.cursor >= line_value.span.end) {
@@ -61,17 +70,18 @@ pub const TokenIterator = struct {
             if (operatorEnd(self.text, self.cursor, line_value.span.end)) |end| {
                 return self.advance(line_value, end, .operator);
             }
-            if (self.skipChevronBlockString(line_value)) continue;
-            if (source.startsWithAt(self.text, self.cursor, "c\"")) {
-                const end = source.skipDoubleQuotedString(self.text, self.cursor + 1, self.text.len);
-                if (end <= line_value.span.end) return self.advance(line_value, end, .color_string);
-                self.advanceToAbsolute(end);
+            const start = self.cursor;
+            if (self.skipChevronBlockString(line_value)) {
+                if (punctuation) return makeToken(line_value, start, self.cursor, .string);
                 continue;
             }
-            if (byte == '"') {
-                const end = source.skipDoubleQuotedString(self.text, self.cursor, self.text.len);
-                if (end <= line_value.span.end) return self.advance(line_value, end, .string);
+            const color = source.startsWithAt(self.text, start, "c\"");
+            if (color or byte == '"') {
+                const kind: TokenKind = if (color) .color_string else .string;
+                const end = source.skipDoubleQuotedString(self.text, start + @intFromBool(color), self.text.len);
+                if (end <= line_value.span.end) return self.advance(line_value, end, kind);
                 self.advanceToAbsolute(end);
+                if (punctuation) return makeToken(line_value, start, end, kind);
                 continue;
             }
             if (std.ascii.isDigit(byte)) {
@@ -89,7 +99,9 @@ pub const TokenIterator = struct {
                 return self.advance(line_value, end, .identifier);
             }
 
-            self.cursor += std.unicode.utf8ByteSequenceLength(byte) catch 1;
+            const end = self.cursor + (std.unicode.utf8ByteSequenceLength(byte) catch 1);
+            if (punctuation) return self.advance(line_value, end, .punctuation);
+            self.cursor = end;
         }
     }
 
@@ -104,8 +116,12 @@ pub const TokenIterator = struct {
     fn advance(self: *TokenIterator, line_value: source.Line, end: usize, kind: TokenKind) Token {
         const start = self.cursor;
         self.cursor = @min(end, line_value.span.end);
+        return makeToken(line_value, start, self.cursor, kind);
+    }
+
+    fn makeToken(line_value: source.Line, start: usize, end: usize, kind: TokenKind) Token {
         return .{
-            .span = .{ .start = start, .end = self.cursor },
+            .span = .{ .start = start, .end = end },
             .line = line_value.number - 1,
             .line_start = line_value.span.start,
             .line_end = line_value.span.end,
@@ -180,7 +196,7 @@ pub fn semanticTokens(allocator: std.mem.Allocator, text: []const u8) ![]Semanti
     var previous_word: ?[]const u8 = null;
     while (iter.next()) |token| {
         const kind = switch (token.kind) {
-            .operator => blk: {
+            .operator, .punctuation => blk: {
                 previous_word = null;
                 break :blk SemanticKind.operator;
             },
