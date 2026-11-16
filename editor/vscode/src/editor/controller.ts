@@ -424,7 +424,7 @@ export class EditorController implements vscode.Disposable {
       return;
     }
     if (message.type === "revealSource") {
-      await revealSource(message.path, message.start, message.end);
+      await revealSource(message.path, message.start, message.end, session.document.uri, session.panel.viewColumn);
       return;
     }
     if (message.type === "queryIcons") {

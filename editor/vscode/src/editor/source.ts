@@ -53,6 +53,8 @@ export async function revealSource(
   filePath: string,
   start: number,
   end: number,
+  entry: vscode.Uri,
+  previewColumn: vscode.ViewColumn | undefined,
 ): Promise<void> {
   const document = await vscode.workspace.openTextDocument(
     vscode.Uri.file(filePath),
@@ -64,11 +66,10 @@ export async function revealSource(
     document.positionAt(startOffset),
     document.positionAt(endOffset),
   );
-  const viewColumn = existingViewColumn(document.uri);
   const editor = await vscode.window.showTextDocument(document, {
     preview: false,
     preserveFocus: false,
-    viewColumn,
+    viewColumn: sourceViewColumn(document.uri, entry, previewColumn),
   });
   editor.selection = new vscode.Selection(range.start, range.end);
   editor.revealRange(
@@ -77,18 +78,25 @@ export async function revealSource(
   );
 }
 
-function existingViewColumn(uri: vscode.Uri): vscode.ViewColumn | undefined {
-  const visible = vscode.window.visibleTextEditors.find((editor) =>
-    editor.document.uri.toString() === uri.toString()
-  );
-  if (visible?.viewColumn != null) return visible.viewColumn;
-
-  for (const group of vscode.window.tabGroups.all) {
-    for (const tab of group.tabs) {
-      if (tabContainsUri(tab.input, uri)) return group.viewColumn;
-    }
+function sourceViewColumn(
+  target: vscode.Uri,
+  entry: vscode.Uri,
+  previewColumn: vscode.ViewColumn | undefined,
+): vscode.ViewColumn {
+  const { all, activeTabGroup } = vscode.window.tabGroups;
+  const preview = previewColumn ?? activeTabGroup.viewColumn;
+  const groups = all.filter(group => group.viewColumn !== preview);
+  for (const uri of [target, entry]) {
+    const match = groups.find(group => tabContainsUri(group.activeTab?.input, uri))
+      ?? groups.find(group => group.tabs.some(tab => tabContainsUri(tab.input, uri)));
+    if (match) return match.viewColumn;
   }
-  return undefined;
+
+  const visibleSources = vscode.window.visibleTextEditors.filter(editor => editor.viewColumn !== preview);
+  return visibleSources.find(editor => editor.document.languageId === "ss-slide")?.viewColumn
+    ?? visibleSources.find(editor => editor.viewColumn != null)?.viewColumn
+    ?? groups.find(group => group.tabs.some(tab => tab.input instanceof vscode.TabInputText))?.viewColumn
+    ?? vscode.ViewColumn.Beside;
 }
 
 function tabContainsUri(input: unknown, uri: vscode.Uri): boolean {

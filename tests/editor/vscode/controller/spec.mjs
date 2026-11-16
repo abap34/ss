@@ -63,6 +63,7 @@ const { EditorController, setProjectSettingsProvider } = await import(
 );
 
 await testOpenResolvesConfiguredEntryWithoutSsDocument();
+await testRevealSourceKeepsPreviewVisible();
 await testDisposingSessionCancelsSourceEditRequest();
 await testPendingOpenDoesNotSurviveDisposal();
 await testOpeningManualPreviewBuildsInitialSnapshot();
@@ -85,6 +86,52 @@ await testPageCodeLensOpensEntryAndRevealsFirstExpansion();
 await testRestartDiscardsUnacknowledgedRequestsAndQueuedEdits();
 await testRestartFailureIsVisibleAndRetryCanRebuild();
 setProjectSettingsProvider(undefined);
+
+async function testRevealSourceKeepsPreviewVisible() {
+  await withManualSession(async ({ controller, session }) => {
+    const entry = session.document.uri;
+    const uri = mock.Uri.file(path.join(path.dirname(entry.fsPath), "chapter.ss"));
+    const target = { uri, languageId: "ss-slide", getText: () => "日text", positionAt: character => ({ line: 0, character }) };
+    mock.workspace.textDocuments.push(target);
+    const tab = uri => Object.assign(new mock.TabInputText(), { uri });
+    const group = (viewColumn, ...inputs) => {
+      const tabs = inputs.map(input => ({ input }));
+      return { viewColumn, tabs, activeTab: tabs[0] };
+    };
+    const preview = group(2, {}, tab(uri)); // The target can be hidden behind the WYSIWYG.
+    const code = group(1, tab(entry));
+    const other = group(3, tab(mock.Uri.file("/other.ss")));
+    const msg = { type: "revealSource", path: uri.fsPath, start: 3, end: 7 };
+    let shown;
+    mock.window.showTextDocument = async (doc, options) => {
+      assert.equal(doc, target);
+      shown = options;
+      return { revealRange(range) { assert.deepEqual(range.values.map(p => p.character), [1, 5]); } };
+    };
+    async function check(groups, visible, expected) {
+      mock.window.tabGroups = { activeTabGroup: preview, all: groups };
+      mock.window.visibleTextEditors = visible;
+      shown = undefined;
+      await controller.handleMessage(session, msg);
+      assert.equal(shown?.viewColumn, expected);
+      assert.equal(shown?.preserveFocus, false);
+      assert.equal(shown?.preview, false);
+    }
+    try {
+      session.panel.viewColumn = preview.viewColumn;
+      await check([other, preview, code], [], 1);
+      await check([code, preview, group(3, {}, tab(uri))], [], 3);
+      await check([preview, other], [{ document: { languageId: "ss-slide" }, viewColumn: 3 }], 3);
+      await check([preview], [], mock.ViewColumn.Beside);
+      session.panel.viewColumn = undefined;
+      await check([preview, code], [], 1);
+    } finally {
+      delete mock.window.showTextDocument;
+      delete mock.window.tabGroups;
+      delete mock.window.visibleTextEditors;
+    }
+  });
+}
 
 async function testPageCodeLensOpensEntryAndRevealsFirstExpansion() {
   const fixture = await mkdtemp(path.join(os.tmpdir(), "ss-editor-page-reveal-"));
@@ -1398,7 +1445,7 @@ function vscodeMock() {
     Range,
     Selection: class {},
     CancellationTokenSource,
-    ViewColumn: { Beside: 2 },
+    ViewColumn: { Beside: -2 },
     TextEditorRevealType: { InCenterIfOutsideViewport: 0 },
     TabInputText,
     TabInputTextDiff,
