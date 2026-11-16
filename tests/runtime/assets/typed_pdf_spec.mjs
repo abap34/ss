@@ -87,7 +87,7 @@ try {
   assert.doesNotMatch(wrongFormat.stderr, /panic:/);
 
   for (const number of ["0", "-1", "1.5", "100000000000000000000"]) {
-    await writeFile(path.join(project, "invalid.ss"), source.replace("asset.pdf_page = 2", `asset.pdf_page = ${number}`));
+    await writeFile(path.join(project, "invalid.ss"), source.replace("pdf_page = 2", `pdf_page = ${number}`));
     const result = run("dump", "--quiet", "invalid.ss");
     assert.notEqual(result.status, 0, `Invalid page number accepted: ${number}`);
     assert.match(result.stderr, /InvalidAsset/);
@@ -100,7 +100,7 @@ try {
   assert.match(missing.stderr, /AssetNotFound/);
   assert.match(missing.stderr, /missing\.pdf/);
 
-  await writeFile(path.join(project, "out-of-range.ss"), source.replace("asset.pdf_page = 2", "asset.pdf_page = 3"));
+  await writeFile(path.join(project, "out-of-range.ss"), source.replace("pdf_page = 2", "pdf_page = 3"));
   const absentPage = run("render", "--quiet", "out-of-range.ss", "--output", "absent.pdf");
   assert.notEqual(absentPage.status, 0);
   assert.match(absentPage.stderr, /InvalidPdfResource/);

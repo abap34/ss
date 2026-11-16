@@ -33,7 +33,7 @@ page second
 pagectx().notes = <<
 ${secondNotes}
 >>
-pdf!("font.pdf", AssetBlockStyle {} with { asset.scale = 0.5 })
+pdf!("font.pdf", ImageStyle {} with { scale = 0.5 })
 end
 `);
 await writeFile(path.join(output, "ss.toml"), '[project]\nentry = "slide.ss"\n');

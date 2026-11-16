@@ -1,7 +1,6 @@
 import std:themes/default as { default_theme }
 import std:text as native_text
 import std:text/style as { TextBlockStyle }
-import std:text/types as { MarkdownHeadingStyle, MarkdownHeadingStyles }
 import std:math/types as { LatexConfig }
 
 const accent: Color = c"#4682b4"
@@ -16,62 +15,52 @@ fn item061() -> Theme
     accent_color = accent
     muted_color = c"#808080"
   }) with {
-    body.text.size = 28
-    body.text.line_height = 36
-    body.text.markdown.bold_color = c"#000009"
-    h1.text.size = 44
-    h1.text.line_height = 52
-    h2.text.size = 34
-    h2.text.line_height = 42
-    h3.text.size = 28
-    h3.text.line_height = 36
-    pdf.chrome.stroke = c"#ffffff"
+    text.size = 28
+    text.line_height = 36
+    text.markdown.bold.color = c"#000009"
+    text.headings.h1.size = 44
+    text.headings.h1.line_height = 52
+    text.headings.h2.size = 34
+    text.headings.h2.line_height = 42
+    text.headings.h3.size = 28
+    text.headings.h3.line_height = 36
+    image.chrome.stroke = c"#ffffff"
   }
-  return value with {
-    body.text.markdown.code.colors = value.code.highlight.code
-    body.headings = MarkdownHeadingStyles {
-      h1 = MarkdownHeadingStyle { text = value.h1.text }
-      h2 = MarkdownHeadingStyle { text = value.h2.text }
-      h3 = MarkdownHeadingStyle { text = value.h3.text }
-      h4 = MarkdownHeadingStyle { text = value.h4.text }
-      h5 = MarkdownHeadingStyle { text = value.h5.text }
-      h6 = MarkdownHeadingStyle { text = value.h6.text }
-    }
-  }
+  return value
 end
 
-const head_style: TextBlockStyle = theme.h1 with {
-  text.size = 40
-  text.line_height = 48
-  text.color = accent
+const head_style: TextBlockStyle = theme.text with {
+  size = 40
+  line_height = 48
+  color = accent
   layout.spacing_after = 34
 }
 
-const item063: TextBlockStyle = theme.h1 with {
-  text.size = 60
-  text.line_height = 68
-  text.font.weight = 400
-  text.color = accent
+const item063: TextBlockStyle = theme.text with {
+  size = 60
+  line_height = 68
+  font.weight = 400
+  color = accent
   layout.spacing_after = 26
 }
 
-const item064: TextBlockStyle = theme.h2 with {
-  text.size = 34
-  text.line_height = 42
-  text.font.weight = 700
-  text.color = accent
-  layout.x = 72
+const item064: TextBlockStyle = theme.text with {
+  size = 34
+  line_height = 42
+  font.weight = 700
+  color = accent
+  layout.left_inset = 72
   layout.right_inset = 72
   layout.spacing_after = 24
 }
 
-const item065: TextBlockStyle = theme.byline with {
-  text.size = 22
-  text.line_height = 28
-  text.color = accent
+const item065: TextBlockStyle = theme.text with {
+  size = 22
+  line_height = 28
+  color = accent
 }
 
-fn/! text(content: String, style: TextBlockStyle = theme.body, config: LatexConfig = latex_config) -> Text
+fn/! text(content: String, style: TextBlockStyle = theme.text, config: LatexConfig = latex_config) -> Text
   return native_text::text(content, style, config)
 end
 
@@ -115,19 +104,19 @@ fn item070!(title: String, subtitle: String, author: String) -> Placed<Group<Tex
 end
 
 fn item074!(content: String) -> Placed<Text>
-  let item075 = text!(content, theme.body with { text.size = 16 text.line_height = 20 })
+  let item075 = text!(content, theme.text with { size = 16 line_height = 20 })
   ~ item075.bottom == page.bottom + 20
   ~ item075.left == page.left + 60
   return item075
 end
 
 fn item076!(target: Page) -> Void
-  let item075 = place_on!(target, pageno(theme.page_number))
+  let item075 = place_on!(target, pageno(theme.text))
   target ~ item075.right == target.right - 24
   target ~ item075.bottom == target.bottom + 20
 end
 
-fn/! item077(content: String, style: TextBlockStyle = theme.body, config: LatexConfig = latex_config) -> Text
-  let item078 = style with { text.color = c"#ff0000" }
+fn/! item077(content: String, style: TextBlockStyle = theme.text, config: LatexConfig = latex_config) -> Text
+  let item078 = style with { color = c"#ff0000" }
   return native_text::text(content, item078, config)
 end

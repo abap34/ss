@@ -95,14 +95,14 @@ try {
   assert.equal((await readFile(path.join(output, "slides.pdf"))).subarray(0, 5).toString(), "%PDF-");
   const picturePath = path.join(root, "tests/fixtures/layout/width-allocation/diagram.svg");
   for (const [name, statements, diagnostic] of [
-    ["shortage", `place!(text("Body") || image("${picturePath}", AssetBlockStyle {} with { asset.scale = 4 }))`, "InvalidWidthAllocation"],
+    ["shortage", `place!(text("Body") || image("${picturePath}", ImageStyle {} with { scale = 4 }))`, "InvalidWidthAllocation"],
     ["manual", `place!(group(text("A"), text("B")) || image("${picturePath}"))`, "UnboundedGroupWidth"],
     ["padding", `let body = text!("Body", TextBlockStyle {} with { chrome.pad_x = 12 })\n  ~ body.width == 24`, "InvalidWidthAllocation"],
     ["zero-height", `let body = text!("Body")\n  ~ body.height == 0`, "InvalidFrameSize"],
-    ["zero-scale", `image!("${picturePath}", AssetBlockStyle {} with { asset.scale = 0 })`, "InvalidNativeDisplay"],
+    ["zero-scale", `image!("${picturePath}", ImageStyle {} with { scale = 0 })`, "InvalidNativeDisplay"],
     ["negative-padding", `text!("Body", TextBlockStyle {} with { chrome.pad_x = -1 })`, "InvalidNativeDisplay"],
   ]) {
-    await writeFile(path.join(output, `${name}.ss`), `import std:prelude as *\nimport std:text/style as { TextBlockStyle }\nimport std:assets/style as { AssetBlockStyle }\npage invalid\n  ${statements}\nend\n`);
+    await writeFile(path.join(output, `${name}.ss`), `import std:prelude as *\nimport std:text/style as { TextBlockStyle }\nimport std:assets/style as { ImageStyle }\npage invalid\n  ${statements}\nend\n`);
     const result = spawnSync(ssBin, ["dump", "--quiet", `${name}.ss`], { cwd: output, encoding: "utf8", timeout: 60000 });
     assert.ifError(result.error);
     assert.notEqual(result.status, 0, name);

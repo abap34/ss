@@ -71,6 +71,7 @@ pub const layout = @import("layout/root.zig");
 pub const fields = @import("core/fields.zig");
 pub const font = @import("core/font.zig");
 pub const fontawesome = @import("core/fontawesome.zig");
+pub const render_paint = @import("core/render_paint.zig");
 pub const render_policy = @import("core/render_policy.zig");
 pub const latex_config = @import("core/latex_config.zig");
 pub const markdown = @import("core/markdown.zig");

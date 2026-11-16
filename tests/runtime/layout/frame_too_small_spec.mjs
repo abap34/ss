@@ -18,9 +18,9 @@ async function testWrappedTextUsesConstrainedWidthForDiagnostics() {
       `import std:themes/default as *
 
 page wrapped_ok
-  let body = text!("This is a deliberately long paragraph that should wrap inside the fixed width frame without reporting frame too small.", default_theme().body with {
-    text.size = 22
-    text.line_height = 30
+  let body = text!("This is a deliberately long paragraph that should wrap inside the fixed width frame without reporting frame too small.", default_theme().text with {
+    size = 22
+    line_height = 30
   })
   ~ body.left == page.left + 100
   ~ body.right == body.left + 260
@@ -54,12 +54,12 @@ page table_ok
 
 Repeated updates continue along the same edge after the older state is processed.
 >>
-  let body = text!(body_content, default_theme().body with {
-    text.size = 16
-    text.line_height = 22
-    text.markdown.table.cell_pad_x = 7
-    text.markdown.table.cell_pad_y = 5
-    text.markdown.table.line_width = 0.8
+  let body = text!(body_content, default_theme().text with {
+    size = 16
+    line_height = 22
+    markdown.table.cell_pad_x = 7
+    markdown.table.cell_pad_y = 5
+    markdown.table.line_width = 0.8
   })
 
   ~ body.left == page.left + 642
@@ -85,7 +85,7 @@ async function testChromeStrokeStaysInsideFrameForDiagnostics() {
       `import std:themes/default as *
 
 page chrome_ok
-  let panel = code!("", "plain", CodeBlockStyle {} with {
+  let panel = code!("", "plain", TextBlockStyle {} with {
     chrome.fill = c"0.97,0.98,1"
     chrome.stroke = c"0.80,0.84,0.90"
     chrome.line_width = 2
@@ -115,9 +115,9 @@ async function testTooSmallFixedFrameReportsConstraints() {
       `import std:themes/default as *
 
 page too_small
-  let body = text!("SupercalifragilisticexpialidociousSupercalifragilisticexpialidocious", default_theme().body with {
-    text.size = 24
-    text.line_height = 30
+  let body = text!("SupercalifragilisticexpialidociousSupercalifragilisticexpialidocious", default_theme().text with {
+    size = 24
+    line_height = 30
   })
   ~ body.left == page.left + 100
   ~ body.right == body.left + 120

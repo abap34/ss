@@ -46,7 +46,7 @@ try {
   assert.equal(byPage[0][1].content, "fa-solid:heart");
   assert.deepEqual(byPage[0][0].placement.input, byPage[0][2].placement.input);
   const field = (record, name) => record.fields.find(item => item.name === name).value;
-  const tint = node => field(field(field(node.placement.input, "style"), "asset"), "tint");
+  const tint = node => field(field(node.placement.input, "style"), "tint");
   assert.notDeepEqual(tint(byPage[0][0]), tint(byPage[0][1]));
   assert.equal(new Set(icons.map(node => node.id)).size, 5);
   success("render", "--quiet", source, "--output", path.join(output, "slides.pdf"));
@@ -61,7 +61,7 @@ try {
 
   const original = await readFile(source, "utf8");
   const changed = path.join(output, "changed.ss");
-  await writeFile(changed, original.replace("asset.scale = 1.5", "asset.scale = 0.5"));
+  await writeFile(changed, original.replace("scale = 1.5", "scale = 0.5"));
   success("dump", "--quiet", changed, "--output", path.join(output, "changed.json"));
   const updated = JSON.parse(await readFile(path.join(output, "changed.json"), "utf8"));
   const heart = updated.nodes.find(node => imageSourceIs(node, "icon") && node.content === "fa-solid:heart");

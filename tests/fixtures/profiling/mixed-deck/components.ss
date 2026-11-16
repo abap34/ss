@@ -6,15 +6,15 @@ import std:math/types as { LatexConfig }
 
 const pale: Color = c"#f3f7fa"
 const border: Color = c"#cadbe8"
-const body_style: TextBlockStyle = theme_api::theme.body with {
-  text.line_height = 38
+const body_style: TextBlockStyle = theme_api::theme.text with {
+  line_height = 38
   layout.spacing_after = 0
 }
 const title_style: TextBlockStyle = body_style with {
-  text.size = 25
-  text.line_height = 34
-  text.font.weight = 700
-  text.color = theme_api::accent
+  size = 25
+  line_height = 34
+  font.weight = 700
+  color = theme_api::accent
 }
 
 type Value001 { title: String label: String = "屋上" config: LatexConfig = LatexConfig {} }
@@ -114,22 +114,22 @@ fn item026(items: Selection<Placed<Heading>>) -> String
 ", (item075: Placed<Heading>) |-> str(number_of(item075, items) ?? 0) ++ ". " ++ item075.value.title)
 end
 
-fn item027!(items: Selection<Placed<Heading>>, style: TextBlockStyle = theme_api::theme.body) -> Placed<Text>
+fn item027!(items: Selection<Placed<Heading>>, style: TextBlockStyle = theme_api::theme.text) -> Placed<Text>
   return theme_api::text!(item026(items), style)
 end
 
 fn item028!() -> Placed<Text>
-  return item027!(item016(docctx(), 1), theme_api::theme.h2 with { text.parse = TextParseMode.block text.line_height = 50 })
+  return item027!(item016(docctx(), 1), theme_api::theme.text with { line_height = 50 })
 end
 
 fn item029!() -> Placed<Text>
-  return item027!(item017(pagectx(), docctx()), theme_api::theme.body with { text.size = 26 text.line_height = 42 })
+  return item027!(item017(pagectx(), docctx()), theme_api::theme.text with { size = 26 line_height = 42 })
 end
 
-fn/! item030(style: TextBlockStyle = theme_api::theme.body) -> Text
+fn/! item030(style: TextBlockStyle = theme_api::theme.text) -> Text
   return theme_api::text("→", style)
 end
 
-fn/! item031(content: String, style: TextBlockStyle = theme_api::theme.body) -> Text
-  return theme_api::text(content, style with { text.size = 20 text.line_height = 30 })
+fn/! item031(content: String, style: TextBlockStyle = theme_api::theme.text) -> Text
+  return theme_api::text(content, style with { size = 20 line_height = 30 })
 end

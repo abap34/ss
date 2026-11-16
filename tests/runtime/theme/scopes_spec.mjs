@@ -39,7 +39,7 @@ try {
   assert.deepEqual(dump.diagnostics, []);
   const sizes = label => text(dump).filter(n => n.content === label)
     .sort((a, b) => dump.page_order.indexOf(a.placement.page) - dump.page_order.indexOf(b.placement.page))
-    .map(n => n.render.text.font_size);
+    .map(n => n.render[n.render.kind].font_size);
   assert.deepEqual(sizes("Shared"), [21, 35, 21]);
   assert.deepEqual(sizes("Badge"), [13, 19]);
   assert.deepEqual(sizes("Subsection"), [27, 39]);
@@ -66,6 +66,7 @@ try {
   assert.equal((await readFile(path.join(cwd, "scopes.pdf"))).subarray(0, 5).toString(), "%PDF-");
 
   await copyFile(path.join(root, "src/cli/templates/components.ss"), path.join(cwd, "components.ss"));
+  await writeFile(path.join(cwd, "theme.ss"), "fn footnote_style(t: Theme) -> TextBlockStyle = t.text\n");
   const components = 'import "./components" as { footnote! }\n';
   const nested = await source(components + `fn setup!(t: Theme) -> Void
   theme!(t)
@@ -73,10 +74,10 @@ try {
 end
 page local
   footnote!("Earlier in source")
-  setup!(document_theme() with { note.text.size = 13 })
+  setup!(document_theme() with { text.size = 13 })
 end
 document
-  theme!(Theme {} with { note.text.size = 9 })
+  theme!(Theme {} with { text.size = 9 })
 end`);
   const nestedGraph = await json(["debug", "schedule", nested]);
   const chain = ["theme!(", "setup!(", "footnote!("].map(prefix => parent(nestedGraph, prefix));
@@ -89,10 +90,10 @@ end`);
 
   // Only paths reaching the footnote need the definition. Callers must
   // include early returns when deciding whether the page overrides the document.
-  for (const [otherwise, fallback] of [["return", true], ["theme!(Theme {} with { note.text.size = 17 })", false]]) {
+  for (const [otherwise, fallback] of [["return", true], ["theme!(Theme {} with { text.size = 17 })", false]]) {
     const input = await source(components + `fn choose!(flag: Bool) -> Void
   if flag
-    theme!(Theme {} with { note.text.size = 13 })
+    theme!(Theme {} with { text.size = 13 })
   else
     ${otherwise}
   end
@@ -107,7 +108,7 @@ page second
   footnote!("Outside second")
 end
 document
-  theme!(Theme {} with { note.text.size = 9 })
+  theme!(Theme {} with { text.size = 9 })
 end`);
     const graph = await json(["debug", "schedule", input]);
     const writer = parent(graph, "theme!(");
@@ -127,10 +128,10 @@ end`);
 
   const documentRead = await source(`fn apply!(t: Theme) -> Void
   theme!(t)
-  docctx().layout_h_center_offset = document_theme().note.text.size
+  docctx().layout_h_center_offset = document_theme().text.size
 end
 document
-  apply!(Theme {} with { note.text.size = 26 })
+  apply!(Theme {} with { text.size = 26 })
 end
 page first
   text!(str(docctx().layout_h_center_offset))
@@ -140,18 +141,18 @@ end`);
   // Arguments run before omitted defaults and the callee's body. Defining a
   // theme in an argument cannot supply an earlier argument's read.
   const callOrder = `fn define!() -> Number
-  theme!(Theme {} with { note.text.size = 27 })
+  theme!(Theme {} with { text.size = 27 })
   return 0
 end
-fn label!(n: Number, size: Number = theme_for(pagectx()).note.text.size) -> Placed<Text>
-  return text!(str(size), theme_for(pagectx()).note)
+fn label!(n: Number, size: Number = theme_for(pagectx()).text.size) -> Placed<Text>
+  return text!(str(size), theme_for(pagectx()).text)
 end
 page first
   label!(define!())
 end`;
   const [called] = text(await json(["dump", "--quiet", await source(callOrder)]));
   assert.deepEqual([called.content, called.render.text.font_size], ["27", 27]);
-  run(["dump", "--quiet", await source(callOrder.replace("label!(define!())", "label!(theme_for(pagectx()).note.text.size, define!())"))],
+  run(["dump", "--quiet", await source(callOrder.replace("label!(define!())", "label!(theme_for(pagectx()).text.size, define!())"))],
     "ExecutionDependencyCycle");
 
   // The original cross-page reproducer had opposite directions for two
@@ -173,7 +174,7 @@ end`);
   for (const external of [false, true]) {
     const local = await source(components + `fn accent!(enabled: Bool) -> Void
   if enabled
-    theme!(Theme {} with { note.text.size = 17 })
+    theme!(Theme {} with { text.size = 17 })
   end
 end
 fn panel!(enabled: Bool) -> Void
@@ -182,13 +183,13 @@ fn panel!(enabled: Bool) -> Void
 end
 page first
   panel!(page_index(pagectx()) == 2)
-  ${external ? "theme!(Theme {} with { note.text.size = 23 })" : ""}
+  ${external ? "theme!(Theme {} with { text.size = 23 })" : ""}
 end
 page second
   panel!(page_index(pagectx()) == 2)
 end
 document
-  theme!(Theme {} with { note.text.size = 12 })
+  theme!(Theme {} with { text.size = 12 })
 end`);
     const graph = await json(["debug", "schedule", local]);
     const panel = parent(graph, "panel!(");
@@ -208,7 +209,7 @@ end`);
     footnote!("Reference")
     return
   end
-  theme!(Theme {} with { note.text.size = 17 })
+  theme!(Theme {} with { text.size = 17 })
   footnote!("Reference")
 end
 page first
@@ -218,7 +219,7 @@ page second
   panel!(page_index(pagectx()) == 2)
 end
 document
-  theme!(Theme {} with { note.text.size = 12 })
+  theme!(Theme {} with { text.size = 12 })
 end`);
   const branches = await json(["dump", "--quiet", exclusive]);
   for (const [i, expected] of [12, 17].entries()) {
@@ -252,7 +253,7 @@ end`);
 end
 fn setup!() -> Void
   let empty = selection_filter(pages(docctx()), (p: Page) |-> false)
-  let f = fold(empty, 0, reducer(theme_for(pagectx()).note.text.size))
+  let f = fold(empty, 0, reducer(theme_for(pagectx()).text.size))
   theme!(Theme {})
 end
 page first
@@ -264,8 +265,8 @@ end`;
     'footnote!("Too early")\n  theme!(Theme {})',
     'footnote!("Too early")\n  if page_index(pagectx()) == 1\n    theme!(Theme {})\n  end',
     'if page_index(pagectx()) == 1\n    theme!(Theme {})\n  end\n  footnote!("Middle")\n  theme!(Theme {})',
-    'theme!(theme_for(pagectx()) with { note.text.size = 18 })',
-    'if page_index(pagectx()) == 1\n    theme!(theme_for(pagectx()) with { note.text.size = 18 })\n  end',
+    'theme!(theme_for(pagectx()) with { text.size = 18 })',
+    'if page_index(pagectx()) == 1\n    theme!(theme_for(pagectx()) with { text.size = 18 })\n  end',
     'let parent = theme_for(pagectx())\n  theme!(parent)',
   ]) {
     const input = await source(components + `fn setup!() -> Void\n  ${body}\nend\npage first\n  setup!()\nend`);
@@ -279,14 +280,14 @@ end`;
   if !flag
     return
   end
-  theme!(Theme {} with { body.text.size = 42 })
+  theme!(Theme {} with { text.size = 42 })
 end
 page local
   text!("Conditional")
   maybe!(page_index(pagectx()) ${comparison})
 end
 document
-  theme!(Theme {} with { body.text.size = 23 })
+  theme!(Theme {} with { text.size = 23 })
 end`);
     const graph = await json(["debug", "schedule", input]);
     const target = display(graph, parent(graph, 'text!("Conditional")'));
@@ -297,13 +298,13 @@ end`);
 
   // The caller chooses another page at runtime; display must use that page's settings.
   const cross = await source(`type Marker { label: String }
-fn display(self: Placed<Marker>) -> Text = text(self.value.label, theme_for(pagectx()).body)
+fn display(self: Placed<Marker>) -> Text = text(self.value.label, theme_for(pagectx()).text)
 page destination
-  theme!(Theme {} with { body.text.size = 37 })
+  theme!(Theme {} with { text.size = 37 })
 end
 page caller
   place_on!(first(pages(docctx())), Marker { label = "Moved" })
-  theme!(Theme {} with { body.text.size = 16 })
+  theme!(Theme {} with { text.size = 16 })
 end`);
   const moved = text(await json(["dump", "--quiet", cross])).find(n => n.content === "Moved");
   assert.equal(moved.render.text.font_size, 37);

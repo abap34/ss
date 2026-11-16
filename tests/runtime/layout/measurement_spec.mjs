@@ -291,7 +291,7 @@ let formula = latex!("$x + y$")
 end
 
 page latex_scaled
-let formula = latex!("$x + y$", formulas::LatexBlockStyle {} with { latex.scale = 2 })
+let formula = latex!("$x + y$", formulas::ImageStyle {} with { scale = 2 })
 ~ formula.left == page.left + 100
 ~ formula.top == page.top - 160
 end
@@ -321,9 +321,9 @@ async function testPdfFactorScalesMeasuredAssetFrame() {
       `import std:prelude as *
 
 page pdf_scale
-  let small = pdf!("asset.pdf", AssetBlockStyle {} with { asset.scale = 0.3 })
+  let small = pdf!("asset.pdf", ImageStyle {} with { scale = 0.3 })
 
-  let large = pdf!("asset.pdf", AssetBlockStyle {} with { asset.scale = 2 })
+  let large = pdf!("asset.pdf", ImageStyle {} with { scale = 2 })
 end
 `,
       "utf8",

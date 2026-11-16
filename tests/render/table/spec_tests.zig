@@ -5,20 +5,20 @@ const table_layout = @import("table_layout");
 const render_text = @import("render_text");
 const testing = std.testing;
 
-fn paint() core.render_policy.TextPaint {
-    var result = std.mem.zeroes(core.render_policy.TextPaint);
-    result.font = .{ .family = "DejaVu Serif", .weight = 400, .style = .italic, .stretch = .normal };
-    result.bold_font = result.font;
-    result.bold_font.weight = 700;
-    result.italic_font = result.font;
-    result.code_font = result.font;
-    result.font_size = 24;
-    result.line_height = 20;
-    result.markdown_underline = .{ .offset = 15, .width = 4 };
-    result.markdown_table_cell_pad_x = 5;
-    result.markdown_table_cell_pad_y = 7;
-    result.markdown_table_border = .{ .r = 0, .g = 0, .b = 0 };
-    result.markdown_table_line_width = 2;
+fn paint() core.render_paint.TextPaint {
+    var result = std.mem.zeroes(core.render_paint.TextPaint);
+    result.typography.font = .{ .family = "DejaVu Serif", .weight = 400, .style = .italic, .stretch = .normal };
+
+    result.markdown.emphasis.bold_weight = 700;
+
+    result.code.style.font = result.typography.font;
+    result.typography.font_size = 24;
+    result.typography.line_height = 20;
+    result.markdown.emphasis.underline = .{ .offset = 15, .width = 4 };
+    result.markdown.table.cell_pad_x = 5;
+    result.markdown.table.cell_pad_y = 7;
+    result.markdown.table.border = .{ .r = 0, .g = 0, .b = 0 };
+    result.markdown.table.line_width = 2;
     return result;
 }
 

@@ -46,11 +46,11 @@ async function testExplicitThemeValues() {
   const project = await mkdtempProject("ss-theme-values-");
   try {
     await writeFile(path.join(project, "slide.ss"), `import std:themes/default as *
-const custom: Theme = default_theme() with { body.text.size = 31 }
+const custom: Theme = default_theme() with { text.size = 31 }
 page styled
-  text!("Custom", custom.body)
-  text!("Local", custom.body with { text.size = 19 })
-  text!("Unchanged", custom.body)
+  text!("Custom", custom.text)
+  text!("Local", custom.text with { size = 19 })
+  text!("Unchanged", custom.text)
   text!("Default")
 end
 `);

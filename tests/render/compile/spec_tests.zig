@@ -50,11 +50,11 @@ test "final-width measurements retain ink origins and baselines through the file
     (try state_layout.frame(object_id)).* = .{ .x = 0, .y = 684, .width = 47.995, .height = 36 };
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
-    const text = &prepared.pages[0].objects[0].render.text.?;
-    text.font.family = "DejaVu Serif";
-    text.font.style = .italic;
-    text.font_size = 24;
-    text.line_height = 36;
+    const text = &prepared.pages[0].objects[0].render.content.text;
+    text.typography.font.family = "DejaVu Serif";
+    text.typography.font.style = .italic;
+    text.typography.font_size = 24;
+    text.typography.line_height = 36;
     const font_environment = try render_compile.acquireFontEnvironment();
 
     const measured = blk: {
@@ -106,9 +106,9 @@ test "code measurement includes empty logical lines and keeps its ink offset" {
     (try state_layout.frame(object_id)).* = .{ .width = 240, .height = 108 };
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
-    const text = &prepared.pages[0].objects[0].render.text.?;
-    text.code_font.family = "DejaVu Serif";
-    text.code_font.style = .italic;
+    const text = &prepared.pages[0].objects[0].render.content.code.style;
+    text.font.family = "DejaVu Serif";
+    text.font.style = .italic;
     text.font_size = 24;
     text.line_height = 36;
     const font_environment = try render_compile.acquireFontEnvironment();
@@ -132,14 +132,7 @@ test "natural measurement includes tables beside ordinary paragraphs" {
     defer state_layout.deinit();
     const page_id = try state.addPage("mixed-block-geometry");
     const object_id = try document_testing.native(&state, page_id, "mixed blocks", .text, "Introduction\n\n| column | value |\n| --- | --- |\n| first | second |");
-    var text_style = core.RecordValue.init(ast.Type.recordType("TextStyle"));
-    defer text_style.deinit(testing.allocator);
-    try text_style.fields.append(testing.allocator, .{
-        .name = "parse",
-        .value = .{ .enum_case = .{ .enum_name = "TextParseMode", .case_name = "block" } },
-        .explicit = true,
-    });
-    try document_testing.setField(&state, object_id, "text", .{ .record = text_style });
+    try document_testing.setPath(&state, object_id, "content", &.{"parse"}, .{ .enum_case = .{ .enum_name = "TextParseMode", .case_name = "block" } });
     const object = state.getNode(object_id).?;
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
@@ -168,38 +161,26 @@ fn markdownGeometry(content: []const u8, family: []const u8, width: f32) !Markdo
     defer state_layout.deinit();
     const page_id = try state.addPage("block-geometry");
     const object_id = try document_testing.native(&state, page_id, "blocks", .text, content);
-    var style = core.RecordValue.init(ast.Type.recordType("TextStyle"));
-    defer style.deinit(testing.allocator);
-    try style.fields.append(testing.allocator, .{
-        .name = "parse",
-        .value = .{ .enum_case = .{ .enum_name = "TextParseMode", .case_name = "block" } },
-        .explicit = true,
-    });
-    try document_testing.setField(&state, object_id, "text", .{ .record = style });
+    try document_testing.setPath(&state, object_id, "content", &.{"parse"}, .{ .enum_case = .{ .enum_name = "TextParseMode", .case_name = "block" } });
     const object = state.getNode(object_id).?;
     (try state_layout.frame(object_id)).* = .{ .x = 0, .y = 0, .width = width, .height = 720 };
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
-    const paint = &prepared.pages[0].objects[0].render.text.?;
-    paint.font.family = family;
-    paint.bold_font = paint.font;
-    paint.italic_font = paint.font;
-    paint.code_font = paint.font;
-    paint.font_size = 24;
-    paint.line_height = 31;
+    const paint = &prepared.pages[0].objects[0].render.content.text;
+    paint.typography.font.family = family;
+
+    paint.code.style.font = paint.typography.font;
+    paint.typography.font_size = 24;
+    paint.typography.line_height = 31;
     paint.wrap = true;
-    paint.markdown_block_gap = 8;
-    paint.markdown_quote.pad_y = 5;
-    paint.markdown_quote.pad_x = 0;
-    paint.markdown_quote.inset = 0;
-    var heading = std.mem.zeroes(core.render_policy.MarkdownHeadingPaint);
-    heading.font = paint.font;
-    heading.bold_font = paint.font;
-    heading.italic_font = paint.font;
-    heading.code_font = paint.font;
+    paint.markdown.block_gap = 8;
+    paint.markdown.quote.pad_y = 5;
+    paint.markdown.quote.pad_x = 0;
+    paint.markdown.quote.inset = 0;
+    var heading = paint.typography;
     heading.font_size = 30;
     heading.line_height = 47;
-    paint.markdown_headings[1] = heading;
+    paint.headings[1] = heading;
     const environment = try render_compile.acquireFontEnvironment();
     var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .cache_dir = test_cache_dir, .font_environment = environment });
     defer {
@@ -511,7 +492,7 @@ test "render compiler shares highlight work across objects and compilations" {
     const page_id = try state.addPage("highlight");
     for (0..2) |index| {
         const object_id = try document_testing.native(&state, page_id, "code", .code, "def hello():\n  return 1\n");
-        try document_testing.setField(&state, object_id, "language", .{ .string = "python" });
+        try document_testing.setPath(&state, object_id, "content", &.{"language"}, .{ .string = "python" });
         (try state_layout.frame(object_id)).* = .{ .x = 40, .y = 60 + @as(f32, @floatFromInt(index)) * 160, .width = 400, .height = 120 };
     }
     var prepared = try core.prepared.prepare(testing.allocator, &state);
@@ -549,12 +530,12 @@ test "measurement cache observes changed highlight query contents" {
     defer state_layout.deinit();
     const page_id = try state.addPage("measurement-highlight");
     const object_id = try document_testing.native(&state, page_id, "code", .code, "T-T");
-    try document_testing.setField(&state, object_id, "language", .{ .string = "python" });
+    try document_testing.setPath(&state, object_id, "content", &.{"language"}, .{ .string = "python" });
     const object = state.getNode(object_id) orelse return error.MissingTestObject;
     (try state_layout.frame(object_id)).* = .{ .x = 40, .y = 60, .width = 400, .height = 120 };
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
-    prepared.pages[0].objects[0].render.text.?.code_font.family = "DejaVu Serif";
+    prepared.pages[0].objects[0].render.content.code.style.font.family = "DejaVu Serif";
     const font_environment = try render_compile.acquireFontEnvironment();
     var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{
         .cache_dir = test_cache_dir,
@@ -706,7 +687,7 @@ test "render compiler rejects unavailable PDF pages" {
 
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
-    prepared.pages[0].objects[0].render.asset.?.pdf_page = 2;
+    prepared.pages[0].objects[0].render.content.vector_asset.pdf_page = 2;
 
     if (render_compile.compile(
         testing.allocator,
@@ -1223,7 +1204,7 @@ test "markdown underline paint controls color opacity width offset and dash" {
 
     const baseline_y: f64 = 180;
     const font_size: f64 = 48;
-    const underline_color = core.render_policy.Color{ .r = 0.8, .g = 0.2, .b = 0.4 };
+    const underline_color = core.render_paint.Color{ .r = 0.8, .g = 0.2, .b = 0.4 };
     try emitter.textBaseline(
         testing.allocator,
         40,
@@ -2164,7 +2145,7 @@ test "paragraph measurement and emission retain the same final-width glyph layou
         "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467} joined",
     };
     for (examples) |content| {
-        for ([_]core.render_policy.HorizontalAlign{ .left, .center, .right }) |alignment| {
+        for ([_]core.render_paint.HorizontalAlign{ .left, .center, .right }) |alignment| {
             var state = try initEmptyDocumentState();
             defer state.deinit();
             var state_layout = LayoutFixture.init(&state);
@@ -2175,12 +2156,12 @@ test "paragraph measurement and emission retain the same final-width glyph layou
             (try state_layout.frame(object_id)).* = .{ .x = 0, .y = 0, .width = 100, .height = 720 };
             var prepared = try core.prepared.prepare(testing.allocator, &state);
             defer prepared.deinit(testing.allocator);
-            const paint = &prepared.pages[0].objects[0].render.text.?;
-            paint.horizontal_align = alignment;
-            paint.font.family = "DejaVu Sans";
-            paint.bold_font.family = "DejaVu Sans";
-            paint.font_size = 24;
-            paint.line_height = 36;
+            const paint = &prepared.pages[0].objects[0].render.content.text;
+            paint.typography.horizontal_align = alignment;
+            paint.typography.font.family = "DejaVu Sans";
+
+            paint.typography.font_size = 24;
+            paint.typography.line_height = 36;
             paint.wrap = true;
             var cache = render_text.Cache.init(testing.allocator, testing.io);
             defer cache.deinit();
@@ -2224,24 +2205,24 @@ test "text alignment positions each wrapped line inside its padded frame" {
             const page_id = try state.addPage("text-alignment");
             const content = if (std.mem.eql(u8, parse_mode, "block")) "Several words wrap inside this narrow text frame.\n\nShort" else "Several words wrap inside this narrow text frame.\nShort";
             const object_id = try document_testing.native(&state, page_id, "aligned", .text, content);
-            try document_testing.setPath(&state, object_id, "text", &.{"parse"}, .{ .enum_case = .{ .enum_name = "TextParseMode", .case_name = parse_mode } });
+            try document_testing.setPath(&state, object_id, "content", &.{"parse"}, .{ .enum_case = .{ .enum_name = "TextParseMode", .case_name = parse_mode } });
             try document_testing.setPath(&state, object_id, "chrome", &.{"pad_x"}, .{ .number = 12 });
             try document_testing.setPath(&state, object_id, "chrome", &.{"pad_y"}, .{ .number = 8 });
             (try state_layout.frame(object_id)).* = .{ .x = 0, .y = 0, .width = 180, .height = 720 };
             var prepared = try core.prepared.prepare(testing.allocator, &state);
             defer prepared.deinit(testing.allocator);
-            const paint = &prepared.pages[0].objects[0].render.text.?;
-            try testing.expectEqual(core.render_policy.HorizontalAlign.left, paint.horizontal_align);
-            paint.font.family = "DejaVu Sans";
-            paint.font_size = 24;
-            paint.line_height = 36;
+            const paint = &prepared.pages[0].objects[0].render.content.text;
+            try testing.expectEqual(core.render_paint.HorizontalAlign.left, paint.typography.horizontal_align);
+            paint.typography.font.family = "DejaVu Sans";
+            paint.typography.font_size = 24;
+            paint.typography.line_height = 36;
             paint.wrap = mode != .natural;
             var page_cache = render_compile.PageCache.init(testing.allocator, testing.io);
             defer page_cache.deinit();
             const environment = try render_compile.acquireFontEnvironment();
             var previous_key: ?u64 = null;
-            for ([_]core.render_policy.HorizontalAlign{ .left, .center, .right }) |alignment| {
-                paint.horizontal_align = alignment;
+            for ([_]core.render_paint.HorizontalAlign{ .left, .center, .right }) |alignment| {
+                paint.typography.horizontal_align = alignment;
                 var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .cache_dir = test_cache_dir, .font_environment = environment });
                 defer scope.deinit();
                 const provider = scope.provider();
@@ -2288,20 +2269,20 @@ test "markdown headings resolve independent text alignment and invalidate cached
     defer state_layout.deinit();
     const page_id = try state.addPage("heading-alignment");
     const object_id = try document_testing.native(&state, page_id, "heading", .text, "# Heading\n\nParagraph");
-    try document_testing.setPath(&state, object_id, "text", &.{"parse"}, .{ .enum_case = .{ .enum_name = "TextParseMode", .case_name = "block" } });
-    try document_testing.setPath(&state, object_id, "text", &.{"align"}, .{ .enum_case = .{ .enum_name = "Align", .case_name = "right" } });
-    try document_testing.setPath(&state, object_id, "markdown_headings", &.{ "h1", "text", "size" }, .{ .number = 24 });
-    try document_testing.setPath(&state, object_id, "markdown_headings", &.{ "h1", "text", "align" }, .{ .enum_case = .{ .enum_name = "Align", .case_name = "center" } });
+    try document_testing.setPath(&state, object_id, "content", &.{"parse"}, .{ .enum_case = .{ .enum_name = "TextParseMode", .case_name = "block" } });
+    try document_testing.setPath(&state, object_id, "align", &.{}, .{ .enum_case = .{ .enum_name = "Align", .case_name = "right" } });
+    try document_testing.setPath(&state, object_id, "headings", &.{ "h1", "size" }, .{ .number = 24 });
+    try document_testing.setPath(&state, object_id, "headings", &.{ "h1", "align" }, .{ .enum_case = .{ .enum_name = "Align", .case_name = "center" } });
     (try state_layout.frame(object_id)).* = .{ .x = 0, .y = 0, .width = 400, .height = 720 };
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
-    const paint = &prepared.pages[0].objects[0].render.text.?;
-    try testing.expectEqual(core.render_policy.HorizontalAlign.right, paint.horizontal_align);
-    try testing.expectEqual(core.render_policy.HorizontalAlign.center, paint.forMarkdownHeading(1).horizontal_align);
+    const paint = &prepared.pages[0].objects[0].render.content.text;
+    try testing.expectEqual(core.render_paint.HorizontalAlign.right, paint.typography.horizontal_align);
+    try testing.expectEqual(core.render_paint.HorizontalAlign.center, paint.forMarkdownHeading(1).typography.horizontal_align);
     var cache = render_compile.PageCache.init(testing.allocator, testing.io);
     defer cache.deinit();
-    for ([_]core.render_policy.HorizontalAlign{ .center, .right }) |heading_align| {
-        paint.markdown_headings[0].?.horizontal_align = heading_align;
+    for ([_]core.render_paint.HorizontalAlign{ .center, .right }) |heading_align| {
+        paint.headings[0].?.horizontal_align = heading_align;
         var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .cache_dir = test_cache_dir, .jobs = 1, .page_cache = &cache });
         defer ir.deinit(testing.allocator);
         var text_count: usize = 0;
@@ -2330,8 +2311,8 @@ test "paint boundaries preserve contextual glyphs and visual positions" {
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
     for (prepared.pages[0].objects) |*object| {
-        object.render.text.?.font.family = "DejaVu Sans";
-        object.render.text.?.font_size = 24;
+        object.render.content.text.typography.font.family = "DejaVu Sans";
+        object.render.content.text.typography.font_size = 24;
     }
     var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .cache_dir = test_cache_dir, .jobs = 1 });
     defer ir.deinit(testing.allocator);
@@ -2382,15 +2363,15 @@ test "Markdown highlight backgrounds wrap behind glyphs and inline icons without
         }
         var prepared = try core.prepared.prepare(testing.allocator, &state);
         defer prepared.deinit(testing.allocator);
-        const color = core.render_policy.Color{ .r = 1, .g = 0.9, .b = 0.4 };
+        const color = core.render_paint.Color{ .r = 1, .g = 0.9, .b = 0.4 };
         for (prepared.pages[0].objects) |*object| {
-            const text = &object.render.text.?;
-            text.font.family = "DejaVu Sans";
-            text.bold_font.family = "DejaVu Sans";
-            text.font_size = 24;
-            text.line_height = 32;
+            const text = &object.render.content.text;
+            text.typography.font.family = "DejaVu Sans";
+
+            text.typography.font_size = 24;
+            text.typography.line_height = 32;
             text.wrap = true;
-            text.markdown_highlight_fill = color;
+            text.markdown.emphasis.highlight_fill = color;
         }
         const plain_id = prepared.pages[0].objects[0].node_id;
         const marked_id = prepared.pages[0].objects[1].node_id;
@@ -2445,7 +2426,7 @@ test "Markdown highlight backgrounds wrap behind glyphs and inline icons without
         try testing.expectApproxEqAbs(@as(f64, expected.width), ink.?.width, 0.001);
         try testing.expectApproxEqAbs(@as(f64, expected.height), ink.?.height, 0.001);
 
-        prepared.pages[0].objects[1].render.text.?.markdown_highlight_fill = null;
+        prepared.pages[0].objects[1].render.content.text.markdown.emphasis.highlight_fill = null;
         const without_background = (try provider.measure(provider.context, try fixture.work(), state.getNode(marked_id).?, 180, .width_constrained)).?;
         try testing.expect(measured.cache_key != without_background.cache_key);
         try testing.expectEqual(measured.logicalBounds(), without_background.logicalBounds());
@@ -2469,29 +2450,22 @@ test "Markdown code line backgrounds cover source rows without changing glyphs o
         var fixture = LayoutFixture.init(&state);
         defer fixture.deinit();
         const page_id = try state.addPage("code-line-highlights");
-        var style = core.RecordValue.init(ast.Type.recordType("TextStyle"));
-        defer style.deinit(testing.allocator);
-        try style.fields.append(testing.allocator, .{
-            .name = "parse",
-            .value = .{ .enum_case = .{ .enum_name = "TextParseMode", .case_name = "block" } },
-            .explicit = true,
-        });
         for ([_][]const u8{ plain, marked }) |content| {
             const id = try document_testing.native(&state, page_id, "code", .text, content);
-            try document_testing.setField(&state, id, "text", .{ .record = style });
+            try document_testing.setPath(&state, id, "content", &.{"parse"}, .{ .enum_case = .{ .enum_name = "TextParseMode", .case_name = "block" } });
             (try fixture.frame(id)).* = .{ .width = 180, .height = 720 };
         }
         var prepared = try core.prepared.prepare(testing.allocator, &state);
         defer prepared.deinit(testing.allocator);
-        const color = core.render_policy.Color{ .r = 1, .g = 0.9, .b = 0.4 };
+        const color = core.render_paint.Color{ .r = 1, .g = 0.9, .b = 0.4 };
         for (prepared.pages[0].objects) |*object| {
-            const paint = &object.render.text.?;
-            paint.code_font.family = "DejaVu Sans Mono";
-            paint.markdown_code_font_size = 18;
-            paint.markdown_code_line_height = 26;
-            paint.markdown_code_pad_x = 10;
-            paint.markdown_code_pad_y = 8;
-            paint.markdown_code_highlight_fill = color;
+            const paint = &object.render.content.text;
+            paint.code.style.font.family = "DejaVu Sans Mono";
+            paint.code.style.font_size = 18;
+            paint.code.style.line_height = 26;
+            paint.code.chrome.pad_x = 10;
+            paint.code.chrome.pad_y = 8;
+            paint.code.style.line_highlight_fill = color;
         }
         const plain_id = prepared.pages[0].objects[0].node_id;
         const marked_id = prepared.pages[0].objects[1].node_id;
@@ -2507,7 +2481,7 @@ test "Markdown code line backgrounds cover source rows without changing glyphs o
         var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try fixture.document(), .{ .cache_dir = test_cache_dir, .jobs = 1, .font_environment = environment });
         defer ir.deinit(testing.allocator);
         try ir.validate();
-        const Glyph = struct { id: u32, x: f64, y: f64, advance: f64, color: core.render_policy.Color };
+        const Glyph = struct { id: u32, x: f64, y: f64, advance: f64, color: core.render_paint.Color };
         var plain_glyphs = std.ArrayList(Glyph).empty;
         defer plain_glyphs.deinit(testing.allocator);
         var marked_glyphs = std.ArrayList(Glyph).empty;
@@ -2557,7 +2531,7 @@ test "Markdown code line backgrounds cover source rows without changing glyphs o
         try testing.expectApproxEqAbs(@as(f64, expected.width), ink.?.width, 0.001);
         try testing.expectApproxEqAbs(@as(f64, expected.height), ink.?.height, 0.001);
 
-        prepared.pages[0].objects[1].render.text.?.markdown_code_highlight_fill = null;
+        prepared.pages[0].objects[1].render.content.text.code.style.line_highlight_fill = null;
         const disabled_measurement = (try provider.measure(provider.context, try fixture.work(), state.getNode(marked_id).?, 180, .width_constrained)).?;
         try testing.expect(measured.cache_key != disabled_measurement.cache_key);
         try testing.expectEqual(measured.logicalBounds(), disabled_measurement.logicalBounds());
@@ -2581,7 +2555,7 @@ test "inline math shares measured paragraph baselines with bidirectional text" {
     (try state_layout.frame(object_id)).* = .{ .width = 250, .height = 720 };
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
-    prepared.pages[0].objects[0].render.text.?.font.family = "DejaVu Sans";
+    prepared.pages[0].objects[0].render.content.text.typography.font.family = "DejaVu Sans";
     var cache = render_text.Cache.init(testing.allocator, testing.io);
     defer cache.deinit();
     const environment = try render_compile.acquireFontEnvironment();
@@ -2632,24 +2606,20 @@ fn verifyTableGeometry(source: []const u8) !void {
     defer state_layout.deinit();
     const page_id = try state.addPage("retained-table");
     const object_id = try document_testing.native(&state, page_id, "table", .text, source);
-    var text_style = core.RecordValue.init(ast.Type.recordType("TextStyle"));
-    defer text_style.deinit(testing.allocator);
-    try text_style.fields.append(testing.allocator, .{ .name = "parse", .value = .{ .enum_case = .{ .enum_name = "TextParseMode", .case_name = "block" } }, .explicit = true });
-    try document_testing.setField(&state, object_id, "text", .{ .record = text_style });
+    try document_testing.setPath(&state, object_id, "content", &.{"parse"}, .{ .enum_case = .{ .enum_name = "TextParseMode", .case_name = "block" } });
     (try state_layout.frame(object_id)).* = .{ .x = 0, .y = 360, .width = 280, .height = 360 };
     var pages = try core.prepared.prepare(testing.allocator, &state);
     defer pages.deinit(testing.allocator);
     const prepared = &pages.pages[0].objects[0];
-    const text = &prepared.render.text.?;
-    text.font.family = "DejaVu Serif";
-    text.bold_font.family = "DejaVu Serif";
-    text.italic_font.family = "DejaVu Serif";
-    text.font_size = 24;
-    text.line_height = 24;
-    text.markdown_table_border = .{ .r = 0, .g = 0, .b = 0 };
-    text.markdown_table_line_width = 2;
-    text.markdown_table_cell_pad_x = 5;
-    text.markdown_table_cell_pad_y = 7;
+    const text = &prepared.render.content.text;
+    text.typography.font.family = "DejaVu Serif";
+
+    text.typography.font_size = 24;
+    text.typography.line_height = 24;
+    text.markdown.table.border = .{ .r = 0, .g = 0, .b = 0 };
+    text.markdown.table.line_width = 2;
+    text.markdown.table.cell_pad_x = 5;
+    text.markdown.table.cell_pad_y = 7;
     const environment = try render_compile.acquireFontEnvironment();
     var cache = render_text.Cache.init(testing.allocator, testing.io);
     defer cache.deinit();

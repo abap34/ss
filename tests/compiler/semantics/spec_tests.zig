@@ -137,7 +137,7 @@ fn expectObjectContentWithFile(source: []const u8, file_name: []const u8, file_c
     try compiler_semantics.expectObjectContent(testing.io, allocator, slide_path, source, expected);
 }
 
-fn expectObjectPropertyWithFile(source: []const u8, file_name: []const u8, file_content: []const u8, key: []const u8, expected: []const u8) !void {
+fn expectObjectFieldPathWithFile(source: []const u8, file_name: []const u8, file_content: []const u8, key: []const u8, fields: []const []const u8, expected: []const u8) !void {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -155,7 +155,7 @@ fn expectObjectPropertyWithFile(source: []const u8, file_name: []const u8, file_
         .flags = .{ .truncate = true },
     });
 
-    try compiler_semantics.expectObjectProperty(testing.io, allocator, slide_path, source, key, expected);
+    try compiler_semantics.expectObjectFieldPath(testing.io, allocator, slide_path, source, key, fields, expected);
 }
 
 fn expectBuildFails(source: []const u8) !void {
@@ -509,7 +509,7 @@ test "compiler semantics: default alias supports theme override with prelude pla
         \\import std:text
         \\
         \\fn/! h2(content: String) -> Text
-        \\  let t = text::text(content, default_theme().h2)
+        \\  let t = text::text(content, default_theme().text)
         \\  return t
         \\end
         \\
@@ -526,9 +526,9 @@ test "compiler semantics: theme text size override keeps automatic line height" 
         \\
         \\page ok
         \\  let title = heading!("large text
-        \\next line", 1, default_theme().h1 with {
-        \\    text.size = 64
-        \\    text.line_height = none
+        \\next line", 1, default_theme().text with {
+        \\    size = 64
+        \\    line_height = none
         \\  })
         \\end
         \\
@@ -649,17 +649,17 @@ test "compiler semantics: stdlib display values build with explicit default them
         \\import std:themes/default as base
         \\const theme: Theme = base::default_theme()
         \\page main
-        \\  heading!("Heading", 1, theme.h1)
-        \\  text!("Body", theme.body)
-        \\  code!("print(1)", "python", theme.code)
+        \\  heading!("Heading", 1, theme.text)
+        \\  text!("Body", theme.text)
+        \\  code!("print(1)", "python", theme.text)
         \\end
         \\page assets
         \\  image!("image.svg", theme.image)
-        \\  pdf!("doc.pdf", theme.pdf)
+        \\  pdf!("doc.pdf", theme.image)
         \\end
         \\page contents
-        \\  toc!("Contents", theme.toc)
-        \\  let number = pageno!(theme.page_number)
+        \\  toc!("Contents", TocStyle { entries = theme.text })
+        \\  let number = pageno!(theme.text)
         \\  ~ number.bottom == page.bottom + 20
         \\  ~ number.right == page.right - 24
         \\end
@@ -681,7 +681,7 @@ test "compiler semantics: code_file reads source text from asset base" {
     ;
 
     try expectObjectContentWithFile(source, "snippet.zig", snippet, snippet);
-    try expectObjectPropertyWithFile(source, "snippet.zig", snippet, "language", "zig");
+    try expectObjectFieldPathWithFile(source, "snippet.zig", snippet, "content", &.{"language"}, "zig");
 }
 
 test "compiler semantics: import as star introduces bare names" {
@@ -788,7 +788,7 @@ test "compiler semantics: implicit prelude does not propagate through bare-name 
         \\
     ,
         \\fn place!(obj: Text) -> Placed<Text>
-        \\  return place_on!(pagectx(), obj with { style = default_text_style with { text.size = 41 } })
+        \\  return place_on!(pagectx(), obj with { style = default_text_style with { size = 41 } })
         \\end
         \\
     );
@@ -1023,21 +1023,21 @@ test "compiler semantics: dynamically built text survives lowering" {
 test "compiler semantics: text alignment belongs to typed input styles" {
     try buildSource(
         \\page ok
-        \\  text!("Centered", default_text_style with { text.align = Align.center })
-        \\  text!("Right", default_text_style with { text.align = Align.right })
+        \\  text!("Centered", default_text_style with { align = Align.center })
+        \\  text!("Right", default_text_style with { align = Align.right })
         \\  text!("# Heading", default_text_style with {
-        \\    headings.h1 = MarkdownHeadingStyle { text = TextStyle { align = Align.center } }
+        \\    headings.h1 = TypographyOverride { align = Align.center }
         \\  })
         \\end
     );
     try expectDiagnostic(
         \\page bad
-        \\  text!("Text", default_text_style with { text.align = "center" })
+        \\  text!("Text", default_text_style with { align = "center" })
         \\end
     , "case.ss:bytes:", "TypeMismatch: expected Align, got String");
     try expectDiagnostic(
         \\page bad
-        \\  text!("Text", default_text_style with { text.align = Align.sideways })
+        \\  text!("Text", default_text_style with { align = Align.sideways })
         \\end
     , "case.ss:bytes:", "UnknownEnumCase: enum 'Align' has no case 'sideways'");
 }
@@ -1048,8 +1048,8 @@ test "compiler semantics: math alignment belongs to typed input styles" {
         \\import std:math as formulas
         \\
         \\page ok
-        \\  let body = text!("$$x^2$$", default_text_style with { text.math.align = Align.left })
-        \\  let formula = latex!("$x^2 + y^2 = z^2$", formulas::LatexBlockStyle {} with { latex.align = Align.right })
+        \\  let body = text!("$$x^2$$", default_text_style with { math.align = Align.left })
+        \\  let formula = latex!("$x^2 + y^2 = z^2$", formulas::ImageStyle {} with { align = Align.right })
         \\end
         \\
     );
@@ -1060,11 +1060,11 @@ test "compiler semantics: LaTeX configuration is an explicit immutable input" {
         \\import std:math as formulas
         \\const config: formulas::LatexConfig = formulas::LatexConfig { engine = formulas::LatexEngine.lualatex preamble = "Shared" }
         \\page first
-        \\  let value = formulas::latex!("$x$", formulas::LatexBlockStyle {}, config)
+        \\  let value = formulas::latex!("$x$", formulas::ImageStyle {}, config)
         \\  let words = text!("Inline $x$", default_text_style, config)
         \\end
         \\page second
-        \\  let value = formulas::latex!("$x$", formulas::LatexBlockStyle {}, config with { preamble = "Local" })
+        \\  let value = formulas::latex!("$x$", formulas::ImageStyle {}, config with { preamble = "Local" })
         \\end
     );
 }
@@ -1134,7 +1134,7 @@ test "compiler semantics: qualified type names resolve in annotations records an
         \\import std:text as classes
         \\import std:layout as layout_types
         \\
-        \\fn keep_style(style: classes::TextStyle) -> classes::TextStyle
+        \\fn keep_style(style: classes::TextBlockStyle) -> classes::TextBlockStyle
         \\  return style
         \\end
         \\
@@ -1143,12 +1143,12 @@ test "compiler semantics: qualified type names resolve in annotations records an
         \\end
         \\
         \\page ok
-        \\  let style = keep_style(classes::TextStyle {
+        \\  let style = keep_style(classes::TextBlockStyle {
         \\    size = 32
         \\    math = classes::TextMathStyle { align = layout_types::Align.left }
         \\  })
         \\  let align = keep_align(layout_types::Align.left)
-        \\  let body = classes::text("qualified", classes::TextBlockStyle { text = style with { math.align = align } })
+        \\  let body = classes::text("qualified", style with { math.align = align })
         \\  layout_types::place!(body)
         \\end
         \\
@@ -1384,7 +1384,7 @@ test "compiler semantics: Color is a static type" {
         \\
         \\page ok
         \\  let body = text!("ok", default_text_style with {
-        \\    text.color = keep_color(c"0.1,0.2,0.3")
+        \\    color = keep_color(c"0.1,0.2,0.3")
         \\  })
         \\end
         \\
@@ -1399,7 +1399,7 @@ test "compiler semantics: Color is a static type" {
         \\
         \\page bad
         \\  let body = text!("bad", default_text_style with {
-        \\    text.color = keep_color("0.1,0.2,0.3")
+        \\    color = keep_color("0.1,0.2,0.3")
         \\  })
         \\end
         \\
@@ -1410,29 +1410,29 @@ test "compiler semantics: Color is a static type" {
         \\
         \\page ok
         \\  let body = text!("color", default_text_style with {
-        \\    text.color = c"#334455"
+        \\    color = c"#334455"
         \\  })
         \\end
         \\
-    , "text", &.{"color"}, "0.2,0.26666668,0.33333334");
+    , "color", &.{}, "0.2,0.26666668,0.33333334");
 
     try expectObjectFieldPath(
         \\import std:themes/default as *
         \\
         \\page ok
         \\  let body = text!("**bold**", default_text_style with {
-        \\    text.markdown.bold_color = c"#884422"
+        \\    markdown.bold.color = c"#884422"
         \\  })
         \\end
         \\
-    , "text", &.{ "markdown", "bold_color" }, "0.53333336,0.26666668,0.13333334");
+    , "markdown", &.{ "bold", "color" }, "0.53333336,0.26666668,0.13333334");
 
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
         \\page bad
         \\  let body = text!("bad", default_text_style with {
-        \\    text.markdown.code.chrome.fill = "red"
+        \\    code.chrome.fill = "red"
         \\  })
         \\end
         \\
@@ -1443,7 +1443,7 @@ test "compiler semantics: Color is a static type" {
         \\
         \\page bad
         \\  let body = text!("bad", default_text_style with {
-        \\    text.markdown.bold_color = "red"
+        \\    markdown.bold.color = "red"
         \\  })
         \\end
         \\
@@ -1456,19 +1456,17 @@ test "compiler semantics: structured style values expand to render properties" {
         \\
         \\page ok
         \\  let body = text!("style", default_text_style with {
-        \\    text = TextStyle {
-        \\      size = 33
-        \\      color = c"#123456"
-        \\      font = FontFace { family = "Menlo", weight = 700 }
-        \\    }
+        \\    size = 33
+        \\    color = c"#123456"
+        \\    font = FontFace { family = "Menlo", weight = 700 }
         \\  })
         \\end
         \\
     ;
-    try expectObjectFieldPath(source, "text", &.{"size"}, "33");
-    try expectObjectFieldPath(source, "text", &.{"color"}, "0.07058824,0.20392157,0.3372549");
-    try expectObjectFieldPath(source, "text", &.{ "font", "family" }, "Menlo");
-    try expectObjectFieldPath(source, "text", &.{ "font", "weight" }, "700");
+    try expectObjectFieldPath(source, "size", &.{}, "33");
+    try expectObjectFieldPath(source, "color", &.{}, "0.07058824,0.20392157,0.3372549");
+    try expectObjectFieldPath(source, "font", &.{"family"}, "Menlo");
+    try expectObjectFieldPath(source, "font", &.{"weight"}, "700");
 }
 
 test "compiler semantics: markdown underline uses a structured style" {
@@ -1477,24 +1475,24 @@ test "compiler semantics: markdown underline uses a structured style" {
         \\
         \\page ok
         \\  let body = text!("plain _underlined_ text", default_text_style with {
-        \\    text.markdown.underline = MarkdownUnderlineStyle { color = c"#cc3366" opacity = 0.35 width = 5 offset = 3 dash = "8,4" }
+        \\    markdown.underline = MarkdownUnderlineStyle { color = c"#cc3366" opacity = 0.35 width = 5 offset = 3 dash = "8,4" }
         \\  })
         \\end
         \\
     ;
 
-    try expectObjectFieldPath(source, "text", &.{ "markdown", "underline", "color" }, "0.8,0.2,0.4");
-    try expectObjectFieldPath(source, "text", &.{ "markdown", "underline", "opacity" }, "0.35");
-    try expectObjectFieldPath(source, "text", &.{ "markdown", "underline", "width" }, "5");
-    try expectObjectFieldPath(source, "text", &.{ "markdown", "underline", "offset" }, "3");
-    try expectObjectFieldPath(source, "text", &.{ "markdown", "underline", "dash" }, "8,4");
+    try expectObjectFieldPath(source, "markdown", &.{ "underline", "color" }, "0.8,0.2,0.4");
+    try expectObjectFieldPath(source, "markdown", &.{ "underline", "opacity" }, "0.35");
+    try expectObjectFieldPath(source, "markdown", &.{ "underline", "width" }, "5");
+    try expectObjectFieldPath(source, "markdown", &.{ "underline", "offset" }, "3");
+    try expectObjectFieldPath(source, "markdown", &.{ "underline", "dash" }, "8,4");
 
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
         \\page bad
         \\  let body = text!("_bad_", default_text_style with {
-        \\    text.markdown.underline.opacity = "opaque"
+        \\    markdown.underline.opacity = "opaque"
         \\  })
         \\end
         \\
@@ -1502,25 +1500,25 @@ test "compiler semantics: markdown underline uses a structured style" {
 }
 
 test "compiler semantics: text carries themed markdown heading styles" {
-    try expectFixtureObjectFieldPath("theme/markdown-heading-text", "markdown_headings", &.{ "h2", "text", "size" }, "35");
-    try expectFixtureObjectFieldPath("theme/markdown-heading-text", "markdown_headings", &.{ "h2", "text", "color" }, "0.08235294,0.47843137,0.16862746");
-    try expectFixtureObjectFieldPath("theme/markdown-heading-text", "markdown_headings", &.{ "h6", "text", "size" }, "17");
+    try expectFixtureObjectFieldPath("theme/markdown-heading-text", "headings", &.{ "h2", "size" }, "35");
+    try expectFixtureObjectFieldPath("theme/markdown-heading-text", "headings", &.{ "h2", "color" }, "0.08235294,0.47843137,0.16862746");
+    try expectFixtureObjectFieldPath("theme/markdown-heading-text", "headings", &.{ "h6", "size" }, "17");
 }
 
 test "compiler semantics: shared theme style application keeps text decoration and layout" {
-    try expectFixtureObjectFieldPath("theme/text-decoration-layout", "layout", &.{"x"}, "137");
-    try expectFixtureObjectFieldPath("theme/text-decoration-layout", "underline", &.{"color"}, "0.6313726,0.14901961,0.30980393");
-    try expectFixtureObjectFieldPath("theme/text-decoration-layout", "underline", &.{"width"}, "3");
+    try expectFixtureObjectFieldPath("theme/text-decoration-layout", "layout", &.{"left_inset"}, "137");
+    try expectFixtureObjectFieldPath("theme/text-decoration-layout", "chrome", &.{ "bottom_rule", "color" }, "0.6313726,0.14901961,0.30980393");
+    try expectFixtureObjectFieldPath("theme/text-decoration-layout", "chrome", &.{ "bottom_rule", "width" }, "3");
 }
 
 test "compiler semantics: all themed text constructors apply their theme records" {
-    try expectFixtureObjectFieldPath("theme/direct-constructors", "text", &.{"size"}, "29");
-    try expectFixtureObjectFieldPath("theme/direct-constructors", "text", &.{"size"}, "18");
-    try expectFixtureObjectFieldPath("theme/direct-constructors", "text", &.{"size"}, "16");
-    try expectFixtureObjectFieldPath("theme/direct-constructors", "text", &.{"size"}, "17");
-    try expectFixtureObjectFieldPath("theme/generated-constructors", "text", &.{"size"}, "17");
-    try expectFixtureObjectFieldPath("theme/generated-constructors", "text", &.{"size"}, "18");
-    try expectFixtureObjectFieldPath("theme/generated-constructors", "text", &.{"size"}, "19");
+    try expectFixtureObjectFieldPath("theme/direct-constructors", "size", &.{}, "29");
+    try expectFixtureObjectFieldPath("theme/direct-constructors", "size", &.{}, "18");
+    try expectFixtureObjectFieldPath("theme/direct-constructors", "size", &.{}, "16");
+    try expectFixtureObjectFieldPath("theme/direct-constructors", "size", &.{}, "17");
+    try expectFixtureObjectFieldPath("theme/generated-constructors", "size", &.{}, "17");
+    try expectFixtureObjectFieldPath("theme/generated-constructors", "size", &.{}, "18");
+    try expectFixtureObjectFieldPath("theme/generated-constructors", "size", &.{}, "19");
 }
 
 test "compiler semantics: image chrome and typed toc text accept explicit styles" {
@@ -1535,26 +1533,26 @@ test "compiler semantics: nested style updates reach the placed text" {
         \\
         \\page ok
         \\  let body = text!("style", default_text_style with {
-        \\    text.size = 33
-        \\    text.color = c"#123456"
-        \\    text.font.family = "Menlo"
-        \\    text.font.weight = 650
-        \\    text.font.style = FontStyle.italic
-        \\    text.font.stretch = FontStretch.expanded
-        \\    layout.x = 123
+        \\    size = 33
+        \\    color = c"#123456"
+        \\    font.family = "Menlo"
+        \\    font.weight = 650
+        \\    font.style = FontStyle.italic
+        \\    font.stretch = FontStretch.expanded
+        \\    layout.left_inset = 123
         \\    layout.wrap = WrapMode.off
         \\  })
         \\
         \\end
         \\
     ;
-    try expectObjectFieldPath(source, "text", &.{"size"}, "33");
-    try expectObjectFieldPath(source, "text", &.{"color"}, "0.07058824,0.20392157,0.3372549");
-    try expectObjectFieldPath(source, "text", &.{ "font", "family" }, "Menlo");
-    try expectObjectFieldPath(source, "text", &.{ "font", "weight" }, "650");
-    try expectObjectFieldPath(source, "text", &.{ "font", "style" }, "italic");
-    try expectObjectFieldPath(source, "text", &.{ "font", "stretch" }, "expanded");
-    try expectObjectFieldPath(source, "layout", &.{"x"}, "123");
+    try expectObjectFieldPath(source, "size", &.{}, "33");
+    try expectObjectFieldPath(source, "color", &.{}, "0.07058824,0.20392157,0.3372549");
+    try expectObjectFieldPath(source, "font", &.{"family"}, "Menlo");
+    try expectObjectFieldPath(source, "font", &.{"weight"}, "650");
+    try expectObjectFieldPath(source, "font", &.{"style"}, "italic");
+    try expectObjectFieldPath(source, "font", &.{"stretch"}, "expanded");
+    try expectObjectFieldPath(source, "layout", &.{"left_inset"}, "123");
     try expectObjectFieldPath(source, "layout", &.{"wrap"}, "off");
 }
 
@@ -1564,22 +1562,22 @@ test "compiler semantics: nested style updates preserve sibling leaves" {
         \\
         \\page ok
         \\  let body = text!("style", default_text_style with {
-        \\    text.size = 21
-        \\    text.font.family = "Avenir"
-        \\    text.font.weight = 600
-        \\    text.markdown.bold_color = c"#445566"
-        \\    text.color = c"#123456"
-        \\    text.font.style = FontStyle.italic
+        \\    size = 21
+        \\    font.family = "Avenir"
+        \\    font.weight = 600
+        \\    markdown.bold.color = c"#445566"
+        \\    color = c"#123456"
+        \\    font.style = FontStyle.italic
         \\  })
         \\end
         \\
     ;
-    try expectObjectFieldPath(source, "text", &.{"size"}, "21");
-    try expectObjectFieldPath(source, "text", &.{ "font", "family" }, "Avenir");
-    try expectObjectFieldPath(source, "text", &.{ "font", "weight" }, "600");
-    try expectObjectFieldPath(source, "text", &.{ "font", "style" }, "italic");
-    try expectObjectFieldPath(source, "text", &.{ "markdown", "bold_color" }, "0.26666668,0.33333334,0.4");
-    try expectObjectFieldPath(source, "text", &.{"color"}, "0.07058824,0.20392157,0.3372549");
+    try expectObjectFieldPath(source, "size", &.{}, "21");
+    try expectObjectFieldPath(source, "font", &.{"family"}, "Avenir");
+    try expectObjectFieldPath(source, "font", &.{"weight"}, "600");
+    try expectObjectFieldPath(source, "font", &.{"style"}, "italic");
+    try expectObjectFieldPath(source, "markdown", &.{ "bold", "color" }, "0.26666668,0.33333334,0.4");
+    try expectObjectFieldPath(source, "color", &.{}, "0.07058824,0.20392157,0.3372549");
 }
 
 test "compiler semantics: nested style updates accept explicit none" {
@@ -1588,12 +1586,12 @@ test "compiler semantics: nested style updates accept explicit none" {
         \\
         \\page ok
         \\  let body = text!("style", default_text_style with {
-        \\    text.markdown.bold_color = none
+        \\    markdown.bold.color = none
         \\  })
         \\end
         \\
     ;
-    try expectObjectFieldPathNone(source, "text", &.{ "markdown", "bold_color" });
+    try expectObjectFieldPathNone(source, "markdown", &.{ "bold", "color" });
 }
 
 test "compiler semantics: nested style updates reject invalid paths and values" {
@@ -1602,40 +1600,40 @@ test "compiler semantics: nested style updates reject invalid paths and values" 
         \\
         \\page bad
         \\  let body = text!("bad", default_text_style with {
-        \\    text.missing = 1
+        \\    missing = 1
         \\  })
         \\end
         \\
-    , "case.ss:bytes:", "UnknownField: type 'TextStyle' has no field 'missing'");
+    , "case.ss:bytes:", "UnknownField: type 'TextBlockStyle' has no field 'missing'");
 
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
         \\page bad
         \\  let body = text!("bad", default_text_style with {
-        \\    text.size.value = 1
+        \\    size.value = 1
         \\  })
         \\end
         \\
-    , "case.ss:bytes:", "InvalidValueUpdatePath: field 'text.size' has type Number, which has no fields");
+    , "case.ss:bytes:", "InvalidValueUpdatePath: field 'size' has type Number, which has no fields");
 
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
         \\page bad
         \\  let body = text!("bad", default_text_style with {
-        \\    text.font.family.value = "id"
+        \\    font.family.value = "id"
         \\  })
         \\end
         \\
-    , "case.ss:bytes:", "InvalidValueUpdatePath: field 'text.font.family' has type String, which has no fields");
+    , "case.ss:bytes:", "InvalidValueUpdatePath: field 'font.family' has type String, which has no fields");
 
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
         \\page bad
         \\  let body = text!("bad", default_text_style with {
-        \\    text.size = "large"
+        \\    size = "large"
         \\  })
         \\end
         \\
@@ -1647,10 +1645,10 @@ test "compiler semantics: code theme helpers set code and markdown colors" {
         \\import std:themes/default as *
         \\import std:code as palettes
         \\
-        \\const theme: Theme = default_theme() with { code.highlight = palettes::code_theme_one_dark() }
+        \\const theme: Theme = default_theme() with { text.code.colors = palettes::code_theme_one_dark().code }
         \\
         \\page ok
-        \\  code!("fn demo() -> Void\nend", "ss", theme.code)
+        \\  code!("fn demo() -> Void\nend", "ss", theme.text)
         \\  text!("```ss\nfn demo() -> Void\nend\n```")
         \\end
         \\
@@ -1662,15 +1660,13 @@ test "compiler semantics: code theme helpers set code and markdown colors" {
         \\
         \\page ok
         \\  let colors = palettes::code_theme_one_dark()
-        \\  let snippet = code!("fn demo() -> Void\nend", "ss", default_theme().code with { highlight = colors })
-        \\  let body = text!("```ss\nfn demo() -> Void\nend\n```", default_text_style with { text.markdown.code.colors = colors.code })
+        \\  let snippet = code!("fn demo() -> Void\nend", "ss", default_theme().text with { code.colors = colors.code })
+        \\  let body = text!("```ss\nfn demo() -> Void\nend\n```", default_text_style with { code.colors = colors.code })
         \\end
         \\
     ;
-    try expectObjectFieldPath(explicit_source, "code", &.{"keyword"}, "0.7764706,0.47058824,0.8666667");
-    try expectObjectFieldPath(explicit_source, "code", &.{"function"}, "0.38039216,0.6862745,0.9372549");
-    try expectObjectFieldPath(explicit_source, "text", &.{ "markdown", "code", "colors", "keyword" }, "0.7764706,0.47058824,0.8666667");
-    try expectObjectFieldPath(explicit_source, "text", &.{ "markdown", "code", "colors", "function" }, "0.38039216,0.6862745,0.9372549");
+    try expectObjectFieldPath(explicit_source, "code", &.{ "colors", "keyword" }, "0.7764706,0.47058824,0.8666667");
+    try expectObjectFieldPath(explicit_source, "code", &.{ "colors", "function" }, "0.38039216,0.6862745,0.9372549");
 }
 
 test "compiler semantics: default theme applies code theme to code and markdown" {
@@ -1679,16 +1675,14 @@ test "compiler semantics: default theme applies code theme to code and markdown"
         \\
         \\page ok
         \\  code!("const value = demo(1)", "javascript")
-        \\  text!("```javascript\nconst value = demo(1)\n```", default_theme().body with { text.markdown.code.colors = default_theme().code.highlight.code })
+        \\  text!("```javascript\nconst value = demo(1)\n```", default_theme().text with { code.colors = default_theme().text.code.colors })
         \\end
         \\
     ;
     try expectResolvedCodePaintIsColorful(source);
-    try expectObjectFieldPath(source, "code", &.{"plain"}, "0.14117648,0.16078432,0.18431373");
-    try expectObjectFieldPath(source, "code", &.{"keyword"}, "0.8117647,0.13333334,0.18039216");
-    try expectObjectFieldPath(source, "text", &.{ "markdown", "code", "colors", "plain" }, "0.14117648,0.16078432,0.18431373");
-    try expectObjectFieldPath(source, "text", &.{ "markdown", "code", "colors", "keyword" }, "0.8117647,0.13333334,0.18039216");
-    try expectObjectFieldPath(source, "text", &.{ "markdown", "code", "chrome", "fill" }, "0.9647059,0.972549,0.98039216");
+    try expectObjectFieldPath(source, "code", &.{ "colors", "plain" }, "0.14117648,0.16078432,0.18431373");
+    try expectObjectFieldPath(source, "code", &.{ "colors", "keyword" }, "0.8117647,0.13333334,0.18039216");
+    try expectObjectFieldPath(source, "code", &.{ "chrome", "fill" }, "0.9647059,0.972549,0.98039216");
 }
 
 test "compiler semantics: default code fonts use the generic monospace family" {
@@ -1700,8 +1694,7 @@ test "compiler semantics: default code fonts use the generic monospace family" {
         \\end
         \\
     ;
-    try expectObjectFieldPath(code_source, "text", &.{ "font", "family" }, "monospace");
-    try expectObjectFieldPath(code_source, "text", &.{ "code_font", "family" }, "monospace");
+    try expectObjectFieldPath(code_source, "code", &.{ "font", "family" }, "monospace");
 
     const markdown_source =
         \\import std:themes/default as *
@@ -1711,7 +1704,7 @@ test "compiler semantics: default code fonts use the generic monospace family" {
         \\end
         \\
     ;
-    try expectObjectFieldPath(markdown_source, "text", &.{ "code_font", "family" }, "monospace");
+    try expectObjectFieldPath(markdown_source, "code", &.{ "font", "family" }, "monospace");
 }
 
 test "compiler semantics: structured style value members are typed" {
@@ -1719,22 +1712,22 @@ test "compiler semantics: structured style value members are typed" {
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  let style = TextStyle { size = 31 }
-        \\  let body = text!("style", default_text_style with { text.size = style.size })
+        \\  let style = TextBlockStyle { size = 31 }
+        \\  let body = text!("style", default_text_style with { size = style.size })
         \\end
         \\
-    , "text", &.{"size"}, "31");
+    , "size", &.{}, "31");
 
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
         \\page bad
         \\  let body = text!("bad", default_text_style with {
-        \\    text = FontFace { family = "Menlo" }
+        \\    font = TextBlockStyle {}
         \\  })
         \\end
         \\
-    , "case.ss:bytes:", "TypeMismatch: expected TextStyle, got FontFace");
+    , "case.ss:bytes:", "TypeMismatch: expected FontFace, got TextBlockStyle");
 }
 
 test "compiler semantics: ordinary values reject direct and nested field assignment" {
@@ -1774,14 +1767,12 @@ test "compiler semantics: ordinary value updates copy nested fields" {
         \\    body.size = 33
         \\  }
         \\  let body = text!("changed", default_text_style with {
-        \\    text = TextStyle {
-        \\      size = changed.body.size
-        \\      color = changed.body.color
-        \\    }
+        \\    size = changed.body.size
+        \\    color = changed.body.color
         \\  })
         \\end
         \\
-    , "text", &.{"size"}, "33");
+    , "size", &.{}, "33");
 
     try expectObjectFieldPath(
         \\import std:themes/default as *
@@ -1800,13 +1791,11 @@ test "compiler semantics: ordinary value updates copy nested fields" {
         \\    body.size = 33
         \\  }
         \\  let body = text!("base", default_text_style with {
-        \\    text = TextStyle {
-        \\      size = base.body.size
-        \\    }
+        \\    size = base.body.size
         \\  })
         \\end
         \\
-    , "text", &.{"size"}, "20");
+    , "size", &.{}, "20");
 }
 
 test "compiler semantics: explicit record fields override their defaults" {
@@ -1890,13 +1879,13 @@ test "compiler semantics: record update makes updated style leaves explicit" {
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  let style = TextStyle {} with {
+        \\  let style = TextBlockStyle {} with {
         \\    size = 31
         \\  }
-        \\  text!("style", default_text_style with { text = style })
+        \\  text!("style", style)
         \\end
         \\
-    , "text", &.{"size"}, "31");
+    , "size", &.{}, "31");
 }
 
 test "compiler semantics: record update rejects invalid paths and values" {
@@ -1904,18 +1893,18 @@ test "compiler semantics: record update rejects invalid paths and values" {
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let style = TextStyle {} with {
+        \\  let style = TextBlockStyle {} with {
         \\    missing = 1
         \\  }
         \\end
         \\
-    , "case.ss:bytes:", "UnknownField: type 'TextStyle' has no field 'missing'");
+    , "case.ss:bytes:", "UnknownField: type 'TextBlockStyle' has no field 'missing'");
 
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let style = TextStyle {} with {
+        \\  let style = TextBlockStyle {} with {
         \\    font.family.name = "bad"
         \\  }
         \\end
@@ -1926,7 +1915,7 @@ test "compiler semantics: record update rejects invalid paths and values" {
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let style = TextStyle {} with {
+        \\  let style = TextBlockStyle {} with {
         \\    size = "large"
         \\  }
         \\end
@@ -1937,7 +1926,7 @@ test "compiler semantics: record update rejects invalid paths and values" {
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let style = TextStyle {} with {
+        \\  let style = TextBlockStyle {} with {
         \\    font = FontFace {}
         \\    font.family = "Menlo"
         \\  }
@@ -1952,13 +1941,13 @@ test "compiler semantics: theme values customize imported defaults and local sty
         \\import std:text as base
         \\
         \\const presentation: Theme = default_theme() with {
-        \\    body.text.size = 22
-        \\    h1.text.color = c"#123456"
+        \\    text.size = 22
+        \\    text.headings.h1.color = c"#123456"
         \\  }
         \\
         \\fn/! h1(text_value: String, theme: Theme = presentation) -> Text
-        \\  return base::text(text_value, theme.h1 with {
-        \\    text.size = 44
+        \\  return base::text(text_value, theme.text with {
+        \\    size = 44
         \\  })
         \\end
         \\
@@ -1968,10 +1957,10 @@ test "compiler semantics: theme values customize imported defaults and local sty
         \\import "./theme" as *
         \\
         \\page ok
-        \\  text!("body", presentation.body)
+        \\  text!("body", presentation.text)
         \\end
         \\
-    , theme_source, "text", &.{"size"}, "22");
+    , theme_source, "size", &.{}, "22");
 
     try expectObjectFieldPathWithThemeOverlay(
         \\import "./theme" as *
@@ -1980,19 +1969,19 @@ test "compiler semantics: theme values customize imported defaults and local sty
         \\  h1!("title")
         \\end
         \\
-    , theme_source, "text", &.{"size"}, "44");
+    , theme_source, "size", &.{}, "44");
 
     try expectObjectFieldPathWithThemeOverlay(
         \\import "./theme" as *
         \\
         \\page ok
         \\  let local = presentation with {
-        \\    body.text.size = 18
+        \\    text.size = 18
         \\  }
-        \\  text!("small", local.body)
+        \\  text!("small", local.text)
         \\end
         \\
-    , theme_source, "text", &.{"size"}, "18");
+    , theme_source, "size", &.{}, "18");
 }
 
 test "compiler semantics: user record declarations define typed record values" {
@@ -2006,9 +1995,9 @@ test "compiler semantics: user record declarations define typed record values" {
         \\end
         \\page main
         \\  let style = large(CaptionStyle { size = 20 })
-        \\  text!("caption", default_text_style with { text = TextStyle { size = style.size color = style.color } })
+        \\  text!("caption", default_text_style with { size = style.size color = style.color })
         \\end
-    , "text", &.{"size"}, "24");
+    , "size", &.{}, "24");
 }
 
 test "compiler semantics: optional fields accept none and coalesce" {
@@ -2020,8 +2009,8 @@ test "compiler semantics: optional fields accept none and coalesce" {
         \\end
         \\
         \\page ok
-        \\  let style = default_text_style with { text.markdown.code.chrome.fill = none }
-        \\  text!("ok", style with { text.color = fallback(style.text.markdown.code.chrome.fill) })
+        \\  let style = default_text_style with { code.chrome.fill = none }
+        \\  text!("ok", style with { color = fallback(style.code.chrome.fill) })
         \\end
         \\
     );
@@ -2043,7 +2032,7 @@ test "compiler semantics: optional fields accept none and coalesce" {
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let style = TextStyle {} with { color = none }
+        \\  let style = TextBlockStyle {} with { color = none }
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Color, got None");
@@ -2065,8 +2054,8 @@ test "compiler semantics: optional fields accept none and coalesce" {
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  let style = default_text_style with { text.markdown.code.chrome.fill = none }
-        \\  if style.text.markdown.code.chrome.fill?
+        \\  let style = default_text_style with { code.chrome.fill = none }
+        \\  if style.code.chrome.fill?
         \\    text!("still-set")
         \\  else
         \\    text!("unset")
@@ -2120,8 +2109,8 @@ test "compiler semantics: optional values are checked at function boundaries" {
         \\end
         \\
         \\page bad
-        \\  let style = TextStyle {}
-        \\  let invalid = take_color(style.markdown.code.chrome.fill)
+        \\  let style = TextBlockStyle {}
+        \\  let invalid = take_color(style.code.chrome.fill)
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Color, got Color?");
@@ -2134,7 +2123,7 @@ test "compiler semantics: optional values are checked at function boundaries" {
         \\end
         \\
         \\page bad
-        \\  let style = TextStyle {}
+        \\  let style = TextBlockStyle {}
         \\  let invalid = take_maybe("red")
         \\end
         \\
@@ -2201,9 +2190,9 @@ test "compiler semantics: optional values stay checked through multi-step flows"
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\fn may_be_none(target: TextStyle, prefer_markup: Bool) -> Color?
+        \\fn may_be_none(target: TextBlockStyle, prefer_markup: Bool) -> Color?
         \\  if prefer_markup
-        \\    return target.markdown.code.chrome.fill
+        \\    return target.code.chrome.fill
         \\  else
         \\    if target.line_height?
         \\      return c"0.1,0.2,0.3"
@@ -2218,10 +2207,10 @@ test "compiler semantics: optional values stay checked through multi-step flows"
         \\end
         \\
         \\page bad
-        \\  let style = TextStyle {} with { markdown.code.chrome.fill = none }
+        \\  let style = TextBlockStyle {} with { code.chrome.fill = none }
         \\  let x = may_be_none(style, true)
         \\  let y = must_call_by_notnone(x)
-        \\  let invalid = TextStyle {} with { color = y }
+        \\  let invalid = TextBlockStyle {} with { color = y }
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Color, got Color?");
@@ -2255,17 +2244,17 @@ test "compiler semantics: optional values stay checked through multi-step flows"
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\fn apply_palette(target: TextStyle, primary: Color?, secondary: Color?) -> TextStyle
+        \\fn apply_palette(target: TextBlockStyle, primary: Color?, secondary: Color?) -> TextBlockStyle
         \\  let chosen = primary
         \\  if target.line_height?
         \\    return target with { color = chosen }
         \\  else
-        \\    return target with { markdown.code.chrome.fill = secondary }
+        \\    return target with { code.chrome.fill = secondary }
         \\  end
         \\end
         \\
         \\page bad
-        \\  let style = TextStyle {}
+        \\  let style = TextBlockStyle {}
         \\  apply_palette(style, none, c"0.3,0.3,0.3")
         \\end
         \\
@@ -2349,9 +2338,9 @@ test "compiler semantics: mismatched if branches are rejected statically" {
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\fn maybe_accent(target: TextStyle, use_saved: Bool, force_number: Bool) -> Color?
+        \\fn maybe_accent(target: TextBlockStyle, use_saved: Bool, force_number: Bool) -> Color?
         \\  if use_saved
-        \\    return target.markdown.code.chrome.fill
+        \\    return target.code.chrome.fill
         \\  else
         \\    if force_number
         \\      return 1
@@ -2370,7 +2359,7 @@ test "compiler semantics: mismatched if branches are rejected statically" {
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\fn choose_from_branch_local(target: TextStyle, maybe_color: Color?, prefer_saved: Bool) -> Color
+        \\fn choose_from_branch_local(target: TextBlockStyle, maybe_color: Color?, prefer_saved: Bool) -> Color
         \\  if prefer_saved
         \\    let chosen = maybe_color
         \\    return chosen
@@ -2389,7 +2378,7 @@ test "compiler semantics: mismatched if branches are rejected statically" {
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\fn paint_target(target: TextStyle, maybe_color: Color?, use_optional: Bool) -> TextStyle
+        \\fn paint_target(target: TextBlockStyle, maybe_color: Color?, use_optional: Bool) -> TextBlockStyle
         \\  if use_optional
         \\    return target with { color = maybe_color }
         \\  else
@@ -2398,7 +2387,7 @@ test "compiler semantics: mismatched if branches are rejected statically" {
         \\end
         \\
         \\page bad
-        \\  let style = TextStyle {}
+        \\  let style = TextBlockStyle {}
         \\  paint_target(style, none, true)
         \\end
         \\
@@ -2504,7 +2493,7 @@ test "compiler semantics: if branch checks do not depend on optional types" {
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\fn configure_text(target: TextStyle, compact: Bool) -> TextStyle
+        \\fn configure_text(target: TextBlockStyle, compact: Bool) -> TextBlockStyle
         \\  if compact
         \\    return target with { size = "small" }
         \\  else
@@ -2513,7 +2502,7 @@ test "compiler semantics: if branch checks do not depend on optional types" {
         \\end
         \\
         \\page bad
-        \\  let style = TextStyle {}
+        \\  let style = TextBlockStyle {}
         \\  configure_text(style, true)
         \\end
         \\
@@ -2708,7 +2697,7 @@ test "compiler semantics: typed settings and value updates reject incompatible v
 
     try expectDiagnostic(
         \\page main
-        \\  let style = TextStyle {} with { markdown.code.chrome.fill = 1 }
+        \\  let style = TextBlockStyle {} with { code.chrome.fill = 1 }
         \\end
     , "case.ss:bytes:", "TypeMismatch: expected Color?, got Number");
 }
@@ -2758,7 +2747,7 @@ test "compiler semantics: ordinary field defaults evaluate with their declared t
 
     try expectBodyTextDefaults(
         \\page main
-        \\  text!("Body", default_theme().body)
+        \\  text!("Body", default_theme().text)
         \\end
     , .{
         .math_scale = 1.05,
@@ -2826,7 +2815,7 @@ test "compiler semantics: resource settings and immutable styles retain declared
 
     try expectDiagnostic(
         \\page main
-        \\  let style = LayoutStyle {} with { wrap = "off" }
+        \\  let style = TextLayout {} with { wrap = "off" }
         \\end
     , "case.ss:bytes:", "TypeMismatch: expected WrapMode, got String");
 }
@@ -2834,12 +2823,12 @@ test "compiler semantics: resource settings and immutable styles retain declared
 test "compiler semantics: math alignment rejects unknown literals" {
     try expectDiagnostic(
         \\page bad
-        \\  text!("$$x^2$$", default_text_style with { text.math.align = "sideways" })
+        \\  text!("$$x^2$$", default_text_style with { math.align = "sideways" })
         \\end
     , "case.ss:bytes:", "TypeMismatch: expected Align, got String");
     try expectDiagnostic(
         \\page bad
-        \\  text!("$$x^2$$", default_text_style with { text.math.align = Align.sideways })
+        \\  text!("$$x^2$$", default_text_style with { math.align = Align.sideways })
         \\end
     , "case.ss:bytes:", "UnknownEnumCase: enum 'Align' has no case 'sideways'");
 }
@@ -2892,9 +2881,9 @@ test "compiler semantics: member reads preserve concrete field types" {
         \\page main
         \\  let target = Label {
         \\    content = "custom"
-        \\    style = default_text_style with { layout.wrap = WrapMode.off text.size = 24 }
+        \\    style = default_text_style with { layout.wrap = WrapMode.off size = 24 }
         \\  }
-        \\  text!(wrap_label(target.style.layout.wrap) ++ ":" ++ str(target.style.text.size) ++ ":" ++ link_label(target.content))
+        \\  text!(wrap_label(target.style.layout.wrap) ++ ":" ++ str(target.style.size) ++ ":" ++ link_label(target.content))
         \\end
     , "wrap:24:custom");
 }
@@ -2903,8 +2892,8 @@ test "compiler semantics: logical not inverts optional presence checks" {
     try expectObjectContent(
         \\import std:themes/default as *
         \\
-        \\fn optional_color_label(target: TextStyle) -> String
-        \\  if !target.markdown.code.chrome.fill?
+        \\fn optional_color_label(target: TextBlockStyle) -> String
+        \\  if !target.code.chrome.fill?
         \\    return "none"
         \\  else
         \\    return "some"
@@ -2912,8 +2901,8 @@ test "compiler semantics: logical not inverts optional presence checks" {
         \\end
         \\
         \\page ok
-        \\  let unset = TextStyle {} with { markdown.code.chrome.fill = none }
-        \\  let set = TextStyle {} with { markdown.code.chrome.fill = c"0.1,0.2,0.3" }
+        \\  let unset = TextBlockStyle {} with { code.chrome.fill = none }
+        \\  let set = TextBlockStyle {} with { code.chrome.fill = c"0.1,0.2,0.3" }
         \\  text!(optional_color_label(unset) ++ ":" ++ optional_color_label(set))
         \\end
         \\
@@ -3684,7 +3673,7 @@ test "compiler semantics: number_of formats typed placements across pages" {
 test "compiler semantics: number_of includes inputs returned by user constructors" {
     try expectObjectContent(numbered_claim_source ++
         \\fn/! captioned(title: String) -> Claim
-        \\  return claim(title) with { style.text.size = 12 }
+        \\  return claim(title) with { style = default_text_style with { size = 12 } }
         \\end
         \\page one
         \\  captioned!("A")
@@ -5876,7 +5865,7 @@ test "compiler semantics: default callbacks contribute effects in their definiti
 }
 
 test "compiler semantics: omitted theme arguments read later document definitions" {
-    try expectFixtureObjectFieldPath("default-arguments", "text", &.{"size"}, "22");
+    try expectFixtureObjectFieldPath("default-arguments", "size", &.{}, "22");
 }
 
 test "compiler semantics: unused default arguments still contribute writes" {
@@ -6725,16 +6714,16 @@ test "compiler semantics: document and page settings reject duplicate definition
 
 test "compiler semantics: ordinary values reject overlapping writes in both orders" {
     const definitions = [_][]const u8{
-        "a.layout.x = 100\na.layout.x = 200",
-        "a.layout = LayoutStyle { x = 100 }\na.layout.x = 200",
-        "a.layout.x = 100\na.layout = LayoutStyle { x = 200 }",
-        "a.text.font = FontFace {}\na.text.font.family = \"Avenir\"",
-        "a.text.markdown.bold_color = none\na.text.markdown.bold_color = none",
+        "a.layout.left_inset = 100\na.layout.left_inset = 200",
+        "a.layout = TextLayout { left_inset = 100 }\na.layout.left_inset = 200",
+        "a.layout.left_inset = 100\na.layout = TextLayout { left_inset = 200 }",
+        "a.font = FontFace {}\na.font.family = \"Avenir\"",
+        "a.markdown.bold.color = none\na.markdown.bold.color = none",
     };
     for (definitions) |definition| {
         const source = try std.fmt.allocPrint(
             testing.allocator,
-            "type Card {{ layout: LayoutStyle = LayoutStyle {{}} text: TextStyle = TextStyle {{}} }}\npage main\nlet a = Card {{}}\n{s}\nend\n",
+            "type Card {{ layout: TextLayout = TextLayout {{}} font: FontFace = FontFace {{}} markdown: MarkdownAppearance = MarkdownAppearance {{}} }}\npage main\nlet a = Card {{}}\n{s}\nend\n",
             .{definition},
         );
         defer testing.allocator.free(source);
@@ -6812,7 +6801,7 @@ test "compiler semantics: property paths detect value aliases of a resource" {
 test "compiler semantics: fresh value construction satisfies subsequent local reads" {
     try expectObjectContent(
         \\fn make_label() -> String
-        \\  let style = TextStyle { size = 123 }
+        \\  let style = TextBlockStyle { size = 123 }
         \\  return "x=" ++ str(style.size)
         \\end
         \\page main
@@ -6824,7 +6813,7 @@ test "compiler semantics: fresh value construction satisfies subsequent local re
 test "compiler semantics: fresh value updates preserve prior local reads" {
     try expectObjectContent(
         \\fn make_label() -> String
-        \\  let original = TextStyle { size = 0 }
+        \\  let original = TextBlockStyle { size = 0 }
         \\  let before = original.size
         \\  let changed = original with { size = 123 }
         \\  return str(before) ++ ":" ++ str(changed.size)
@@ -6872,8 +6861,8 @@ test "compiler semantics: returned initialized values retain fields derived from
     try expectObjectContent(
         \\type Item { input: Text label: String }
         \\fn make() -> Item
-        \\  let input = text("A", default_text_style with { text.size = 123 })
-        \\  return Item { input = input label = str((input.style ?? default_text_style).text.size) }
+        \\  let input = text("A", default_text_style with { size = 123 })
+        \\  return Item { input = input label = str((input.style ?? default_text_style).size) }
         \\end
         \\page main
         \\  let result = make()
@@ -7061,7 +7050,7 @@ test "compiler semantics: optional fallback preserves an optional result" {
         \\  return primary ?? fallback
         \\end
         \\page main
-        \\  let style = default_text_style with { text.color = choose(none, c"#123456") ?? c"#000000" }
+        \\  let style = default_text_style with { color = choose(none, c"#123456") ?? c"#000000" }
         \\  text!("Optional colors", style)
         \\end
     );
@@ -7708,7 +7697,7 @@ test "compiler semantics: qualified constants preserve nominal values updates an
         \\import std:text as text
         \\import std:layout as layout
         \\page main
-        \\  layout::place!(text::text("Styled", text::default_text_style with { text.size = 24 }))
+        \\  layout::place!(text::text("Styled", text::default_text_style with { size = 24 }))
         \\end
     );
 }

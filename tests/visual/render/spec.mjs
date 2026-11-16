@@ -127,7 +127,7 @@ await withBrowser(output, async (browser, baseUrl) => {
   if (!practicalOnly) {
     await inspectStandaloneNavigation(browser, baseUrl);
     await inspectTextBaselineDetection(browser, baseUrl);
-    await inspectMarkdownHeadingStyles(browser, baseUrl);
+    await inspectHeadingLevels(browser, baseUrl);
   }
 
   if (full) {
@@ -151,7 +151,7 @@ await withBrowser(output, async (browser, baseUrl) => {
   }
 });
 
-async function inspectMarkdownHeadingStyles(browser, baseUrl) {
+async function inspectHeadingLevels(browser, baseUrl) {
   const page = await browser.newPage({ viewport: { width: 1920, height: 1200 } });
   try {
     await page.goto(`${baseUrl}/markdown-headings.html`, { waitUntil: "networkidle" });

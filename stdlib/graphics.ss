@@ -3,11 +3,11 @@ import std:graphics/content as { PathShape }
 import std:graphics/path as paths
 import std:graphics/paint as fills
 
-fn/! path_shape(path_value: Path, width: Number = 160, height: Number = 100, style: VectorStyle = VectorStyle {}, marker_start: MarkerStyle? = none, marker_end: MarkerStyle? = none) -> PathShape
+fn/! path_shape(path_value: Path, width: Number = 160, height: Number = 100, style: VectorStyle? = none, marker_start: MarkerStyle? = none, marker_end: MarkerStyle? = none) -> PathShape
   return PathShape { path = path_value width = width height = height style = style marker_start = marker_start marker_end = marker_end }
 end
 
-fn/! rectangle(width: Number = 160, height: Number = 100, style: VectorStyle = VectorStyle {}) -> PathShape
+fn/! rectangle(width: Number = 160, height: Number = 100, style: VectorStyle? = none) -> PathShape
   return path_shape(path(
     paths::move_to(0, 0),
     paths::line_to(1, 0),
@@ -17,7 +17,7 @@ fn/! rectangle(width: Number = 160, height: Number = 100, style: VectorStyle = V
   ), width, height, style)
 end
 
-fn/! circle(width: Number = 120, height: Number = width, style: VectorStyle = VectorStyle {}) -> PathShape
+fn/! circle(width: Number = 120, height: Number = width, style: VectorStyle? = none) -> PathShape
   return path_shape(path(
     paths::move_to(0.5, 0),
     paths::arc_to(0.5, 0.5, 0, false, true, 0.5, 1),
@@ -26,7 +26,7 @@ fn/! circle(width: Number = 120, height: Number = width, style: VectorStyle = Ve
   ), width, height, style)
 end
 
-fn/! arrow_shape(width: Number = 170, height: Number = 90, style: VectorStyle = VectorStyle {}) -> PathShape
+fn/! arrow_shape(width: Number = 170, height: Number = 90, style: VectorStyle? = none) -> PathShape
   return path_shape(path(
     paths::move_to(0, 0.28),
     paths::line_to(0.62, 0.28),
@@ -39,7 +39,7 @@ fn/! arrow_shape(width: Number = 170, height: Number = 90, style: VectorStyle = 
   ), width, height, style)
 end
 
-fn/! speech_bubble(width: Number = 180, height: Number = 120, style: VectorStyle = VectorStyle {}) -> PathShape
+fn/! speech_bubble(width: Number = 180, height: Number = 120, style: VectorStyle? = none) -> PathShape
   return path_shape(path(
     paths::move_to(0.12, 0.05),
     paths::line_to(0.88, 0.05),
@@ -58,18 +58,32 @@ fn/! speech_bubble(width: Number = 180, height: Number = 120, style: VectorStyle
 end
 
 fn/! line(width: Number = 160, height: Number = 1, style: LineStyle = LineStyle {}) -> PathShape
-  return path_shape(path(
+  let geometry = path(
     paths::move_to(style.start_x, style.start_y),
     paths::line_to(style.end_x, style.end_y)
-  ), width, height, VectorStyle { stroke = style.stroke }, style.marker_start, style.marker_end)
+  )
+  return stroke_path(geometry, width, height, style)
 end
 
 fn/! elbow_line(width: Number = 160, height: Number = 100, style: LineStyle = LineStyle {}) -> PathShape
-  return path_shape(path(
+  let geometry = path(
     paths::move_to(style.start_x, style.start_y),
     paths::line_to(style.end_x, style.start_y),
     paths::line_to(style.end_x, style.end_y)
-  ), width, height, VectorStyle { stroke = style.stroke }, style.marker_start, style.marker_end)
+  )
+  return stroke_path(geometry, width, height, style)
+end
+
+fn stroke_path(geometry: Path, width: Number, height: Number, line_style: LineStyle) -> PathShape
+  return PathShape {
+    path = geometry
+    width = width
+    height = height
+    stroke_only = true
+    line_stroke = line_style.stroke
+    marker_start = line_style.marker_start
+    marker_end = line_style.marker_end
+  }
 end
 
 fn marker_arrow_open(size: Number = 10, color_name: Color = c"#4b5563", line_width: Number = 1.6) -> MarkerStyle

@@ -21,7 +21,7 @@ function success(...args) {
 const close = (a, b) => assert(Math.abs(a - b) < 0.1, `${a} != ${b}`);
 const field = (record, name) => record.fields.find(item => item.name === name).value;
 function assertTint(node, rgb) {
-  const tint = field(field(field(node.placement.input, "style"), "asset"), "tint").value;
+  const tint = field(field(node.placement.input, "style"), "tint").value;
   const channels = tint.split(",").map(Number);
   assert.equal(channels.length, 3);
   channels.forEach((channel, index) => assert(Math.abs(channel - rgb[index] / 255) < 0.0001));
@@ -54,7 +54,7 @@ fn display(self: Placed<Wrapped>) -> a::${type} = a::${name}(self.value.source)
 page first
   let count = selection_count(select<a::${type}>(pagectx()))
   let direct: Placed<a::${type}> = a::${name}!("${input}")
-  let changed = place!(value with { style = a::AssetBlockStyle {} with { asset.scale = 0.5 } })
+  let changed = place!(value with { style = a::ImageStyle {} with { scale = 0.5 } })
   ~ direct.left == page.left + count * 32
   ~ direct.top == page.top - 64
   ~ changed.left == direct.right + 32
@@ -90,7 +90,7 @@ end
       assert(imageSourceIs(leaf, name === "image" ? "file" : name));
       if (index > 1) assert.deepEqual(node.placement.input, nodes[0].placement.input);
     }
-    if (name === "icon") assertTint(nodes[0], [55, 65, 81]);
+    if (name === "icon") assert.equal(field(nodes[0].placement.input, "style").kind, "none");
     success("render", "--quiet", "slide.ss", "--output", `${name}.pdf`);
     assert.equal((await readFile(path.join(project, `${name}.pdf`))).subarray(0, 5).toString(), "%PDF-");
     success("render", "--quiet", "--format", "html", "slide.ss", "--output", `${name}.html`);
@@ -105,8 +105,8 @@ end
 
   await writeFile(path.join(project, "options.ss"), `import std:assets as a
 page options
-  let sheet = a::pdf!("asset.pdf", a::AssetBlockStyle {} with { asset.pdf_page = 2 asset.pdf_box = a::PdfPageBox.media asset.scale = 0.5 })
-  let symbol = a::icon!("fa-solid:heart", a::AssetBlockStyle {} with { asset.tint = c"#2563eb" })
+  let sheet = a::pdf!("asset.pdf", a::ImageStyle {} with { scale = 0.5 }, 2, a::PdfPageBox.media)
+  let symbol = a::icon!("fa-solid:heart", a::ImageStyle {} with { tint = c"#2563eb" })
   ~ sheet.left == page.left + 64
   ~ sheet.top == page.top - 64
   ~ symbol.left == sheet.right + 32

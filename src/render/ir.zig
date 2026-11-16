@@ -81,7 +81,7 @@ pub const StrokeLine = struct {
     start: Point,
     end: Point,
     line_width: f64,
-    color: core.render_policy.Color,
+    color: core.render_paint.Color,
     dash_on: f64 = 0,
     dash_off: f64 = 0,
 };
@@ -97,13 +97,13 @@ pub const PathCommand = union(enum) {
     close: void,
 };
 
-pub const LineCap = enum { butt, round, square };
-pub const LineJoin = enum { miter, round, bevel };
-pub const FillRule = enum { nonzero, even_odd };
-pub const GradientSpread = enum { pad, repeat, reflect };
+pub const LineCap = core.render_paint.LineCap;
+pub const LineJoin = core.render_paint.LineJoin;
+pub const FillRule = core.render_paint.FillRule;
+pub const GradientSpread = core.render_paint.GradientSpread;
 
 pub const StrokePaint = struct {
-    color: core.render_policy.Color,
+    color: core.render_paint.Color,
     width: f64,
     cap: LineCap = .butt,
     join: LineJoin = .miter,
@@ -125,7 +125,7 @@ pub const StrokePaint = struct {
 
 pub const GradientStop = struct {
     offset: f64,
-    color: core.render_policy.Color,
+    color: core.render_paint.Color,
 };
 
 pub const LinearGradientPaint = struct {
@@ -146,7 +146,7 @@ pub const RadialGradientPaint = struct {
 
 pub const BaseFillPaint = union(enum) {
     none: void,
-    solid: core.render_policy.Color,
+    solid: core.render_paint.Color,
     linear: LinearGradientPaint,
     radial: RadialGradientPaint,
 };
@@ -156,7 +156,7 @@ pub const TilePatternPaint = struct {
     cell_width: f64,
     cell_height: f64,
     transform: Transform = .{},
-    fill: ?core.render_policy.Color = null,
+    fill: ?core.render_paint.Color = null,
     stroke: ?StrokePaint = null,
 
     fn clone(self: TilePatternPaint, allocator: std.mem.Allocator) !TilePatternPaint {
@@ -226,15 +226,15 @@ pub const VectorPath = struct {
 pub const FillRect = struct {
     header: ItemHeader,
     rect: Rect,
-    color: core.render_policy.Color,
+    color: core.render_paint.Color,
 };
 
 pub const RoundedRect = struct {
     header: ItemHeader,
     rect: Rect,
     radius: f64,
-    fill: ?core.render_policy.Color,
-    stroke: ?core.render_policy.Color,
+    fill: ?core.render_paint.Color,
+    stroke: ?core.render_paint.Color,
     line_width: f64,
 };
 
@@ -245,7 +245,7 @@ pub const Text = struct {
     width: f64,
     layout: TextLayout,
     font_size: f64,
-    color: core.render_policy.Color,
+    color: core.render_paint.Color,
 
     fn deinit(self: *Text, allocator: std.mem.Allocator) void {
         self.layout.deinit(allocator);
@@ -262,7 +262,7 @@ pub const Svg = struct {
     header: ItemHeader,
     rect: Rect,
     resource: ResourceId,
-    tint: ?core.render_policy.Color,
+    tint: ?core.render_paint.Color,
 };
 
 pub const PdfPage = struct {
@@ -270,7 +270,7 @@ pub const PdfPage = struct {
     rect: Rect,
     resource: ResourceId,
     page_index: usize,
-    box: core.render_policy.PdfPageBox,
+    box: core.render_paint.PdfPageBox,
     copy_annotations: bool,
 };
 
@@ -279,7 +279,7 @@ pub const Latex = struct {
     rect: Rect,
     resource: ResourceId,
     page_index: usize,
-    box: core.render_policy.PdfPageBox,
+    box: core.render_paint.PdfPageBox,
 };
 
 pub const Item = union(enum) {
@@ -502,7 +502,7 @@ pub const Page = struct {
         return false;
     }
 
-    pub fn appendFillRect(self: *Page, allocator: std.mem.Allocator, node_id: ?core.NodeId, rect: Rect, color: core.render_policy.Color) !void {
+    pub fn appendFillRect(self: *Page, allocator: std.mem.Allocator, node_id: ?core.NodeId, rect: Rect, color: core.render_paint.Color) !void {
         try self.requireOwnedContent();
         try self.items.append(allocator, .{ .fill_rect = .{
             .header = self.itemHeader(node_id, rect, rect),
@@ -518,7 +518,7 @@ pub const Page = struct {
         start: Point,
         end: Point,
         line_width: f64,
-        color: core.render_policy.Color,
+        color: core.render_paint.Color,
         dash_on: f64,
         dash_off: f64,
     ) !void {
@@ -533,7 +533,7 @@ pub const Page = struct {
         start: Point,
         end: Point,
         line_width: f64,
-        color: core.render_policy.Color,
+        color: core.render_paint.Color,
         dash_on: f64,
         dash_off: f64,
         opacity: f64,
@@ -576,8 +576,8 @@ pub const Page = struct {
         node_id: ?core.NodeId,
         rect: Rect,
         radius: f64,
-        fill: ?core.render_policy.Color,
-        stroke: ?core.render_policy.Color,
+        fill: ?core.render_paint.Color,
+        stroke: ?core.render_paint.Color,
         line_width: f64,
     ) !void {
         try self.requireOwnedContent();
@@ -639,7 +639,7 @@ pub const Page = struct {
         width: f64,
         layout: TextLayout,
         font_size: f64,
-        color: core.render_policy.Color,
+        color: core.render_paint.Color,
     ) !void {
         var owned_layout = layout;
         errdefer owned_layout.deinit(allocator);
@@ -675,7 +675,7 @@ pub const Page = struct {
         node_id: ?core.NodeId,
         rect: Rect,
         resource: ResourceId,
-        tint: ?core.render_policy.Color,
+        tint: ?core.render_paint.Color,
     ) !void {
         try self.requireOwnedContent();
         try self.items.append(allocator, .{ .svg = .{
@@ -693,7 +693,7 @@ pub const Page = struct {
         rect: Rect,
         resource: ResourceId,
         page_index: usize,
-        box: core.render_policy.PdfPageBox,
+        box: core.render_paint.PdfPageBox,
         copy_annotations: bool,
     ) !void {
         try self.requireOwnedContent();
@@ -714,7 +714,7 @@ pub const Page = struct {
         rect: Rect,
         resource: ResourceId,
         page_index: usize,
-        box: core.render_policy.PdfPageBox,
+        box: core.render_paint.PdfPageBox,
     ) !void {
         try self.requireOwnedContent();
         try self.items.append(allocator, .{ .latex = .{

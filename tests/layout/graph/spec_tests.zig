@@ -50,7 +50,7 @@ fn expectFrame(expected: model.Frame, actual: model.Frame) !void {
     try testing.expectEqual(expected.y_set, actual.y_set);
 }
 
-fn expectColor(expected_r: f32, expected_g: f32, expected_b: f32, actual: core.render_policy.Color) !void {
+fn expectColor(expected_r: f32, expected_g: f32, expected_b: f32, actual: core.render_paint.Color) !void {
     try expectFloat(expected_r, actual.r);
     try expectFloat(expected_g, actual.g);
     try expectFloat(expected_b, actual.b);
@@ -117,68 +117,60 @@ fn setLayoutWrap(state: *core.DocumentState, node_id: model.NodeId, case_name: [
     try setRecordEnumField(state, node_id, "layout", "wrap", "WrapMode", case_name);
 }
 
-fn setLayoutFontSize(state: *core.DocumentState, node_id: model.NodeId, value: []const u8) !void {
-    try setRecordStringField(state, node_id, "layout", "font_size", value);
-}
-
-fn setLayoutLineHeight(state: *core.DocumentState, node_id: model.NodeId, value: []const u8) !void {
-    try setRecordStringField(state, node_id, "layout", "line_height", value);
-}
-
 fn setLayoutSpacingAfter(state: *core.DocumentState, node_id: model.NodeId, value: []const u8) !void {
     try setRecordStringField(state, node_id, "layout", "spacing_after", value);
 }
 
 fn setTextParse(state: *core.DocumentState, node_id: model.NodeId, case_name: []const u8) !void {
-    try setRecordEnumField(state, node_id, "text", "parse", "TextParseMode", case_name);
+    try setRecordEnumField(state, node_id, "content", "parse", "TextParseMode", case_name);
 }
 
 fn setTextSize(state: *core.DocumentState, node_id: model.NodeId, value: []const u8) !void {
-    try setRecordStringField(state, node_id, "text", "size", value);
+    try setStringField(state, node_id, "size", value);
 }
 
 fn setTextLineHeight(state: *core.DocumentState, node_id: model.NodeId, value: []const u8) !void {
-    try setRecordStringField(state, node_id, "text", "line_height", value);
+    try setStringField(state, node_id, "line_height", value);
 }
 
 fn setTextMathScale(state: *core.DocumentState, node_id: model.NodeId, value: []const u8) !void {
-    try setRecordStringField(state, node_id, "text", "math.scale", value);
+    try setRecordStringField(state, node_id, "math", "scale", value);
 }
 
 fn setTextMarkdownBoldColor(state: *core.DocumentState, node_id: model.NodeId, value: []const u8) !void {
-    try setRecordStringField(state, node_id, "text", "markdown.bold_color", value);
+    try setRecordStringField(state, node_id, "markdown", "bold.color", value);
 }
 
 fn setTextMarkdownBoldWeight(state: *core.DocumentState, node_id: model.NodeId, value: []const u8) !void {
-    try setRecordStringField(state, node_id, "text", "bold_weight", value);
+    try setRecordStringField(state, node_id, "markdown", "bold.weight", value);
 }
 
 fn setTextMarkdownItalicStyle(state: *core.DocumentState, node_id: model.NodeId, case_name: []const u8) !void {
-    try setRecordEnumField(state, node_id, "text", "italic_style", "FontStyle", case_name);
+    try setRecordEnumField(state, node_id, "markdown", "italic.style", "FontStyle", case_name);
 }
 
 fn setTextFontFamily(state: *core.DocumentState, node_id: model.NodeId, value: []const u8) !void {
-    try setRecordPathValue(state, node_id, "text", &.{ "font", "family" }, .{ .string = value });
+    try setRecordPathValue(state, node_id, "font", &.{"family"}, .{ .string = value });
 }
 
 fn setTextFontWeight(state: *core.DocumentState, node_id: model.NodeId, value: []const u8) !void {
-    try setRecordPathValue(state, node_id, "text", &.{ "font", "weight" }, .{ .string = value });
+    try setRecordPathValue(state, node_id, "font", &.{"weight"}, .{ .string = value });
 }
 
 fn setTextFontStyle(state: *core.DocumentState, node_id: model.NodeId, case_name: []const u8) !void {
-    try setRecordPathValue(state, node_id, "text", &.{ "font", "style" }, .{ .enum_case = .{ .enum_name = "FontStyle", .case_name = case_name } });
+    try setRecordPathValue(state, node_id, "font", &.{"style"}, .{ .enum_case = .{ .enum_name = "FontStyle", .case_name = case_name } });
 }
 
 fn setTextFontStretch(state: *core.DocumentState, node_id: model.NodeId, case_name: []const u8) !void {
-    try setRecordPathValue(state, node_id, "text", &.{ "font", "stretch" }, .{ .enum_case = .{ .enum_name = "FontStretch", .case_name = case_name } });
+    try setRecordPathValue(state, node_id, "font", &.{"stretch"}, .{ .enum_case = .{ .enum_name = "FontStretch", .case_name = case_name } });
 }
 
 fn setTextCodeFontFamily(state: *core.DocumentState, node_id: model.NodeId, value: []const u8) !void {
-    try setRecordPathValue(state, node_id, "text", &.{ "code_font", "family" }, .{ .string = value });
+    try setRecordPathValue(state, node_id, "code", &.{ "font", "family" }, .{ .string = value });
 }
 
 fn setTextCodeFontWeight(state: *core.DocumentState, node_id: model.NodeId, value: []const u8) !void {
-    try setRecordPathValue(state, node_id, "text", &.{ "code_font", "weight" }, .{ .string = value });
+    try setRecordPathValue(state, node_id, "code", &.{ "font", "weight" }, .{ .string = value });
 }
 
 fn setChromePadX(state: *core.DocumentState, node_id: model.NodeId, value: []const u8) !void {
@@ -194,7 +186,7 @@ fn setChromeLineWidth(state: *core.DocumentState, node_id: model.NodeId, value: 
 }
 
 fn setUnderlineWidth(state: *core.DocumentState, node_id: model.NodeId, value: []const u8) !void {
-    try setRecordStringField(state, node_id, "underline", "width", value);
+    try setRecordStringField(state, node_id, "chrome", "bottom_rule.width", value);
 }
 
 fn setRuleLineWidth(state: *core.DocumentState, node_id: model.NodeId, value: []const u8) !void {
@@ -796,7 +788,7 @@ test "layout solver: page-dependent group children receive local vertical fallba
     const title = try document_testing.native(&state, page, "title", .text, "Title");
     const body = try document_testing.native(&state, page, "body", .text, "Body");
     _ = try document_testing.group(&state, page, &.{ ruler, title }, .{ .label = "head" });
-    try setLayoutLineHeight(&state, ruler, "4");
+    try setTextLineHeight(&state, ruler, "4");
     try setLayoutSpacingAfter(&state, ruler, "12");
     try state.constraints.addAnchor(state.allocator, ruler, .top, .{ .page = .top }, -200, .{ .label = "rule-top" });
 
@@ -921,10 +913,10 @@ test "layout solver: a page-positioned object does not affect page flow" {
     const baseline_rule = try document_testing.native(&baseline, baseline_page, "rule", .text, "");
     _ = try document_testing.group(&baseline, baseline_page, &.{ baseline_title, baseline_rule }, .{ .label = "head" });
     const baseline_body = try document_testing.native(&baseline, baseline_page, "body", .text, "Body");
-    try setLayoutLineHeight(&baseline, baseline_title, "44");
-    try setLayoutLineHeight(&baseline, baseline_rule, "2");
+    try setTextLineHeight(&baseline, baseline_title, "44");
+    try setTextLineHeight(&baseline, baseline_rule, "2");
     try setLayoutSpacingAfter(&baseline, baseline_rule, "48");
-    try setLayoutLineHeight(&baseline, baseline_body, "70");
+    try setTextLineHeight(&baseline, baseline_body, "70");
     try baseline.constraints.addAnchor(baseline.allocator, baseline_title, .top, .{ .page = .top }, -56, .{ .label = "title-top" });
     try baseline.constraints.addAnchor(baseline.allocator, baseline_rule, .top, .{ .node = .{ .node_id = baseline_title, .anchor = .bottom } }, -14, .{ .label = "rule-below-title" });
     try solveDocumentState(&baseline_layout);
@@ -936,7 +928,7 @@ test "layout solver: a page-positioned object does not affect page flow" {
 
     const decorated_page = try decorated.addPage("Page");
     const page_number = try document_testing.native(&decorated, decorated_page, "pageno", .text, "1");
-    try setLayoutLineHeight(&decorated, page_number, "16");
+    try setTextLineHeight(&decorated, page_number, "16");
     try setLayoutSpacingAfter(&decorated, page_number, "0");
     try decorated.constraints.addAnchor(decorated.allocator, page_number, .bottom, .{ .page = .bottom }, 20, .{ .label = "pageno-bottom" });
 
@@ -944,10 +936,10 @@ test "layout solver: a page-positioned object does not affect page flow" {
     const decorated_rule = try document_testing.native(&decorated, decorated_page, "rule", .text, "");
     const decorated_head = try document_testing.group(&decorated, decorated_page, &.{ decorated_title, decorated_rule }, .{ .label = "head" });
     const decorated_body = try document_testing.native(&decorated, decorated_page, "body", .text, "Body");
-    try setLayoutLineHeight(&decorated, decorated_title, "44");
-    try setLayoutLineHeight(&decorated, decorated_rule, "2");
+    try setTextLineHeight(&decorated, decorated_title, "44");
+    try setTextLineHeight(&decorated, decorated_rule, "2");
     try setLayoutSpacingAfter(&decorated, decorated_rule, "48");
-    try setLayoutLineHeight(&decorated, decorated_body, "70");
+    try setTextLineHeight(&decorated, decorated_body, "70");
     try decorated.constraints.addAnchor(decorated.allocator, decorated_title, .top, .{ .page = .top }, -56, .{ .label = "title-top" });
     try decorated.constraints.addAnchor(decorated.allocator, decorated_rule, .top, .{ .node = .{ .node_id = decorated_title, .anchor = .bottom } }, -14, .{ .label = "rule-below-title" });
     try solveDocumentState(&decorated_layout);
@@ -977,12 +969,12 @@ test "layout solver: page-positioned components leave unrelated vertical flow un
                 const first = try document_testing.native(&state, page, "body", .text, "First");
                 const second = try document_testing.native(&state, page, "body", .text, "Second");
 
-                try setLayoutLineHeight(&state, heading, "40");
-                try setLayoutLineHeight(&state, note, "30");
+                try setTextLineHeight(&state, heading, "40");
+                try setTextLineHeight(&state, note, "30");
                 try setLayoutSpacingAfter(&state, note, "120");
-                try setLayoutLineHeight(&state, first, "80");
+                try setTextLineHeight(&state, first, "80");
                 try setLayoutSpacingAfter(&state, first, "24");
-                try setLayoutLineHeight(&state, second, "60");
+                try setTextLineHeight(&state, second, "60");
                 try setLayoutSpacingAfter(&state, second, "0");
                 try addFixedSize(&state, heading, 100, 40);
                 try addFixedSize(&state, note, 100, 30);
@@ -1023,7 +1015,7 @@ test "layout solver: page-dependent group children before fixed anchors receive 
     const ruler = try document_testing.native(&state, page, "rule", .text, "");
     _ = try document_testing.group(&state, page, &.{ title, ruler }, .{ .label = "head" });
     try setLayoutSpacingAfter(&state, title, "12");
-    try setLayoutLineHeight(&state, ruler, "4");
+    try setTextLineHeight(&state, ruler, "4");
     try state.constraints.addAnchor(state.allocator, ruler, .top, .{ .page = .top }, -200, .{ .label = "rule-top" });
 
     try finalizeDocumentState(&state_layout);
@@ -1045,7 +1037,7 @@ test "layout solver: page-dependent vertical cycles receive fallback placement" 
     const first = try document_testing.native(&state, page, "first", .text, "A");
     const second = try document_testing.native(&state, page, "second", .text, "B");
     _ = try document_testing.group(&state, page, &.{ ruler, first, second }, .{ .label = "head" });
-    try setLayoutLineHeight(&state, ruler, "4");
+    try setTextLineHeight(&state, ruler, "4");
     try setLayoutSpacingAfter(&state, ruler, "12");
     try state.constraints.addAnchor(state.allocator, ruler, .top, .{ .page = .top }, -200, .{ .label = "rule-top" });
     try state.constraints.addAnchor(state.allocator, first, .top, .{ .node = .{ .node_id = second, .anchor = .top } }, 0, .{ .label = "first-cycle" });
@@ -1071,7 +1063,7 @@ test "layout solver: page-dependent horizontal cycles receive fallback placement
     const first = try document_testing.native(&state, page, "first", .text, "A");
     const second = try document_testing.native(&state, page, "second", .text, "B");
     _ = try document_testing.group(&state, page, &.{ ruler, first, second }, .{ .label = "head" });
-    try setLayoutLineHeight(&state, ruler, "4");
+    try setTextLineHeight(&state, ruler, "4");
     try state.constraints.addAnchor(state.allocator, ruler, .left, .{ .page = .left }, 100, .{ .label = "rule-left" });
     try state.constraints.addAnchor(state.allocator, first, .left, .{ .node = .{ .node_id = second, .anchor = .left } }, 0, .{ .label = "first-cycle" });
     try state.constraints.addAnchor(state.allocator, second, .left, .{ .node = .{ .node_id = first, .anchor = .left } }, 0, .{ .label = "second-cycle" });
@@ -1097,9 +1089,9 @@ test "layout solver: centered page-dependent group children receive local vertic
     const title = try document_testing.native(&state, page, "title", .text, "Title");
     const body = try document_testing.native(&state, page, "body", .text, "Body");
     _ = try document_testing.group(&state, page, &.{ ruler, title }, .{ .label = "head" });
-    try setLayoutLineHeight(&state, ruler, "4");
+    try setTextLineHeight(&state, ruler, "4");
     try setLayoutSpacingAfter(&state, ruler, "12");
-    try setLayoutLineHeight(&state, body, "500");
+    try setTextLineHeight(&state, body, "500");
     try state.constraints.addAnchor(state.allocator, ruler, .top, .{ .page = .top }, -200, .{ .label = "rule-top" });
 
     try finalizeDocumentState(&state_layout);
@@ -1640,10 +1632,10 @@ test "layout solver: centered vflow treats vertically aligned groups as one row"
     const left_group = try document_testing.group(&state, page, &.{ left_title, left_body }, .{ .label = "left-group" });
     const right_group = try document_testing.group(&state, page, &.{ right_title, right_body }, .{ .label = "right-group" });
 
-    try setLayoutLineHeight(&state, left_title, "40");
-    try setLayoutLineHeight(&state, left_body, "200");
-    try setLayoutLineHeight(&state, right_title, "40");
-    try setLayoutLineHeight(&state, right_body, "200");
+    try setTextLineHeight(&state, left_title, "40");
+    try setTextLineHeight(&state, left_body, "200");
+    try setTextLineHeight(&state, right_title, "40");
+    try setTextLineHeight(&state, right_body, "200");
     try setLayoutSpacingAfter(&state, left_title, "20");
     try setLayoutSpacingAfter(&state, right_title, "20");
     try setLayoutSpacingAfter(&state, left_body, "0");
@@ -1675,9 +1667,9 @@ test "layout solver: centered vflow ignores the space occupied by fixed top comp
     const header = try document_testing.native(&state, page, "title", .text, "Title");
     const body = try document_testing.native(&state, page, "body", .text, "Body");
 
-    try setLayoutLineHeight(&state, header, "44");
+    try setTextLineHeight(&state, header, "44");
     try setLayoutSpacingAfter(&state, header, "40");
-    try setLayoutLineHeight(&state, body, "580");
+    try setTextLineHeight(&state, body, "580");
     try state.constraints.addAnchor(state.allocator, header, .top, .{ .page = .top }, -56, .{ .label = "header-top" });
 
     try solveDocumentState(&state_layout);
@@ -1701,11 +1693,11 @@ test "layout solver: document centered vflow is not shadowed by page default pol
     const title = try document_testing.native(&state, page, "title", .text, "Title");
     const subtitle = try document_testing.native(&state, page, "subtitle", .text, "Subtitle");
 
-    try setLayoutLineHeight(&state, pageno, "16");
+    try setTextLineHeight(&state, pageno, "16");
     try setLayoutSpacingAfter(&state, pageno, "0");
-    try setLayoutLineHeight(&state, title, "94");
+    try setTextLineHeight(&state, title, "94");
     try setLayoutSpacingAfter(&state, title, "42");
-    try setLayoutLineHeight(&state, subtitle, "37");
+    try setTextLineHeight(&state, subtitle, "37");
     try setLayoutSpacingAfter(&state, subtitle, "0");
     try state.constraints.addAnchor(state.allocator, pageno, .bottom, .{ .page = .bottom }, 20, .{ .label = "pageno-bottom" });
 
@@ -1732,11 +1724,11 @@ test "layout solver: centered vflow preserves page center for side-by-side rows"
     const pipe_child = try document_testing.native(&state, page, "pipe", .text, "Pipe");
     const pipe = try document_testing.group(&state, page, &.{pipe_child}, .{ .label = "pipe-group" });
 
-    try setLayoutLineHeight(&state, title, "44");
-    try setLayoutLineHeight(&state, rule, "4");
+    try setTextLineHeight(&state, title, "44");
+    try setTextLineHeight(&state, rule, "4");
     try setLayoutSpacingAfter(&state, rule, "48");
-    try setLayoutLineHeight(&state, body, "360");
-    try setLayoutLineHeight(&state, pipe_child, "360");
+    try setTextLineHeight(&state, body, "360");
+    try setTextLineHeight(&state, pipe_child, "360");
     try state.constraints.addAnchor(state.allocator, title, .top, .{ .page = .top }, -56, .{ .label = "title-top" });
     try state.constraints.addAnchor(state.allocator, rule, .top, .{ .node = .{ .node_id = title, .anchor = .bottom } }, -14, .{ .label = "rule-below-title" });
     try state.constraints.addAnchor(state.allocator, pipe, .right, .{ .page = .right }, -100, .{ .label = "pipe-right" });
@@ -2289,8 +2281,8 @@ test "layout metrics: chrome padding is part of visual bounds and yields a conte
     const page = try state.addPage("Page");
     const plain = try document_testing.native(&state, page, "plain", .code, "Hello");
     const padded = try document_testing.native(&state, page, "padded", .code, "Hello");
-    try setChromePadX(&state, padded, "12");
-    try setChromePadY(&state, padded, "8");
+    try setRecordNumberField(&state, padded, "code", "chrome.pad_x", 12);
+    try setRecordNumberField(&state, padded, "code", "chrome.pad_y", 8);
 
     const plain_node = state.getNode(plain).?;
     const padded_node = state.getNode(padded).?;
@@ -2312,13 +2304,14 @@ test "layout metrics: unwrapped text width includes visual glyph bounds" {
     defer state_layout.deinit();
 
     const page = try state.addPage("Page");
-    const object = try document_testing.native(&state, page, "body", .code, "コンポーネントの集合と絶対位置");
+    const object = try document_testing.native(&state, page, "body", .text, "コンポーネントの集合と絶対位置");
+    try setLayoutWrap(&state, object, "off");
     try setTextSize(&state, object, "24");
     try setChromePadX(&state, object, "20");
 
     const node = state.getNode(object).?;
     const style = core.layout.style.textMetricsForNode(&state, node);
-    const font = core.font.textFacesForNode(&state, node).normal;
+    const font = core.font.bodyFont(node);
     var atom_width: f32 = 0;
     var utf8 = try std.unicode.Utf8View.init(core.nodeContent(node).?);
     var iterator = utf8.iterator();
@@ -2425,8 +2418,8 @@ test "layout diagnostics: one-pixel text reports frame too small" {
 
     const page = try state.addPage("Page");
     const object = try document_testing.native(&state, page, "toc-marker", .text, "hidden section title");
-    try setLayoutFontSize(&state, object, "1");
-    try setLayoutLineHeight(&state, object, "1");
+    try setTextSize(&state, object, "1");
+    try setTextLineHeight(&state, object, "1");
     try setTextSize(&state, object, "1");
     try setTextLineHeight(&state, object, "1");
     try setLayoutWrap(&state, object, "on");
@@ -2452,15 +2445,14 @@ test "layout font size resolves consistently for measurement and rendering" {
 
     const page = try state.addPage("Page");
     const object = try document_testing.native(&state, page, "body", .text, "one\ntwo");
-    try setLayoutFontSize(&state, object, "20");
     try setTextSize(&state, object, "30");
     try setTextLineHeight(&state, object, "45");
 
     const node = state.getNode(object).?;
     try expectFloat(90, metrics.intrinsicHeight(try state_layout.work(), node, (try state_layout.frame(node.id)).*));
     const resolved = core.render_policy.resolve(&state, node);
-    try expectFloat(20, resolved.text.?.font_size);
-    try expectFloat(45, resolved.text.?.line_height);
+    try expectFloat(30, resolved.content.text.typography.font_size);
+    try expectFloat(45, resolved.content.text.typography.line_height);
 }
 
 test "layout metrics derive line height from explicit text size" {
@@ -2477,8 +2469,8 @@ test "layout metrics derive line height from explicit text size" {
     try expectFloat(87, metrics.intrinsicHeight(try state_layout.work(), node, (try state_layout.frame(node.id)).*));
 
     const resolved = core.render_policy.resolve(&state, node);
-    try expectFloat(30, resolved.text.?.font_size);
-    try expectFloat(43.5, resolved.text.?.line_height);
+    try expectFloat(30, resolved.content.text.typography.font_size);
+    try expectFloat(43.5, resolved.content.text.typography.line_height);
 }
 
 test "layout metrics honor explicit text and layout line heights" {
@@ -2496,11 +2488,11 @@ test "layout metrics honor explicit text and layout line heights" {
     const layout_override = try document_testing.native(&state, page, "layout-override", .text, "one\ntwo");
     try setTextSize(&state, layout_override, "30");
     try setTextLineHeight(&state, layout_override, "45");
-    try setLayoutLineHeight(&state, layout_override, "50");
+    try setTextLineHeight(&state, layout_override, "50");
     try expectFloat(100, metrics.intrinsicHeight(try state_layout.work(), state.getNode(layout_override).?, (try state_layout.frame(layout_override)).*));
 
     const resolved = core.render_policy.resolve(&state, state.getNode(layout_override).?);
-    try expectFloat(50, resolved.text.?.line_height);
+    try expectFloat(50, resolved.content.text.typography.line_height);
 }
 
 test "layout metrics treat zero line heights as automatic" {
@@ -2513,13 +2505,13 @@ test "layout metrics treat zero line heights as automatic" {
     const object = try document_testing.native(&state, page, "body", .text, "one\ntwo");
     try setTextSize(&state, object, "30");
     try setTextLineHeight(&state, object, "0");
-    try setLayoutLineHeight(&state, object, "0");
+    try setTextLineHeight(&state, object, "0");
 
     const node = state.getNode(object).?;
     try expectFloat(87, metrics.intrinsicHeight(try state_layout.work(), node, (try state_layout.frame(node.id)).*));
 
     const resolved = core.render_policy.resolve(&state, node);
-    try expectFloat(43.5, resolved.text.?.line_height);
+    try expectFloat(43.5, resolved.content.text.typography.line_height);
 }
 
 test "render policy: invalid numeric properties fall back before rendering" {
@@ -2541,14 +2533,14 @@ test "render policy: invalid numeric properties fall back before rendering" {
     try setRuleDash(&state, object, "inf, 4");
 
     const resolved = core.render_policy.resolve(&state, state.getNode(object).?);
-    const text = resolved.text.?;
-    try expectFloat(20, text.font_size);
-    try expectFloat(29, text.line_height);
-    try expectFloat(1, text.math_scale);
+    const text = resolved.content.text;
+    try expectFloat(20, text.typography.font_size);
+    try expectFloat(29, text.typography.line_height);
+    try expectFloat(1, text.math.scale);
     try expectFloat(0, resolved.chrome.pad_x);
     try expectFloat(0, resolved.chrome.pad_y);
     try expectFloat(0, resolved.chrome.line_width);
-    try expectFloat(0, resolved.underline.width);
+    try expectFloat(0, resolved.chrome.bottom_rule.width);
     try expectFloat(0, resolved.rule.line_width);
     try testing.expect(resolved.rule.dash == null);
 }
@@ -2571,15 +2563,15 @@ test "render policy: font face properties resolve structurally" {
     try setTextCodeFontWeight(&state, object, "500");
 
     const resolved = core.render_policy.resolve(&state, state.getNode(object).?);
-    const text = resolved.text.?;
-    try testing.expectEqualStrings("Avenir Next", text.font.family);
-    try testing.expectEqual(@as(u16, 650), text.font.weight);
-    try testing.expectEqual(core.font.Style.oblique, text.font.style);
-    try testing.expectEqual(core.font.Stretch.condensed, text.font.stretch);
-    try testing.expectEqual(@as(u16, 720), text.bold_font.weight);
-    try testing.expectEqual(core.font.Style.italic, text.italic_font.style);
-    try testing.expectEqualStrings("Menlo", text.code_font.family);
-    try testing.expectEqual(@as(u16, 500), text.code_font.weight);
+    const text = resolved.content.text;
+    try testing.expectEqualStrings("Avenir Next", text.typography.font.family);
+    try testing.expectEqual(@as(u16, 650), text.typography.font.weight);
+    try testing.expectEqual(core.font.Style.oblique, text.typography.font.style);
+    try testing.expectEqual(core.font.Stretch.condensed, text.typography.font.stretch);
+    try testing.expectEqual(@as(u16, 720), text.boldFont().weight);
+    try testing.expectEqual(core.font.Style.italic, text.italicFont().style);
+    try testing.expectEqualStrings("Menlo", text.code.style.font.family);
+    try testing.expectEqual(@as(u16, 500), text.code.style.font.weight);
 }
 
 test "render policy: markdown bold color is optional and resolves as text paint" {
@@ -2592,11 +2584,11 @@ test "render policy: markdown bold color is optional and resolves as text paint"
     const object = try document_testing.native(&state, page, "body", .text, "**Hello**");
 
     var resolved = core.render_policy.resolve(&state, state.getNode(object).?);
-    try testing.expect(resolved.text.?.markdown_bold_color == null);
+    try testing.expect(resolved.content.text.markdown.emphasis.bold_color == null);
 
     try setTextMarkdownBoldColor(&state, object, "0.2,0.4,0.6");
     resolved = core.render_policy.resolve(&state, state.getNode(object).?);
-    try expectColor(0.2, 0.4, 0.6, resolved.text.?.markdown_bold_color.?);
+    try expectColor(0.2, 0.4, 0.6, resolved.content.text.markdown.emphasis.bold_color.?);
 }
 
 test "render policy: markdown underline style resolves as text paint" {
@@ -2607,14 +2599,14 @@ test "render policy: markdown underline style resolves as text paint" {
 
     const page = try state.addPage("Page");
     const object = try document_testing.native(&state, page, "body", .text, "_Hello_");
-    try setRecordPathValue(&state, object, "text", &.{ "markdown", "underline", "color" }, .{ .string = "0.2,0.4,0.6" });
-    try setRecordPathValue(&state, object, "text", &.{ "markdown", "underline", "opacity" }, .{ .number = 0.35 });
-    try setRecordPathValue(&state, object, "text", &.{ "markdown", "underline", "width" }, .{ .number = 5 });
-    try setRecordPathValue(&state, object, "text", &.{ "markdown", "underline", "offset" }, .{ .number = 3 });
-    try setRecordPathValue(&state, object, "text", &.{ "markdown", "underline", "dash" }, .{ .string = "8,4" });
+    try setRecordPathValue(&state, object, "markdown", &.{ "underline", "color" }, .{ .string = "0.2,0.4,0.6" });
+    try setRecordPathValue(&state, object, "markdown", &.{ "underline", "opacity" }, .{ .number = 0.35 });
+    try setRecordPathValue(&state, object, "markdown", &.{ "underline", "width" }, .{ .number = 5 });
+    try setRecordPathValue(&state, object, "markdown", &.{ "underline", "offset" }, .{ .number = 3 });
+    try setRecordPathValue(&state, object, "markdown", &.{ "underline", "dash" }, .{ .string = "8,4" });
 
     const resolved = core.render_policy.resolve(&state, state.getNode(object).?);
-    const underline = resolved.text.?.markdown_underline;
+    const underline = resolved.content.text.markdown.emphasis.underline;
     try expectColor(0.2, 0.4, 0.6, underline.color.?);
     try expectFloat(0.35, underline.opacity);
     try expectFloat(5, underline.width.?);
@@ -2631,27 +2623,27 @@ test "render policy: markdown quote style resolves as text paint" {
 
     const page = try state.addPage("Page");
     const object = try document_testing.native(&state, page, "body", .text, "> Hello");
-    try setRecordPathValue(&state, object, "text", &.{ "markdown", "quote", "color" }, .{ .string = "0.2,0.3,0.4" });
-    try setRecordPathValue(&state, object, "text", &.{ "markdown", "quote", "inset" }, .{ .number = 12 });
-    try setRecordPathValue(&state, object, "text", &.{ "markdown", "quote", "pad_x" }, .{ .number = 18 });
-    try setRecordPathValue(&state, object, "text", &.{ "markdown", "quote", "pad_y" }, .{ .number = 9 });
-    try setRecordPathValue(&state, object, "text", &.{ "markdown", "quote", "fill" }, .{ .string = "0.9,0.8,0.7" });
-    try setRecordPathValue(&state, object, "text", &.{ "markdown", "quote", "radius" }, .{ .number = 7 });
-    try setRecordPathValue(&state, object, "text", &.{ "markdown", "quote", "bar_color" }, .{ .string = "0.6,0.2,0.1" });
-    try setRecordPathValue(&state, object, "text", &.{ "markdown", "quote", "bar_width" }, .{ .number = 4 });
-    try setRecordPathValue(&state, object, "text", &.{ "markdown", "quote", "bar_dash" }, .{ .string = "8,3" });
+    try setRecordPathValue(&state, object, "markdown", &.{ "quote", "color" }, .{ .string = "0.2,0.3,0.4" });
+    try setRecordPathValue(&state, object, "markdown", &.{ "quote", "inset" }, .{ .number = 12 });
+    try setRecordPathValue(&state, object, "markdown", &.{ "quote", "pad_x" }, .{ .number = 18 });
+    try setRecordPathValue(&state, object, "markdown", &.{ "quote", "pad_y" }, .{ .number = 9 });
+    try setRecordPathValue(&state, object, "markdown", &.{ "quote", "fill" }, .{ .string = "0.9,0.8,0.7" });
+    try setRecordPathValue(&state, object, "markdown", &.{ "quote", "radius" }, .{ .number = 7 });
+    try setRecordPathValue(&state, object, "markdown", &.{ "quote", "bar", "color" }, .{ .string = "0.6,0.2,0.1" });
+    try setRecordPathValue(&state, object, "markdown", &.{ "quote", "bar", "width" }, .{ .number = 4 });
+    try setRecordPathValue(&state, object, "markdown", &.{ "quote", "bar", "dash" }, .{ .string = "8,3" });
 
-    const quote = core.render_policy.resolve(&state, state.getNode(object).?).text.?.markdown_quote;
+    const quote = core.render_policy.resolve(&state, state.getNode(object).?).content.text.markdown.quote;
     try expectColor(0.2, 0.3, 0.4, quote.color.?);
     try expectFloat(12, quote.inset);
     try expectFloat(18, quote.pad_x);
     try expectFloat(9, quote.pad_y);
     try expectColor(0.9, 0.8, 0.7, quote.fill.?);
     try expectFloat(7, quote.radius);
-    try expectColor(0.6, 0.2, 0.1, quote.bar_color.?);
-    try expectFloat(4, quote.bar_width);
-    try expectFloat(8, quote.bar_dash.?.on);
-    try expectFloat(3, quote.bar_dash.?.off);
+    try expectColor(0.6, 0.2, 0.1, quote.bar.stroke.?);
+    try expectFloat(4, quote.bar.line_width);
+    try expectFloat(8, quote.bar.dash.?.on);
+    try expectFloat(3, quote.bar.dash.?.off);
 }
 
 test "layout metrics include markdown quote padding" {
@@ -2669,12 +2661,12 @@ test "layout metrics include markdown quote padding" {
         try setTextFontFamily(&state, object, "Helvetica");
         try setTextSize(&state, object, "20");
         try setTextLineHeight(&state, object, "29");
-        try setRecordPathValue(&state, object, "text", &.{ "markdown", "quote", "inset" }, .{ .number = 0 });
-        try setRecordPathValue(&state, object, "text", &.{ "markdown", "quote", "pad_x" }, .{ .number = 0 });
+        try setRecordPathValue(&state, object, "markdown", &.{ "quote", "inset" }, .{ .number = 0 });
+        try setRecordPathValue(&state, object, "markdown", &.{ "quote", "pad_x" }, .{ .number = 0 });
         (try state_layout.frame(object)).*.width = 1000;
     }
-    try setRecordPathValue(&state, compact, "text", &.{ "markdown", "quote", "pad_y" }, .{ .number = 0 });
-    try setRecordPathValue(&state, padded, "text", &.{ "markdown", "quote", "pad_y" }, .{ .number = 12 });
+    try setRecordPathValue(&state, compact, "markdown", &.{ "quote", "pad_y" }, .{ .number = 0 });
+    try setRecordPathValue(&state, padded, "markdown", &.{ "quote", "pad_y" }, .{ .number = 12 });
 
     const compact_height = metrics.intrinsicHeight(try state_layout.work(), state.getNode(compact).?, (try state_layout.frame(compact)).*);
     const padded_height = metrics.intrinsicHeight(try state_layout.work(), state.getNode(padded).?, (try state_layout.frame(padded)).*);
@@ -2711,36 +2703,36 @@ test "render policy: markdown headings resolve their own text paint" {
 
     const page = try state.addPage("Page");
     const object = try document_testing.native(&state, page, "body", .text, "## Heading");
-    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "size" }, .{ .number = 35 });
-    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "line_height" }, .{ .number = 42 });
-    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "color" }, .{ .string = "0.1,0.6,0.2" });
-    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "font", "family" }, .{ .string = "Avenir Next" });
-    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "font", "weight" }, .{ .number = 650 });
-    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "math", "scale" }, .{ .number = 1.3 });
-    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "math", "inline_spacing" }, .{ .number = 0.2 });
-    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "math", "display_gap" }, .{ .number = 2.4 });
-    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "math", "display_fit" }, .{ .string = "shrink" });
-    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "math", "align" }, .{ .string = "left" });
-    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "emoji_spacing" }, .{ .number = 0.25 });
+    try setRecordPathValue(&state, object, "headings", &.{ "h2", "size" }, .{ .number = 35 });
+    try setRecordPathValue(&state, object, "headings", &.{ "h2", "line_height" }, .{ .number = 42 });
+    try setRecordPathValue(&state, object, "headings", &.{ "h2", "color" }, .{ .string = "0.1,0.6,0.2" });
+    try setRecordPathValue(&state, object, "headings", &.{ "h2", "font", "family" }, .{ .string = "Avenir Next" });
+    try setRecordPathValue(&state, object, "headings", &.{ "h2", "font", "weight" }, .{ .number = 650 });
+    try setRecordPathValue(&state, object, "math", &.{"scale"}, .{ .number = 1.3 });
+    try setRecordPathValue(&state, object, "math", &.{"inline_spacing"}, .{ .number = 0.2 });
+    try setRecordPathValue(&state, object, "math", &.{"display_gap"}, .{ .number = 2.4 });
+    try setRecordPathValue(&state, object, "math", &.{"display_fit"}, .{ .string = "shrink" });
+    try setRecordPathValue(&state, object, "math", &.{"align"}, .{ .string = "left" });
+    try setRecordPathValue(&state, object, "headings", &.{ "h2", "emoji_spacing" }, .{ .number = 0.25 });
 
     const resolved = core.render_policy.resolve(&state, state.getNode(object).?);
-    const heading = resolved.text.?.markdown_headings[1].?;
+    const heading = resolved.content.text.headings[1].?;
     try expectFloat(35, heading.font_size);
     try expectFloat(42, heading.line_height);
     try expectColor(0.1, 0.6, 0.2, heading.color);
     try testing.expectEqualStrings("Avenir Next", heading.font.family);
     try testing.expectEqual(@as(u16, 650), heading.font.weight);
 
-    const selected = resolved.text.?.forMarkdownHeading(2);
-    try expectFloat(35, selected.font_size);
-    try expectFloat(42, selected.line_height);
-    try expectColor(0.1, 0.6, 0.2, selected.color);
-    try expectFloat(1.3, selected.math_scale);
-    try expectFloat(0.2, selected.inline_math_spacing);
-    try expectFloat(2.4, selected.display_math_gap);
-    try testing.expectEqual(core.render_policy.MathFit.shrink, selected.display_math_fit);
-    try testing.expectEqual(core.render_policy.HorizontalAlign.left, selected.math_align);
-    try expectFloat(0.25, selected.emoji_spacing);
+    const selected = resolved.content.text.forMarkdownHeading(2);
+    try expectFloat(35, selected.typography.font_size);
+    try expectFloat(42, selected.typography.line_height);
+    try expectColor(0.1, 0.6, 0.2, selected.typography.color);
+    try expectFloat(1.3, selected.math.scale);
+    try expectFloat(0.2, selected.math.inline_spacing);
+    try expectFloat(2.4, selected.math.display_gap);
+    try testing.expectEqual(core.render_paint.MathFit.shrink, selected.math.display_fit);
+    try testing.expectEqual(core.render_paint.HorizontalAlign.left, selected.math.horizontal_align);
+    try expectFloat(0.25, selected.typography.emoji_spacing);
 }
 
 test "layout metrics use the markdown block gap after a heading" {
@@ -2758,15 +2750,15 @@ test "layout metrics use the markdown block gap after a heading" {
         try setTextFontFamily(&state, object, "Helvetica");
         try setTextSize(&state, object, "23");
         try setTextLineHeight(&state, object, "31");
-        try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "font", "family" }, .{ .string = "Helvetica" });
-        try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "size" }, .{ .number = 30 });
-        try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "line_height" }, .{ .number = 37 });
+        try setRecordPathValue(&state, object, "headings", &.{ "h2", "font", "family" }, .{ .string = "Helvetica" });
+        try setRecordPathValue(&state, object, "headings", &.{ "h2", "size" }, .{ .number = 30 });
+        try setRecordPathValue(&state, object, "headings", &.{ "h2", "line_height" }, .{ .number = 37 });
         // Standalone heading layout spacing must not override spacing inside a Markdown document.
-        try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "spacing_after" }, .{ .number = 97 });
+        try setRecordPathValue(&state, object, "headings", &.{ "h2", "spacing_after" }, .{ .number = 97 });
         (try state_layout.frame(object)).*.width = 1000;
     }
-    try setRecordNumberField(&state, compact, "text", "markdown.block_gap", 8);
-    try setRecordNumberField(&state, relaxed, "text", "markdown.block_gap", 20);
+    try setRecordNumberField(&state, compact, "markdown", "block_gap", 8);
+    try setRecordNumberField(&state, relaxed, "markdown", "block_gap", 20);
 
     const compact_height = metrics.intrinsicHeight(try state_layout.work(), state.getNode(compact).?, (try state_layout.frame(compact)).*);
     const relaxed_height = metrics.intrinsicHeight(try state_layout.work(), state.getNode(relaxed).?, (try state_layout.frame(relaxed)).*);
@@ -2777,7 +2769,7 @@ test "render policy: native payloads determine rendering kinds without propertie
     var state = try initEmptyDocumentState();
     defer state.deinit();
     const page = try state.addPage("Page");
-    const cases = [_]struct { payload: document_testing.FixtureInput, kind: core.render_policy.RenderKind }{
+    const cases = [_]struct { payload: document_testing.FixtureInput, kind: core.render_paint.RenderKind }{
         .{ .payload = .text, .kind = .text },
         .{ .payload = .code, .kind = .code },
         .{ .payload = .latex, .kind = .latex },
@@ -2791,7 +2783,7 @@ test "render policy: native payloads determine rendering kinds without propertie
         try testing.expectEqual(case.kind, core.render_policy.resolveKind(node));
     }
     const group_id = try document_testing.group(&state, page, &.{}, null);
-    try testing.expectEqual(core.render_policy.RenderKind.chrome_only, core.render_policy.resolveKind(state.getNode(group_id).?));
+    try testing.expectEqual(core.render_paint.RenderKind.chrome_only, core.render_policy.resolveKind(state.getNode(group_id).?));
 }
 
 test "render policy: math alignment is read from each content style" {
@@ -2799,19 +2791,19 @@ test "render policy: math alignment is read from each content style" {
     defer state.deinit();
     const page = try state.addPage("Page");
     const text_object = try document_testing.native(&state, page, "body", .text, "$$x^2$$");
-    try setRecordPathValue(&state, text_object, "text", &.{ "math", "align" }, .{ .enum_case = .{ .enum_name = "Align", .case_name = "left" } });
+    try setRecordPathValue(&state, text_object, "math", &.{"align"}, .{ .enum_case = .{ .enum_name = "Align", .case_name = "left" } });
     const resolved_text = core.render_policy.resolve(&state, state.getNode(text_object).?);
-    try testing.expectEqual(core.render_policy.HorizontalAlign.left, resolved_text.text.?.math_align);
+    try testing.expectEqual(core.render_paint.HorizontalAlign.left, resolved_text.content.text.math.horizontal_align);
 
     const invalid_text_object = try document_testing.native(&state, page, "body", .text, "$$z^2$$");
-    try setRecordPathValue(&state, invalid_text_object, "text", &.{ "math", "align" }, .{ .string = "sideways" });
+    try setRecordPathValue(&state, invalid_text_object, "math", &.{"align"}, .{ .string = "sideways" });
     const resolved_invalid = core.render_policy.resolve(&state, state.getNode(invalid_text_object).?);
-    try testing.expectEqual(core.render_policy.HorizontalAlign.center, resolved_invalid.text.?.math_align);
+    try testing.expectEqual(core.render_paint.HorizontalAlign.center, resolved_invalid.content.text.math.horizontal_align);
 
     const latex_object = try document_testing.native(&state, page, "latex", .latex, "$x^2$");
-    try setRecordPathValue(&state, latex_object, "latex", &.{"align"}, .{ .enum_case = .{ .enum_name = "Align", .case_name = "right" } });
+    try setRecordPathValue(&state, latex_object, "image", &.{"align"}, .{ .enum_case = .{ .enum_name = "Align", .case_name = "right" } });
     const resolved_latex = core.render_policy.resolve(&state, state.getNode(latex_object).?);
-    try testing.expectEqual(core.render_policy.HorizontalAlign.right, resolved_latex.latex.?.horizontal_align);
+    try testing.expectEqual(core.render_paint.HorizontalAlign.right, resolved_latex.content.latex.horizontal_align);
 }
 
 fn initPageGraph(state: *core.DocumentState, page_id: model.NodeId) !graph.PageLayoutGraph {
@@ -3024,10 +3016,7 @@ test "layout allocation: separate formulas center in the column independently of
         const body = try document_testing.native(&state, page, "body", .text, prose);
         const formula = try document_testing.native(&state, page, "formula", .latex, "formula");
         try setLayoutWrap(&state, body, "on");
-        var latex = core.Value{ .record = .init(ast.Type.recordType("LatexStyle")) };
-        defer latex.deinit(testing.allocator);
-        try latex.record.fields.append(testing.allocator, .{ .name = "align", .value = .{ .enum_case = .{ .enum_name = "Align", .case_name = "center" } } });
-        try document_testing.setField(&state, formula, "latex", latex);
+        try document_testing.setPath(&state, formula, "image", &.{"align"}, .{ .enum_case = .{ .enum_name = "Align", .case_name = "center" } });
         const column = try state.adoptGroup(page, &.{ body, formula }, .vertical, 32, null);
         try state.collectDefaultAlignments();
         var context: u8 = 0;

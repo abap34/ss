@@ -80,13 +80,14 @@ pub fn translationPatchPreservesRenderedOutput(
     for (pages.pages) |page| {
         for (page.objects) |object| {
             if (!hasTranslationForNode(translations, object.node_id)) continue;
-            if (object.render.vector_path) |path| {
-                if (vectorFillUsesPageSpace(path.fill)) return false;
+            if (object.render.content == .vector_path) {
+                const path = object.render.content.vector_path;
+                if (path.fill.usesPageSpace()) return false;
                 if (path.marker_start) |marker| {
-                    if (vectorFillUsesPageSpace(marker.fill)) return false;
+                    if (marker.fill.usesPageSpace()) return false;
                 }
                 if (path.marker_end) |marker| {
-                    if (vectorFillUsesPageSpace(marker.fill)) return false;
+                    if (marker.fill.usesPageSpace()) return false;
                 }
             }
             // Link and destination annotations have no node id, so they
@@ -98,12 +99,6 @@ pub fn translationPatchPreservesRenderedOutput(
         }
     }
     return true;
-}
-
-fn vectorFillUsesPageSpace(fill: core.render_policy.VectorFillPaint) bool {
-    if (fill.space == .page) return true;
-    if (fill.pattern) |pattern| return pattern.space == .page;
-    return false;
 }
 
 fn hasTranslationForNode(

@@ -435,7 +435,7 @@ end
 import std:text as { Text, TextContent }
 page example
 hflow(LayoutPolicy.${policy})
-let pair = place!(Text { content = TextContent { source = "Short" } } |=| image("${asset}", AssetBlockStyle {} with { asset.scale = ${scale} }))
+let pair = place!(Text { content = TextContent { source = "Short" } } |=| image("${asset}", ImageStyle {} with { scale = ${scale} }))
 ~ pair.left == page.left + 72
 ~ pair.width == 1136
 end

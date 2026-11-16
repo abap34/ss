@@ -875,26 +875,13 @@ pub fn nodeField(node: *const Node, key: []const u8) ?Value {
         if (placement.display == .native) {
             const style = placement.renderValue().record.field("style") orelse return null;
             if (style != .record) return null;
-            if (std.mem.eql(u8, key, "layout")) return style.record.field(key);
             return switch (placement.display.native) {
-                .path_shape => blk: {
-                    if (std.mem.eql(u8, key, "path") or std.mem.eql(u8, key, "marker_start") or std.mem.eql(u8, key, "marker_end")) break :blk placement.renderValue().record.field(key);
-                    if (std.mem.eql(u8, key, "fill") or std.mem.eql(u8, key, "stroke")) break :blk style.record.field(key);
-                    break :blk null;
-                },
-                .text => blk: {
-                    if (std.mem.eql(u8, key, "semantics")) break :blk placement.renderValue().record.field(key);
-                    if (std.mem.eql(u8, key, "text") or std.mem.eql(u8, key, "underline") or std.mem.eql(u8, key, "chrome")) break :blk style.record.field(key);
-                    if (std.mem.eql(u8, key, "markdown_headings")) break :blk style.record.field("headings");
-                    const content = nodeTextContent(node) orelse break :blk null;
-                    if (std.mem.eql(u8, key, "language")) break :blk content.field("language");
-                    if (std.mem.eql(u8, key, "code")) {
-                        const highlight = content.field("highlight") orelse break :blk null;
-                        if (highlight == .record) break :blk highlight.record.field("code");
-                    }
-                    break :blk null;
-                },
-                .image => if (std.mem.eql(u8, key, "asset") or std.mem.eql(u8, key, "chrome")) style.record.field(key) else if (std.mem.eql(u8, key, "image_source")) placement.renderValue().record.field("source") else null,
+                .path_shape => if (style.record.field(key)) |field| field else placement.renderValue().record.field(key),
+                .text => if (std.mem.eql(u8, key, "content") or std.mem.eql(u8, key, "semantics"))
+                    placement.renderValue().record.field(key)
+                else
+                    style.record.field(key),
+                .image => if (std.mem.eql(u8, key, "image_source")) placement.renderValue().record.field("source") else if (std.mem.eql(u8, key, "image")) style else style.record.field(key),
             };
         }
     }

@@ -171,7 +171,7 @@ const Composition = struct {
         try self.layers.append(self.allocator, .{
             .path = native_path.ptr,
             .page_index = page_index,
-            .box = @intFromEnum(core.render_policy.PdfPageBox.crop),
+            .box = @backingInt(core.render_paint.PdfPageBox.crop),
             .x = 0,
             .y = 0,
             .width = self.page.width,
@@ -195,7 +195,7 @@ const Composition = struct {
         self: *Composition,
         path: [:0]const u8,
         page_index: usize,
-        box: core.render_policy.PdfPageBox,
+        box: core.render_paint.PdfPageBox,
         rect: render_ir.Rect,
         header: render_ir.ItemHeader,
         copy_annotations: bool,
@@ -203,7 +203,7 @@ const Composition = struct {
         try self.layers.append(self.allocator, .{
             .path = path.ptr,
             .page_index = page_index,
-            .box = @intFromEnum(box),
+            .box = @backingInt(box),
             .x = rect.x,
             .y = self.page.height - rect.y - rect.height,
             .width = rect.width,
@@ -250,7 +250,7 @@ fn layerEffects(header: render_ir.ItemHeader, page_height: f64) c.SsLayerEffects
     effects.x0 = transform.xy * page_height + transform.x0;
     effects.y0 = page_height * (1 - transform.yy) - transform.y0;
     effects.opacity = header.opacity;
-    effects.blend_mode = @intFromEnum(header.blend_mode);
+    effects.blend_mode = @backingInt(header.blend_mode);
     if (header.clip) |value| switch (value) {
         .rect => |rect| {
             effects.has_clip = 1;
@@ -387,7 +387,7 @@ fn replayVectorPath(allocator: Allocator, pdf: *c.SsPdf, value: render_ir.Vector
         .none => {},
         .solid => |color| {
             appendPdfPath(pdf, value.commands, .{}, 0, 0);
-            c.ss_pdf_path_fill_solid(pdf, color.r, color.g, color.b, value.fill.opacity, @intFromEnum(value.fill.rule));
+            c.ss_pdf_path_fill_solid(pdf, color.r, color.g, color.b, value.fill.opacity, @backingInt(value.fill.rule));
         },
         .linear => |gradient| {
             const arrays = try gradientArrays(allocator, gradient.stops);
@@ -402,9 +402,9 @@ fn replayVectorPath(allocator: Allocator, pdf: *c.SsPdf, value: render_ir.Vector
                 arrays.offsets.ptr,
                 arrays.colors.ptr,
                 gradient.stops.len,
-                @intFromEnum(gradient.spread),
+                @backingInt(gradient.spread),
                 value.fill.opacity,
-                @intFromEnum(value.fill.rule),
+                @backingInt(value.fill.rule),
             );
         },
         .radial => |gradient| {
@@ -422,9 +422,9 @@ fn replayVectorPath(allocator: Allocator, pdf: *c.SsPdf, value: render_ir.Vector
                 arrays.offsets.ptr,
                 arrays.colors.ptr,
                 gradient.stops.len,
-                @intFromEnum(gradient.spread),
+                @backingInt(gradient.spread),
                 value.fill.opacity,
-                @intFromEnum(value.fill.rule),
+                @backingInt(value.fill.rule),
             );
         },
     }
@@ -463,7 +463,7 @@ fn replayTilePattern(pdf: *c.SsPdf, value: render_ir.VectorPath, pattern: render
     c.ss_pdf_state_save(pdf);
     defer c.ss_pdf_state_restore(pdf);
     appendPdfPath(pdf, value.commands, .{}, 0, 0);
-    c.ss_pdf_path_clip(pdf, @intFromEnum(value.fill.rule));
+    c.ss_pdf_path_clip(pdf, @backingInt(value.fill.rule));
 
     const bounds = try inverseTransformBounds(value.header.bounds, pattern.transform);
     const first_x = @floor(bounds.x / pattern.cell_width) * pattern.cell_width - pattern.cell_width;
@@ -479,7 +479,7 @@ fn replayTilePattern(pdf: *c.SsPdf, value: render_ir.VectorPath, pattern: render
             if (tile_count > 1_000_000) return error.InvalidItemGeometry;
             if (pattern.fill) |color| {
                 appendPdfPath(pdf, pattern.commands, pattern.transform, x, y);
-                c.ss_pdf_path_fill_solid(pdf, color.r, color.g, color.b, value.fill.opacity, @intFromEnum(value.fill.rule));
+                c.ss_pdf_path_fill_solid(pdf, color.r, color.g, color.b, value.fill.opacity, @backingInt(value.fill.rule));
             }
             if (pattern.stroke) |stroke| {
                 appendPdfPath(pdf, pattern.commands, pattern.transform, x, y);
@@ -523,8 +523,8 @@ fn strokePdfPath(pdf: *c.SsPdf, stroke: render_ir.StrokePaint, opacity: f64) voi
         stroke.color.b,
         opacity,
         stroke.width,
-        @intFromEnum(stroke.cap),
-        @intFromEnum(stroke.join),
+        @backingInt(stroke.cap),
+        @backingInt(stroke.join),
         stroke.miter_limit,
         if (stroke.dash.len == 0) null else stroke.dash.ptr,
         stroke.dash.len,
@@ -569,7 +569,7 @@ fn itemEffects(header: render_ir.ItemHeader) c.SsLayerEffects {
     effects.x0 = header.transform.x0;
     effects.y0 = header.transform.y0;
     effects.opacity = header.opacity;
-    effects.blend_mode = @intFromEnum(header.blend_mode);
+    effects.blend_mode = @backingInt(header.blend_mode);
     if (header.clip) |value| switch (value) {
         .rect => |rect| {
             effects.has_clip = 1;
@@ -600,7 +600,7 @@ fn replayTextLayout(
     x: f64,
     y: f64,
     font_size: f64,
-    color: core.render_policy.Color,
+    color: core.render_paint.Color,
     resources: *const ResourceFiles,
 ) !void {
     for (layout.runs) |run| {

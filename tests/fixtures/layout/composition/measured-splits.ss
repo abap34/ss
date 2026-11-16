@@ -1,6 +1,6 @@
 import std:themes/default as *
 
-const style: TextBlockStyle = default_theme().body with { layout.spacing_after = 32 }
+const style: TextBlockStyle = default_theme().text with { layout.spacing_after = 32 }
 
 page split_tables
 text!(<<

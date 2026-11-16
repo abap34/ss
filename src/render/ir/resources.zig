@@ -102,7 +102,7 @@ pub const PdfPageMetadata = struct {
     annotation_count: usize,
     has_unsafe_annotations: bool,
 
-    pub fn box(self: *const PdfPageMetadata, kind: @import("core").render_policy.PdfPageBox) PdfBox {
+    pub fn box(self: *const PdfPageMetadata, kind: @import("core").render_paint.PdfPageBox) PdfBox {
         return switch (kind) {
             .media => self.media,
             .crop => self.crop,

@@ -389,13 +389,12 @@ test "native display: exactly three kinds validate structured text and image inp
 test "native text display: a user display reaches Markdown preparation through immutable Text input" {
     var state = try documentWithModules(
         \\import std:text/content as native
-        \\import std:text/types as styles
         \\import std:text/style as block
         \\type Message { content: String }
         \\fn display(self: Placed<Message>) -> native::Text
         \\  return native::Text {
         \\    content = native::TextContent { source = self.value.content }
-        \\    style = block::TextBlockStyle { text = styles::TextStyle { size = 31 parse = styles::TextParseMode.block } }
+        \\    style = block::TextBlockStyle { size = 31 }
         \\  }
         \\end
     );
@@ -425,14 +424,14 @@ test "native text display: a user display reaches Markdown preparation through i
     try testing.expectEqual(core.native_display.Kind.text, node.placement.?.display.native);
     try testing.expectEqualStrings("# Overview\n\n**Typed** text", core.nodeDisplayContent(node));
     const render = core.render_policy.resolve(&state, node);
-    try testing.expectEqual(@as(f32, 31), render.text.?.font_size);
+    try testing.expectEqual(@as(f32, 31), render.content.text.typography.font_size);
     var prepared = try core.prepared.prepareObjectWithRender(testing.allocator, &state, node, render);
     defer prepared.deinit(testing.allocator);
     try testing.expectEqual(core.markdown.ParseMode.block, prepared.parse_mode);
     try testing.expect(prepared.markdown_doc.?.blocks.items.len >= 2);
     try testing.expectEqualStrings("# Overview\n\n**Typed** text", prepared.content);
     try testing.expect(state.getNode(parent).?.placement.?.display == .expanded);
-    try testing.expectEqual(core.render_policy.RenderKind.chrome_only, core.render_policy.resolveKind(state.getNode(parent).?));
+    try testing.expectEqual(core.render_paint.RenderKind.chrome_only, core.render_policy.resolveKind(state.getNode(parent).?));
     var pages = try core.prepared.prepare(testing.allocator, &state);
     defer pages.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 1), pages.pages.len);
@@ -447,11 +446,11 @@ test "native image display: immutable inputs retain asset styles and independent
         \\fn display(self: Placed<Picture>) -> assets::Image = self.value.image
         \\const picture: assets::Image = assets::Image {
         \\  source = assets::image_source("tests/fixtures/layout/practical/diagram.svg")
-        \\  style = assets::AssetBlockStyle {} with { asset.scale = 0.5 chrome.pad_x = 8 chrome.pad_y = 6 }
+        \\  style = assets::ImageStyle {} with { scale = 0.5 chrome.pad_x = 8 chrome.pad_y = 6 }
         \\}
         \\page first
         \\  let first = place!(picture)
-        \\  let second = place!(picture with { style = (picture.style ?? assets::AssetBlockStyle {}) with { asset.scale = 0.25 } })
+        \\  let second = place!(picture with { style = (picture.style ?? assets::ImageStyle {}) with { scale = 0.25 } })
         \\end
         \\page second
         \\  let wrapped = place!(Picture { image = picture })
@@ -476,8 +475,8 @@ test "native image display: immutable inputs retain asset styles and independent
         try testing.expectEqual(core.PayloadKind.image_ref, core.nodePayloadKind(node).?);
         try testing.expectEqual(@as(usize, 0), node.fields.items.len);
         const paint = core.render_policy.resolve(&state, node);
-        try testing.expectEqual(core.render_policy.RenderKind.raster_asset, paint.kind);
-        try testing.expectEqual(scale, paint.asset.?.scale);
+        try testing.expectEqual(core.render_paint.RenderKind.raster_asset, paint.kind());
+        try testing.expectEqual(scale, paint.content.asset().?.scale);
         try testing.expectEqual(@as(f32, 8), paint.chrome.pad_x);
         try testing.expectEqual(@as(f32, 6), paint.chrome.pad_y);
         var prepared = try core.prepared.prepareObject(testing.allocator, &state, node);
@@ -502,15 +501,15 @@ test "native code display: source, language and styles remain immutable across p
         \\const sample: code_api::Code = code_api::Code {
         \\  source = "**Literal** $x$ ![image](missing.png)"
         \\  language = "python"
-        \\  style = code_api::CodeBlockStyle {} with {
-        \\    text.size = 18
-        \\    highlight = code_api::CodeHighlightTheme { code = code_api::CodeColors { plain = c"#123456" } }
-        \\    chrome.pad_x = 16
+        \\  style = code_api::TextBlockStyle {} with {
+        \\    code.size = 18
+        \\    code.colors = code_api::CodeColors { plain = c"#123456" }
+        \\    code.chrome.pad_x = 16
         \\  }
         \\}
         \\page first
         \\  let highlighted = place!(sample)
-        \\  let plain = place!(sample with { language = "plain" style = (sample.style ?? code_api::CodeBlockStyle {}) with { text.size = 22 } })
+        \\  let plain = place!(sample with { language = "plain" style = (sample.style ?? code_api::TextBlockStyle {}) with { code.size = 22 } })
         \\end
         \\page second
         \\  let wrapped = place!(Example { code = sample })
@@ -531,12 +530,12 @@ test "native code display: source, language and styles remain immutable across p
         try testing.expectEqual(core.native_display.Kind.text, node.placement.?.display.native);
         try testing.expectEqual(@as(usize, 0), node.fields.items.len);
         const paint = core.render_policy.resolve(&state, node);
-        try testing.expectEqual(core.render_policy.RenderKind.code, paint.kind);
-        try testing.expectEqualStrings(language, paint.code.?.language.?);
-        try testing.expectEqual(size, paint.text.?.font_size);
+        try testing.expectEqual(core.render_paint.RenderKind.code, paint.kind());
+        try testing.expectEqualStrings(language, paint.content.code.language.?);
+        try testing.expectEqual(size, paint.content.code.style.font_size);
         try testing.expectEqual(@as(f32, 16), paint.chrome.pad_x);
-        try testing.expectApproxEqAbs(@as(f32, 18.0 / 255.0), paint.code.?.plain.r, 0.0001);
-        try testing.expectEqualDeep(paint.code.?.plain, paint.code.?.comment);
+        try testing.expectApproxEqAbs(@as(f32, 18.0 / 255.0), paint.content.code.style.colors.get(.plain).r, 0.0001);
+        try testing.expectEqualDeep(paint.content.code.style.colors.get(.plain), paint.content.code.style.colors.get(.comment));
         var prepared = try core.prepared.prepareObject(testing.allocator, &state, node);
         defer prepared.deinit(testing.allocator);
         try testing.expectEqualStrings("**Literal** $x$ ![image](missing.png)", prepared.content);
@@ -558,10 +557,10 @@ test "code constructors: values allocate only at placement and defaults are inde
         \\  let unused: c::Code = c::code("Unused")
         \\end
         \\page used
-        \\  let custom = default_theme() with { code.text.size = 99 }
+        \\  let custom = default_theme() with { text.code.size = 99 }
         \\  let value: c::Code = c::code("return 1", "python")
         \\  let direct: Placed<c::Code> = c::code!("return 1", "python")
-        \\  let changed = place!(value with { style = custom.code })
+        \\  let changed = place!(value with { style = custom.text })
         \\  let copies = place!(duplicate(value))
         \\  let count = selection_count(select<c::Code>(pagectx()))
         \\  ~ direct.width == count * 40
@@ -583,9 +582,9 @@ test "code constructors: values allocate only at placement and defaults are inde
         try testing.expectEqualStrings("return 1", core.nodeContent(node).?);
         try testing.expectEqual(@as(usize, 0), node.fields.items.len);
         const paint = core.render_policy.resolve(&state, node);
-        try testing.expectEqual(size, paint.text.?.font_size);
-        try testing.expectEqualStrings("python", paint.code.?.language.?);
-        try testing.expectApproxEqAbs(@as(f32, 207.0 / 255.0), paint.code.?.keyword.r, 0.0001);
+        try testing.expectEqual(size, paint.content.code.style.font_size);
+        try testing.expectEqualStrings("python", paint.content.code.language.?);
+        try testing.expectApproxEqAbs(@as(f32, 207.0 / 255.0), paint.content.code.style.colors.get(.keyword).r, 0.0001);
     }
     try testing.expect(children[0] != children[1]);
 }
@@ -638,7 +637,7 @@ test "native asset display: local names and incomplete inputs cannot impersonate
         defer value.deinit(testing.allocator);
         try value.record.fields.append(testing.allocator, .{ .name = if (std.mem.eql(u8, case.name, "Icon")) "source" else "path", .value = .{ .string = "Missing style" } });
         try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, case.kind));
-        try value.record.fields.append(testing.allocator, .{ .name = "style", .value = .{ .record = .init(Type.recordType("AssetBlockStyle").inModule(0)) } });
+        try value.record.fields.append(testing.allocator, .{ .name = "style", .value = .{ .record = .init(Type.recordType("ImageStyle").inModule(0)) } });
         try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, case.kind));
     }
 }
@@ -695,14 +694,14 @@ test "native text display: public Text preserves complete block styles without m
         \\end
         \\page main
         \\  let original = text_api::TextBlockStyle {
-        \\    text = text_api::TextStyle { size = 23 parse = text_api::TextParseMode.block }
-        \\    layout = layout::LayoutStyle { x = 64 right_inset = 80 spacing_after = 19 wrap = layout::WrapMode.off }
-        \\    underline = text_api::UnderlineStyle { color = c"#ff0000" width = 3 offset = -4 }
-        \\    headings = text_api::MarkdownHeadingStyles {
-        \\      h1 = text_api::MarkdownHeadingStyle { text = text_api::TextStyle { size = 37 line_height = 43 } }
+        \\    size = 23
+        \\    layout = layout::TextLayout { left_inset = 64 right_inset = 80 spacing_after = 19 wrap = layout::WrapMode.off }
+        \\    chrome = BoxStyle {} with { bottom_rule.color = c"#ff0000" bottom_rule.width = 3 bottom_rule.offset = -4 }
+        \\    headings = text_api::HeadingLevels {
+        \\      h1 = text_api::TypographyOverride { size = 37 line_height = 43 }
         \\    }
         \\  }
-        \\  let changed = original with { text.size = 29 layout.wrap = layout::WrapMode.on headings.h2 = text_api::MarkdownHeadingStyle { text = text_api::TextStyle { size = 31 } } }
+        \\  let changed = original with { size = 29 layout.wrap = layout::WrapMode.on headings.h2 = text_api::TypographyOverride { size = 31 } }
         \\  let first: Placed<text_api::Text> = styled!("# First", original)
         \\  let second: Placed<text_api::Text> = styled!("## Second", changed)
         \\end
@@ -717,16 +716,16 @@ test "native text display: public Text preserves complete block styles without m
         const node = state.getNode(root).?;
         try testing.expectEqual(@as(usize, 0), node.fields.items.len);
         const paint = core.render_policy.resolve(&state, node);
-        try testing.expectEqual(font_size, paint.text.?.font_size);
-        try testing.expectEqual(index == 1, paint.text.?.wrap);
-        try testing.expectEqual(@as(f32, 37), paint.text.?.markdown_headings[0].?.font_size);
-        try testing.expectEqual(@as(f32, 43), paint.text.?.markdown_headings[0].?.line_height);
-        if (index == 0) try testing.expect(paint.text.?.markdown_headings[1] == null) else try testing.expectEqual(@as(f32, 31), paint.text.?.markdown_headings[1].?.font_size);
-        try testing.expectEqual(@as(f32, 3), paint.underline.width);
-        try testing.expectEqual(@as(f32, -4), paint.underline.offset);
-        try testing.expectEqual(@as(f32, 1), paint.underline.color.?.r);
+        try testing.expectEqual(font_size, paint.content.text.typography.font_size);
+        try testing.expectEqual(index == 1, paint.content.text.wrap);
+        try testing.expectEqual(@as(f32, 37), paint.content.text.headings[0].?.font_size);
+        try testing.expectEqual(@as(f32, 43), paint.content.text.headings[0].?.line_height);
+        try testing.expectEqual(@as(f32, if (index == 0) 30 else 31), paint.content.text.headings[1].?.font_size);
+        try testing.expectEqual(@as(f32, 3), paint.chrome.bottom_rule.width);
+        try testing.expectEqual(@as(f32, -4), paint.chrome.bottom_rule.offset);
+        try testing.expectEqual(@as(f32, 1), paint.chrome.bottom_rule.color.?.r);
         const layout = core.nodeField(node, "layout").?.record;
-        try testing.expectEqual(@as(f32, 64), layout.field("x").?.number);
+        try testing.expectEqual(@as(f32, 64), layout.field("left_inset").?.number);
         try testing.expectEqual(@as(f32, 80), layout.field("right_inset").?.number);
         try testing.expectEqual(@as(f32, 19), layout.field("spacing_after").?.number);
         var prepared = try core.prepared.prepareObjectWithRender(testing.allocator, &state, node, paint);
@@ -743,9 +742,9 @@ test "native text display: an immutable theme block can be used directly and upd
         \\fn/! styled(content: String, style: TextBlockStyle) -> Text = Text { content = TextContent { source = content } style = style }
         \\page main
         \\  let theme = base::default_theme()
-        \\  styled!("Original", theme.h1)
-        \\  styled!("Changed", theme.h1 with { text.size = 44 })
-        \\  styled!("Reused", theme.h1)
+        \\  styled!("Original", theme.text)
+        \\  styled!("Changed", theme.text with { size = 44 })
+        \\  styled!("Reused", theme.text)
         \\end
     );
     defer state.deinit();
@@ -754,12 +753,12 @@ test "native text display: an immutable theme block can be used directly and upd
     try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
     const roots = state.placementRootsOf(state.graph.page_order.items[0]);
     try testing.expectEqual(@as(usize, 3), roots.len);
-    for (roots, [_]f32{ 40, 44, 40 }) |root, size| {
+    for (roots, [_]f32{ 24, 44, 24 }) |root, size| {
         const node = state.getNode(root).?;
         const paint = core.render_policy.resolve(&state, node);
-        try testing.expectEqual(size, paint.text.?.font_size);
-        try testing.expectEqual(@as(f32, 47), paint.text.?.line_height);
-        try testing.expectEqual(@as(f32, 42), core.nodeField(node, "layout").?.record.field("spacing_after").?.number);
+        try testing.expectEqual(size, paint.content.text.typography.font_size);
+        try testing.expectEqual(@as(f32, 31), paint.content.text.typography.line_height);
+        try testing.expectEqual(@as(f32, 28), core.nodeField(node, "layout").?.record.field("spacing_after").?.number);
         try testing.expectEqual(@as(usize, 0), node.fields.items.len);
     }
 }
@@ -772,8 +771,8 @@ test "native text display: every bundled theme resolves the same text paint from
             \\fn/! styled(content: String, style: TextBlockStyle) -> Text = Text {{ content = TextContent {{ source = content }} style = style }}
             \\page main
             \\  let theme = theme_api::default_theme()
-            \\  text!("# Theme", theme.body)
-            \\  styled!("# Theme", theme.body)
+            \\  text!("# Theme", theme.text)
+            \\  styled!("# Theme", theme.text)
             \\end
         , .{name});
         defer testing.allocator.free(source);
@@ -788,8 +787,8 @@ test "native text display: every bundled theme resolves the same text paint from
         const typed = state.getNode(roots[1]).?;
         const previous_paint = core.render_policy.resolve(&state, previous);
         const typed_paint = core.render_policy.resolve(&state, typed);
-        try testing.expectEqualDeep(previous_paint.text, typed_paint.text);
-        try testing.expectEqualDeep(previous_paint.underline, typed_paint.underline);
+        try testing.expectEqualDeep(previous_paint.content.text, typed_paint.content.text);
+        try testing.expectEqualDeep(previous_paint.chrome.bottom_rule, typed_paint.chrome.bottom_rule);
         try testing.expectEqual(core.markdown.parseModeForNode(&state, previous), core.markdown.parseModeForNode(&state, typed));
         try testing.expectEqual(@as(usize, 0), typed.fields.items.len);
     }
@@ -1278,14 +1277,14 @@ test "native latex display: immutable body and configuration survive reuse and d
         \\const body: math::Latex = math::Latex {
         \\  source = "Raw **body** $x$"
         \\  config = math::LatexConfig { preamble = "Custom preamble" }
-        \\  style = math::LatexBlockStyle {} with { chrome.pad_x = 12 }
+        \\  style = math::ImageStyle {} with { chrome.pad_x = 12 }
         \\}
         \\page first
         \\  let normal: Placed<math::Latex> = math::latex!(body.source, body.style, body.config)
         \\  let changed = place!(body with {
         \\    config.engine = math::LatexEngine.lualatex
         \\    config.preamble = "Other preamble"
-        \\    style.latex.scale = 2
+        \\    style = (body.style ?? math::ImageStyle {}) with { scale = 2 }
         \\  })
         \\end
         \\page second
@@ -1304,8 +1303,8 @@ test "native latex display: immutable body and configuration survive reuse and d
         try testing.expectEqual(core.native_display.Kind.image, node.placement.?.display.native);
         try testing.expectEqual(@as(usize, 0), node.fields.items.len);
         const paint = core.render_policy.resolve(&state, node);
-        try testing.expectEqual(core.render_policy.RenderKind.latex, paint.kind);
-        try testing.expectEqual(@as(f32, if (index == 1) 2 else 1), paint.latex.?.scale);
+        try testing.expectEqual(core.render_paint.RenderKind.latex, paint.kind());
+        try testing.expectEqual(@as(f32, if (index == 1) 2 else 1), paint.content.latex.scale);
         try testing.expectEqual(@as(f32, 12), paint.chrome.pad_x);
         var prepared = try core.prepared.prepareObject(testing.allocator, &state, node);
         defer prepared.deinit(testing.allocator);
@@ -1325,11 +1324,11 @@ test "math display: public constructors preserve source, configuration and typed
         \\import std:text as t
         \\type Formula { value: Math }
         \\fn display(self: Placed<Formula>) -> Math = self.value.value
-        \\const shared: Math = math("x^2", formulas::LatexBlockStyle {} with { chrome.pad_x = 8 }, formulas::LatexConfig { preamble = "Original preamble" })
+        \\const shared: Math = math("x^2", formulas::ImageStyle {} with { chrome.pad_x = 8 }, formulas::LatexConfig { preamble = "Original preamble" })
         \\page first
         \\  let original: Placed<Math> = place!(shared)
         \\  let updated = place!(shared with {
-        \\    style.latex.scale = 2
+        \\    style = (shared.style ?? formulas::ImageStyle {}) with { scale = 2 }
         \\    config.engine = formulas::LatexEngine.lualatex
         \\    config.preamble = "Other preamble"
         \\  })
@@ -1361,7 +1360,7 @@ test "math display: public constructors preserve source, configuration and typed
         try testing.expectEqual(core.native_display.Kind.image, leaf.placement.?.display.native);
         try testing.expectEqual(input.page_id, leaf.placement.?.page_id);
         const paint = core.render_policy.resolve(&state, leaf);
-        try testing.expectEqual(@as(f32, if (index == 1) 2 else 1), paint.latex.?.scale);
+        try testing.expectEqual(@as(f32, if (index == 1) 2 else 1), paint.content.latex.scale);
         try testing.expectEqual(@as(f32, if (index == 2) 0 else 8), paint.chrome.pad_x);
         var prepared = try core.prepared.prepareObject(testing.allocator, &state, leaf);
         defer prepared.deinit(testing.allocator);
@@ -1417,7 +1416,7 @@ test "native latex display: configuration must have the declared nominal type" {
     var value = core.Value{ .record = .init(native_type) };
     defer value.deinit(testing.allocator);
     try value.record.fields.append(testing.allocator, .{ .name = "source", .value = .{ .string = "Body" } });
-    const style_type = Type.recordType("LatexBlockStyle").inModule(state.moduleByPathOrSpec("std:math/style").?.id);
+    const style_type = Type.recordType("ImageStyle").inModule(state.moduleByPathOrSpec("std:assets/style").?.id);
     try value.record.fields.append(testing.allocator, .{ .name = "style", .value = .{ .record = .init(style_type) } });
     try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, .image));
     try value.record.fields.append(testing.allocator, .{ .name = "config", .value = .{ .record = .init(Type.recordType("LatexConfig").inModule(0)) } });
@@ -1704,7 +1703,7 @@ test "native path display: immutable geometry, paint and markers survive reuse a
         \\page first
         \\  place!(t::Text { content = t::TextContent { source = str(selection_count(select<g::PathShape>(pagectx()))) } })
         \\  place!(input)
-        \\  place!(input with { width = 240 style.stroke.width = 4 marker_start = g::MarkerStyle { path = path(p::move_to(0, 0), p::line_to(1, 1)) } })
+        \\  place!(input with { width = 240 style = g::VectorStyle {} with { stroke.width = 4 } marker_start = g::MarkerStyle { path = path(p::move_to(0, 0), p::line_to(1, 1)) } })
         \\end
         \\page second
         \\  place!(Diagram { shape = input })
@@ -1724,7 +1723,7 @@ test "native path display: immutable geometry, paint and markers survive reuse a
         try testing.expectEqualStrings("PathShape", node.placement.?.value.record.ty.class_name.?);
         try testing.expectEqual(if (index == 2) pages[1] else pages[0], node.placement.?.page_id);
         try testing.expectEqual(@as(usize, 0), node.fields.items.len);
-        const paint = core.render_policy.resolve(&state, node).vector_path.?;
+        const paint = core.render_policy.resolve(&state, node).content.vector_path;
         try testing.expectEqual(@as(f32, if (index == 1) 240 else 180), paint.natural_size.?.width);
         try testing.expectEqual(@as(f32, 90), paint.natural_size.?.height);
         try testing.expectEqual(@as(f32, if (index == 1) 4 else 1.6), paint.stroke.?.width);
@@ -1805,10 +1804,10 @@ test "native icon display: immutable inputs preserve identity, paint and bundled
         try testing.expectEqual(core.native_display.Kind.image, node.placement.?.display.native);
         try testing.expectEqual(@as(usize, 0), node.fields.items.len);
         const paint = core.render_policy.resolve(&state, node);
-        try testing.expectEqual(core.render_policy.RenderKind.vector_asset, paint.kind);
-        try testing.expectEqual(@as(f32, if (index == 1) 1.5 else 1), paint.asset.?.scale);
-        try testing.expect(paint.asset.?.tint != null);
-        try testing.expectApproxEqAbs(@as(f32, if (index == 1) 219.0 / 255.0 else 37.0 / 255.0), paint.asset.?.tint.?.r, 0.0001);
+        try testing.expectEqual(core.render_paint.RenderKind.vector_asset, paint.kind());
+        try testing.expectEqual(@as(f32, if (index == 1) 1.5 else 1), paint.content.asset().?.scale);
+        try testing.expect(paint.content.asset().?.tint != null);
+        try testing.expectApproxEqAbs(@as(f32, if (index == 1) 219.0 / 255.0 else 37.0 / 255.0), paint.content.asset().?.tint.?.r, 0.0001);
         var prepared = try core.prepared.prepareObject(testing.allocator, &state, node);
         defer prepared.deinit(testing.allocator);
         try testing.expectEqualStrings(if (index == 1) "fa-solid:heart" else "fa-solid:star", prepared.content);
@@ -1906,7 +1905,7 @@ test "asset constructors: reused paths retain their source through helpers and d
 test "latex constructor: unused bodies do not allocate placements or require external tools" {
     var state = try documentWithModules(
         \\import std:math as formulas
-        \\const body: formulas::Latex = formulas::latex("Unknown TeX command", formulas::LatexBlockStyle {}, formulas::LatexConfig { engine = formulas::LatexEngine.lualatex })
+        \\const body: formulas::Latex = formulas::latex("Unknown TeX command", formulas::ImageStyle {}, formulas::LatexConfig { engine = formulas::LatexEngine.lualatex })
         \\page unused
         \\  let pair = group(body, body)
         \\end
@@ -1924,7 +1923,7 @@ test "native text display: public constructors preserve explicit TeX configurati
         \\import std:text as words
         \\const config: LatexConfig = LatexConfig { engine = LatexEngine.lualatex preamble = "explicit" }
         \\const original: words::Text = words::text("**Shared**", default_text_style, config)
-        \\const changed: words::Text = original with { content.config.preamble = "changed" style = default_text_style with { text.size = 31 } }
+        \\const changed: words::Text = original with { content.config.preamble = "changed" style = default_text_style with { size = 31 } }
         \\page main
         \\  let first: Placed<words::Text> = place!(original)
         \\  let second: Placed<words::Text> = place!(changed)
@@ -1941,7 +1940,7 @@ test "native text display: public constructors preserve explicit TeX configurati
     for (roots, [_][]const u8{ "explicit", "changed", "" }, [_]f32{ 20, 31, 20 }) |root, preamble, size| {
         const node = state.getNode(root).?;
         try testing.expectEqual(@as(usize, 0), node.fields.items.len);
-        try testing.expectEqual(size, core.render_policy.resolve(&state, node).text.?.font_size);
+        try testing.expectEqual(size, core.render_policy.resolve(&state, node).content.text.typography.font_size);
         const config_value = try core.latex_config.forNode(node);
         try testing.expectEqual(if (preamble.len == 0) core.latex_config.LatexEngine.pdflatex else .lualatex, config_value.engine);
         try testing.expectEqualStrings(preamble, config_value.preamble);

@@ -42,7 +42,7 @@ type LineStyle {
   start_y: Number = 0.5
   end_x: Number = 1
   end_y: Number = 0.5
-  stroke: VectorStrokeStyle = VectorStrokeStyle {}
+  stroke: VectorStrokeStyle? = none
   marker_start: MarkerStyle? = none
   marker_end: MarkerStyle? = none
 }

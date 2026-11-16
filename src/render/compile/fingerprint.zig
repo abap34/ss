@@ -9,9 +9,7 @@ const utils = @import("utils");
 const cache_versions = @import("cache_versions.zig");
 
 const c = pdf_ffi.c;
-const Color = core.render_policy.Color;
-const FontFace = core.font.Face;
-const HorizontalAlign = core.render_policy.HorizontalAlign;
+const Color = core.render_paint.Color;
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
@@ -28,7 +26,7 @@ pub const Command = struct {
     content: []const u8,
     link_id: ?[]const u8,
     parse_mode: []const u8,
-    render: core.render_policy.ResolvedRender,
+    render: core.render_paint.ResolvedRender,
     latex_preamble: []const u8,
     latex_engine: core.latex_config.LatexEngine,
     latex_kind: []const u8,
@@ -94,7 +92,7 @@ pub fn renderPageKey(
     hasher.update(&ctx.font_environment);
     hashU64(&hasher, page_id);
     hashUsize(&hasher, page_index);
-    hashOptionalColor(&hasher, background);
+    hashPaint(&hasher, background);
     try hashHighlightLanguages(ctx, &files, &hasher, highlight_languages);
     hashUsize(&hasher, commands.len);
     for (commands) |command| {
@@ -141,7 +139,7 @@ fn hashCommand(ctx: Context, files: *std.StringHashMap(File), hasher: *std.hash.
     hashString(hasher, command.content);
     hashOptionalString(hasher, command.link_id);
     hashString(hasher, command.parse_mode);
-    if (command.render.kind == .latex or command.render.kind == .text) {
+    if (command.render.kind() == .latex or command.render.kind() == .text) {
         hashString(hasher, @tagName(command.latex_engine));
         hashString(hasher, command.latex_preamble);
     }
@@ -161,11 +159,11 @@ fn hashCommand(ctx: Context, files: *std.StringHashMap(File), hasher: *std.hash.
             .icon => hashString(hasher, core.fontawesome.cache_namespace),
         }
     }
-    if (command.render.kind == .latex and command.asset_deps.len == 0) {
+    if (command.render.kind() == .latex and command.asset_deps.len == 0) {
         try hashLatexInputs(ctx, files, hasher, command.content, command.latex_preamble, command.latex_engine, command.latex_kind);
     }
-    hashResolvedRender(hasher, command.render);
-    switch (command.render.kind) {
+    hashPaint(hasher, command.render);
+    switch (command.render.kind()) {
         .latex => hashString(hasher, command.latex_kind),
         .vector_asset, .raster_asset => {
             if (core.fontawesome.parseSource(command.content) != null) {
@@ -257,280 +255,34 @@ fn readFileFingerprint(ctx: Context, source: []const u8) !File {
     return .{ .present = true, .digest = hasher.final() };
 }
 
-fn hashResolvedRender(hasher: *std.hash.Wyhash, render: core.render_policy.ResolvedRender) void {
-    hashString(hasher, @tagName(render.kind));
-    hashOptionalTextPaint(hasher, render.text);
-    hashOptionalLatexPaint(hasher, render.latex);
-    hashOptionalAssetPaint(hasher, render.asset);
-    hashOptionalCodePaint(hasher, render.code);
-    hashOptionalVectorPathPaint(hasher, render.vector_path);
-    hashChromePaint(hasher, render.chrome);
-    hashUnderlinePaint(hasher, render.underline);
-    hashRulePaint(hasher, render.rule);
-}
-
-fn hashOptionalTextPaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.TextPaint) void {
-    hashBool(hasher, maybe != null);
-    if (maybe) |text| {
-        hashFontFace(hasher, text.font);
-        hashFontFace(hasher, text.bold_font);
-        hashFontFace(hasher, text.italic_font);
-        hashFontFace(hasher, text.code_font);
-        hashF32(hasher, text.font_size);
-        hashF32(hasher, text.line_height);
-        hashHorizontalAlign(hasher, text.horizontal_align);
-        hashColor(hasher, text.color);
-        hashColor(hasher, text.link_color);
-        hashOptionalColor(hasher, text.markdown_bold_color);
-        hashOptionalColor(hasher, text.markdown_highlight_fill);
-        hashMarkdownUnderlinePaint(hasher, text.markdown_underline);
-        hashMarkdownQuotePaint(hasher, text.markdown_quote);
-        for (text.markdown_headings) |heading| hashOptionalHeadingPaint(hasher, heading);
-        hashF32(hasher, text.math_scale);
-        hashF32(hasher, text.inline_math_spacing);
-        hashF32(hasher, text.display_math_gap);
-        std.hash.autoHash(hasher, @intFromEnum(text.display_math_fit));
-        hashHorizontalAlign(hasher, text.math_align);
-        hashF32(hasher, text.emoji_spacing);
-        hashF32(hasher, text.markdown_block_gap);
-        hashF32(hasher, text.markdown_list_inset);
-        hashF32(hasher, text.markdown_list_indent);
-        hashF32(hasher, text.markdown_code_font_size);
-        hashF32(hasher, text.markdown_code_line_height);
-        hashF32(hasher, text.markdown_code_pad_x);
-        hashF32(hasher, text.markdown_code_pad_y);
-        hashOptionalColor(hasher, text.markdown_code_highlight_fill);
-        hashOptionalColor(hasher, text.markdown_code_fill);
-        hashOptionalColor(hasher, text.markdown_code_stroke);
-        hashF32(hasher, text.markdown_code_line_width);
-        hashF32(hasher, text.markdown_code_radius);
-        hashOptionalColor(hasher, text.markdown_code_plain_color);
-        hashOptionalColor(hasher, text.markdown_code_keyword_color);
-        hashOptionalColor(hasher, text.markdown_code_function_color);
-        hashOptionalColor(hasher, text.markdown_code_type_color);
-        hashOptionalColor(hasher, text.markdown_code_constant_color);
-        hashOptionalColor(hasher, text.markdown_code_number_color);
-        hashOptionalColor(hasher, text.markdown_code_variable_color);
-        hashOptionalColor(hasher, text.markdown_code_operator_color);
-        hashOptionalColor(hasher, text.markdown_code_comment_color);
-        hashOptionalColor(hasher, text.markdown_code_string_color);
-        hashF32(hasher, text.markdown_table_cell_pad_x);
-        hashF32(hasher, text.markdown_table_cell_pad_y);
-        hashOptionalColor(hasher, text.markdown_table_border);
-        hashF32(hasher, text.markdown_table_line_width);
-        hashOptionalColor(hasher, text.markdown_table_header_fill);
-        hashOptionalColor(hasher, text.markdown_table_alt_row_fill);
-        hashBool(hasher, text.wrap);
-    }
-}
-
-fn hashOptionalHeadingPaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.MarkdownHeadingPaint) void {
-    hashBool(hasher, maybe != null);
-    if (maybe) |heading| {
-        hashFontFace(hasher, heading.font);
-        hashFontFace(hasher, heading.bold_font);
-        hashFontFace(hasher, heading.italic_font);
-        hashFontFace(hasher, heading.code_font);
-        hashF32(hasher, heading.font_size);
-        hashF32(hasher, heading.line_height);
-        hashHorizontalAlign(hasher, heading.horizontal_align);
-        hashColor(hasher, heading.color);
-        hashColor(hasher, heading.link_color);
-        hashOptionalColor(hasher, heading.markdown_bold_color);
-        hashOptionalColor(hasher, heading.markdown_highlight_fill);
-        hashMarkdownUnderlinePaint(hasher, heading.markdown_underline);
-        hashF32(hasher, heading.math_scale);
-        hashF32(hasher, heading.inline_math_spacing);
-        hashF32(hasher, heading.display_math_gap);
-        std.hash.autoHash(hasher, @intFromEnum(heading.display_math_fit));
-        std.hash.autoHash(hasher, @intFromEnum(heading.math_align));
-        hashF32(hasher, heading.emoji_spacing);
-    }
-}
-
-fn hashMarkdownUnderlinePaint(hasher: *std.hash.Wyhash, underline: core.render_policy.MarkdownUnderlinePaint) void {
-    hashOptionalColor(hasher, underline.color);
-    hashF32(hasher, underline.opacity);
-    hashBool(hasher, underline.width != null);
-    if (underline.width) |width| hashF32(hasher, width);
-    hashF32(hasher, underline.offset);
-    hashBool(hasher, underline.dash != null);
-    if (underline.dash) |dash| {
-        hashF32(hasher, dash.on);
-        hashF32(hasher, dash.off);
-    }
-}
-
-fn hashMarkdownQuotePaint(hasher: *std.hash.Wyhash, quote: core.render_policy.MarkdownQuotePaint) void {
-    hashOptionalColor(hasher, quote.color);
-    hashF32(hasher, quote.inset);
-    hashF32(hasher, quote.pad_x);
-    hashF32(hasher, quote.pad_y);
-    hashOptionalColor(hasher, quote.fill);
-    hashF32(hasher, quote.radius);
-    hashOptionalColor(hasher, quote.bar_color);
-    hashF32(hasher, quote.bar_width);
-    hashBool(hasher, quote.bar_dash != null);
-    if (quote.bar_dash) |dash| {
-        hashF32(hasher, dash.on);
-        hashF32(hasher, dash.off);
-    }
-}
-
-fn hashOptionalLatexPaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.LatexPaint) void {
-    hashBool(hasher, maybe != null);
-    if (maybe) |latex| {
-        hashF32(hasher, latex.min_height);
-        hashF32(hasher, latex.scale);
-        hashHorizontalAlign(hasher, latex.horizontal_align);
-    }
-}
-
-fn hashOptionalAssetPaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.AssetPaint) void {
-    hashBool(hasher, maybe != null);
-    if (maybe) |asset| {
-        hashString(hasher, @tagName(asset.format));
-        hashF32(hasher, asset.scale);
-        hashOptionalColor(hasher, asset.tint);
-        hashU64(hasher, asset.pdf_page);
-        hashString(hasher, @tagName(asset.pdf_box));
-        hashString(hasher, @tagName(asset.horizontal_align));
-    }
-}
-
-fn hashOptionalCodePaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.CodePaint) void {
-    hashBool(hasher, maybe != null);
-    if (maybe) |code| {
-        hashOptionalString(hasher, code.language);
-        hashColor(hasher, code.plain);
-        hashColor(hasher, code.keyword);
-        hashColor(hasher, code.function);
-        hashColor(hasher, code.type);
-        hashColor(hasher, code.constant);
-        hashColor(hasher, code.number);
-        hashColor(hasher, code.variable);
-        hashColor(hasher, code.operator);
-        hashColor(hasher, code.comment);
-        hashColor(hasher, code.string);
-    }
-}
-
-fn hashOptionalVectorPathPaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.VectorPathPaint) void {
-    hashBool(hasher, maybe != null);
-    if (maybe) |path| {
-        hashBool(hasher, path.natural_size != null);
-        if (path.natural_size) |size| {
-            hashF32(hasher, size.width);
-            hashF32(hasher, size.height);
-        }
-        hashCorePath(hasher, path.path);
-        hashVectorFill(hasher, path.fill);
-        hashOptionalVectorStroke(hasher, path.stroke);
-        hashOptionalMarker(hasher, path.marker_start);
-        hashOptionalMarker(hasher, path.marker_end);
-    }
-}
-
-fn hashVectorFill(hasher: *std.hash.Wyhash, fill: core.render_policy.VectorFillPaint) void {
-    hashString(hasher, @tagName(fill.kind));
-    hashOptionalColor(hasher, fill.color);
-    hashOptionalColor(hasher, fill.color2);
-    hashF32(hasher, fill.start_x);
-    hashF32(hasher, fill.start_y);
-    hashF32(hasher, fill.start_radius);
-    hashF32(hasher, fill.end_x);
-    hashF32(hasher, fill.end_y);
-    hashF32(hasher, fill.end_radius);
-    hashString(hasher, @tagName(fill.spread));
-    hashString(hasher, @tagName(fill.space));
-    hashString(hasher, @tagName(fill.rule));
-    hashF32(hasher, fill.opacity);
-    hashBool(hasher, fill.pattern != null);
-    if (fill.pattern) |pattern| {
-        hashCorePath(hasher, pattern.path);
-        hashF32(hasher, pattern.cell_width);
-        hashF32(hasher, pattern.cell_height);
-        hashF32(hasher, pattern.xx);
-        hashF32(hasher, pattern.yx);
-        hashF32(hasher, pattern.xy);
-        hashF32(hasher, pattern.yy);
-        hashF32(hasher, pattern.x0);
-        hashF32(hasher, pattern.y0);
-        hashString(hasher, @tagName(pattern.space));
-        hashOptionalColor(hasher, pattern.fill);
-        hashOptionalVectorStroke(hasher, pattern.stroke);
-    }
-}
-
-fn hashCorePath(hasher: *std.hash.Wyhash, path: core.Path) void {
-    hashU64(hasher, path.commands.len);
-    for (path.commands) |command| {
-        hashString(hasher, @tagName(command));
-        switch (command) {
-            .move_to, .line_to => |point| {
-                hashF32(hasher, point.x);
-                hashF32(hasher, point.y);
+/// Hash paint by value, including the active tag, optional presence, and slice
+/// contents. New style fields automatically participate in cache invalidation.
+fn hashPaint(hasher: *std.hash.Wyhash, value: anytype) void {
+    const T = @TypeOf(value);
+    switch (@typeInfo(T)) {
+        .void => {},
+        .bool => hashBool(hasher, value),
+        .float => hashF32(hasher, value),
+        .int => std.hash.autoHash(hasher, value),
+        .@"enum" => hashPaint(hasher, @backingInt(value)),
+        .optional => {
+            hashBool(hasher, value != null);
+            if (value) |item| hashPaint(hasher, item);
+        },
+        .array => for (value) |item| hashPaint(hasher, item),
+        .@"struct" => inline for (comptime std.meta.fieldNames(T)) |name| hashPaint(hasher, @field(value, name)),
+        .@"union" => switch (value) {
+            inline else => |payload, tag| {
+                hashPaint(hasher, tag);
+                hashPaint(hasher, payload);
             },
-            .cubic_to => |cubic| {
-                hashF32(hasher, cubic.control1.x);
-                hashF32(hasher, cubic.control1.y);
-                hashF32(hasher, cubic.control2.x);
-                hashF32(hasher, cubic.control2.y);
-                hashF32(hasher, cubic.end.x);
-                hashF32(hasher, cubic.end.y);
-            },
-            .close => {},
-        }
-    }
-}
-
-fn hashOptionalVectorStroke(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.VectorStrokePaint) void {
-    hashBool(hasher, maybe != null);
-    if (maybe) |stroke| {
-        hashColor(hasher, stroke.color);
-        hashF32(hasher, stroke.width);
-        hashString(hasher, @tagName(stroke.cap));
-        hashString(hasher, @tagName(stroke.join));
-        hashF32(hasher, stroke.miter_limit);
-        hashU64(hasher, stroke.dash.count);
-        for (stroke.dash.slice()) |entry| hashF32(hasher, entry);
-        hashF32(hasher, stroke.dash.offset);
-    }
-}
-
-fn hashOptionalMarker(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.MarkerPaint) void {
-    hashBool(hasher, maybe != null);
-    if (maybe) |marker| {
-        hashCorePath(hasher, marker.path);
-        hashF32(hasher, marker.width);
-        hashF32(hasher, marker.height);
-        hashVectorFill(hasher, marker.fill);
-        hashOptionalVectorStroke(hasher, marker.stroke);
-    }
-}
-
-fn hashChromePaint(hasher: *std.hash.Wyhash, chrome: core.render_policy.ChromePaint) void {
-    hashOptionalColor(hasher, chrome.fill);
-    hashOptionalColor(hasher, chrome.stroke);
-    hashF32(hasher, chrome.line_width);
-    hashF32(hasher, chrome.radius);
-    hashF32(hasher, chrome.pad_x);
-    hashF32(hasher, chrome.pad_y);
-}
-
-fn hashUnderlinePaint(hasher: *std.hash.Wyhash, underline: core.render_policy.UnderlinePaint) void {
-    hashOptionalColor(hasher, underline.color);
-    hashF32(hasher, underline.width);
-    hashF32(hasher, underline.offset);
-}
-
-fn hashRulePaint(hasher: *std.hash.Wyhash, rule: core.render_policy.RulePaint) void {
-    hashOptionalColor(hasher, rule.stroke);
-    hashF32(hasher, rule.line_width);
-    hashBool(hasher, rule.dash != null);
-    if (rule.dash) |dash| {
-        hashF32(hasher, dash.on);
-        hashF32(hasher, dash.off);
+        },
+        .pointer => |ptr| {
+            if (ptr.size != .slice) @compileError("only slice pointers may occur in paint values: " ++ @typeName(T));
+            hashUsize(hasher, value.len);
+            if (ptr.child == u8) hasher.update(value) else for (value) |item| hashPaint(hasher, item);
+        },
+        else => @compileError("unsupported paint field: " ++ @typeName(T)),
     }
 }
 
@@ -555,28 +307,6 @@ fn hashFrame(hasher: *std.hash.Wyhash, frame: core.Frame) void {
     hashF32(hasher, frame.y);
     hashF32(hasher, frame.width);
     hashF32(hasher, frame.height);
-}
-
-fn hashOptionalColor(hasher: *std.hash.Wyhash, value: ?Color) void {
-    hashBool(hasher, value != null);
-    if (value) |color| hashColor(hasher, color);
-}
-
-fn hashColor(hasher: *std.hash.Wyhash, color: Color) void {
-    hashF32(hasher, color.r);
-    hashF32(hasher, color.g);
-    hashF32(hasher, color.b);
-}
-
-fn hashFontFace(hasher: *std.hash.Wyhash, face: FontFace) void {
-    hashString(hasher, face.family);
-    hashU32(hasher, @intCast(face.weight));
-    hashU32(hasher, @intFromEnum(face.style));
-    hashU32(hasher, @intFromEnum(face.stretch));
-}
-
-fn hashHorizontalAlign(hasher: *std.hash.Wyhash, value: HorizontalAlign) void {
-    hashU32(hasher, @intFromEnum(value));
 }
 
 fn hashNativeRuntime(hasher: *std.hash.Wyhash) void {

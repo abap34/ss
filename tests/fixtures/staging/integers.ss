@@ -8,8 +8,6 @@ end
 
 page Appendix
   stages i { 2:-1:1 }
-  let sheet = assets::pdf!("appendix.pdf", assets::AssetBlockStyle {} with {
-    asset.pdf_page = i
-  })
+  let sheet = assets::pdf!("appendix.pdf", none, i)
   ~ sheet.width == 240
 end

@@ -2,18 +2,18 @@ import std:prelude as *
 import std:text/style as { TextBlockStyle, default_text_style }
 
 const body: TextBlockStyle = default_text_style with {
-  text.size = 28
-  text.line_height = 36
+  size = 28
+  line_height = 36
   layout.spacing_after = 28
 }
-const asset: AssetBlockStyle = AssetBlockStyle {} with {
+const asset: ImageStyle = ImageStyle {} with {
   chrome.fill = c"1,1,1"
   chrome.pad_x = 12
   chrome.pad_y = 10
 }
 
 fn head!(title: String) -> Placed<Group<Heading, PathShape>>
-  let label = heading!(title, 3, body with { text.size = 40 text.line_height = 48 })
+  let label = heading!(title, 3, body with { size = 40 line_height = 48 })
   let rule = line!(1136, 2)
   ~ label.left == page.left + 72
   ~ label.top == page.top - 56
@@ -33,7 +33,7 @@ page list_and_pdf
    - Conditions for analysis inside one procedure can be extended to analysis across procedure boundaries.
 >>, body)
   |=|
-  pdf!("list.pdf", asset with { asset.scale = 0.75 })
+  pdf!("list.pdf", asset with { scale = 0.75 })
 end
 
 page code_and_pdf

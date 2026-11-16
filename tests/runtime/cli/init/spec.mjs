@@ -61,20 +61,20 @@ async function testGeneratedDeckAndCustomization() {
   assert(original.nodes.some(node => node.content === "Source: add a reference here."));
   assert.equal(original.nodes.find(node => node.id === original.page_order[1]).fields.notes, "Add speaker notes here.");
   assert.equal(original.nodes.find(node => node.content === "Left column").render.text.font_size, 26);
-  const command = original.nodes.find(node => node.content === next && node.render?.text);
-  assert.equal(command?.render.text.font_size, 22);
+  const command = original.nodes.find(node => node.content === next && node.render?.code);
+  assert.equal(command?.render.code.font_size, 22);
 
   const entry = path.join(cwd, "slide.ss");
   await writeFile(entry, (await readFile(entry, "utf8"))
     .replace("My presentation", "Our project update")
-    .replace('text! "Left column"', 'text!("Left column", deck::theme.body with { text.size = 18 })'));
+    .replace('text! "Left column"', 'text!("Left column", deck::theme.text with { size = 18 })'));
   const theme = path.join(cwd, "theme.ss");
   await writeFile(theme, (await readFile(theme, "utf8"))
     .replace("#2563eb", "#0d7d16")
-    .replace("body.text.size = 26", "body.text.size = 29"));
+    .replace("text.size = 26", "text.size = 29"));
   const components = path.join(cwd, "components.ss");
   await writeFile(components, (await readFile(components, "utf8"))
-    .replace("text!(author, theme.byline)", 'text!("By " ++ author, theme.byline)'));
+    .replace("text!(author)", 'text!("By " ++ author)'));
   const customized = await dump(cwd, "customized.json");
   assert(customized.nodes.some(node => node.content === "Our project update"));
   assert(customized.nodes.some(node => node.content === "By Your name"));

@@ -26,21 +26,21 @@ async function testSizing() {
     { name: 'matrix_three', formula: String.raw`\begin{matrix}x\\x\\x\end{matrix}` },
     { name: 'wide', formula: 'x+x+x+x' },
     { name: 'overflow', formula: 'x+x+x+x', width: 30 },
-    { name: 'shrink', formula: 'x+x+x+x', width: 30, style: 'text.math.display_fit = MathFit.shrink' },
-    { name: 'shrink_short', content: '$$x$$', style: 'text.math.display_fit = MathFit.shrink' },
-    { name: 'double_size', content: '$$x$$', style: 'text.size = 48' },
-    { name: 'scaled', content: '$$x$$', style: 'text.math.scale = 1.5' },
-    { name: 'zero_gap', formula: aligned, style: 'text.math.display_gap = 0' },
-    { name: 'large_gap', formula: aligned, style: 'text.math.display_gap = 1' },
+    { name: 'shrink', formula: 'x+x+x+x', width: 30, style: 'math.display_fit = MathFit.shrink' },
+    { name: 'shrink_short', content: '$$x$$', style: 'math.display_fit = MathFit.shrink' },
+    { name: 'double_size', content: '$$x$$', style: 'size = 48' },
+    { name: 'scaled', content: '$$x$$', style: 'math.scale = 1.5' },
+    { name: 'zero_gap', formula: aligned, style: 'math.display_gap = 0' },
+    { name: 'large_gap', formula: aligned, style: 'math.display_gap = 1' },
   ];
   const source = 'import std:themes/default as *\n' + cases.map(c => `
 page ${c.name}
   let content = <<
 ${c.content ?? `$$\n${c.formula}\n$$`}
 >>
-  let base_style = default_theme().body with {
-    text.size = 24
-    text.math.scale = 1
+  let base_style = default_theme().text with {
+    size = 24
+    math.scale = 1
   }
   let body = text!(content, base_style with { ${c.style ?? ''} })
   ~ body.width == ${c.width ?? 500}
@@ -102,7 +102,7 @@ end
     near(following('zero_gap').y - following('large_gap').y, 48);
 
     // Reuse the same on-disk caches after a style-only change.
-    await writeFile(path.join(project, 'slide.ss'), source.replace('text.math.scale = 1.5', 'text.math.scale = 2'));
+    await writeFile(path.join(project, 'slide.ss'), source.replace('math.scale = 1.5', 'math.scale = 2'));
     run(['render', 'slide.ss', 'out.pdf']);
     run(['render', '--format', 'html', 'slide.ss', 'updated.html']);
     const updated = await readFile(path.join(project, 'updated.html'), 'utf8');

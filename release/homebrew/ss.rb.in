@@ -40,7 +40,7 @@ class @FORMULA_CLASS@ < Formula
       page home
       heading!("Homebrew")
       text!("ss formula smoke")
-      text!("v#{version}", default_theme().byline)
+      text!("v#{version}", default_theme().text with { size = 16 })
       end
     EOS
 

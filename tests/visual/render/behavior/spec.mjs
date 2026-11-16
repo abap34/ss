@@ -40,14 +40,14 @@ async function renderLatexCases() {
 import std:math as formulas
 
 page math_scale_one
-let formula = latex!("$x + y = z$", formulas::LatexBlockStyle {} with { latex.scale = 1 })
+let formula = latex!("$x + y = z$", formulas::ImageStyle {} with { scale = 1 })
 ~ formula.left == page.left + 96
 ~ formula.right == page.right - 96
 ~ formula.top == page.top - 240
 end
 
 page math_scale_two
-let formula = latex!("$x + y = z$", formulas::LatexBlockStyle {} with { latex.scale = 2 })
+let formula = latex!("$x + y = z$", formulas::ImageStyle {} with { scale = 2 })
 ~ formula.left == page.left + 96
 ~ formula.right == page.right - 96
 ~ formula.top == page.top - 240
@@ -62,10 +62,10 @@ async function renderPdfAssetCases() {
   const project = await createProject("pdf-assets");
   await writeMinimalPdf(path.join(project, "asset.pdf"), 200, 100);
   await writeFile(path.join(project, "slide.ss"), `import std:prelude as *
-import std:assets/style as { AssetBlockStyle }
+import std:assets/style as { ImageStyle }
 
 page small
-let asset = pdf!("asset.pdf", AssetBlockStyle {} with { asset.scale = 0.3 })
+let asset = pdf!("asset.pdf", ImageStyle {} with { scale = 0.3 })
 ~ asset.left == page.left + 100
 ~ asset.right == page.right - 480
 ~ asset.top == page.top - 120
@@ -73,7 +73,7 @@ let asset = pdf!("asset.pdf", AssetBlockStyle {} with { asset.scale = 0.3 })
 end
 
 page large
-let asset = pdf!("asset.pdf", AssetBlockStyle {} with { asset.scale = 0.8 })
+let asset = pdf!("asset.pdf", ImageStyle {} with { scale = 0.8 })
 ~ asset.left == page.left + 100
 ~ asset.right == page.right - 480
 ~ asset.top == page.top - 120
@@ -81,7 +81,7 @@ let asset = pdf!("asset.pdf", AssetBlockStyle {} with { asset.scale = 0.8 })
 end
 
 page fixed_frame
-let asset = pdf!("asset.pdf", AssetBlockStyle {} with { asset.scale = 1 })
+let asset = pdf!("asset.pdf", ImageStyle {} with { scale = 1 })
 ~ asset.left == page.left + 100
 ~ asset.right == asset.left + 80
 ~ asset.top == page.top - 120

@@ -178,25 +178,25 @@ async function runStandalone() {
 
 function navigationFixture() {
   return `import std:themes/default as *
-import std:assets as { pdf!, AssetBlockStyle, AssetStyle, PdfPageBox }
-import std:graphics/paint/types as { ChromeStyle }
+import std:assets as { pdf!, ImageStyle, PdfPageBox }
+import std:graphics/paint/types as { BoxStyle }
 
 page first
-let title = heading!("First page", 1, default_theme().h1)
+let title = heading!("First page", 1, default_theme().text)
 ~ title.left == page.left + 96
 ~ title.top == page.top - 72
 end
 
 page second
-let title = heading!("Second page", 1, default_theme().h1)
+let title = heading!("Second page", 1, default_theme().text)
 ~ title.left == page.left + 96
 ~ title.top == page.top - 72
 end
 
 page third
-let picture = pdf!("asset.pdf", AssetBlockStyle {
+let picture = pdf!("asset.pdf", ImageStyle {
   asset = AssetStyle { scale = 0.72 pdf_page = 2 pdf_box = PdfPageBox.crop }
-  chrome = ChromeStyle { fill = none stroke = none line_width = 0 }
+  chrome = BoxStyle { fill = none stroke = none line_width = 0 }
 })
 ~ picture.left == page.left + 312
 ~ picture.top == page.top - 168

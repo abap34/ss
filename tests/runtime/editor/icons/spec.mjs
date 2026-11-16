@@ -132,7 +132,7 @@ end
     );
     source = applyProtocolEdits(source, insertion.workspaceEdit?.changes?.[uri] ?? []);
     assert(
-      source.includes('let icon_item = icon!("fa-solid:star", AssetBlockStyle {} with { asset.tint = c"#f59e0b" })') &&
+      source.includes('let icon_item = icon!("fa-solid:star", ImageStyle {} with { tint = c"#f59e0b" })') &&
         source.includes("~!~ icon_item.width == 72") &&
         source.includes("~!~ icon_item.height == 80") &&
         source.includes("~!~ icon_item.left == page.left + 120") &&
@@ -179,7 +179,7 @@ end
     const resize = await requestEdit(client, uri, after, editing, bounds, resizedBounds, "absolute", page.id);
     assert(resize.status === "ok", `typed icon resize failed: ${JSON.stringify(resize)}`);
     source = applyProtocolEdits(source, resize.workspaceEdit?.changes?.[uri] ?? []);
-    assert(source.includes('asset.tint = c"#f59e0b"'), "resizing changed the immutable icon style");
+    assert(source.includes('tint = c"#f59e0b"'), "resizing changed the immutable icon style");
     diagnosticsPromise = client.waitForDiagnostics(uri);
     client.changeDocument({ uri, version: 3, text: source });
     assert((await diagnosticsPromise).params.diagnostics.length === 0, "resized icon produced diagnostics");

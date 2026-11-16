@@ -40,7 +40,7 @@ pub fn insert(
     try text.appendSlice(allocator, binding);
     try text.appendSlice(allocator, " = icon!(\"");
     try text.appendSlice(allocator, icon_source);
-    try text.appendSlice(allocator, "\", AssetBlockStyle {} with { asset.tint = c\"");
+    try text.appendSlice(allocator, "\", ImageStyle {} with { tint = c\"");
     try text.appendSlice(allocator, color);
     try text.appendSlice(allocator, "\" })\n");
     for ([_][]const u8{ "width", "height" }, [_][]const u8{ width, height }) |dimension, value| {

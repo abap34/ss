@@ -5,7 +5,7 @@ const resources_compile = @import("render_resources");
 const text = @import("render_text");
 
 const Allocator = std.mem.Allocator;
-const Color = core.render_policy.Color;
+const Color = core.render_paint.Color;
 
 pub const TextDecoration = struct {
     strikethrough: bool = false,
@@ -249,7 +249,7 @@ pub const Emitter = struct {
         rect: render.Rect,
         path: []const u8,
         page_index: usize,
-        box: core.render_policy.PdfPageBox,
+        box: core.render_paint.PdfPageBox,
         copy_annotations: bool,
     ) !void {
         const resource = try self.resources.addPath(allocator, self.io, .pdf, path);

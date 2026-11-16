@@ -27,23 +27,19 @@ const partsFixture = path.join(fixtureDirectory, "parts.ss");
 const themeTempFixture = path.join(fixtureDirectory, "theme-temp.ss");
 const defaultTheme = path.join(root, "stdlib", "text.ss");
 const baseTheme = path.join(root, "stdlib", "theme", "types.ss");
-const classes = path.join(root, "stdlib", "text", "types.ss");
 const uri = pathToFileURL(fixture).toString();
 const partsUri = pathToFileURL(partsFixture).toString();
 const themeTempUri = pathToFileURL(themeTempFixture).toString();
 const defaultThemeUri = pathToFileURL(defaultTheme).toString();
 const baseThemeUri = pathToFileURL(baseTheme).toString();
-const classesUri = pathToFileURL(classes).toString();
 const source = await readFile(fixture, "utf8");
 const defaultThemeSource = await readFile(defaultTheme, "utf8");
 const baseThemeSource = await readFile(baseTheme, "utf8");
-const classesSource = await readFile(classes, "utf8");
 const defaultThemeTextDefinition = functionDefinitionLocation(defaultThemeUri, defaultThemeSource, "text");
 const baseThemeThemeDefinition = declarationDefinitionLocation(baseThemeUri, baseThemeSource, "type", "Theme");
-const baseThemeBodyFieldDefinition = recordFieldDefinitionLocation(baseThemeUri, baseThemeSource, "Theme", "body");
+const themeTextFieldDefinition = recordFieldDefinitionLocation(baseThemeUri, baseThemeSource, "Theme", "text");
 const textStylePath = path.join(root, "stdlib", "text", "style.ss");
-const baseThemeTextBlockTextDefinition = recordFieldDefinitionLocation(pathToFileURL(textStylePath).toString(), await readFile(textStylePath, "utf8"), "TextBlockStyle", "text");
-const classesTextStyleSizeDefinition = recordFieldDefinitionLocation(classesUri, classesSource, "TextStyle", "size");
+const textSizeDefinition = recordFieldDefinitionLocation(pathToFileURL(textStylePath).toString(), await readFile(textStylePath, "utf8"), "TextBlockStyle", "size");
 const layoutTypes = path.join(root, "stdlib", "layout", "types.ss");
 const alignCenterDefinition = enumCaseDefinitionLocation(pathToFileURL(layoutTypes).toString(), await readFile(layoutTypes, "utf8"), "Align", "center");
 
@@ -80,15 +76,15 @@ async function testProjectCompletionLifecycle() {
 import std:text as *
 
 fn module_label!(text_value: String, color_name: Color = c"0.07,0.08,0.10") -> Placed<Text>
-  return text!(text_value, default_theme().body with {
-    text.size = 24
-    text.color = color_name
+  return text!(text_value, default_theme().text with {
+    size = 24
+    color = color_name
   })
 end
 
 fn/! ultra_big(content: String) -> Text
   let t = default::text(content)
-  let styled = t with { style = default_text_style with { text.size = 64 } }
+  let styled = t with { style = default_text_style with { size = 64 } }
   return styled
 end
 `;
@@ -97,7 +93,7 @@ end
     const libraryDiagnostics = await libraryDiagnosticsPromise;
     assert(libraryDiagnostics.params.diagnostics.length === 0, `library valid diagnostics: ${JSON.stringify(libraryDiagnostics.params.diagnostics)}`);
 
-    const libraryBrokenSource = libraryValidSource.replace('let styled = t with { style = default_text_style with { text.size = 64 } }', "t.");
+    const libraryBrokenSource = libraryValidSource.replace('let styled = t with { style = default_text_style with { size = 64 } }', "t.");
     const libraryBrokenDiagnostics = client.waitForDiagnostics(partsUri);
     client.changeDocument({ uri: partsUri, version: 2, text: libraryBrokenSource });
     const libraryMemberCompletion = await requestCompleteCompletion(client, {
@@ -113,7 +109,7 @@ end
     });
     assertSameLabels(libraryMemberCompletion, repeatedLibraryCompletion, "repeated imported library member completion");
 
-    const libraryRecordUpdateBrokenSource = libraryValidSource.replace("text.size = 24", "tex");
+    const libraryRecordUpdateBrokenSource = libraryValidSource.replace("size = 24", "siz");
     client.changeDocument({ uri: partsUri, version: 3, text: libraryRecordUpdateBrokenSource });
     const recordUpdateBaseCompletion = await requestCompleteCompletion(client, {
       textDocument: { uri: partsUri },
@@ -123,17 +119,17 @@ end
 
     const recordUpdatePrefixCompletion = await requestCompleteCompletion(client, {
       textDocument: { uri: partsUri },
-      position: positionAfter(libraryRecordUpdateBrokenSource, "    tex"),
+      position: positionAfter(libraryRecordUpdateBrokenSource, "    siz"),
     });
     assertTextBlockCompletion(recordUpdatePrefixCompletion, "record update prefix completion");
 
-    const libraryRecordUpdateNestedBrokenSource = libraryValidSource.replace("text.size = 24", "text.");
+    const libraryRecordUpdateNestedBrokenSource = libraryValidSource.replace("size = 24", "font.");
     client.changeDocument({ uri: partsUri, version: 4, text: libraryRecordUpdateNestedBrokenSource });
     const recordUpdateNestedCompletion = await requestCompleteCompletion(client, {
       textDocument: { uri: partsUri },
-      position: positionAfter(libraryRecordUpdateNestedBrokenSource, "    text."),
+      position: positionAfter(libraryRecordUpdateNestedBrokenSource, "    font."),
     });
-    assertTextStyleRecordCompletion(recordUpdateNestedCompletion, "record update nested completion");
+    assertFontCompletion(recordUpdateNestedCompletion, "record update nested completion");
 
     const libraryRestoredDiagnosticsPromise = client.waitForDiagnostics(
       partsUri,
@@ -145,21 +141,21 @@ end
     assert(libraryRestoredDiagnostics.params.diagnostics.length === 0, `library restored diagnostics: ${JSON.stringify(libraryRestoredDiagnostics.params.diagnostics)}`);
 
     const updates = libraryValidSource
-      .replace("t with { style.text.size = 64 }", "t with {}")
-      .replace("    text.size = 24\n    text.color = color_name", "    ") + `
-fn/! very_small_text(content: String, style: TextBlockStyle = default_theme().body) -> Text
-  return default::text(content, style with { text.size = 16 text.line_height = 18  })
+      .replace("t with { style = default_text_style with { size = 64 } }", "t with {}")
+      .replace("    size = 24\n    color = color_name", "    ") + `
+fn/! very_small_text(content: String, style: TextBlockStyle = default_theme().text) -> Text
+  return default::text(content, style with { size = 16 line_height = 18  })
 end
 `;
     client.changeDocument({ uri: partsUri, version: 6, text: updates });
-    const blockFields = ["text", "layout", "underline", "headings", "chrome"];
+    const blockFields = ["size", "line_height", "font", "color", "align", "emoji_spacing", "layout", "chrome", "headings", "code", "markdown", "math"];
     for (const [cursor, fields] of [
-      ["t with {", ["content", "style", "semantics"]],
-      ["default_theme().body with {\n    ", blockFields],
-      ["text.size = 16 ", blockFields],
-      ["text.line_height = 18", blockFields],
-      ["text.line_height = 18 ", blockFields],
-      ["text.line_height = 18  ", blockFields],
+      ["let styled = t with {", ["content", "style", "semantics"]],
+      ["default_theme().text with {\n    ", blockFields],
+      ["size = 16 ", blockFields],
+      ["line_height = 18", blockFields],
+      ["line_height = 18 ", blockFields],
+      ["line_height = 18  ", blockFields],
     ]) {
       const params = { textDocument: { uri: partsUri }, position: positionAfter(updates, cursor), context: { triggerKind: 1 } };
       const first = await client.request("textDocument/completion", params);
@@ -174,7 +170,7 @@ end
 
 fn/! ultra_big(content: String) -> Text
   let t = default::text(content)
-  let styled = t with { style = default_text_style with { text.size = 64 } }
+  let styled = t with { style = default_text_style with { size = 64 } }
   return styled
 end
 `;
@@ -183,7 +179,7 @@ end
     const unimportedDiagnostics = await unimportedDiagnosticsPromise;
     assert(unimportedDiagnostics.params.diagnostics.length === 0, `unimported library valid diagnostics: ${JSON.stringify(unimportedDiagnostics.params.diagnostics)}`);
 
-    const unimportedLibraryBrokenSource = unimportedLibraryValidSource.replace('let styled = t with { style = default_text_style with { text.size = 64 } }', "t.");
+    const unimportedLibraryBrokenSource = unimportedLibraryValidSource.replace('let styled = t with { style = default_text_style with { size = 64 } }', "t.");
     const unimportedBrokenDiagnostics = client.waitForDiagnostics(themeTempUri);
     client.changeDocument({ uri: themeTempUri, version: 2, text: unimportedLibraryBrokenSource });
     const unimportedBrokenCompletion = await requestCompleteCompletion(client, {
@@ -276,7 +272,7 @@ end
       position: positionAt(memberValidSource, "text(", 1),
     });
     assert(
-      textHover?.contents?.value?.includes("text(content: String, style: TextBlockStyle? = none, config: LatexConfig = LatexConfig {  }) -> Text"),
+      textHover?.contents?.value?.includes("text(content: String, style: TextBlockStyle? = none, config: LatexConfig = LatexConfig {  }, parse: TextParseMode = TextParseMode.block) -> Text"),
       `text hover did not show themed signature: ${JSON.stringify(textHover)}`,
     );
 
@@ -315,7 +311,7 @@ end
     const enumBrokenSource = `import std:text as *
 
 page ok
-  let style = TextStyle {} with { math.align = Align. }
+  let style = TextBlockStyle {} with { math.align = Align. }
 end
 `;
     const enumDiagnosticsPromise = client.waitForDiagnostics(
@@ -454,13 +450,13 @@ async function testTypeAndImportDefinition() {
 
 fn themed(theme_value: Theme) -> Text
   let override = Theme {
-    body = theme_value.body
+    text = theme_value.text
   }
   let changed = override with {
-    body.text.size = 24
+    text.size = 24
   }
   let align_value = Align.center
-  return text("body", theme_value.body)
+  return text("body", theme_value.text)
 end
 
 page title
@@ -500,46 +496,35 @@ end
 
       const fieldDefinition = await client.request("textDocument/definition", {
         textDocument: { uri: localUri },
-        position: positionAt(localSource, "body ="),
+        position: positionAt(localSource, "text ="),
       });
       assert(Array.isArray(fieldDefinition), `expected record field definition array, got ${JSON.stringify(fieldDefinition)}`);
       assert(fieldDefinition.length === 1, `record field definition was not unique: ${JSON.stringify(fieldDefinition)}`);
       assert(
-        isDefinitionLocation(fieldDefinition[0], baseThemeBodyFieldDefinition),
-        `record field definition did not jump to Theme.body: ${JSON.stringify(fieldDefinition)}`,
+        isDefinitionLocation(fieldDefinition[0], themeTextFieldDefinition),
+        `record field definition did not jump to Theme.text: ${JSON.stringify(fieldDefinition)}`,
       );
 
       const memberFieldDefinition = await client.request("textDocument/definition", {
         textDocument: { uri: localUri },
-        position: positionAt(localSource, "theme_value.body", "theme_value.".length),
+        position: positionAt(localSource, "theme_value.text", "theme_value.".length),
       });
       assert(Array.isArray(memberFieldDefinition), `expected member field definition array, got ${JSON.stringify(memberFieldDefinition)}`);
       assert(memberFieldDefinition.length === 1, `member field definition was not unique: ${JSON.stringify(memberFieldDefinition)}`);
       assert(
-        isDefinitionLocation(memberFieldDefinition[0], baseThemeBodyFieldDefinition),
-        `member field definition did not jump to Theme.body: ${JSON.stringify(memberFieldDefinition)}`,
+        isDefinitionLocation(memberFieldDefinition[0], themeTextFieldDefinition),
+        `member field definition did not jump to Theme.text: ${JSON.stringify(memberFieldDefinition)}`,
       );
 
       const updateBodyDefinition = await client.request("textDocument/definition", {
         textDocument: { uri: localUri },
-        position: positionAt(localSource, "body.text.size"),
+        position: positionAt(localSource, "text.size"),
       });
       assert(Array.isArray(updateBodyDefinition), `expected record update body definition array, got ${JSON.stringify(updateBodyDefinition)}`);
       assert(updateBodyDefinition.length === 1, `record update body definition was not unique: ${JSON.stringify(updateBodyDefinition)}`);
       assert(
-        isDefinitionLocation(updateBodyDefinition[0], baseThemeBodyFieldDefinition),
-        `record update body definition did not jump to Theme.body: ${JSON.stringify(updateBodyDefinition)}`,
-      );
-
-      const updateTextDefinition = await client.request("textDocument/definition", {
-        textDocument: { uri: localUri },
-        position: positionAt(localSource, "text.size"),
-      });
-      assert(Array.isArray(updateTextDefinition), `expected record update text definition array, got ${JSON.stringify(updateTextDefinition)}`);
-      assert(updateTextDefinition.length === 1, `record update text definition was not unique: ${JSON.stringify(updateTextDefinition)}`);
-      assert(
-        isDefinitionLocation(updateTextDefinition[0], baseThemeTextBlockTextDefinition),
-        `record update text definition did not jump to TextBlockStyle.text: ${JSON.stringify(updateTextDefinition)}`,
+        isDefinitionLocation(updateBodyDefinition[0], themeTextFieldDefinition),
+        `record update body definition did not jump to Theme.text: ${JSON.stringify(updateBodyDefinition)}`,
       );
 
       const updateSizeDefinition = await client.request("textDocument/definition", {
@@ -549,8 +534,8 @@ end
       assert(Array.isArray(updateSizeDefinition), `expected record update size definition array, got ${JSON.stringify(updateSizeDefinition)}`);
       assert(updateSizeDefinition.length === 1, `record update size definition was not unique: ${JSON.stringify(updateSizeDefinition)}`);
       assert(
-        isDefinitionLocation(updateSizeDefinition[0], classesTextStyleSizeDefinition),
-        `record update size definition did not jump to TextStyle.size: ${JSON.stringify(updateSizeDefinition)}`,
+        isDefinitionLocation(updateSizeDefinition[0], textSizeDefinition),
+        `record update size definition did not jump to TextBlockStyle.size: ${JSON.stringify(updateSizeDefinition)}`,
       );
 
       const enumCaseDefinition = await client.request("textDocument/definition", {
@@ -566,7 +551,7 @@ end
 
       const paramDefinition = await client.request("textDocument/definition", {
         textDocument: { uri: localUri },
-        position: positionAt(localSource, "theme_value.body)", 1),
+        position: positionAt(localSource, "theme_value.text)", 1),
       });
       assert(Array.isArray(paramDefinition), `expected param definition array, got ${JSON.stringify(paramDefinition)}`);
       assert(paramDefinition.length === 1, `param definition was not unique: ${JSON.stringify(paramDefinition)}`);
@@ -620,7 +605,7 @@ import std:text as *
 
 fn/! ultra_big(content: String) -> Text
   let t = default::text(content)
-  let styled = t with { style = default_text_style with { text.size = 64 } }
+  let styled = t with { style = default_text_style with { size = 64 } }
   return styled
 end
 
@@ -691,17 +676,17 @@ function assertPlacedCompletion(completion, label) {
 function assertTextBlockCompletion(completion, label) {
   assertUniqueCompletionLabels(completion, label);
   assert(completion.items.every(item => item.kind === 10), `${label}: expected only properties`);
-  assertCompletionHas(completion, "text", label);
+  assertCompletionHas(completion, "size", label);
   assertCompletionHas(completion, "layout", label);
   assertCompletionHas(completion, "headings", label);
-  assertCompletionMissing(completion, ["page", "String", "size"], label);
+  assertCompletionMissing(completion, ["page", "String", "typography"], label);
 }
 
-function assertTextStyleRecordCompletion(completion, label) {
+function assertFontCompletion(completion, label) {
   assertUniqueCompletionLabels(completion, label);
   assert(completion.items.every(item => item.kind === 10), `${label}: expected only properties`);
-  assertCompletionHas(completion, "size", label);
-  assertCompletionHas(completion, "color", label);
+  assertCompletionHas(completion, "family", label);
+  assertCompletionHas(completion, "weight", label);
   assertCompletionMissing(completion, ["page", "String", "body"], label);
 }
 

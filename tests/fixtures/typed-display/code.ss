@@ -15,13 +15,13 @@ def twice(n):
     return n * 2
 >>
   language = "python"
-  style = base::default_theme().code with { text.size = 18 }
+  style = base::default_theme().text with { code.size = 18 layout.wrap = WrapMode.off }
 }
 
 page languages
   let title = place!(text_api::Text { content = text_api::TextContent { source = "# Highlighted and plain source" } })
   let highlighted = place!(sample)
-  let plain = place!(sample with { language = "plain" style = (sample.style ?? code_api::CodeBlockStyle {}) with { text.size = 22 } })
+  let plain = place!(sample with { language = "plain" style = (sample.style ?? code_api::TextBlockStyle {}) with { code.size = 22 } })
   ~ title.left == page.left + 64
   ~ title.top == page.top - 48
   ~ highlighted.left == title.left
@@ -33,10 +33,10 @@ end
 page wrapped
   let palette = code_api::code_theme_github_dark()
   let dark = sample with {
-    style = (sample.style ?? code_api::CodeBlockStyle {}) with {
-      highlight = palette
-      chrome.fill = palette.fill
-      chrome.stroke = palette.stroke
+    style = (sample.style ?? code_api::TextBlockStyle {}) with {
+      code.colors = palette.code
+      code.chrome.fill = palette.fill
+      code.chrome.stroke = palette.stroke
     }
   }
   let title = place!(text_api::Text { content = text_api::TextContent { source = "# Code returned by a user display" } })

@@ -16,7 +16,7 @@ fn display(self: Placed<Card>) -> Group<PathShape, Text>
     text("## " ++ self.value.title ++ "
 
 " ++ self.value.detail,
-      theme.body with { text.size = 20 text.line_height = 27 })
+      theme.text with { size = 20 line_height = 27 })
   )
 end
 
@@ -29,13 +29,13 @@ fn arrange_card(card: Placed<Card>) -> Void
 end
 
 fn page_heading!(title: String) -> Void
-  let heading = heading!(title, 1, theme.h1)
+  let heading = heading!(title, 1, theme.text)
   ~ heading.left == page.left + 72
   ~ heading.top == page.top - 56
 end
 
 fn page_number!(p: Page) -> Void
-  let number = place_on!(p, pageno(theme.page_number))
+  let number = place_on!(p, pageno(theme.text))
   ~ number.bottom == p.bottom + 20
   ~ number.right == p.right - 24
 end
@@ -52,7 +52,7 @@ A synthetic paragraph explains how a small collection is checked before processi
 - Keep the original ordering.
 - Report missing values clearly.
 >>
-  let description = text(description_content, theme.body with { text.size = 24 })
+  let description = text(description_content, theme.text with { size = 24 })
   let upper = text <<
 ## Input summary
 
@@ -139,15 +139,15 @@ page table_code
 | --- | --- |
 | intake | Several small batches share the same source identifier. |
 | review | A second pass checks ordering and missing entries. |
->>, theme.body)
-  let table_note = text("Table note: all entries are invented for this test.", theme.note)
+>>, theme.text)
+  let table_note = text("Table note: all entries are invented for this test.", theme.text)
   let program_text = <<
 records = read_batch()
 valid = check(records)
 write_report(valid)
 >>
-  let program = code(program_text, "python", theme.code)
-  let code_note = text("Program note: validation happens before report generation.", theme.note)
+  let program = code(program_text, "python", theme.text)
+  let code_note = text("Program note: validation happens before report generation.", theme.text)
   let content = place!(((table // table_note) with { gap = 20 }) |=| ((program // code_note) with { gap = 20 }))
   let code_frame = first(select<Code>(content))
   ~ code_frame.width == 484
@@ -161,7 +161,7 @@ end
 
 page flow
   vflow(LayoutPolicy.top)
-  heading!("A heading followed by ordinary document flow", 1, theme.h1)
+  heading!("A heading followed by ordinary document flow", 1, theme.text)
   let intro = text!("Flow introduction: a longer paragraph should wrap naturally without pushing the next item into its last line.")
   ~ intro.width == 680
   let list = text! <<
@@ -178,7 +178,7 @@ end
 page image_caption
   page_heading!("A diagram with a caption and a side note")
   let diagram_value = image("diagram.svg")
-  let caption_value = text("Diagram caption: the three invented bars illustrate increasing counts and have no connection to measured data.", theme.note)
+  let caption_value = text("Diagram caption: the three invented bars illustrate increasing counts and have no connection to measured data.", theme.text)
   let annotation_value = text <<
 ## Reading the diagram
 

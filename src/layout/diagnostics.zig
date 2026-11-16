@@ -3,6 +3,7 @@ const std = @import("std");
 const model = @import("model");
 const fields = @import("../core/fields.zig");
 const render_policy = @import("../core/render_policy.zig");
+const render_paint = @import("../core/render_paint.zig");
 const graph = @import("graph.zig");
 const metrics = @import("metrics.zig");
 
@@ -62,7 +63,7 @@ fn collectPageDiagnosticsWithCache(state: *Workspace, page_id: NodeId, child_ids
             const overflow_top = @max(@as(f32, 0.0), visual_top - Defaults.height);
 
             if (overflow_left > graph.ConstraintTolerance or overflow_right > graph.ConstraintTolerance or overflow_bottom > graph.ConstraintTolerance or overflow_top > graph.ConstraintTolerance) {
-                const policy = overflowPolicy(state, node);
+                const policy = overflowPolicy(state, page_id);
                 switch (policy) {
                     .ignore => {},
                     .warn, .@"error" => try appendOverflowDiagnostic(state.allocator, &overflows, .{
@@ -89,7 +90,7 @@ fn collectPageDiagnosticsWithCache(state: *Workspace, page_id: NodeId, child_ids
             else
                 0;
             if (overflow_width > graph.ConstraintTolerance or overflow_height > graph.ConstraintTolerance) {
-                switch (overflowPolicy(state, node)) {
+                switch (overflowPolicy(state, page_id)) {
                     .ignore => {},
                     .warn => try state.addLayoutWarning(page_id, child_id, .{ .content_overflow = .{
                         .required_width = measured.width,
@@ -207,8 +208,8 @@ fn frameToVisual(frame: model.Frame) VisualFrame {
     };
 }
 
-fn contentVisualFrame(state: *Workspace, node: *const Node, render: render_policy.ResolvedRender, requirement: ?FrameRequirement) ?VisualFrame {
-    const measured = requirement orelse return switch (render.kind) {
+fn contentVisualFrame(state: *Workspace, node: *const Node, render: render_paint.ResolvedRender, requirement: ?FrameRequirement) ?VisualFrame {
+    const measured = requirement orelse return switch (render.kind()) {
         .chrome_only => null,
         else => frameToVisual(state.frame(node.id).*),
     };
@@ -220,8 +221,8 @@ fn contentVisualFrame(state: *Workspace, node: *const Node, render: render_polic
     const content_width = @max(@as(f32, 1.0), measured.width - 2.0 * metrics.chromePadX(state, node));
     const content_height = @max(@as(f32, 1.0), measured.height - 2.0 * metrics.chromePadY(state, node));
 
-    return switch (render.kind) {
-        .latex => latexContentVisualFrame(content_frame, content_width, content_height, render.latex),
+    return switch (render.content) {
+        .latex => |latex| latexContentVisualFrame(content_frame, content_width, content_height, latex),
         .vector_asset, .raster_asset, .text, .code => topAnchoredContentVisualFrame(content_frame, content_width, content_height),
         .vector_path, .chrome_only => null,
     };
@@ -236,17 +237,16 @@ fn topAnchoredContentVisualFrame(frame: model.Frame, width: f32, height: f32) Vi
     };
 }
 
-fn latexContentVisualFrame(frame: model.Frame, width: f32, height: f32, latex: ?render_policy.LatexPaint) VisualFrame {
-    const horizontal_align = if (latex) |paint| paint.horizontal_align else render_policy.HorizontalAlign.center;
+fn latexContentVisualFrame(frame: model.Frame, width: f32, height: f32, latex: render_paint.LatexPaint) VisualFrame {
     return .{
-        .x = alignedX(frame.x, frame.width, width, horizontal_align),
+        .x = alignedX(frame.x, frame.width, width, latex.horizontal_align),
         .y = frame.y + frame.height - height,
         .width = width,
         .height = height,
     };
 }
 
-fn alignedX(x: f32, width: f32, content_width: f32, horizontal_align: render_policy.HorizontalAlign) f32 {
+fn alignedX(x: f32, width: f32, content_width: f32, horizontal_align: render_paint.HorizontalAlign) f32 {
     const slack = @max(width - content_width, 0);
     return switch (horizontal_align) {
         .left => x,
@@ -255,11 +255,11 @@ fn alignedX(x: f32, width: f32, content_width: f32, horizontal_align: render_pol
     };
 }
 
-fn hasFrameInk(render: render_policy.ResolvedRender) bool {
+fn hasFrameInk(render: render_paint.ResolvedRender) bool {
     if (render.chrome.fill != null) return true;
     if (render.chrome.stroke != null and render.chrome.line_width > 0) return true;
     if (render.rule.stroke != null and render.rule.line_width > 0) return true;
-    if (render.underline.color != null and render.underline.width > 0) return true;
+    if (render.chrome.bottom_rule.color != null and render.chrome.bottom_rule.width > 0) return true;
     return false;
 }
 
@@ -287,8 +287,10 @@ fn shouldCheckContentOverflow(node: *const Node) bool {
     return node.kind == .object;
 }
 
-fn overflowPolicy(state: *Workspace, node: *const Node) OverflowPolicy {
-    const fit = fields.read(state.allocator, state.source, node, "layout", &.{"fit"}, .text);
+fn overflowPolicy(state: *Workspace, page_id: NodeId) OverflowPolicy {
+    const page = state.source.getNode(page_id) orelse return .warn;
+    const doc = state.source.getNode(state.source.graph.document_id) orelse return .warn;
+    const fit = fields.readExplicit(page, "fit", &.{}, .text) orelse fields.readExplicit(doc, "fit", &.{}, .text);
     if (fit) |value| {
         if (std.meta.stringToEnum(OverflowPolicy, value)) |parsed| return parsed;
     }

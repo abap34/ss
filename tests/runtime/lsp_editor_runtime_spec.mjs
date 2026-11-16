@@ -145,7 +145,7 @@ async function testLargeDocumentDefinitionUsesSnapshotFallback() {
     const themeSource = `import std:text as default
 
 fn/! ultra_big(content: String) -> Text
-  return default::text(content, default_theme().h1)
+  return default::text(content, default_theme().text)
 end
 `;
     const filler = Array.from({ length: 8000 }, (_, index) => `;; filler ${index}`).join("\n");
@@ -1116,7 +1116,7 @@ function featureSource(title, color) {
   return `import std:prelude as *
 
 fn themed!(theme: Theme) -> Placed<Text>
-  return text!("typed", theme.body)
+  return text!("typed", theme.text)
 end
 
 type LocalStyle {
@@ -1128,8 +1128,8 @@ type Badge {
 }
 
 page feature
-let heading = text!("${title}", default_theme().body with {
-  text.color = c"${color}"
+let heading = text!("${title}", default_theme().text with {
+  color = c"${color}"
 })
 end
 `;

@@ -136,7 +136,7 @@ end
       for (const position of ["before", "after"]) {
         const generation = `
 fn add_number!(p: Page) -> Void
-  let number = place_on!(p, pageno(default_theme().page_number))
+  let number = place_on!(p, pageno(default_theme().text))
   p ~ number.right == p.right - 24
   p ~ number.bottom == p.bottom + 20
 end

@@ -6,7 +6,7 @@ Short line.
 
 **Bold**, [linked](https://example.com), ==highlighted==, and ![star](fa:star) content stays together.
 >>, default_text_style with {
-    text.align = Align.center
+    align = Align.center
     chrome.pad_x = 24
     chrome.pad_y = 16
     chrome.fill = c"#edf4ff"
@@ -24,8 +24,8 @@ This paragraph is right aligned inside the text frame. It wraps when it reaches 
 
 Short paragraph.
 >>, default_text_style with {
-    text.align = Align.right
-    headings.h1 = MarkdownHeadingStyle { text = TextStyle { size = 36 align = Align.center } }
+    align = Align.right
+    headings.h1 = TypographyOverride { size = 36 align = Align.center }
     chrome.pad_x = 24
     chrome.pad_y = 16
     chrome.fill = c"#f0f8f1"

@@ -282,7 +282,7 @@ async function testRelativeEditsCompleteMovedAxes() {
     {
       name: "image-reference",
       body: '~ guide.left == page.left + 100\n~ guide.top == page.top - 180\n~ item.left == guide.right + 32\n~ item.top == guide.top',
-      item: 'let item = image!("figure.svg", AssetBlockStyle {} with { asset.scale = 0.9 })',
+      item: 'let item = image!("figure.svg", ImageStyle {} with { scale = 0.9 })',
       guide: 'let guide = text!("A sufficiently wide guide for this image", TextBlockStyle {} with { layout.wrap = WrapMode.off })',
       header: 'heading! "Monte Carlo"',
       policy: 'hflow(LayoutPolicy.center)',

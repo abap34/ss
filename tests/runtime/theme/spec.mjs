@@ -7,14 +7,13 @@ import path from "node:path";
 import { assert, ssBin } from "../harness.mjs";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
-const repository = path.resolve(specDir, "../../..");
 const fixtures = path.resolve(specDir, "../../fixtures/runtime/theme");
 
-await testEveryMarkdownHeadingStyleReachesRenderIr();
-await testProjectThemeWrapperPreservesMarkdownHeadingStyle();
+await testEveryTypographyOverrideReachesRenderIr();
+await testProjectThemeWrapperPreservesTypographyOverride();
 await testThemeOptions();
 
-async function testEveryMarkdownHeadingStyleReachesRenderIr() {
+async function testEveryTypographyOverrideReachesRenderIr() {
   const node = await dumpTextNode(path.join(fixtures, "markdown-headings"), "HeadingOne");
   const paint = node.render?.text;
   assert(paint, `text paint was not emitted: ${JSON.stringify(node.render)}`);
@@ -35,7 +34,7 @@ async function testEveryMarkdownHeadingStyleReachesRenderIr() {
   }
 }
 
-async function testProjectThemeWrapperPreservesMarkdownHeadingStyle() {
+async function testProjectThemeWrapperPreservesTypographyOverride() {
   const node = await dumpTextNode(path.join(fixtures, "project-wrapper"), "WrappedHeading");
   const paint = node.render?.text;
   assert(paint, `wrapped text paint was not emitted: ${JSON.stringify(node.render)}`);
@@ -44,7 +43,7 @@ async function testProjectThemeWrapperPreservesMarkdownHeadingStyle() {
     paint.markdown_headings?.h2,
     {
       fontSize: 30,
-      lineHeight: 37,
+      lineHeight: 40.4,
       color: [13 / 255, 125 / 255, 22 / 255],
     },
     "wrapped h2",
@@ -75,9 +74,9 @@ async function testThemeOptions() {
 
   assert(title.render?.text?.font.family === "Fixture Sans", `title font: ${title.render?.text?.font.family}`);
   assertColor(title.render?.text?.color, [16 / 255, 32 / 255, 48 / 255], "title color");
-  assertColor(author.render?.text?.color, [112 / 255, 128 / 255, 144 / 255], "byline color");
+  assertColor(author.render?.text?.color, [16 / 255, 32 / 255, 48 / 255], "author inherits text color");
   assert(pageNumber?.render?.text?.font.family === "Fixture Sans", `page number font: ${pageNumber?.render?.text?.font.family}`);
-  assertColor(pageNumber?.render?.text?.color, [112 / 255, 128 / 255, 144 / 255], "page number color");
+  assertColor(pageNumber?.render?.text?.color, [16 / 255, 32 / 255, 48 / 255], "page number inherits text color");
 
   assert(original.render?.text?.font.family === "Helvetica", `default theme was mutated: ${original.render?.text?.font.family}`);
   assert(fontOnly.render?.text?.font.family === "Fixture Sans", `font-only setting was not applied: ${fontOnly.render?.text?.font.family}`);
@@ -94,7 +93,7 @@ async function dumpNodes(fixture) {
   const output = await mkdtemp(path.join(os.tmpdir(), "ss-theme-dump-"));
   try {
     const dumpPath = path.join(output, "dump.json");
-    await runSs(["dump", path.join(fixture, "slide.ss"), dumpPath], repository);
+    await runSs(["dump", path.join(fixture, "slide.ss"), dumpPath], output);
     const dump = JSON.parse(await readFile(dumpPath, "utf8"));
     const parents = new Map(dump.contains.flatMap(entry => entry.children.map(id => [id, entry.parent])));
     return dump.nodes.map(node => ({ ...node, parent: parents.get(node.id) }));

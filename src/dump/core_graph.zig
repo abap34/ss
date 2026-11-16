@@ -222,66 +222,58 @@ fn writeMarkdownBlock(blocks: *json.Array, block: *const core.markdown.Block) an
     try item.end();
 }
 
-fn writeRender(object: *json.Object, render: core.render_policy.ResolvedRender) !void {
+fn writeRender(object: *json.Object, render: core.render_paint.ResolvedRender) !void {
     var render_object = try object.objectField("render");
-    try render_object.enumTagField("kind", render.kind);
-    try writeOptionalTextPaint(&render_object, render.text);
-    try writeOptionalLatexPaint(&render_object, render.latex);
-    try writeOptionalCodePaint(&render_object, render.code);
+    try render_object.enumTagField("kind", render.kind());
+    try writeOptionalTextPaint(&render_object, if (render.content == .text) &render.content.text else null);
+    try writeOptionalLatexPaint(&render_object, if (render.content == .latex) render.content.latex else null);
+    try writeOptionalCodePaint(&render_object, if (render.content == .code) &render.content.code else null);
     try writeChromePaint(&render_object, render.chrome);
-    try writeUnderlinePaint(&render_object, render.underline);
+    try writeUnderlinePaint(&render_object, "underline", render.chrome.bottom_rule);
     try writeRulePaint(&render_object, render.rule);
     try render_object.end();
 }
 
-fn writeOptionalTextPaint(object: *json.Object, maybe_text: ?core.render_policy.TextPaint) !void {
+fn writeOptionalTextPaint(object: *json.Object, maybe_text: ?*const core.render_paint.TextPaint) !void {
     const text_spec = maybe_text orelse {
         try object.nullField("text");
         return;
     };
 
     var text = try object.objectField("text");
-    try writeInlineTextPaint(&text, text_spec);
-    try writeMarkdownQuotePaint(&text, text_spec.markdown_quote);
+    try writeInlineTextPaint(&text, text_spec.*);
+    try writeMarkdownQuotePaint(&text, text_spec.markdown.quote);
     var headings = try text.objectField("markdown_headings");
     const names = [_][]const u8{ "h1", "h2", "h3", "h4", "h5", "h6" };
-    for (names, text_spec.markdown_headings) |name, heading| {
-        try writeOptionalMarkdownHeadingPaint(&headings, name, heading);
+    for (names, text_spec.headings) |name, heading| {
+        try writeOptionalMarkdownHeadingPaint(&headings, name, text_spec.*, heading);
     }
     try headings.end();
-    try text.floatField("markdown_block_gap", text_spec.markdown_block_gap, "{d:.4}");
-    try text.floatField("markdown_list_inset", text_spec.markdown_list_inset, "{d:.4}");
-    try text.floatField("markdown_list_indent", text_spec.markdown_list_indent, "{d:.4}");
-    try text.floatField("markdown_code_font_size", text_spec.markdown_code_font_size, "{d:.1}");
-    try text.floatField("markdown_code_line_height", text_spec.markdown_code_line_height, "{d:.1}");
-    try text.floatField("markdown_code_pad_x", text_spec.markdown_code_pad_x, "{d:.1}");
-    try text.floatField("markdown_code_pad_y", text_spec.markdown_code_pad_y, "{d:.1}");
-    try writeOptionalColor(&text, "markdown_code_highlight_fill", text_spec.markdown_code_highlight_fill);
-    try writeOptionalColor(&text, "markdown_code_fill", text_spec.markdown_code_fill);
-    try writeOptionalColor(&text, "markdown_code_stroke", text_spec.markdown_code_stroke);
-    try text.floatField("markdown_code_line_width", text_spec.markdown_code_line_width, "{d:.1}");
-    try text.floatField("markdown_code_radius", text_spec.markdown_code_radius, "{d:.1}");
-    try writeOptionalColor(&text, "markdown_code_plain_color", text_spec.markdown_code_plain_color);
-    try writeOptionalColor(&text, "markdown_code_keyword_color", text_spec.markdown_code_keyword_color);
-    try writeOptionalColor(&text, "markdown_code_function_color", text_spec.markdown_code_function_color);
-    try writeOptionalColor(&text, "markdown_code_type_color", text_spec.markdown_code_type_color);
-    try writeOptionalColor(&text, "markdown_code_constant_color", text_spec.markdown_code_constant_color);
-    try writeOptionalColor(&text, "markdown_code_number_color", text_spec.markdown_code_number_color);
-    try writeOptionalColor(&text, "markdown_code_variable_color", text_spec.markdown_code_variable_color);
-    try writeOptionalColor(&text, "markdown_code_operator_color", text_spec.markdown_code_operator_color);
-    try writeOptionalColor(&text, "markdown_code_comment_color", text_spec.markdown_code_comment_color);
-    try writeOptionalColor(&text, "markdown_code_string_color", text_spec.markdown_code_string_color);
-    try text.floatField("markdown_table_cell_pad_x", text_spec.markdown_table_cell_pad_x, "{d:.1}");
-    try text.floatField("markdown_table_cell_pad_y", text_spec.markdown_table_cell_pad_y, "{d:.1}");
-    try writeOptionalColor(&text, "markdown_table_border", text_spec.markdown_table_border);
-    try text.floatField("markdown_table_line_width", text_spec.markdown_table_line_width, "{d:.1}");
-    try writeOptionalColor(&text, "markdown_table_header_fill", text_spec.markdown_table_header_fill);
-    try writeOptionalColor(&text, "markdown_table_alt_row_fill", text_spec.markdown_table_alt_row_fill);
+    try text.floatField("markdown_block_gap", text_spec.markdown.block_gap, "{d:.4}");
+    try text.floatField("markdown_list_inset", text_spec.markdown.list.inset, "{d:.4}");
+    try text.floatField("markdown_list_indent", text_spec.markdown.list.indent, "{d:.4}");
+    try text.floatField("markdown_code_font_size", text_spec.code.style.font_size, "{d:.1}");
+    try text.floatField("markdown_code_line_height", text_spec.code.style.line_height, "{d:.1}");
+    try text.floatField("markdown_code_pad_x", text_spec.code.chrome.pad_x, "{d:.1}");
+    try text.floatField("markdown_code_pad_y", text_spec.code.chrome.pad_y, "{d:.1}");
+    try writeUnderlinePaint(&text, "markdown_code_bottom_rule", text_spec.code.chrome.bottom_rule);
+    try writeOptionalColor(&text, "markdown_code_highlight_fill", text_spec.code.style.line_highlight_fill);
+    try writeOptionalColor(&text, "markdown_code_fill", text_spec.code.chrome.fill);
+    try writeOptionalColor(&text, "markdown_code_stroke", text_spec.code.chrome.stroke);
+    try text.floatField("markdown_code_line_width", text_spec.code.chrome.line_width, "{d:.1}");
+    try text.floatField("markdown_code_radius", text_spec.code.chrome.radius, "{d:.1}");
+    inline for (comptime std.meta.tags(core.render_paint.CodeRole)) |role| try writeColor(&text, "markdown_code_" ++ @tagName(role) ++ "_color", text_spec.code.style.colors.get(role));
+    try text.floatField("markdown_table_cell_pad_x", text_spec.markdown.table.cell_pad_x, "{d:.1}");
+    try text.floatField("markdown_table_cell_pad_y", text_spec.markdown.table.cell_pad_y, "{d:.1}");
+    try writeOptionalColor(&text, "markdown_table_border", text_spec.markdown.table.border);
+    try text.floatField("markdown_table_line_width", text_spec.markdown.table.line_width, "{d:.1}");
+    try writeOptionalColor(&text, "markdown_table_header_fill", text_spec.markdown.table.header_fill);
+    try writeOptionalColor(&text, "markdown_table_alt_row_fill", text_spec.markdown.table.alt_row_fill);
     try text.boolField("wrap", text_spec.wrap);
     try text.end();
 }
 
-fn writeMarkdownQuotePaint(object: *json.Object, quote: core.render_policy.MarkdownQuotePaint) !void {
+fn writeMarkdownQuotePaint(object: *json.Object, quote: core.render_paint.MarkdownQuotePaint) !void {
     var value = try object.objectField("markdown_quote");
     try writeOptionalColor(&value, "color", quote.color);
     try value.floatField("inset", quote.inset, "{d:.1}");
@@ -289,9 +281,9 @@ fn writeMarkdownQuotePaint(object: *json.Object, quote: core.render_policy.Markd
     try value.floatField("pad_y", quote.pad_y, "{d:.1}");
     try writeOptionalColor(&value, "fill", quote.fill);
     try value.floatField("radius", quote.radius, "{d:.1}");
-    try writeOptionalColor(&value, "bar_color", quote.bar_color);
-    try value.floatField("bar_width", quote.bar_width, "{d:.1}");
-    if (quote.bar_dash) |dash| {
+    try writeOptionalColor(&value, "bar_color", quote.bar.stroke);
+    try value.floatField("bar_width", quote.bar.line_width, "{d:.1}");
+    if (quote.bar.dash) |dash| {
         try value.floatField("bar_dash_on", dash.on, "{d:.1}");
         try value.floatField("bar_dash_off", dash.off, "{d:.1}");
     } else {
@@ -301,27 +293,27 @@ fn writeMarkdownQuotePaint(object: *json.Object, quote: core.render_policy.Markd
     try value.end();
 }
 
-fn writeInlineTextPaint(object: *json.Object, spec: anytype) !void {
-    try writeFontFace(object, "font", spec.font);
-    try writeFontFace(object, "bold_font", spec.bold_font);
-    try writeFontFace(object, "italic_font", spec.italic_font);
-    try writeFontFace(object, "code_font", spec.code_font);
-    try object.floatField("font_size", spec.font_size, "{d:.1}");
-    try object.floatField("line_height", spec.line_height, "{d:.1}");
-    try object.enumTagField("align", spec.horizontal_align);
-    try writeColor(object, "color", spec.color);
-    try writeColor(object, "link_color", spec.link_color);
-    try writeOptionalColor(object, "markdown_bold_color", spec.markdown_bold_color);
-    try writeMarkdownUnderlinePaint(object, spec.markdown_underline);
-    try object.floatField("math_scale", spec.math_scale, "{d:.4}");
-    try object.floatField("inline_math_spacing", spec.inline_math_spacing, "{d:.4}");
-    try object.floatField("display_math_gap", spec.display_math_gap, "{d:.4}");
-    try object.enumTagField("display_math_fit", spec.display_math_fit);
-    try object.enumTagField("math_align", spec.math_align);
-    try object.floatField("emoji_spacing", spec.emoji_spacing, "{d:.4}");
+fn writeInlineTextPaint(object: *json.Object, spec: core.render_paint.TextPaint) !void {
+    try writeFontFace(object, "font", spec.typography.font);
+    try writeFontFace(object, "bold_font", spec.boldFont());
+    try writeFontFace(object, "italic_font", spec.italicFont());
+    try writeFontFace(object, "code_font", spec.code.style.font);
+    try object.floatField("font_size", spec.typography.font_size, "{d:.1}");
+    try object.floatField("line_height", spec.typography.line_height, "{d:.1}");
+    try object.enumTagField("align", spec.typography.horizontal_align);
+    try writeColor(object, "color", spec.typography.color);
+    try writeColor(object, "link_color", spec.markdown.emphasis.link_color);
+    try writeOptionalColor(object, "markdown_bold_color", spec.markdown.emphasis.bold_color);
+    try writeMarkdownUnderlinePaint(object, spec.markdown.emphasis.underline);
+    try object.floatField("math_scale", spec.math.scale, "{d:.4}");
+    try object.floatField("inline_math_spacing", spec.math.inline_spacing, "{d:.4}");
+    try object.floatField("display_math_gap", spec.math.display_gap, "{d:.4}");
+    try object.enumTagField("display_math_fit", spec.math.display_fit);
+    try object.enumTagField("math_align", spec.math.horizontal_align);
+    try object.floatField("emoji_spacing", spec.typography.emoji_spacing, "{d:.4}");
 }
 
-fn writeMarkdownUnderlinePaint(object: *json.Object, spec: core.render_policy.MarkdownUnderlinePaint) !void {
+fn writeMarkdownUnderlinePaint(object: *json.Object, spec: core.render_paint.MarkdownUnderlinePaint) !void {
     var underline = try object.objectField("markdown_underline");
     try writeOptionalColor(&underline, "color", spec.color);
     try underline.floatField("opacity", spec.opacity, "{d:.4}");
@@ -341,7 +333,8 @@ fn writeMarkdownUnderlinePaint(object: *json.Object, spec: core.render_policy.Ma
 fn writeOptionalMarkdownHeadingPaint(
     object: *json.Object,
     key: []const u8,
-    maybe_heading: ?core.render_policy.MarkdownHeadingPaint,
+    base: core.render_paint.TextPaint,
+    maybe_heading: ?core.render_paint.Typography,
 ) !void {
     const heading_spec = maybe_heading orelse {
         try object.nullField(key);
@@ -349,7 +342,9 @@ fn writeOptionalMarkdownHeadingPaint(
     };
 
     var heading = try object.objectField(key);
-    try writeInlineTextPaint(&heading, heading_spec);
+    var effective = base;
+    effective.typography = heading_spec;
+    try writeInlineTextPaint(&heading, effective);
     try heading.end();
 }
 
@@ -362,7 +357,7 @@ fn writeFontFace(object: *json.Object, key: []const u8, face: core.font.Face) !v
     try font.end();
 }
 
-fn writeOptionalLatexPaint(object: *json.Object, maybe_latex: ?core.render_policy.LatexPaint) !void {
+fn writeOptionalLatexPaint(object: *json.Object, maybe_latex: ?core.render_paint.LatexPaint) !void {
     const latex_spec = maybe_latex orelse {
         try object.nullField("latex");
         return;
@@ -375,28 +370,20 @@ fn writeOptionalLatexPaint(object: *json.Object, maybe_latex: ?core.render_polic
     try latex.end();
 }
 
-fn writeOptionalCodePaint(object: *json.Object, maybe_code: ?core.render_policy.CodePaint) !void {
-    const code_spec = maybe_code orelse {
-        try object.nullField("code");
-        return;
-    };
-
+fn writeOptionalCodePaint(object: *json.Object, maybe_code: ?*const core.render_paint.CodeBlockPaint) !void {
+    const spec = maybe_code orelse return object.nullField("code");
     var code = try object.objectField("code");
-    try code.optionalStringField("language", code_spec.language);
-    try writeColor(&code, "plain_color", code_spec.plain);
-    try writeColor(&code, "keyword_color", code_spec.keyword);
-    try writeColor(&code, "function_color", code_spec.function);
-    try writeColor(&code, "type_color", code_spec.type);
-    try writeColor(&code, "constant_color", code_spec.constant);
-    try writeColor(&code, "number_color", code_spec.number);
-    try writeColor(&code, "variable_color", code_spec.variable);
-    try writeColor(&code, "operator_color", code_spec.operator);
-    try writeColor(&code, "comment_color", code_spec.comment);
-    try writeColor(&code, "string_color", code_spec.string);
+    try code.optionalStringField("language", spec.language);
+    try code.stringField("highlight_lines", spec.highlight_lines);
+    try writeFontFace(&code, "font", spec.style.font);
+    try code.floatField("font_size", spec.style.font_size, "{d:.1}");
+    try code.floatField("line_height", spec.style.line_height, "{d:.1}");
+    try code.boolField("wrap", spec.wrap);
+    inline for (comptime std.meta.tags(core.render_paint.CodeRole)) |role| try writeColor(&code, @tagName(role) ++ "_color", spec.style.colors.get(role));
     try code.end();
 }
 
-fn writeChromePaint(object: *json.Object, chrome_spec: core.render_policy.ChromePaint) !void {
+fn writeChromePaint(object: *json.Object, chrome_spec: core.render_paint.ChromePaint) !void {
     var chrome = try object.objectField("chrome");
     try writeOptionalColor(&chrome, "fill", chrome_spec.fill);
     try writeOptionalColor(&chrome, "stroke", chrome_spec.stroke);
@@ -407,15 +394,15 @@ fn writeChromePaint(object: *json.Object, chrome_spec: core.render_policy.Chrome
     try chrome.end();
 }
 
-fn writeUnderlinePaint(object: *json.Object, underline_spec: core.render_policy.UnderlinePaint) !void {
-    var underline = try object.objectField("underline");
+fn writeUnderlinePaint(object: *json.Object, name: []const u8, underline_spec: core.render_paint.BottomRulePaint) !void {
+    var underline = try object.objectField(name);
     try writeOptionalColor(&underline, "color", underline_spec.color);
     try underline.floatField("width", underline_spec.width, "{d:.1}");
     try underline.floatField("offset", underline_spec.offset, "{d:.1}");
     try underline.end();
 }
 
-fn writeRulePaint(object: *json.Object, rule_spec: core.render_policy.RulePaint) !void {
+fn writeRulePaint(object: *json.Object, rule_spec: core.render_paint.RulePaint) !void {
     var rule = try object.objectField("rule");
     try writeOptionalColor(&rule, "stroke", rule_spec.stroke);
     try rule.floatField("line_width", rule_spec.line_width, "{d:.1}");
@@ -430,7 +417,7 @@ fn writeRulePaint(object: *json.Object, rule_spec: core.render_policy.RulePaint)
     try rule.end();
 }
 
-fn writeColor(object: *json.Object, key: []const u8, color: core.render_policy.Color) !void {
+fn writeColor(object: *json.Object, key: []const u8, color: core.render_paint.Color) !void {
     var array = try object.arrayField(key);
     try array.floatItem(color.r, "{d:.4}");
     try array.floatItem(color.g, "{d:.4}");
@@ -438,7 +425,7 @@ fn writeColor(object: *json.Object, key: []const u8, color: core.render_policy.C
     try array.end();
 }
 
-fn writeOptionalColor(object: *json.Object, key: []const u8, color: ?core.render_policy.Color) !void {
+fn writeOptionalColor(object: *json.Object, key: []const u8, color: ?core.render_paint.Color) !void {
     if (color) |value| {
         try writeColor(object, key, value);
     } else {

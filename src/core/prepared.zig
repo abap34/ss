@@ -4,6 +4,7 @@ const DocumentState = @import("document_state.zig").DocumentState;
 const markdown = @import("markdown.zig");
 const latex_config = @import("latex_config.zig");
 const render_policy = @import("render_policy.zig");
+const render_paint = @import("render_paint.zig");
 const partition = @import("../layout/partition.zig");
 const fields = @import("fields.zig");
 const fontawesome = @import("fontawesome.zig");
@@ -22,7 +23,7 @@ pub const PreparedObject = struct {
     content: []const u8,
     content_provenance: []const model.ContentProvenance,
     link_id: ?[]const u8,
-    render: render_policy.ResolvedRender,
+    render: render_paint.ResolvedRender,
     semantics: ObjectSemantics = .auto,
     parse_mode: markdown.ParseMode,
     markdown_doc: ?markdown.MarkdownDocument = null,
@@ -77,7 +78,7 @@ pub const AssetDependency = struct {
 pub const PreparedPage = struct {
     page_id: model.NodeId,
     index: usize,
-    background: ?render_policy.Color,
+    background: ?render_paint.Color,
     objects: []PreparedObject,
 
     pub fn deinit(self: *PreparedPage, allocator: std.mem.Allocator) void {
@@ -167,7 +168,7 @@ pub fn prepareObject(allocator: std.mem.Allocator, state: *DocumentState, node: 
 fn recordFileInputs(state: *DocumentState, object: *const PreparedObject) !void {
     const inputs = state.file_inputs orelse return;
     if (!object.attached) return;
-    switch (object.render.kind) {
+    switch (object.render.kind()) {
         .vector_asset, .raster_asset => {
             const bundled_icon = for (object.asset_deps) |dep| {
                 if (dep.kind == .icon) break true;
@@ -189,7 +190,7 @@ pub fn prepareObjectWithRender(
     allocator: std.mem.Allocator,
     state: *DocumentState,
     node: *const model.Node,
-    render: render_policy.ResolvedRender,
+    render: render_paint.ResolvedRender,
 ) !PreparedObject {
     if (node.placement) |placement| switch (placement.display) {
         .pending, .running => return error.UnexpandedDisplay,
@@ -212,7 +213,7 @@ pub fn prepareObjectWithRender(
     }
     const parse_mode = markdown.parseModeForNode(state, node);
     const content = if (uses_asset_content) model.nodeContent(node) orelse "" else model.nodeDisplayContent(node);
-    switch (render.kind) {
+    switch (render.kind()) {
         .text => switch (parse_mode) {
             .none => {},
             .plain => text_layout = try markdown.parsePlainTextContent(allocator, content),
@@ -232,7 +233,7 @@ pub fn prepareObjectWithRender(
             .content_end = content.len,
         }),
         .vector_asset => {
-            if (render.asset != null and render.asset.?.format == .pdf) {
+            if (render.content.vector_asset.format == .pdf) {
                 try asset_deps.append(allocator, .{
                     .kind = .vector_pdf,
                     .source = content,

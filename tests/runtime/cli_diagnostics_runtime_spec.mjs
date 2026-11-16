@@ -579,7 +579,7 @@ end
     const diagnostic = output.split("\n").find((line) => line.includes("ReadlinesFailed:"));
     assert(diagnostic?.includes("std:code:"), `standard-library diagnostic used the wrong source path:\n${output}`);
     assert(
-      output.includes("|   return code(readlines(path), language, style)"),
+      output.includes("|   return code(readlines(path),"),
       `standard-library diagnostic omitted its source excerpt:\n${output}`,
     );
   } finally {
@@ -1005,14 +1005,14 @@ end
       `import std:text as default
 
 fn/! success_text(content: String) -> Text
-  return default::text(content, default_theme().body with {
-    text.cjk_bold_passes = 3
+  return default::text(content, default_theme().text with {
+    cjk_bold_passes = 3
   })
 end
 
 fn/! danger_text(content: String) -> Text
-  return default::text(content, default_theme().body with {
-    text.cjk_bold_passes = 3
+  return default::text(content, default_theme().text with {
+    cjk_bold_passes = 3
   })
 end
 `,
@@ -1024,9 +1024,9 @@ end
     const headers = output.match(/^ERROR: .*UnknownField:/gm) ?? [];
     assert(result.code !== 0, "dump should fail for an unknown record field in a placing function");
     assert(headers.length === 2, `two unknown record fields produced ${headers.length} diagnostic headers instead of two:\n${output}`);
-    assert(output.includes("theme.ss:5:10: UnknownField:"), `first unknown record field diagnostic did not point at the field token:\n${output}`);
-    assert(output.includes("theme.ss:11:10: UnknownField:"), `second unknown record field diagnostic did not point at the field token:\n${output}`);
-    assert(output.includes("|     text.cjk_bold_passes = 3"), `unknown record field diagnostic omitted its source excerpt:\n${output}`);
+    assert(output.includes("theme.ss:5:5: UnknownField:"), `first unknown record field diagnostic did not point at the field token:\n${output}`);
+    assert(output.includes("theme.ss:11:5: UnknownField:"), `second unknown record field diagnostic did not point at the field token:\n${output}`);
+    assert(output.includes("|     cjk_bold_passes = 3"), `unknown record field diagnostic omitted its source excerpt:\n${output}`);
   } finally {
     await rm(project, { recursive: true, force: true });
   }

@@ -6,7 +6,7 @@ pub const Context = inline_layout.Context;
 
 pub const Cell = struct {
     content: inline_layout.PreparedBlock,
-    alignment: core.render_policy.HorizontalAlign,
+    alignment: core.render_paint.HorizontalAlign,
 };
 
 pub const Row = struct {
@@ -44,10 +44,10 @@ pub const Layout = struct {
     }
 };
 
-pub fn prepare(ctx: Context, table: core.markdown.TableData, text: core.render_policy.TextPaint, width: f32) !Layout {
+pub fn prepare(ctx: Context, table: core.markdown.TableData, text: core.render_paint.TextPaint, width: f32) !Layout {
     const allocator = ctx.assets.allocator;
     const columns = core.markdown.tableColumnCount(table);
-    const border_width = if (text.markdown_table_border != null and text.markdown_table_line_width > 0) text.markdown_table_line_width else 0;
+    const border_width = if (text.markdown.table.border != null and text.markdown.table.line_width > 0) text.markdown.table.line_width else 0;
     const column_widths = try allocator.alloc(f32, columns);
     errdefer allocator.free(column_widths);
     const natural_widths = try allocator.alloc(f32, columns);
@@ -55,11 +55,11 @@ pub fn prepare(ctx: Context, table: core.markdown.TableData, text: core.render_p
     @memset(natural_widths, 0);
     for (table.rows.items) |row| {
         var cell_text = text;
-        cell_text.font = if (row.header) text.bold_font else text.font;
+        cell_text.typography.font = if (row.header) text.boldFont() else text.typography.font;
         for (row.cells.items, 0..) |cell, index| {
             if (table.columnWidth(index) != .auto) continue;
             const natural = try inline_layout.naturalBlockWidth(ctx, cell.lines.items, cell_text);
-            natural_widths[index] = @max(natural_widths[index], natural + text.markdown_table_cell_pad_x * 2);
+            natural_widths[index] = @max(natural_widths[index], natural + text.markdown.table.cell_pad_x * 2);
         }
     }
     core.markdown.resolveTableColumnWidths(table, @max(width - border_width, 1), natural_widths, column_widths);
@@ -79,15 +79,15 @@ pub fn prepare(ctx: Context, table: core.markdown.TableData, text: core.render_p
             cells.deinit(allocator);
         }
         var cell_text = text;
-        cell_text.font = if (row.header) text.bold_font else text.font;
+        cell_text.typography.font = if (row.header) text.boldFont() else text.typography.font;
         var top_overhang: f32 = 0;
-        var bottom_depth = text.line_height;
+        var bottom_depth = text.typography.line_height;
         var left: f32 = 0;
         for (row.cells.items, 0..) |cell, index| {
-            const content_width = @max(column_widths[index] - text.markdown_table_cell_pad_x * 2, 1);
+            const content_width = @max(column_widths[index] - text.markdown.table.cell_pad_x * 2, 1);
             var content = try inline_layout.prepareBlock(ctx, cell.lines.items, cell_text, content_width);
             errdefer content.deinit(allocator);
-            logical_width = @max(logical_width, border_width + left + @max(column_widths[index], content.logical_width + text.markdown_table_cell_pad_x * 2));
+            logical_width = @max(logical_width, border_width + left + @max(column_widths[index], content.logical_width + text.markdown.table.cell_pad_x * 2));
             left += column_widths[index];
             bottom_depth = @max(bottom_depth, content.height);
             if (content.ink_bounds) |ink| {
@@ -100,10 +100,10 @@ pub fn prepare(ctx: Context, table: core.markdown.TableData, text: core.render_p
                 .right => .right,
             } });
         }
-        const height = top_overhang + bottom_depth + text.markdown_table_cell_pad_y * 2;
+        const height = top_overhang + bottom_depth + text.markdown.table.cell_pad_y * 2;
         try rows.ensureUnusedCapacity(allocator, 1);
-        rows.appendAssumeCapacity(.{ .cells = try cells.toOwnedSlice(allocator), .header = row.header, .top = top, .height = height, .content_top = top + text.markdown_table_cell_pad_y + top_overhang });
+        rows.appendAssumeCapacity(.{ .cells = try cells.toOwnedSlice(allocator), .header = row.header, .top = top, .height = height, .content_top = top + text.markdown.table.cell_pad_y + top_overhang });
         top += height;
     }
-    return .{ .rows = try rows.toOwnedSlice(allocator), .columns = columns, .column_widths = column_widths, .cell_pad_x = text.markdown_table_cell_pad_x, .border_width = border_width, .height = top, .logical_width = logical_width };
+    return .{ .rows = try rows.toOwnedSlice(allocator), .columns = columns, .column_widths = column_widths, .cell_pad_x = text.markdown.table.cell_pad_x, .border_width = border_width, .height = top, .logical_width = logical_width };
 }

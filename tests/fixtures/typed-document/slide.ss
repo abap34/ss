@@ -5,12 +5,11 @@ import std:document as document_api
 import std:themes/default as base
 import std:theme/types as { Theme }
 import std:text/style as { TextBlockStyle }
-import std:text/types as { TextParseMode }
+import std:components/toc/style as { TocStyle }
 
 const theme: Theme = base::default_theme()
-const body_style: TextBlockStyle = theme.body with {
-  text.size = 24
-  text.parse = TextParseMode.block
+const body_style: TextBlockStyle = theme.text with {
+  size = 24
 }
 
 fn body_page_number(page: Page, document: Document) -> String
@@ -21,16 +20,16 @@ fn footer_number(page: Page, document: Document) -> String
   return body_page_number(page, document) ++ "/" ++ str(page_count(document) - 1)
 end
 
-const footer: document_api::PageNumber = document_api::pageno(theme.page_number, footer_number)
+const footer: document_api::PageNumber = document_api::pageno(theme.text, footer_number)
 
 page cover
   let title = place!(text_api::Text {
     content = text_api::TextContent { source = "A reproducible reporting pipeline" }
-    style = theme.h1 with { text.size = 48 }
+    style = theme.text with { size = 48 }
   })
   let subtitle = place!(text_api::Text {
     content = text_api::TextContent { source = "Typed inputs, reusable displays, and document queries" }
-    style = theme.body with { text.size = 28 }
+    style = theme.text with { size = 28 }
   })
   ~ title.left == page.left + 64
   ~ title.top == page.top - 184
@@ -39,7 +38,7 @@ page cover
 end
 
 page contents
-  let contents = toc!("Contents", theme.toc with { body = body_style }, body_page_number)
+  let contents = toc!("Contents", TocStyle { entries = body_style }, body_page_number)
   let number = place!(footer)
   ~ contents.left == page.left + 64
   ~ contents.top == page.top - 56
@@ -48,7 +47,7 @@ page contents
 end
 
 page architecture
-  let title = heading!("From source data to a slide", 1, theme.h1)
+  let title = heading!("From source data to a slide", 1, theme.text)
   let explanation = place!(text_api::Text {
     content = text_api::TextContent { source = <<
 ### Keep the inputs explicit
@@ -63,7 +62,7 @@ page architecture
   })
   let chart = place!(assets::Image {
     source = assets::image_source("../layout/practical/diagram.svg")
-    style = theme.image with { asset.scale = 0.7 }
+    style = theme.image with { scale = 0.7 }
   })
   let number = place!(footer)
   ~ title.left == page.left + 64
@@ -78,7 +77,7 @@ page architecture
 end
 
 page implementation
-  let title = heading!("Reuse one definition across pages", 1, theme.h1)
+  let title = heading!("Reuse one definition across pages", 1, theme.text)
   let program = place!(code_api::Code {
     source = <<
 def compile_report(source):
@@ -87,7 +86,7 @@ def compile_report(source):
     return build_slides(valid)
 >>
     language = "python"
-    style = theme.code with { text.size = 22 }
+    style = theme.text with { code.size = 22 }
   })
   let architecture = first(select<Heading>(docctx()))
   let reference = place!(text_api::Text {

@@ -21,7 +21,7 @@ test "analysis query spec: document and page settings share value fields and the
     defer snapshot.deinit();
     try testing.expect(!snapshot.diagnostics.hasErrors());
     for ([_][]const u8{ "doc.layout_h_center_offset", "page.layout_h_center_offset" }) |needle| {
-        try expectAppliedField(&snapshot, path, source, needle, "layout_h_center_offset", "Number", 7);
+        try expectAppliedField(&snapshot, path, source, needle, "layout_h_center_offset", "Number", 8);
         const request = analysis.query.types.SourceRequest{
             .path = path,
             .source = source,

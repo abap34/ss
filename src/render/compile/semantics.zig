@@ -131,14 +131,14 @@ const Builder = struct {
             }
             return id;
         }
-        if (prepared_object.render.kind == .code) return self.objectWithRole(prepared_object, .code, null);
-        if (prepared_object.render.kind == .vector_asset or prepared_object.render.kind == .raster_asset) {
+        if (prepared_object.render.kind() == .code) return self.objectWithRole(prepared_object, .code, null);
+        if (prepared_object.render.kind() == .vector_asset or prepared_object.render.kind() == .raster_asset) {
             const id = try self.append(.figure);
             const label = if (node) |value| value.name else prepared_object.content;
             self.nodes.items[self.index(id)].alt_text = try duplicateOptional(self.allocator, label);
             return id;
         }
-        if (prepared_object.render.kind == .latex) {
+        if (prepared_object.render.kind() == .latex) {
             const id = try self.append(.math);
             self.nodes.items[self.index(id)].text = try duplicateOptional(self.allocator, prepared_object.content);
             return id;
@@ -181,7 +181,7 @@ const Builder = struct {
         }
         const id = try self.append(role);
         self.nodes.items[self.index(id)].heading_level = level;
-        if (object_value.render.kind == .latex) {
+        if (object_value.render.kind() == .latex) {
             const math = try self.leaf(.math, object_value.content);
             self.nodes.items[self.index(id)].children = try self.allocator.dupe(render.SemanticId, &.{math});
         } else if (role != .figure) {

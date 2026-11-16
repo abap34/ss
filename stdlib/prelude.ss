@@ -3,6 +3,10 @@ import std:graphics/types
 import std:math/types
 import std:assets/types
 import std:layout/types
+import std:code/style
+import std:assets/style
+import std:text/style
+import std:components/toc/style
 import std:code/types
 import std:text/types
 import std:graphics/paint/types

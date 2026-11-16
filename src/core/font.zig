@@ -41,82 +41,24 @@ pub const default_code_family = "monospace";
 pub const default_weight: u16 = 400;
 pub const default_bold_weight: u16 = 700;
 
-pub fn textFacesForNode(state: anytype, node: *const Node) TextFaces {
-    const normal = faceFromRecord(
-        state.allocator,
-        state,
-        node,
-        "font",
-        .{
-            .family = default_family,
-            .weight = default_weight,
-            .style = .normal,
-            .stretch = .normal,
-        },
-    );
-    const markdown_bold_weight = fontWeightNumber(fields.read(state.allocator, state, node, "text", &.{"bold_weight"}, .number)) orelse default_bold_weight;
-    const markdown_italic_style = parseStyle(fields.read(state.allocator, state, node, "text", &.{"italic_style"}, .text) orelse "") orelse .italic;
-    const code = faceFromRecord(
-        state.allocator,
-        state,
-        node,
-        "code_font",
-        .{
-            .family = default_code_family,
-            .weight = default_weight,
-            .style = .normal,
-            .stretch = .normal,
-        },
-    );
-    return textFaces(normal, markdown_bold_weight, markdown_italic_style, code);
+pub fn bodyFont(node: *const Node) Face {
+    return faceAt(node, "font", &.{}, .{ .family = default_family, .weight = default_weight, .style = .normal, .stretch = .normal });
 }
 
-pub fn markdownHeadingTextFacesForNode(node: *const Node, heading_field: []const u8) ?TextFaces {
-    if (fields.readExplicit(node, "markdown_headings", &.{ heading_field, "text", "size" }, .number) == null) return null;
-    const normal = faceFromNestedRecord(
-        node,
-        heading_field,
-        "font",
-        .{
-            .family = default_family,
-            .weight = default_weight,
-            .style = .normal,
-            .stretch = .normal,
-        },
-    );
-    const bold_weight = fontWeightNumber(fields.readExplicit(node, "markdown_headings", &.{ heading_field, "text", "bold_weight" }, .number)) orelse default_bold_weight;
-    const italic_style = parseStyle(fields.readExplicit(node, "markdown_headings", &.{ heading_field, "text", "italic_style" }, .text) orelse "") orelse .italic;
-    const code = faceFromNestedRecord(
-        node,
-        heading_field,
-        "code_font",
-        .{
-            .family = default_code_family,
-            .weight = default_weight,
-            .style = .normal,
-            .stretch = .normal,
-        },
-    );
-    return textFaces(normal, bold_weight, italic_style, code);
+pub fn codeFont(node: *const Node) Face {
+    return faceAt(node, "code", &.{"font"}, .{ .family = default_code_family, .weight = default_weight, .style = .normal, .stretch = .normal });
 }
 
-fn textFaces(normal: Face, bold_weight: u16, italic_style: Style, code: Face) TextFaces {
-    return .{
-        .normal = normal,
-        .bold = .{
-            .family = normal.family,
-            .weight = @max(normal.weight, bold_weight),
-            .style = normal.style,
-            .stretch = normal.stretch,
-        },
-        .italic = .{
-            .family = normal.family,
-            .weight = normal.weight,
-            .style = italic_style,
-            .stretch = normal.stretch,
-        },
-        .code = code,
-    };
+pub fn headingFont(node: *const Node, level: []const u8, base: Face) Face {
+    return faceAt(node, "headings", &.{ level, "font" }, base);
+}
+
+pub fn boldWeight(state: anytype, node: *const Node) u16 {
+    return fontWeightNumber(fields.read(state.allocator, state, node, "markdown", &.{ "bold", "weight" }, .number)) orelse default_bold_weight;
+}
+
+pub fn italicStyle(state: anytype, node: *const Node) Style {
+    return parseStyle(fields.read(state.allocator, state, node, "markdown", &.{ "italic", "style" }, .text) orelse "") orelse .italic;
 }
 
 pub fn styleName(style: Style) []const u8 {
@@ -149,33 +91,21 @@ pub fn stretchCode(stretch: Stretch) c_int {
     };
 }
 
-fn faceFromRecord(
-    allocator: std.mem.Allocator,
-    state: anytype,
-    node: *const Node,
-    font_field: []const u8,
-    fallback: Face,
-) Face {
+fn faceAt(node: *const Node, key: []const u8, path: []const []const u8, fallback: Face) Face {
+    const root = model.nodeField(node, key) orelse return fallback;
+    const value = fields.pathValue(root, path) orelse return fallback;
+    if (value != .record) return fallback;
+    const record = value.record;
     return .{
-        .family = cleanFamily(fields.read(allocator, state, node, "text", &.{ font_field, "family" }, .text) orelse fallback.family),
-        .weight = fontWeightNumber(fields.read(allocator, state, node, "text", &.{ font_field, "weight" }, .number)) orelse fallback.weight,
-        .style = parseStyle(fields.read(allocator, state, node, "text", &.{ font_field, "style" }, .text) orelse "") orelse fallback.style,
-        .stretch = parseStretch(fields.read(allocator, state, node, "text", &.{ font_field, "stretch" }, .text) orelse "") orelse fallback.stretch,
+        .family = cleanFamily(readField(record, "family", .text) orelse fallback.family),
+        .weight = fontWeightNumber(readField(record, "weight", .number)) orelse fallback.weight,
+        .style = parseStyle(readField(record, "style", .text) orelse "") orelse fallback.style,
+        .stretch = parseStretch(readField(record, "stretch", .text) orelse "") orelse fallback.stretch,
     };
 }
 
-fn faceFromNestedRecord(
-    node: *const Node,
-    style_field: []const u8,
-    font_field: []const u8,
-    fallback: Face,
-) Face {
-    return .{
-        .family = cleanFamily(fields.readExplicit(node, "markdown_headings", &.{ style_field, "text", font_field, "family" }, .text) orelse fallback.family),
-        .weight = fontWeightNumber(fields.readExplicit(node, "markdown_headings", &.{ style_field, "text", font_field, "weight" }, .number)) orelse fallback.weight,
-        .style = parseStyle(fields.readExplicit(node, "markdown_headings", &.{ style_field, "text", font_field, "style" }, .text) orelse "") orelse fallback.style,
-        .stretch = parseStretch(fields.readExplicit(node, "markdown_headings", &.{ style_field, "text", font_field, "stretch" }, .text) orelse "") orelse fallback.stretch,
-    };
+fn readField(record: model.RecordValue, key: []const u8, comptime as: fields.ReadAs) ?fields.ReadResult(as) {
+    return fields.readValue(record.field(key) orelse return null, as);
 }
 
 fn cleanFamily(value: []const u8) []const u8 {

@@ -47,7 +47,7 @@ const config: LatexConfig = LatexConfig {
   preamble = "\\usepackage{luatexja-fontspec}\\setmainjfont{HaranoAjiMincho-Regular}"
 }
 page formula
-latex!("\u65e5\u672c\u8a9e\u3092\u542b\u3080\u6570\u5f0f $x^2$", formulas::LatexBlockStyle {}, config)
+latex!("\u65e5\u672c\u8a9e\u3092\u542b\u3080\u6570\u5f0f $x^2$", formulas::ImageStyle {}, config)
 end
 `,
       "utf8",
@@ -167,7 +167,7 @@ let source = <<
   \\While{condition}{update state\\;}
 \\end{algorithm}
 >>
-let algorithm = latex!(source, formulas::LatexBlockStyle {}, LatexConfig { preamble = readlines("preamble.tex") })
+let algorithm = latex!(source, formulas::ImageStyle {}, LatexConfig { preamble = readlines("preamble.tex") })
 ~ algorithm.left == page.left + 120
 ~ algorithm.right == page.right - 120
 ~ algorithm.top == page.top - 100
@@ -250,11 +250,11 @@ async function testLatexConfigurationsCreateSeparateEngineProcesses() {
 import std:math as formulas
 
 page first
-latex!("$\\ScopedToken$", formulas::LatexBlockStyle {}, LatexConfig { preamble = "\\newcommand{\\ScopedToken}{First}" })
+latex!("$\\ScopedToken$", formulas::ImageStyle {}, LatexConfig { preamble = "\\newcommand{\\ScopedToken}{First}" })
 end
 
 page second
-latex!("$\\ScopedToken$", formulas::LatexBlockStyle {}, LatexConfig { preamble = "\\newcommand{\\ScopedToken}{Second}" })
+latex!("$\\ScopedToken$", formulas::ImageStyle {}, LatexConfig { preamble = "\\newcommand{\\ScopedToken}{Second}" })
 end
 `,
       "utf8",
@@ -283,7 +283,7 @@ const config: LatexConfig = LatexConfig { preamble = readlines("preamble.tex") }
 
 page formula
 text!("Markdown $\\CacheToken$", default_text_style, config)
-latex!("$\\CacheToken$", formulas::LatexBlockStyle {}, config)
+latex!("$\\CacheToken$", formulas::ImageStyle {}, config)
 end
 `,
       "utf8",

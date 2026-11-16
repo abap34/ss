@@ -22,7 +22,7 @@ log(b->f);
 ```
 >>
   |=|
-  pdf!("asset.pdf", theme.pdf with { asset.scale = 0.8 })
+  pdf!("asset.pdf", theme.image with { scale = 0.8 })
 
   ~!~ text_item.left == page.left + 306.15
   ~!~ text_item.top == page.top - 136.03

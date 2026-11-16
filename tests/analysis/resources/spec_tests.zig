@@ -56,7 +56,7 @@ test "resource index: candidates equal pairwise intersections across scopes owne
         .{ .origin = .local, .scope = .{ .page = 1 }, .name = "title", .local_id = 1 },
         .{ .origin = .local, .scope = .{ .page = 1 }, .name = "title", .local_id = 2 },
     };
-    const keys = [_]Key{ .any, .{ .named = "background_fill" }, .{ .named = "x" }, .{ .named = "y" }, .{ .named = "layout" }, .{ .named = "layout.x" }, .{ .named = "layout.y" }, .{ .named = "layout_extra.x" }, .{ .named = "text.font" }, .{ .named = "text.font.family" } };
+    const keys = [_]Key{ .any, .{ .named = "background_fill" }, .{ .named = "x" }, .{ .named = "y" }, .{ .named = "layout" }, .{ .named = "layout.x" }, .{ .named = "layout.y" }, .{ .named = "layout_extra.x" }, .{ .named = "typography.font" }, .{ .named = "typography.font.family" } };
     var resources = std.ArrayList(Resource).empty;
     defer resources.deinit(testing.allocator);
     for (scopes) |scope| {
@@ -116,7 +116,7 @@ test "resource index: unrelated pages and owners do not increase candidate count
                     .identity = .{ .scope = .{ .page = page_id }, .name = "title" },
                 } }, "x"),
                 Resource.makePages(page_id),
-                Resource.makeProperty(.{ .page = page_id }, "theme.body"),
+                Resource.makeProperty(.{ .page = page_id }, "theme.text"),
                 Resource.makeProperty(.{ .object = .{
                     .identity = .{ .scope = .{ .page = page_id }, .name = "other" },
                 } }, "x"),

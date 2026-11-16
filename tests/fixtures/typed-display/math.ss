@@ -6,7 +6,7 @@ const config: formulas::LatexConfig = formulas::LatexConfig {
 \newcommand{\Example}[1]{f(#1)}
 >>
 }
-const shared: Math = formulas::math("\Example{x} = x^2", formulas::LatexBlockStyle {}, config)
+const shared: Math = formulas::math("\Example{x} = x^2", formulas::ImageStyle {}, config)
 
 page normal
   let title = place!(text_api::Text { content = text_api::TextContent { source = "# Mathematical expressions" } })
@@ -22,7 +22,7 @@ end
 
 page enlarged
   let title = place!(text_api::Text { content = text_api::TextContent { source = "# Independent scaling" } })
-  let formula = place!(shared with { style.latex.scale = 2 })
+  let formula = place!(shared with { style = (shared.style ?? formulas::ImageStyle {}) with { scale = 2 } })
   ~ title.left == page.left + 64
   ~ title.top == page.top - 48
   ~ formula.left == title.left

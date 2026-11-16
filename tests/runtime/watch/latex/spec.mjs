@@ -30,7 +30,7 @@ const source = String.raw`import std:themes/default as *
 import std:math as formulas
 const config: LatexConfig = LatexConfig { preamble = readlines("preamble.tex") }
 page dependencies
-let formula = latex!("$\ProbeText$", formulas::LatexBlockStyle {}, config)
+let formula = latex!("$\ProbeText$", formulas::ImageStyle {}, config)
 ~ formula.left == page.left + 60
 ~ formula.top == page.top - 120
 let inline = text!("Inline $\ProbeText$", default_text_style, config)

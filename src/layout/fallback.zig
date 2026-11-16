@@ -532,10 +532,10 @@ fn imageAlignment(state: *Workspace, id: NodeId) ?model.Anchor {
         if (children.len != 1) return null;
         node = state.source.getNode(children[0]) orelse return null;
     }
-    if (model.nodeImageSourceKind(node) == null) return null;
-    const asset = model.nodeField(node, "asset") orelse return null;
+    const kind = model.nodeImageSourceKind(node) orelse return null;
+    const asset = model.nodeField(node, "image") orelse return null;
     const alignment = asset.record.field("align") orelse return null;
-    if (alignment != .enum_case) return null;
+    if (alignment != .enum_case) return if (kind == .latex) .center_x else null;
     const name = alignment.enum_case.case_name;
     if (std.mem.eql(u8, name, "left")) return .left;
     if (std.mem.eql(u8, name, "center")) return .center_x;

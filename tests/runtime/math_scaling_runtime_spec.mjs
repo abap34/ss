@@ -130,7 +130,7 @@ upsilon
 end
 
 page oversized_math_frame
-let formula = latex!("$x + y = z$", formulas::LatexBlockStyle {} with { latex.scale = 1 })
+let formula = latex!("$x + y = z$", formulas::ImageStyle {} with { scale = 1 })
 ~ formula.left == page.left + 96
 ~ formula.right == page.right - 96
 ~ formula.top == page.top + 120

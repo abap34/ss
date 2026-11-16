@@ -1,8 +1,9 @@
 import std:theme/types as { Theme }
-import std:layout/types as { LayoutPolicy }
+import std:layout/types as { LayoutPolicy, FitPolicy }
 
 type PageSettings {
   theme: Theme? = none
+  fit: FitPolicy = FitPolicy.warn
   notes: String = ""
   layout_h: LayoutPolicy = LayoutPolicy.left
   layout_h_center_offset: Number = 0

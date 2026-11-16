@@ -1,5 +1,5 @@
 import std:document/numbering as { number_of }
-import std:document/content as { PageNumber, format_page_number, Heading, default_heading_style }
+import std:document/content as { PageNumber, format_page_number, Heading }
 import std:document/settings
 import std:text/style
 

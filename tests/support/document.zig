@@ -55,35 +55,14 @@ pub fn setField(state: *core.DocumentState, id: core.NodeId, key: []const u8, va
     const node = state.getNode(id) orelse return error.UnknownNode;
     const placement = if (node.placement) |*p| p else return setStoredField(state, id, key, value);
     if (placement.display != .native) return setStoredField(state, id, key, value);
-    if (std.mem.eql(u8, key, "semantics")) return put(state.allocator, &placement.value.record, key, value);
-    if (std.mem.eql(u8, key, "language")) {
-        const content = try ensureRecord(state.allocator, &placement.value.record, "content");
-        return put(state.allocator, content, key, value);
+    const input = &placement.value.record;
+    if (placement.display.native == .text and (std.mem.eql(u8, key, "content") or std.mem.eql(u8, key, "semantics"))) return put(state.allocator, input, key, value);
+    if (placement.display.native == .image) {
+        if (std.mem.eql(u8, key, "image")) return put(state.allocator, input, "style", value);
+        if (std.mem.eql(u8, key, "image_source")) return put(state.allocator, input, "source", value);
     }
-    var style: *core.RecordValue = undefined;
-    for (placement.value.record.fields.items) |*field| {
-        if (std.mem.eql(u8, field.name, "style")) {
-            style = &field.value.record;
-            break;
-        }
-    } else return error.MissingStyle;
-    if (placement.display.native == .text and std.mem.eql(u8, key, "code")) {
-        const content = try ensureRecord(state.allocator, &placement.value.record, "content");
-        const highlight = try ensureRecord(state.allocator, content, "highlight");
-        return put(state.allocator, highlight, key, value);
-    }
-    if (placement.display.native == .image and std.mem.eql(u8, key, "latex")) {
-        const source = try ensureRecord(state.allocator, &placement.value.record, "source");
-        if (value.record.field("min_height")) |height| try put(state.allocator, source, "min_height", height);
-        const asset = try ensureRecord(state.allocator, style, "asset");
-        for ([_][]const u8{ "scale", "align" }) |field| if (value.record.field(field)) |property| try put(state.allocator, asset, field, property);
-        return;
-    }
-    if (placement.display.native == .image and std.mem.eql(u8, key, "asset")) {
-        const source = try ensureRecord(state.allocator, &placement.value.record, "source");
-        for ([_][]const u8{ "pdf_page", "pdf_box" }) |field| if (value.record.field(field)) |property| try put(state.allocator, source, field, property);
-    }
-    return put(state.allocator, style, if (std.mem.eql(u8, key, "markdown_headings")) "headings" else key, value);
+    const style = try ensureRecord(state.allocator, input, "style");
+    return put(state.allocator, style, key, value);
 }
 
 fn setStoredField(state: *core.DocumentState, id: core.NodeId, key: []const u8, value: core.Value) !void {
@@ -97,6 +76,7 @@ fn setStoredField(state: *core.DocumentState, id: core.NodeId, key: []const u8, 
 }
 
 pub fn setPath(state: *core.DocumentState, id: core.NodeId, root: []const u8, path: []const []const u8, value: core.Value) !void {
+    if (path.len == 0) return setField(state, id, root, value);
     var record = if (state.getNodeField(id, root)) |existing| try existing.clone(state.allocator) else core.Value{ .record = .init(ast.Type.recordType("Style")) };
     defer record.deinit(state.allocator);
     var target = &record.record;

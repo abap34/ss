@@ -1,6 +1,8 @@
 const std = @import("std");
 const ast = @import("ast");
 const model = @import("model");
+const markdown = @import("markdown.zig");
+const source_utils = @import("utils").source;
 const fontawesome = @import("fontawesome.zig");
 
 pub const Kind = model.NativeDisplayKind;
@@ -99,10 +101,13 @@ fn isLibraryType(state: anytype, ty: ast.Type, spec: []const u8, name: []const u
 }
 
 const Contract = struct {
+    // A deferred field may be omitted by the author but must be filled by display.
+    const Presence = enum { required, optional, deferred };
+
     module: []const u8,
     name: []const u8,
     value_fields: []const struct { field: []const u8, ty: ast.Type, tag: model.ValueTag } = &.{},
-    record_fields: []const struct { field: []const u8, module: []const u8, name: []const u8, optional: bool = false },
+    record_fields: []const struct { field: []const u8, module: []const u8, name: []const u8, presence: Presence = .required },
 };
 
 fn contract(kind: Kind) Contract {
@@ -116,9 +121,9 @@ fn contract(kind: Kind) Contract {
                 .{ .field = "height", .ty = ast.Type.number, .tag = .number },
             },
             .record_fields = &.{
-                .{ .field = "style", .module = "std:graphics/types", .name = "VectorStyle" },
-                .{ .field = "marker_start", .module = "std:graphics/types", .name = "MarkerStyle", .optional = true },
-                .{ .field = "marker_end", .module = "std:graphics/types", .name = "MarkerStyle", .optional = true },
+                .{ .field = "style", .module = "std:graphics/types", .name = "VectorStyle", .presence = .deferred },
+                .{ .field = "marker_start", .module = "std:graphics/types", .name = "MarkerStyle", .presence = .optional },
+                .{ .field = "marker_end", .module = "std:graphics/types", .name = "MarkerStyle", .presence = .optional },
             },
         },
         .text => .{
@@ -126,7 +131,7 @@ fn contract(kind: Kind) Contract {
             .name = "Text",
             .record_fields = &.{
                 .{ .field = "content", .module = "std:text/content", .name = "TextContent" },
-                .{ .field = "style", .module = "std:text/style", .name = "TextBlockStyle" },
+                .{ .field = "style", .module = "std:text/style", .name = "TextBlockStyle", .presence = .deferred },
             },
         },
         .image => .{
@@ -134,7 +139,7 @@ fn contract(kind: Kind) Contract {
             .name = "Image",
             .record_fields = &.{
                 .{ .field = "source", .module = "std:assets/content", .name = "ImageSource" },
-                .{ .field = "style", .module = "std:assets/style", .name = "AssetBlockStyle" },
+                .{ .field = "style", .module = "std:assets/style", .name = "ImageStyle", .presence = .deferred },
             },
         },
     };
@@ -161,8 +166,7 @@ pub fn validateType(state: anytype, ty: ast.Type, kind: Kind) !void {
     }
     for (expected.record_fields) |record| {
         const field = index.recordField(id, record.field) orelse return error.InvalidNativeDisplay;
-        const deferred_style = kind != .path_shape and std.mem.eql(u8, record.field, "style") and field.value_type.kind == .optional;
-        const field_type = if (record.optional or deferred_style) blk: {
+        const field_type = if (record.presence != .required) blk: {
             if (field.value_type.kind != .optional) return error.InvalidNativeDisplay;
             break :blk (field.value_type.optional_child orelse return error.InvalidNativeDisplay).*;
         } else field.value_type;
@@ -183,7 +187,7 @@ pub fn validateValue(state: anytype, value: model.Value, kind: Kind) !void {
     }
     for (expected.record_fields) |expected_record| {
         const field = record.field(expected_record.field) orelse return error.InvalidNativeDisplay;
-        if (expected_record.optional and field == .none) continue;
+        if (expected_record.presence == .optional and field == .none) continue;
         if (field != .record or !isLibraryType(state, field.record.ty, expected_record.module, expected_record.name)) return error.InvalidNativeDisplay;
     }
     if (kind == .path_shape) try validateShapeDimensions(value);
@@ -201,8 +205,17 @@ pub fn validateValue(state: anytype, value: model.Value, kind: Kind) !void {
             if (content_kind == .code) {
                 const language = input.field("language") orelse return error.InvalidNativeDisplay;
                 if (language != .string) return error.InvalidNativeDisplay;
-                const highlight = input.field("highlight") orelse return error.InvalidNativeDisplay;
-                if (highlight != .record or !isLibraryType(state, highlight.record.ty, "std:code/types", "CodeHighlightTheme")) return error.InvalidNativeDisplay;
+                const lines = input.field("highlight_lines") orelse return error.InvalidNativeDisplay;
+                if (lines != .string) return error.InvalidNativeDisplay;
+                if (lines.string.len != 0) {
+                    const ranges = markdown.parseCodeLineRanges(state.allocator, lines.string) catch |err| switch (err) {
+                        error.OutOfMemory => return err,
+                        else => return error.InvalidNativeDisplay,
+                    };
+                    defer state.allocator.free(ranges);
+                    const count = if (source.string.len == 0) 0 else source_utils.lineCount(source.string);
+                    for (ranges) |range| if (range.end > count) return error.InvalidNativeDisplay;
+                }
             }
         } else {
             const source_kind = std.meta.stringToEnum(model.ImageSourceKind, input_kind) orelse return error.InvalidNativeDisplay;
@@ -222,10 +235,7 @@ pub fn validateValue(state: anytype, value: model.Value, kind: Kind) !void {
             try validateNumber(chrome.record, "pad_x", true);
             try validateNumber(chrome.record, "pad_y", true);
         }
-        if (kind == .image) if (style.field("asset")) |asset| {
-            if (asset != .record) return error.InvalidNativeDisplay;
-            try validateNumber(asset.record, "scale", false);
-        };
+        if (kind == .image) try validateNumber(style, "scale", false);
     }
 }
 

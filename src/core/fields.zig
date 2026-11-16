@@ -124,7 +124,7 @@ pub fn pathValue(value_to_read: Value, path: []const []const u8) ?Value {
     return current;
 }
 
-fn readValue(value_to_read: Value, comptime as: ReadAs) ?ReadResult(as) {
+pub fn readValue(value_to_read: Value, comptime as: ReadAs) ?ReadResult(as) {
     return switch (as) {
         .text => valueText(value_to_read),
         .number => valueNumber(value_to_read),

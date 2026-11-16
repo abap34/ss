@@ -288,7 +288,7 @@ import std:themes/default as *
 page release_check
 heading!("Release check")
 text!("release binary CLI")
-text!("local", default_theme().byline)
+text!("local", default_theme().text with { size = 16 })
 pageno!()
 end
 SS

@@ -1,5 +1,4 @@
 import std:code/types as { CodeColors, CodeHighlightTheme }
-import std:text/types as { TextStyle }
 
 fn code_theme_github_light() -> CodeHighlightTheme
   return CodeHighlightTheme {
@@ -112,23 +111,5 @@ fn code_theme_monokai() -> CodeHighlightTheme
     }
     fill = c"#272822"
     stroke = c"#49483e"
-  }
-end
-
-fn text_with_code_theme(text: TextStyle, theme: CodeHighlightTheme) -> TextStyle
-  let colors = text.markdown.code.colors
-  return text with {
-    markdown.code.colors = CodeColors {
-      plain = colors.plain ?? theme.code.plain
-      keyword = colors.keyword ?? theme.code.keyword
-      function = colors.function ?? theme.code.function
-      type_name = colors.type_name ?? theme.code.type_name
-      constant = colors.constant ?? theme.code.constant
-      number = colors.number ?? theme.code.number
-      variable = colors.variable ?? theme.code.variable
-      operator = colors.operator ?? theme.code.operator
-      comment = colors.comment ?? theme.code.comment
-      string = colors.string ?? theme.code.string
-    }
   }
 end

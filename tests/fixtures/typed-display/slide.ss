@@ -1,6 +1,6 @@
 import std:text/content as content
 import std:text/style as { TextBlockStyle }
-import std:layout/types as { LayoutStyle, WrapMode }
+import std:layout/types as { TextLayout, WrapMode }
 
 type Heading {
   title: String
@@ -11,7 +11,7 @@ fn/! heading(title: String) -> Heading = Heading { title = title }
 fn display(self: Placed<Heading>) -> content::Text
   return content::Text {
     content = content::TextContent { source = self.value.title ++ " / page " ++ str(page_index(self.page)) }
-    style = TextBlockStyle { layout = LayoutStyle { wrap = WrapMode.off } }
+    style = TextBlockStyle { layout = TextLayout { wrap = WrapMode.off } }
   }
 end
 

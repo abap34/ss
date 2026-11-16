@@ -2,8 +2,8 @@ import std:components/toc as contents
 
 page overview
   contents::toc!("Contents", contents::TocStyle {} with {
-    title.text.size = 41
-    body.text.size = 23
+    title = default_text_style with { size = 41 }
+    entries = default_text_style with { size = 23 }
   })
 end
 page body

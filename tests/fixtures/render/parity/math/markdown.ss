@@ -1,7 +1,7 @@
 import std:themes/default as *
 
 page markdown_math
-let heading = heading!("Mathematics in markdown", 1, default_theme().h1)
+let heading = heading!("Mathematics in markdown", 1, default_theme().text)
 let body = text! <<
 Inline mathematics keeps $x_1^2 + \alpha$ on the text baseline．
 

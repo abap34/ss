@@ -1,11 +1,10 @@
-import std:layout/types as { LayoutStyle }
-import std:assets/types as { AssetStyle }
-import std:graphics/paint/types as { ChromeStyle }
+import std:layout/types as { Align, BlockLayout }
+import std:graphics/paint/types as { BoxStyle }
 
-type AssetBlockStyle {
-  layout: LayoutStyle = LayoutStyle {}
-  asset: AssetStyle = AssetStyle {}
-  chrome: ChromeStyle = ChromeStyle {}
+type ImageStyle {
+  scale: Number = 1
+  align: Align? = none
+  tint: Color? = none
+  layout: BlockLayout = BlockLayout {}
+  chrome: BoxStyle = BoxStyle {}
 }
-
-const default_icon_style: AssetBlockStyle = AssetBlockStyle { asset = AssetStyle { tint = c"#374151" } }

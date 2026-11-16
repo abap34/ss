@@ -3,7 +3,7 @@ import std:text as text_api
 
 const symbol: assets::Icon = assets::Icon {
   source = "fa-solid:star"
-  style = assets::AssetBlockStyle {} with { asset.tint = c"#2563eb" }
+  style = assets::ImageStyle {} with { tint = c"#2563eb" }
 }
 
 type Badge { label: String symbol: assets::Icon }
@@ -14,7 +14,7 @@ end
 page styles
   let title = place!(text_api::Text { content = text_api::TextContent { source = "# Immutable icons" } })
   let original = place!(symbol)
-  let changed = place!(symbol with { source = "fa-solid:heart" style.asset.tint = c"#db2777" style.asset.scale = 1.5 })
+  let changed = place!(symbol with { source = "fa-solid:heart" style = (symbol.style ?? assets::ImageStyle {}) with { tint = c"#db2777" scale = 1.5 } })
   let constrained = place!(symbol)
   ~ title.left == page.left + 64
   ~ title.top == page.top - 48

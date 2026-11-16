@@ -17,10 +17,10 @@ async function dump(source) {
 try {
   const lines = await dump(`import std:text as text_api
 page first
-text!("A" ++ NEWLINE ++ "B", default_text_style with { text.parse = TextParseMode.plain })
-text!("C" ++ text_api::NEWLINE ++ "D", default_text_style with { text.parse = TextParseMode.plain })
-text!(join(pages(docctx()), NEWLINE, (p: Page) |-> str(page_index(p))), default_text_style with { text.parse = TextParseMode.plain })
-text!("A\\nB", default_text_style with { text.parse = TextParseMode.plain })
+text!("A" ++ NEWLINE ++ "B", none, LatexConfig {}, TextParseMode.plain)
+text!("C" ++ text_api::NEWLINE ++ "D", none, LatexConfig {}, TextParseMode.plain)
+text!(join(pages(docctx()), NEWLINE, (p: Page) |-> str(page_index(p))), none, LatexConfig {}, TextParseMode.plain)
+text!("A\\nB", none, LatexConfig {}, TextParseMode.plain)
 end
 page second
 end
@@ -30,10 +30,10 @@ end
   }
 
   const literal = await dump(`page text
-text!("**Literal**", default_theme().body with { text.parse = TextParseMode.plain })
+text!("**Literal**", none, LatexConfig {}, TextParseMode.plain)
 text!("**Formatted**")
 text("Unplaced")
-heading!("Third level", 3, default_theme().h3)
+heading!("Third level", 3, default_theme().text)
 end
 `);
   const raw = literal.nodes.find(n => n.content === '**Literal**');
@@ -41,7 +41,7 @@ end
   assert(raw && formatted);
   assert(raw.width > 20 && raw.height > 10, "Literal text must have rendered dimensions");
   assert.equal(raw.placement.input.type.name, 'Text');
-  assert.equal(raw.placement.input.fields.find(f => f.name === 'style').value.fields.find(f => f.name === 'text').value.fields.find(f => f.name === 'parse').value.case, 'plain');
+  assert.equal(raw.placement.input.fields.find(f => f.name === 'content').value.fields.find(f => f.name === 'parse').value.case, 'plain');
   assert.equal(formatted.placement.input.fields.find(f => f.name === 'style').value.kind, 'none');
   assert(formatted.blocks?.length, "the default display style parses Markdown");
   assert(!literal.nodes.some(n => n.content === 'Unplaced'));
@@ -50,12 +50,12 @@ end
 
   const nested = await dump(`page nested
 text!("**Styled**", default_text_style with {
-  text.markdown.code.size = 17
-  text.markdown.code.chrome.pad_x = 21
-  text.markdown.code.colors.keyword = c"#123456"
-  text.markdown.table.cell_pad_x = 13
-  text.markdown.quote.pad_y = 11
-  text.math.scale = 1.4
+  code.size = 17
+  code.chrome.pad_x = 21
+  code.colors.keyword = c"#123456"
+  markdown.table.cell_pad_x = 13
+  markdown.quote.pad_y = 11
+  math.scale = 1.4
 })
 text!("Default")
 end
@@ -100,17 +100,17 @@ end
   const sharedStyles = await dump(`import std:themes/default as base
 const theme: Theme = base::default_theme()
 page title
- text!("Document title", theme.h1 with { text.size = 33 })
- text!("Document author", theme.byline with { text.size = 17 })
+ text!("Document title", theme.text with { size = 33 })
+ text!("Document author", theme.text with { size = 17 })
 end
 page heading
- heading!("Slide title", 1, theme.h1 with { text.size = 29 })
+ heading!("Slide title", 1, theme.text with { size = 29 })
 end
 page contents
- toc!("Contents title", theme.toc)
+ toc!("Contents title", TocStyle { entries = theme.text })
 end
 page references
- text!("[1] Reference", theme.citation with { text.size = 11 })
+ text!("[1] Reference", theme.text with { size = 11 })
 end
 `);
   for (const [content, size] of [
@@ -172,10 +172,10 @@ end
 
   for (const name of ['default']) {
     const themed = await dump(`import std:themes/${name} as chosen
- const theme: Theme = chosen::default_theme() with { body.text.size = 27 }
+ const theme: Theme = chosen::default_theme() with { text.size = 27 }
  page theme
- text!("Default style", theme.body)
- text!("Local style", theme.body with { text.size = 19 })
+ text!("Default style", theme.text)
+ text!("Local style", theme.text with { size = 19 })
  end
  `);
     assert.equal(themed.nodes.find(n => n.content === 'Default style').render.text.font_size, 27);

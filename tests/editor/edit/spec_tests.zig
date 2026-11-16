@@ -281,7 +281,7 @@ test "icon insertion emits a typed constructor with size and position constraint
     defer allocator.free(updated);
     try std.testing.expectEqualStrings(
         \\page Example
-        \\  let star_icon = icon!("fa-solid:star", AssetBlockStyle {} with { asset.tint = c"#2563eb" })
+        \\  let star_icon = icon!("fa-solid:star", ImageStyle {} with { tint = c"#2563eb" })
         \\  ~!~ star_icon.width == 72
         \\  ~!~ star_icon.height == 80
         \\  ~!~ star_icon.left == page.left + 24

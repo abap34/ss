@@ -17,7 +17,7 @@ fn preloadAssets(
         .content = "",
         .content_provenance = &.{},
         .link_id = null,
-        .render = std.mem.zeroes(core.render_policy.ResolvedRender),
+        .render = .{ .content = .chrome_only, .chrome = std.mem.zeroes(core.render_paint.ChromePaint), .rule = std.mem.zeroes(core.render_paint.RulePaint) },
         .parse_mode = .block,
         .asset_deps = first,
         .latex_preamble = "\\usepackage{amsmath}",

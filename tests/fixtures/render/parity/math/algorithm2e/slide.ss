@@ -11,7 +11,7 @@ let source = <<
   \While{condition}{update state\;}
 \end{algorithm}
 >>
-let algorithm = latex!(source, formulas::LatexBlockStyle {}, LatexConfig { preamble = readlines("preamble.tex") })
+let algorithm = latex!(source, formulas::ImageStyle {}, LatexConfig { preamble = readlines("preamble.tex") })
 ~ algorithm.left == page.left + 240
 ~ algorithm.right == page.right - 240
 ~ algorithm.top == page.top - 100

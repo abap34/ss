@@ -9,9 +9,9 @@ fn display(self: Placed<Sheet>) -> assets::Pdf = self.value.content
 
 const content: assets::Pdf = assets::Pdf {
   path = "asset.pdf"
-  style = assets::AssetBlockStyle {} with {
-    asset.scale = 0.8
-    asset.pdf_page = 2
+  pdf_page = 2
+  style = assets::ImageStyle {} with {
+    scale = 0.8
     chrome.pad_x = 8
     chrome.pad_y = 8
     chrome.stroke = c"#334155"
@@ -22,7 +22,7 @@ page boxes
   let unused = assets::Pdf { path = "unplaced.pdf" }
   let title = place!(text_api::Text { content = text_api::TextContent { source = "# PDF crop and media boxes" } })
   let crop = place!(content)
-  let media = place!(content with { style = (content.style ?? assets::AssetBlockStyle {}) with { asset.pdf_box = assets::PdfPageBox.media } })
+  let media = place!(content with { pdf_box = assets::PdfPageBox.media })
   ~ title.left == page.left + 64
   ~ title.top == page.top - 48
   ~ crop.left == title.left
@@ -33,7 +33,7 @@ end
 
 page first_sheet
   let title = place!(text_api::Text { content = text_api::TextContent { source = "# First PDF page returned by a display" } })
-  let wrapped = place!(Sheet { content = content with { style = (content.style ?? assets::AssetBlockStyle {}) with { asset.pdf_page = 1 } } })
+  let wrapped = place!(Sheet { content = content with { pdf_page = 1 } })
   ~ title.left == page.left + 64
   ~ title.top == page.top - 48
   ~ wrapped.left == title.left

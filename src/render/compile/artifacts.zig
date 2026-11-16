@@ -91,7 +91,7 @@ pub fn rasterAssetSize(ctx: Context, source: []const u8) !Size {
     return .{ .width = @floatFromInt(metadata.oriented_width), .height = @floatFromInt(metadata.oriented_height) };
 }
 
-pub fn pdfAssetSize(ctx: Context, source: []const u8, asset: ?core.render_policy.AssetPaint, kind: render_ir.ResourceKind) !Size {
+pub fn pdfAssetSize(ctx: Context, source: []const u8, asset: ?core.render_paint.AssetPaint, kind: render_ir.ResourceKind) !Size {
     var resource = render_resources.readResource(ctx.allocator, ctx.io, kind, source, ctx.resource_cache) catch |err| {
         if (err == error.InvalidPdfResource) {
             try recordQpdfFailure(ctx, "read PDF page geometry");
@@ -165,7 +165,7 @@ fn publishLatexBatch(
     defer ctx.allocator.free(document_entries);
     const metrics = try readLatexMetrics(ctx, metrics_path, document_entries);
     defer ctx.allocator.free(metrics);
-    if (c.ss_qpdf_page_sizes(batch_path_z.ptr, @intFromEnum(core.render_policy.PdfPageBox.crop), widths.ptr, heights.ptr, entries.len) != 0) {
+    if (c.ss_qpdf_page_sizes(batch_path_z.ptr, @backingInt(core.render_paint.PdfPageBox.crop), widths.ptr, heights.ptr, entries.len) != 0) {
         try recordQpdfFailure(ctx, "read LaTeX PDF page geometry");
         return NativePdfError.AssetConversionFailed;
     }
@@ -680,12 +680,12 @@ fn appendCommandTerm(allocator: Allocator, out: *std.ArrayList(u8), term: std.pr
             try out.appendSlice(allocator, text);
         },
         .signal => |signal| {
-            const text = try std.fmt.allocPrint(allocator, "signal {d}", .{@intFromEnum(signal)});
+            const text = try std.fmt.allocPrint(allocator, "signal {d}", .{@backingInt(signal)});
             defer allocator.free(text);
             try out.appendSlice(allocator, text);
         },
         .stopped => |signal| {
-            const text = try std.fmt.allocPrint(allocator, "stopped {d}", .{@intFromEnum(signal)});
+            const text = try std.fmt.allocPrint(allocator, "stopped {d}", .{@backingInt(signal)});
             defer allocator.free(text);
             try out.appendSlice(allocator, text);
         },

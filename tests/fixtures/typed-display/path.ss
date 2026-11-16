@@ -25,7 +25,7 @@ end
 page normal
   let title = place!(text_api::Text { content = text_api::TextContent { source = "# Immutable vector paths" } })
   let original = place!(shape)
-  let changed = place!(shape with { width = 240 style.fill = paint::solid_fill(c"#dcfce7") style.stroke.color = c"#16a34a" })
+  let changed = place!(shape with { width = 240 style = (shape.style ?? graphics::VectorStyle {}) with { fill = paint::solid_fill(c"#dcfce7") stroke.color = c"#16a34a" } })
   let curved = place!(graphics::PathShape {
     path = path(paths::move_to(0.1, 0.8), paths::cubic_to(0.2, 0.1, 0.7, 0.9, 0.9, 0.2))
     width = 200 height = 120

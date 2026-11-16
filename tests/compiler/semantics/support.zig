@@ -239,10 +239,11 @@ pub fn expectBodyTextDefaults(
         const placement = node.placement orelse continue;
         if (placement.display != .native or placement.display.native != .text) continue;
         const render = core.render_policy.resolve(&state, &node);
-        const text = render.text orelse continue;
-        try std.testing.expectApproxEqAbs(expected.math_scale, text.math_scale, 0.0001);
-        try std.testing.expectApproxEqAbs(expected.inline_math_spacing, text.inline_math_spacing, 0.0001);
-        try std.testing.expectApproxEqAbs(expected.markdown_table_line_width, text.markdown_table_line_width, 0.0001);
+        if (render.content != .text) continue;
+        const text = &render.content.text;
+        try std.testing.expectApproxEqAbs(expected.math_scale, text.math.scale, 0.0001);
+        try std.testing.expectApproxEqAbs(expected.inline_math_spacing, text.math.inline_spacing, 0.0001);
+        try std.testing.expectApproxEqAbs(expected.markdown_table_line_width, text.markdown.table.line_width, 0.0001);
         return;
     }
     return error.ExpectedObjectContentMissing;
@@ -255,15 +256,16 @@ pub fn expectResolvedCodePaintIsColorful(io: std.Io, allocator: std.mem.Allocato
     for (state.graph.nodes.items) |node| {
         if (node.kind != .object) continue;
         const render = core.render_policy.resolve(&state, &node);
-        const code = render.code orelse continue;
-        try expectColorDiffers(code.keyword, code.plain);
-        try expectColorDiffers(code.function, code.plain);
-        try expectColorDiffers(code.type, code.plain);
-        try expectColorDiffers(code.constant, code.plain);
-        try expectColorDiffers(code.number, code.plain);
-        try expectColorDiffers(code.operator, code.plain);
-        try expectColorDiffers(code.comment, code.plain);
-        try expectColorDiffers(code.string, code.plain);
+        if (render.content != .code) continue;
+        const colors = render.content.code.style.colors;
+        try expectColorDiffers(colors.get(.keyword), colors.get(.plain));
+        try expectColorDiffers(colors.get(.function), colors.get(.plain));
+        try expectColorDiffers(colors.get(.type), colors.get(.plain));
+        try expectColorDiffers(colors.get(.constant), colors.get(.plain));
+        try expectColorDiffers(colors.get(.number), colors.get(.plain));
+        try expectColorDiffers(colors.get(.operator), colors.get(.plain));
+        try expectColorDiffers(colors.get(.comment), colors.get(.plain));
+        try expectColorDiffers(colors.get(.string), colors.get(.plain));
         return;
     }
     return error.ExpectedObjectContentMissing;
@@ -363,11 +365,11 @@ fn optionalStringEql(left: ?[]const u8, right: ?[]const u8) bool {
     return std.mem.eql(u8, left.?, right.?);
 }
 
-fn expectColorDiffers(left: core.render_policy.Color, right: core.render_policy.Color) !void {
+fn expectColorDiffers(left: core.render_paint.Color, right: core.render_paint.Color) !void {
     try std.testing.expect(!colorsEqual(left, right));
 }
 
-fn colorsEqual(left: core.render_policy.Color, right: core.render_policy.Color) bool {
+fn colorsEqual(left: core.render_paint.Color, right: core.render_paint.Color) bool {
     const epsilon = 0.0001;
     return @abs(left.r - right.r) <= epsilon and
         @abs(left.g - right.g) <= epsilon and

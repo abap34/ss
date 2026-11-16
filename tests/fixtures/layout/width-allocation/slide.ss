@@ -1,11 +1,9 @@
 import std:prelude as *
-import std:text/style as { TextBlockStyle }
-import std:assets/style as { AssetBlockStyle }
-import std:code/style as { CodeBlockStyle }
+import std:assets/style as { ImageStyle }
 
-const plain: TextBlockStyle = TextBlockStyle {} with { text.parse = TextParseMode.plain }
-const short: Text = text("Short", plain)
-const long: Text = text("A longer paragraph keeps the same assigned width while its words occupy more lines when the available column is narrow. The neighboring image retains its dimensions.", plain)
+const plain: TextBlockStyle = default_text_style
+const short: Text = text("Short", plain, LatexConfig {}, TextParseMode.plain)
+const long: Text = text("A longer paragraph keeps the same assigned width while its words occupy more lines when the available column is narrow. The neighboring image retains its dimensions.", plain, LatexConfig {}, TextParseMode.plain)
 const picture: Image = image("diagram.svg")
 
 page single
@@ -37,7 +35,7 @@ page equal_three_texts
 end
 
 page padded_image
-  let padded = picture with { style = AssetBlockStyle {} with { chrome.pad_x = 12 } }
+  let padded = picture with { style = ImageStyle {} with { chrome.pad_x = 12 } }
   let content = place!(short || padded)
 end
 
@@ -66,7 +64,7 @@ page code_unwrapped
 end
 
 page code_wrapped
-  let content = code!("return alpha + beta + gamma + delta + epsilon + zeta + eta + theta", "python", CodeBlockStyle {} with { layout.wrap = WrapMode.on chrome.pad_x = 12 })
+  let content = code!("return alpha + beta + gamma + delta + epsilon + zeta + eta + theta", "python", TextBlockStyle {} with { layout.wrap = WrapMode.on code.chrome.pad_x = 12 })
   ~ content.width == 250
 end
 
@@ -111,7 +109,7 @@ page nested_fixed_width
 end
 
 page scaled_subpoint_image
-  let content = place!(picture with { style = AssetBlockStyle {} with { asset.scale = 0.001 } })
+  let content = place!(picture with { style = ImageStyle {} with { scale = 0.001 } })
 end
 
 page constrained_subpoint_image
@@ -126,5 +124,5 @@ page constrained_icon_height
 end
 
 page padded_code
-  let content = code!("return value", "python", CodeBlockStyle {} with { chrome.pad_x = 12 chrome.pad_y = 8 })
+  let content = code!("return value", "python", default_text_style with { code.chrome.pad_x = 12 code.chrome.pad_y = 8 })
 end

@@ -157,8 +157,8 @@ test "prelude exports use the canonical parameters without forwarding functions"
             try testing.expect(direct.key.eql(function.key));
             try testing.expect(direct.decl.params.items.ptr == function.decl.params.items.ptr);
             try testing.expect(direct.decl.statements.items.ptr == function.decl.statements.items.ptr);
-            try testing.expectEqual(@as(usize, 3), function.decl.params.items.len);
-            for (function.decl.params.items, [_][]const u8{ "content", "style", "config" }) |parameter, name| {
+            try testing.expectEqual(@as(usize, 4), function.decl.params.items.len);
+            for (function.decl.params.items, [_][]const u8{ "content", "style", "config", "parse" }) |parameter, name| {
                 try testing.expectEqualStrings(name, parameter.name);
             }
             var found_custom = false;

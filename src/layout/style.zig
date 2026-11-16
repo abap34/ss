@@ -1,6 +1,7 @@
 const model = @import("model");
 const fields = @import("../core/fields.zig");
 const render_policy = @import("../core/render_policy.zig");
+const render_paint = @import("../core/render_paint.zig");
 
 const Node = model.Node;
 const TextStyle = model.TextStyle;
@@ -13,10 +14,7 @@ const DEFAULT_TEXT_STYLE = TextStyle{
     .default_right_inset = 96,
 };
 
-pub const TextMetrics = struct {
-    font_size: f32,
-    line_height: f32,
-};
+pub const TextMetrics = render_paint.TextMetrics;
 
 pub fn styleForNode(state: anytype, node: *const Node) TextStyle {
     return overrideTextStyleFromProperties(state, node, DEFAULT_TEXT_STYLE);
@@ -36,17 +34,13 @@ fn overrideTextStyleFromProperties(state: anytype, node: *const Node, base: Text
     style.font_size = text_metrics.font_size;
     style.line_height = text_metrics.line_height;
     if (nonNegativeRecordFloatProperty(state, node, "layout", "spacing_after")) |value| style.spacing_after = value;
-    if (recordFloatProperty(state, node, "layout", "x")) |value| style.default_x = value;
+    if (recordFloatProperty(state, node, "layout", "left_inset")) |value| style.default_x = value;
     if (nonNegativeRecordFloatProperty(state, node, "layout", "right_inset")) |value| style.default_right_inset = value;
     return style;
 }
 
 pub fn textMetricsForNode(state: anytype, node: *const Node) TextMetrics {
-    const resolved = render_policy.resolveTextMetrics(state, node);
-    return .{
-        .font_size = resolved.font_size,
-        .line_height = resolved.line_height,
-    };
+    return render_policy.resolveTextMetrics(state, node);
 }
 
 const recordFloatProperty = fields.recordFloatProperty;

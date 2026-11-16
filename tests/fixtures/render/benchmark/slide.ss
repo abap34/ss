@@ -2,7 +2,7 @@ import std:themes/default as *
 import std:math as formulas
 
 page overview
-let heading = heading!("Rendering benchmark", 1, default_theme().h1)
+let heading = heading!("Rendering benchmark", 1, default_theme().text)
 let body = text! <<
 This fixture exercises the shared PDF and HTML rendering path with several pages，
 wrapped text，**Markdown emphasis**，lists，tables，mathematics，and external assets．
@@ -19,7 +19,7 @@ wrapped text，**Markdown emphasis**，lists，tables，mathematics，and extern
 end
 
 page typography
-let heading = heading!("Typography and wrapping", 1, default_theme().h1)
+let heading = heading!("Typography and wrapping", 1, default_theme().text)
 let body = text! <<
 Long paragraphs force the compiler to preserve line breaking，glyph clusters，fallback
 fonts，and baselines in the rendering intermediate representation．The HTML backend
@@ -35,7 +35,7 @@ must replay that placement without asking the browser to choose different line b
 end
 
 page table
-let heading = heading!("Markdown table", 1, default_theme().h1)
+let heading = heading!("Markdown table", 1, default_theme().text)
 let body = text! <<
 | Resource | PDF output | HTML output |
 | --- | --- | --- |
@@ -54,8 +54,8 @@ The table adds borders，fills，alignment，and repeated short text runs．
 end
 
 page latex_math
-let heading = heading!("LaTeX mathematics", 1, default_theme().h1)
-let formula = latex!("$x_1^2 + \frac{a+b}{\sqrt{c}} = y^{n+1}$", formulas::LatexBlockStyle {} with { latex.scale = 1.5 })
+let heading = heading!("LaTeX mathematics", 1, default_theme().text)
+let formula = latex!("$x_1^2 + \frac{a+b}{\sqrt{c}} = y^{n+1}$", formulas::ImageStyle {} with { scale = 1.5 })
 let body = text! <<
 Inline mathematics keeps $x_1^2 + \alpha$ on the surrounding baseline．
 
@@ -73,7 +73,7 @@ $$
 end
 
 page dense_inline_math
-let heading = heading!("Dense inline LaTeX", 1, default_theme().h1)
+let heading = heading!("Dense inline LaTeX", 1, default_theme().text)
 let body = text! <<
 This Markdown page contains many small formulas among short prose fragments.
 
@@ -93,8 +93,8 @@ $u_1$, $u_2$, $v_1$, $v_2$, $p+q$, $p-q$, $pq$, $p/q$, $r^2$, $s^2$, $i+j$, $i-j
 end
 
 page vector_asset
-let heading = heading!("Explicit SVG resource", 1, default_theme().h1)
-let asset = image!("asset.svg", AssetBlockStyle {} with { asset.scale = 0.72 })
+let heading = heading!("Explicit SVG resource", 1, default_theme().text)
+let asset = image!("asset.svg", ImageStyle {} with { scale = 0.72 })
 ~ heading.left == page.left + 88
 ~ heading.top == page.top - 64
 ~ asset.left == page.left + 184
@@ -102,8 +102,8 @@ let asset = image!("asset.svg", AssetBlockStyle {} with { asset.scale = 0.72 })
 end
 
 page raster_asset
-let heading = heading!("Raster resource", 1, default_theme().h1)
-let asset = image!("asset.png", AssetBlockStyle {} with { asset.scale = 0.45 })
+let heading = heading!("Raster resource", 1, default_theme().text)
+let asset = image!("asset.png", ImageStyle {} with { scale = 0.45 })
 ~ heading.left == page.left + 88
 ~ heading.top == page.top - 64
 ~ asset.left == page.left + 360
@@ -111,8 +111,8 @@ let asset = image!("asset.png", AssetBlockStyle {} with { asset.scale = 0.45 })
 end
 
 page pdf_asset
-let heading = heading!("Embedded PDF page", 1, default_theme().h1)
-let asset = pdf!("asset.pdf", AssetBlockStyle {} with { asset.scale = 0.62 asset.pdf_page = 2 })
+let heading = heading!("Embedded PDF page", 1, default_theme().text)
+let asset = pdf!("asset.pdf", ImageStyle {} with { scale = 0.62 }, 2)
 ~ heading.left == page.left + 88
 ~ heading.top == page.top - 64
 ~ asset.left == page.left + 356
@@ -120,13 +120,13 @@ let asset = pdf!("asset.pdf", AssetBlockStyle {} with { asset.scale = 0.62 asset
 end
 
 page mixed
-let heading = heading!("Mixed page", 1, default_theme().h1)
+let heading = heading!("Mixed page", 1, default_theme().text)
 let body = text! <<
 The last page repeats the common workload with **styled text**，$x_i + y_i = z_i$，
 and a compact external vector resource．Repeated resources also exercise digest-based
 deduplication and cache lookup．
 >>
-let asset = image!("asset.svg", AssetBlockStyle {} with { asset.scale = 0.35 })
+let asset = image!("asset.svg", ImageStyle {} with { scale = 0.35 })
 ~ heading.left == page.left + 88
 ~ heading.top == page.top - 64
 ~ body.left == page.left + 104

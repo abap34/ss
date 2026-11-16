@@ -6,9 +6,9 @@ const render_emitter = @import("render_emitter");
 const artifacts = @import("artifacts.zig");
 const text_measure = core.render_text_measure;
 const Allocator = std.mem.Allocator;
-const Color = core.render_policy.Color;
+const Color = core.render_paint.Color;
 const FontFace = core.font.Face;
-const TextPaint = core.render_policy.TextPaint;
+const TextPaint = core.render_paint.TextPaint;
 const ContentRange = render_text.ContentRange;
 const Line = core.markdown.Line;
 const Run = core.markdown.Run;
@@ -53,7 +53,7 @@ pub const InlineSpan = struct {
     content_range: ?ContentRange = null,
     strikethrough: bool = false,
     underline: bool = false,
-    underline_paint: core.render_policy.MarkdownUnderlinePaint = .{},
+    underline_paint: core.render_paint.MarkdownUnderlinePaint = .{},
     link_url: ?[]const u8 = null,
 };
 
@@ -99,14 +99,14 @@ pub fn prepareRunSpans(ctx: Context, runs: []const Run, text: TextPaint, spans: 
                 try appendMathSpan(ctx, spans, run.text, text, if (run.kind == .display_math) .display_math else .inline_math);
             },
             .icon => if (run.icon) |source| try appendIconSpan(ctx, spans, source, text),
-            .bold => try appendTextSpan(ctx, spans, run.text, text.bold_font, text.markdown_bold_color orelse text.color, null, run.strikethrough, run.underline, text.markdown_underline, .{ .start = run.source_start, .end = run.source_end }),
-            .italic => try appendTextSpan(ctx, spans, run.text, text.italic_font, text.color, null, run.strikethrough, run.underline, text.markdown_underline, .{ .start = run.source_start, .end = run.source_end }),
-            .code => try appendTextSpan(ctx, spans, run.text, text.code_font, text.color, null, run.strikethrough, run.underline, text.markdown_underline, .{ .start = run.source_start, .end = run.source_end }),
-            .link => try appendTextSpan(ctx, spans, run.text, text.font, text.link_color, run.url, run.strikethrough, true, .{}, .{ .start = run.source_start, .end = run.source_end }),
-            .text => try appendTextSpan(ctx, spans, run.text, text.font, text.color, null, run.strikethrough, run.underline, text.markdown_underline, .{ .start = run.source_start, .end = run.source_end }),
+            .bold => try appendTextSpan(ctx, spans, run.text, text.boldFont(), text.markdown.emphasis.bold_color orelse text.typography.color, null, run.strikethrough, run.underline, text.markdown.emphasis.underline, .{ .start = run.source_start, .end = run.source_end }),
+            .italic => try appendTextSpan(ctx, spans, run.text, text.italicFont(), text.typography.color, null, run.strikethrough, run.underline, text.markdown.emphasis.underline, .{ .start = run.source_start, .end = run.source_end }),
+            .code => try appendTextSpan(ctx, spans, run.text, text.code.style.font, text.typography.color, null, run.strikethrough, run.underline, text.markdown.emphasis.underline, .{ .start = run.source_start, .end = run.source_end }),
+            .link => try appendTextSpan(ctx, spans, run.text, text.typography.font, text.markdown.emphasis.link_color, run.url, run.strikethrough, true, .{}, .{ .start = run.source_start, .end = run.source_end }),
+            .text => try appendTextSpan(ctx, spans, run.text, text.typography.font, text.typography.color, null, run.strikethrough, run.underline, text.markdown.emphasis.underline, .{ .start = run.source_start, .end = run.source_end }),
         }
         if (run.highlighted) for (spans.items[start..]) |*span| {
-            span.background = text.markdown_highlight_fill;
+            span.background = text.markdown.emphasis.highlight_fill;
         };
     }
 }
@@ -120,7 +120,7 @@ pub fn appendTextSpan(
     link_url: ?[]const u8,
     strikethrough: bool,
     underline: bool,
-    underline_paint: core.render_policy.MarkdownUnderlinePaint,
+    underline_paint: core.render_paint.MarkdownUnderlinePaint,
     content_range: ?ContentRange,
 ) !void {
     if (value.len == 0) return;
@@ -143,8 +143,8 @@ pub fn appendMathSpan(ctx: Context, spans: *std.ArrayList(InlineSpan), value: []
     try spans.append(ctx.assets.allocator, .{
         .content = .{ .latex = .{ .path = asset.path, .page_index = asset.page_index } },
         .text = value,
-        .font = text.font,
-        .color = text.color,
+        .font = text.typography.font,
+        .color = text.typography.color,
         .width = @max(asset.width * scale, 1),
         .height = @max(asset.height * scale, 1),
         .baseline_from_bottom = asset.baseline_from_bottom * scale,
@@ -154,15 +154,15 @@ pub fn appendMathSpan(ctx: Context, spans: *std.ArrayList(InlineSpan), value: []
 pub fn appendIconSpan(ctx: Context, spans: *std.ArrayList(InlineSpan), source: []const u8, text: TextPaint) !void {
     const svg = try artifacts.renderIconToSvg(ctx.assets, source);
     errdefer ctx.assets.allocator.free(svg.path);
-    const target_height = @max(text.font_size, 1);
+    const target_height = @max(text.typography.font_size, 1);
     const scale = if (svg.height > 0) target_height / svg.height else 1;
-    const font_metrics = try text_measure.lineMetrics(ctx.assets.allocator, text.font, text.font_size);
+    const font_metrics = try text_measure.lineMetrics(ctx.assets.allocator, text.typography.font, text.typography.font_size);
     const font_height = font_metrics.ascent + font_metrics.descent;
     try spans.append(ctx.assets.allocator, .{
         .content = .{ .icon = .{ .path = svg.path } },
         .text = source,
-        .font = text.font,
-        .color = text.link_color,
+        .font = text.typography.font,
+        .color = text.markdown.emphasis.link_color,
         .width = @max(svg.width * scale, 1),
         .height = target_height,
         .baseline_from_bottom = target_height * font_metrics.descent / font_height,
@@ -171,11 +171,11 @@ pub fn appendIconSpan(ctx: Context, spans: *std.ArrayList(InlineSpan), source: [
 
 pub fn paragraphPaint(text: TextPaint) ParagraphPaint {
     return .{
-        .font = text.font,
-        .font_size = text.font_size,
-        .line_height = text.line_height,
-        .emoji_spacing = text.emoji_spacing,
-        .inline_math_spacing = text.inline_math_spacing,
+        .font = text.typography.font,
+        .font_size = text.typography.font_size,
+        .line_height = text.typography.line_height,
+        .emoji_spacing = text.typography.emoji_spacing,
+        .inline_math_spacing = text.math.inline_spacing,
     };
 }
 
@@ -238,19 +238,19 @@ pub fn displayMathSource(allocator: Allocator, runs: []const Run) ![]const u8 {
 // Calibrate against a formula-independent strut, so scripts and extra rows
 // increase occupied space without changing the base glyph size.
 fn mathScale(asset: artifacts.LatexAsset, text: TextPaint) f32 {
-    return if (asset.reference_height > 0) text.font_size * text.math_scale / asset.reference_height else 1;
+    return if (asset.reference_height > 0) text.typography.font_size * text.math.scale / asset.reference_height else 1;
 }
 
 pub fn displayMathBlockSize(asset: artifacts.LatexAsset, max_width: f32, text: TextPaint) Size {
     var scale = mathScale(asset, text);
-    if (text.display_math_fit == .shrink and asset.width > 0) {
+    if (text.math.display_fit == .shrink and asset.width > 0) {
         scale = @min(scale, @max(max_width, 1) / asset.width);
     }
     return .{ .width = @max(asset.width * scale, 1), .height = @max(asset.height * scale, 1) };
 }
 
 pub fn displayMathGap(text: TextPaint) f32 {
-    return text.font_size * text.display_math_gap;
+    return text.typography.font_size * text.math.display_gap;
 }
 
 pub fn spanDecoration(span: *const InlineSpan) render_emitter.TextDecoration {
@@ -466,5 +466,5 @@ fn prepareBlockWithWrap(ctx: Context, lines: []const Line, text: TextPaint, widt
             start = end;
         }
     }
-    return .{ .segments = try builder.segments.toOwnedSlice(ctx.assets.allocator), .paint = paragraphPaint(text), .height = @max(builder.height, text.line_height), .logical_width = builder.logical_width, .ink_bounds = builder.ink };
+    return .{ .segments = try builder.segments.toOwnedSlice(ctx.assets.allocator), .paint = paragraphPaint(text), .height = @max(builder.height, text.typography.line_height), .logical_width = builder.logical_width, .ink_bounds = builder.ink };
 }

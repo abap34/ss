@@ -1,7 +1,9 @@
+import std:document/content as { heading_text }
+
 type Badge { label: String }
 
 fn display(self: Placed<Badge>) -> Text
-  return text(self.value.label, theme_for(self.page).label)
+  return heading_text(self.value.label, 6)
 end
 
 fn setup!(value: Theme) -> Void

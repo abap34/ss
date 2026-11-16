@@ -5,11 +5,11 @@
   "entry": "slide.ss",
   "inputs": {
     "assets.json": "50c8f2cc4efdc9bb367a44008071c7b7cee3e8932b237c80c4da689c4603bed0",
-    "components.ss": "21f70f629a7da79c489856926519fb3ada7b27fe7577f979f976bf2136b1498c",
+    "components.ss": "07d1a6fd5f0db2113bc715990912783c29beb578e501528dcc0d6ab3ca8f4b4c",
     "preamble.tex": "310082f29229efab87da687ef5f9cac7d5b0b2ed86099b1b1852d31ef236f2d1",
-    "slide.ss": "7a973aeafbbef192b0e89bce8b9a877257fe32e281f6fddaaa7e1b5c59b9f530",
+    "slide.ss": "11fe5eec73e9ce783af0c51ccd638bf8e581a46a9beed54f235c7a179366af37",
     "ss.toml": "4b68ebbef95764fea5ab9b87e7478b6aef3e5fb369b34265be1b6737b7a7dac4",
-    "theme.ss": "832327ff088b33790ebfcdbf36ba8a956aeccb2b986c7469dc78e6496f59f34f"
+    "theme.ss": "76255be5fa373e1360d77e69261526ade329fcc21e0e79903873f959472f39b0"
   },
   "assets": {
     "recipe": "assets.json"

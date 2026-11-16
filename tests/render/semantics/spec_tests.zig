@@ -35,7 +35,7 @@ test "prepared backgrounds use the same page theme fallback as display functions
         \\page inherited
         \\end
         \\page local
-        \\  theme!(Theme {} with { background_fill = c"#00ff00" })
+        \\  theme!(Theme {} with { page.background_fill = c"#00ff00" })
         \\end
         \\page absent
         \\  pagectx().theme = none
@@ -44,7 +44,7 @@ test "prepared backgrounds use the same page theme fallback as display functions
         \\  pagectx().background_fill = c"#0000ff"
         \\end
         \\document
-        \\  theme!(Theme {} with { background_fill = c"#ff0000" })
+        \\  theme!(Theme {} with { page.background_fill = c"#ff0000" })
         \\end
     );
     defer state.deinit();
@@ -56,6 +56,195 @@ test "prepared backgrounds use the same page theme fallback as display functions
     for (pages.pages, expected) |page, rgb| {
         const color = page.background orelse return error.MissingBackground;
         try testing.expectEqual(rgb, [3]f32{ color.r, color.g, color.b });
+    }
+}
+
+test "reusable native inputs read only the theme of their placement page" {
+    var state = try document(
+        \\const label: Heading = heading("Standalone", 2)
+        \\const markup: Text = text("## Markdown")
+        \\const symbol: Icon = icon("fa-solid:star")
+        \\const shape: PathShape = rectangle(80, 20)
+        \\fn examples!() -> Void
+        \\  place!(label)
+        \\  place!(markup)
+        \\  place!(symbol)
+        \\  place!(shape)
+        \\  line!(70, 10)
+        \\  let redrawn = line(60, 10, LineStyle { stroke = solid_stroke(c"#ff0000", 11) })
+        \\  place!(redrawn with { style = VectorStyle { stroke = solid_stroke(c"#0000ff", 5) } })
+        \\  pageno!()
+        \\  heading!("Explicit", 2, default_text_style with { size = 12 })
+        \\end
+        \\page regular
+        \\  examples!()
+        \\end
+        \\page special
+        \\  examples!()
+        \\  theme!(document_theme() with {
+        \\    text.font.family = "DejaVu Serif"
+        \\    text.align = Align.right
+        \\    text.emoji_spacing = 0.5
+        \\    text.color = c"#0000ff"
+        \\    text.headings.h2.size = 40
+        \\    image.scale = 2
+        \\    path_shape.stroke.width = 7
+        \\  })
+        \\end
+        \\document
+        \\  theme!(Theme {} with {
+        \\    text.font.family = "DejaVu Sans"
+        \\    text.size = 20
+        \\    text.line_height = 28
+        \\    text.align = Align.center
+        \\    text.emoji_spacing = 0.25
+        \\    text.color = c"#ff0000"
+        \\    text.headings.h2.font.weight = 650
+        \\    text.headings.h2.size = 30
+        \\    path_shape.fill = solid_fill(c"#ff0000")
+        \\    path_shape.stroke.width = 3
+        \\  })
+        \\end
+    );
+    defer state.deinit();
+    try evaluate(&state);
+    var prepared = try core.prepared.prepare(testing.allocator, &state);
+    defer prepared.deinit(testing.allocator);
+    for (prepared.pages, 0..) |page, i| {
+        const size: f32 = if (i == 0) 30 else 40;
+        const family = if (i == 0) "DejaVu Sans" else "DejaVu Serif";
+        var seen: usize = 0;
+        for (page.objects) |obj| switch (obj.render.content) {
+            .text => |paint| {
+                if (std.mem.eql(u8, obj.content, "Explicit")) {
+                    try testing.expectEqual(@as(f32, 12), paint.typography.font_size);
+                    continue;
+                }
+                try testing.expectEqualStrings(family, paint.typography.font.family);
+                const base = paint.typography;
+                try testing.expectEqual(if (i == 0) core.render_paint.HorizontalAlign.center else .right, base.horizontal_align);
+                try testing.expectEqual(@as(f32, if (i == 0) 0.25 else 0.5), base.emoji_spacing);
+                try testing.expectEqual(@as(f32, if (i == 0) 1 else 0), base.color.r);
+                try testing.expectEqual(@as(f32, if (i == 0) 0 else 1), base.color.b);
+                if (std.mem.eql(u8, obj.content, "Standalone") or std.mem.eql(u8, obj.content, "## Markdown")) {
+                    const effective = if (obj.content[0] == '#') paint.forMarkdownHeading(2) else paint;
+                    try testing.expectEqual(size, effective.typography.font_size);
+                    try testing.expectEqual(size * 1.4, effective.typography.line_height);
+                    try testing.expectEqual(@as(u16, 650), effective.typography.font.weight);
+                    try testing.expectEqualStrings(family, effective.typography.font.family);
+                } else try testing.expectEqual(@as(f32, 13), paint.typography.font_size);
+                seen += 1;
+            },
+            .vector_asset => |asset| {
+                try testing.expectEqual(@as(f32, if (i == 0) 1 else 2), asset.scale);
+                seen += 1;
+            },
+            .vector_path => |path| {
+                if (path.natural_size.?.width == 60) {
+                    try testing.expectEqual(@as(f32, 5), path.stroke.?.width);
+                    try testing.expectEqual(@as(f32, 1), path.stroke.?.color.b);
+                    try testing.expect(path.fill.base == .none);
+                    continue;
+                }
+                try testing.expectEqual(@as(f32, if (i == 0) 3 else 7), path.stroke.?.width);
+                if (path.natural_size.?.width == 80) {
+                    try testing.expect(path.fill.base == .solid);
+                } else try testing.expect(path.fill.base == .none);
+                seen += 1;
+            },
+            else => {},
+        };
+        try testing.expectEqual(@as(usize, 6), seen);
+    }
+}
+
+test "a cached gradient follows the path contents and ignores allocation identity" {
+    var state = try document(
+        \\page example
+        \\  rectangle!(100, 40, VectorStyle { fill = linear_gradient_fill(c"#ff0000", c"#0000ff") })
+        \\end
+    );
+    defer state.deinit();
+    try evaluate(&state);
+    var layout = LayoutFixture.init(&state);
+    defer layout.deinit();
+    for (state.graph.nodes.items) |node| (try layout.frame(node.id)).* = .{ .width = 100, .height = 40 };
+    var prepared = try core.prepared.prepare(testing.allocator, &state);
+    defer prepared.deinit(testing.allocator);
+    const path = &prepared.pages[0].objects[0].render.content.vector_path;
+    const copy = try testing.allocator.dupe(core.PathCommand, path.path.commands);
+    defer testing.allocator.free(copy);
+    var cache = render_compile.PageCache.init(testing.allocator, testing.io);
+    defer cache.deinit();
+    const options = render_compile.Options{ .cache_dir = test_cache_dir, .jobs = 1, .page_cache = &cache };
+    for (0..4) |iteration| {
+        switch (iteration) {
+            1 => path.path.commands = copy,
+            2 => copy[0].move_to.x = 0.25,
+            3 => path.fill.base.linear.colors[1] = .{ .r = 0, .g = 1, .b = 0 },
+            else => {},
+        }
+        var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try layout.document(), options);
+        defer ir.deinit(testing.allocator);
+        const drawn = for (ir.pages[0].items.items) |item| {
+            if (item == .vector_path) break item.vector_path;
+        } else return error.MissingVectorPath;
+        try testing.expectEqual(@as(f64, if (iteration < 2) 0 else 25), drawn.commands[0].move_to.x);
+        try testing.expectEqual(@as(f32, if (iteration == 3) 1 else 0), drawn.fill.base.linear.stops[1].color.g);
+        try testing.expectEqual(@as(usize, @max(1, iteration)), cache.entries.count());
+    }
+}
+
+test "standalone and fenced code emit the same selected rows and bottom rule" {
+    var state = try document(
+        \\page separate
+        \\  code!("one
+        \\two
+        \\three", "plain", none, "2")
+        \\end
+        \\page fenced
+        \\  text!(<<
+        \\```plain {2}
+        \\one
+        \\two
+        \\three
+        \\```
+        \\>>)
+        \\end
+        \\document
+        \\  theme!(Theme {} with {
+        \\    text.code.line_height = 25
+        \\    text.code.line_highlight_fill = c"#00ff00"
+        \\    text.code.chrome.bottom_rule.color = c"#ff0000"
+        \\    text.code.chrome.bottom_rule.width = 3
+        \\  })
+        \\end
+    );
+    defer state.deinit();
+    try evaluate(&state);
+    var layout = LayoutFixture.init(&state);
+    defer layout.deinit();
+    for (state.graph.nodes.items) |node| (try layout.frame(node.id)).* = .{ .width = 480, .height = 240 };
+    var prepared = try core.prepared.prepare(testing.allocator, &state);
+    defer prepared.deinit(testing.allocator);
+    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try layout.document(), .{ .cache_dir = test_cache_dir, .jobs = 1 });
+    defer ir.deinit(testing.allocator);
+    for (ir.pages) |page| {
+        var rows: usize = 0;
+        var rules: usize = 0;
+        for (page.items.items) |item| switch (item) {
+            .fill_rect => |rect| if (rect.color.g == 1 and rect.color.r == 0) {
+                rows += 1;
+                try testing.expectApproxEqAbs(@as(f64, 25), rect.rect.height, 0.01);
+            },
+            .stroke_line => |line| if (line.color.r == 1 and line.color.g == 0) {
+                rules += 1;
+                try testing.expectEqual(@as(f64, 3), line.line_width);
+            },
+            else => {},
+        };
+        try testing.expectEqual(@as(usize, 1), rows);
+        try testing.expectEqual(@as(usize, 1), rules);
     }
 }
 

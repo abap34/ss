@@ -648,7 +648,7 @@ fn appendPdfViewer(
     class: []const u8,
     path: []const u8,
     page_index: usize,
-    box_kind: core.render_policy.PdfPageBox,
+    box_kind: core.render_paint.PdfPageBox,
     metadata: *const render.PdfResourceMetadata,
     copy_annotations: bool,
 ) !void {
@@ -679,7 +679,7 @@ fn appendTextRuns(
     ir: *const render.Ir,
     layout: *const render.TextLayout,
     font_size: f64,
-    text_color: core.render_policy.Color,
+    text_color: core.render_paint.Color,
     link: ?*const render.Link,
 ) !void {
     for (layout.runs, 0..) |run, run_index| {

@@ -6,12 +6,15 @@ enum WrapMode { on off }
 
 enum FitPolicy { warn error ignore }
 
-type LayoutStyle {
-  font_size: Number? = none
-  line_height: Number? = none
+type TextLayout {
   spacing_after: Number = 32
-  x: Number = 96
+  left_inset: Number = 96
   right_inset: Number = 96
   wrap: WrapMode = WrapMode.on
-  fit: FitPolicy = FitPolicy.warn
+}
+
+type BlockLayout {
+  spacing_after: Number = 32
+  left_inset: Number = 96
+  right_inset: Number = 96
 }

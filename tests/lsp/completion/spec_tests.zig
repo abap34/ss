@@ -216,7 +216,7 @@ test "analysis completion: dot module and normal positions keep candidate kinds 
         \\
         \\page title
         \\  let t = text::text("body")
-        \\  let restyled = t.style with { text.size = 20 }
+        \\  let restyled = t.style with { size = 20 }
         \\end
         \\
     );
@@ -294,7 +294,7 @@ test "analysis completion: visible function prefers imported module definitions 
     const item = resolve_query.valueBinding(null, snapshot, module.id, "text", null, .function) orelse return error.ExpectedFunction;
 
     try testing.expectEqualStrings("text", item.name);
-    try testing.expectEqualStrings("text(content: String, style: TextBlockStyle? = none, config: LatexConfig = LatexConfig {  }) -> Text", item.signature);
+    try testing.expectEqualStrings("text(content: String, style: TextBlockStyle? = none, config: LatexConfig = LatexConfig {  }, parse: TextParseMode = TextParseMode.block) -> Text", item.signature);
 }
 
 test "analysis completion: visible variables and definitions use shared scope resolution" {
@@ -391,8 +391,8 @@ test "analysis completion: enum type dot completes cases" {
         \\import std:layout as classes
         \\
         \\page title
-        \\  let style = TextStyle {} with { math.align = Align.center }
-        \\  let qualified = TextStyle {} with { math.align = classes::Align.left }
+        \\  let style = TextBlockStyle {} with { math.align = Align.center }
+        \\  let qualified = TextBlockStyle {} with { math.align = classes::Align.left }
         \\end
         \\
     );
@@ -551,9 +551,9 @@ test "analysis completion: record update paths complete record fields" {
         \\
         \\page title
         \\  let local = default_theme() with {
-        \\    body.text.size = 20
+        \\    text.size = 20
         \\  }
-        \\  text!("body", local.body)
+        \\  text!("body", local.text)
         \\end
         \\
     );
@@ -565,12 +565,12 @@ test "analysis completion: record update paths complete record fields" {
         \\page title
         \\  let local = default_theme() with {
         \\
-        \\    bod
-        \\    body.
-        \\    body.text.
-        \\    body.text.size =
+        \\    tex
+        \\    text.
+        \\    text.font.
+        \\    text.size =
         \\  }
-        \\  text!("body", local.body)
+        \\  text!("body", local.text)
         \\end
         \\
     ;
@@ -579,49 +579,46 @@ test "analysis completion: record update paths complete record fields" {
         var result = try case.completeSourceAfter(request_source, "with {\n");
         defer result.deinit(case.allocator);
         try expectUnique(result);
-        try expectHas(result, "body");
-        try expectHas(result, "h1");
-        try expectHas(result, "page_number");
+        try expectOnlyKind(result, .property);
+        inline for (.{ "page", "text", "image", "path_shape" }) |field| try expectHas(result, field);
         try expectMissing(result, "callout");
         try expectMissing(result, "figure");
         try expectMissing(result, "head");
         try expectMissing(result, "size");
-        try expectMissing(result, "page");
         try expectMissing(result, "String");
     }
 
     {
-        var result = try case.completeSourceAfter(request_source, "body.");
+        var result = try case.completeSourceAfter(request_source, "text.");
         defer result.deinit(case.allocator);
         try expectUnique(result);
-        try expectHas(result, "text");
+        try expectHas(result, "font");
         try expectHas(result, "layout");
-        try expectMissing(result, "size");
+        try expectHas(result, "size");
+        try expectMissing(result, "typography");
         try expectMissing(result, "page");
     }
 
     {
-        var result = try case.completeSourceAfter(request_source, "body.text.");
+        var result = try case.completeSourceAfter(request_source, "text.font.");
         defer result.deinit(case.allocator);
         try expectUnique(result);
-        try expectHas(result, "size");
-        try expectHas(result, "color");
+        try expectHas(result, "family");
+        try expectHas(result, "weight");
         try expectMissing(result, "text");
         try expectMissing(result, "page");
     }
 
     {
-        var result = try case.completeSourceAfter(request_source, "bod");
+        var result = try case.completeSourceAfter(request_source, "\n    tex");
         defer result.deinit(case.allocator);
         try expectUnique(result);
-        try expectHas(result, "body");
-        try expectHas(result, "h1");
-        try expectHas(result, "page_number");
+        try expectOnlyKind(result, .property);
+        inline for (.{ "page", "text", "image", "path_shape" }) |field| try expectHas(result, field);
         try expectMissing(result, "callout");
         try expectMissing(result, "figure");
         try expectMissing(result, "head");
         try expectMissing(result, "size");
-        try expectMissing(result, "page");
         try expectMissing(result, "String");
     }
 
@@ -631,28 +628,26 @@ test "analysis completion: record update paths complete record fields" {
             \\
             \\page title
             \\  let local = default_theme() with  {
-            \\bod
+            \\tex
             \\  }
-            \\  text!("body", local.body)
+            \\  text!("body", local.text)
             \\end
             \\
         ;
-        var result = try case.completeSourceAfter(unindented_source, "bod");
+        var result = try case.completeSourceAfter(unindented_source, "\ntex");
         defer result.deinit(case.allocator);
         try expectUnique(result);
-        try expectHas(result, "body");
-        try expectHas(result, "h1");
-        try expectHas(result, "page_number");
+        try expectOnlyKind(result, .property);
+        inline for (.{ "page", "text", "image", "path_shape" }) |field| try expectHas(result, field);
         try expectMissing(result, "callout");
         try expectMissing(result, "figure");
         try expectMissing(result, "head");
         try expectMissing(result, "size");
-        try expectMissing(result, "page");
         try expectMissing(result, "String");
     }
 
     {
-        var result = try case.completeSourceAfter(request_source, "body.text.size =");
+        var result = try case.completeSourceAfter(request_source, "text.size =");
         defer result.deinit(case.allocator);
         try expectUnique(result);
         try expectMissing(result, "page_number");
@@ -1155,7 +1150,7 @@ test "analysis queries: parser cancellation releases partial expressions and dec
         \\end
         \\page title
         \\  let label = text("value")
-        \\  label.text.size = 20
+        \\  text.size = 20
         \\end
         \\
     ;

@@ -1,6 +1,6 @@
-import std:theme as { theme_for, Theme }
-import std:text/content as { Text, text_content }
-import std:text/types as { SemanticRole, TextSemantics }
+import std:theme as { theme_for }
+import std:text/content as { Text, TextContent, text_content }
+import std:text/types as { TextParseMode, SemanticRole, TextSemantics }
 import std:text/style as { TextBlockStyle }
 
 type PageNumber {
@@ -14,12 +14,10 @@ end
 
 fn display(self: Placed<PageNumber>) -> Text
   return Text {
-    content = text_content(self.value.format(self.page, self.document))
-    style = self.value.style ?? theme_for(self.page).page_number
+    content = TextContent { source = self.value.format(self.page, self.document) parse = TextParseMode.plain }
+    style = self.value.style ?? (theme_for(self.page).text with { size = 13 line_height = 16 })
   }
 end
-
-const default_heading_style: TextBlockStyle = TextBlockStyle {} with { text.size = 36 }
 
 type Heading {
   title: String
@@ -27,29 +25,12 @@ type Heading {
   style: TextBlockStyle? = none
 }
 
-fn heading_style(theme: Theme, level: Number) -> TextBlockStyle
-  if level == 2
-    return theme.h2
-  end
-  if level == 3
-    return theme.h3
-  end
-  if level == 4
-    return theme.h4
-  end
-  if level == 5
-    return theme.h5
-  end
-  if level == 6
-    return theme.h6
-  end
-  return theme.h1
+fn heading_text(title: String, level: Number, style: TextBlockStyle? = none) -> Text
+  return Text { content = TextContent { source = title parse = TextParseMode.inline heading_level = level } style = style }
 end
 
 fn display(self: Placed<Heading>) -> Text
-  return Text {
-    content = text_content(self.value.title)
-    style = self.value.style ?? heading_style(theme_for(self.page), self.value.level)
+  return heading_text(self.value.title, self.value.level, self.value.style) with {
     semantics = TextSemantics { role = SemanticRole.heading heading_level = self.value.level }
   }
 end

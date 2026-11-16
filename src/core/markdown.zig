@@ -216,10 +216,7 @@ pub const Block = struct {
     heading_level: ?u8 = null,
 
     pub fn highlightsCodeLine(self: Block, line_number: usize) bool {
-        for (self.code_line_highlights) |range| {
-            if (line_number >= range.start and line_number <= range.end) return true;
-        }
-        return false;
+        return containsCodeLine(self.code_line_highlights, line_number);
     }
 };
 
@@ -379,7 +376,7 @@ pub fn parseModeForNode(state: anytype, node: anytype) ParseMode {
         if (placement.display == .native and placement.display.native != .text) return .none;
     }
     if (@import("model").nodeTextContentKind(node) == .code) return .none;
-    if (fields.read(state.allocator, state, node, "text", &.{"parse"}, .text)) |mode| {
+    if (fields.read(state.allocator, state, node, "content", &.{"parse"}, .text)) |mode| {
         if (std.meta.stringToEnum(ParseMode, mode)) |parsed| return parsed;
     }
     return .@"inline";
@@ -531,8 +528,18 @@ fn parseCodeBlockInfo(allocator: Allocator, block: *Block, info: []const u8) !vo
     // Preserve unrelated fence metadata, as before.
     if (annotation.len == 0 or annotation[0] != '{') return;
     if (annotation[annotation.len - 1] != '}') return error.InvalidMarkdownCodeLineHighlight;
+    block.code_line_highlights = try parseCodeLineRanges(allocator, annotation[1 .. annotation.len - 1]);
+}
+
+pub fn containsCodeLine(ranges: []const CodeLineRange, number: usize) bool {
+    for (ranges) |range| if (number >= range.start and number <= range.end) return true;
+    return false;
+}
+
+pub fn parseCodeLineRanges(allocator: Allocator, spec: []const u8) ![]const CodeLineRange {
     var ranges = std.ArrayList(CodeLineRange).empty;
-    var tokens = std.mem.splitScalar(u8, annotation[1 .. annotation.len - 1], ',');
+    errdefer ranges.deinit(allocator);
+    var tokens = std.mem.splitScalar(u8, spec, ',');
     while (tokens.next()) |token| {
         var endpoints = std.mem.splitScalar(u8, token, '-');
         const start = try parseCodeLineNumber(endpoints.next().?);
@@ -540,7 +547,7 @@ fn parseCodeBlockInfo(allocator: Allocator, block: *Block, info: []const u8) !vo
         if (endpoints.next() != null or end < start) return error.InvalidMarkdownCodeLineHighlight;
         try ranges.append(allocator, .{ .start = start, .end = end });
     }
-    block.code_line_highlights = try ranges.toOwnedSlice(allocator);
+    return ranges.toOwnedSlice(allocator);
 }
 
 fn parseCodeLineNumber(raw: []const u8) !usize {

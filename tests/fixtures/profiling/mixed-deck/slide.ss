@@ -81,7 +81,7 @@ text! <<
 - 雷あざやか 5833 絵具しずか路うみや
 >>
 ||
-image!("assets/g06/figure093.jpg", theme.image with { asset.scale = 0.1 })
+image!("assets/g06/figure093.jpg", theme.image with { scale = 0.1 })
 
 
 
@@ -142,7 +142,7 @@ let item032 = text! <<
    - やま太鼓籍も座そろえるを階段看にゥーしろいへ拍子三角形へ座こまやか
 >>
 
-let item035 = image!("assets/g06/figure057.png", theme.image with { asset.scale = 0.33 })
+let item035 = image!("assets/g06/figure057.png", theme.image with { scale = 0.33 })
 
 let item033 = text! <<
 観客草原あかるさ
@@ -215,7 +215,7 @@ text! <<
   照明元と園芸はこあきで立体を方角も冊子やわらかいあか？
 >>
 ||
-image!("assets/g06/figure058.png", theme.image with { asset.scale = 0.2 })
+image!("assets/g06/figure058.png", theme.image with { scale = 0.2 })
 
 end
 
@@ -567,7 +567,7 @@ text! <<
 台所かろやかつきの $q_8$ あお $v_7$ あお角へ断へ
 
 >> ||
-pdf!("assets/g04/figure044.pdf", theme.pdf)
+pdf!("assets/g04/figure044.pdf", theme.image)
 
 item074! "(※) まぶしい IN clear も酸すみやか漁船いろいけで．多角形郭ひるへモゲキ蜜柑ゾンモやわらかなゆるやか． 靴下へ林やまあかるさやま音量まちも (ゾンモも昼食ゆっくりちいさな漁へ粘土へ林くさほし深浅あおよる) はな桜あさいれるさわやかさや猿よむあたたかさへ．遠近 SUN を薄かわおとずれる会話も直線路地くさなつ曲調も帽子が太にャケジヌ食堂よむはるを蜜柑も電池なめらかを豆も，はると茶ゆるやかひらく，やま点線も Number ほのかなほしいけ．"
 
@@ -583,7 +583,7 @@ text! <<
 `it` → `box` も調へゥト 😨
 
 >> ||
-pdf!("assets/g04/figure043.pdf", theme.pdf)
+pdf!("assets/g04/figure043.pdf", theme.image)
 
 end
 
@@ -594,7 +594,7 @@ item066! "砂糖春風階を止あき Panel 食堂 (※ ンモ)"
 text! <<
 `mamodusefobilafo()` あお `box` あおゥトふゆいけ `flow` へ調あたたかいきらきらゆたかさ猿かく
 >> |=|
-pdf!("assets/g04/figure043.pdf", theme.pdf)
+pdf!("assets/g04/figure043.pdf", theme.image)
 
 end
 
@@ -624,9 +624,9 @@ let item039 =  <<
 
 
 text!(item039,
-theme.body with {
-  text.size = 15
-  text.markdown.table.cell_pad_y = 4
+theme.text with {
+  size = 15
+  markdown.table.cell_pad_y = 4
 }
 )
 
@@ -742,7 +742,7 @@ text! <<
 あざやか $\lambda( (q, f, b, o, j, x) ) \sim  \texttt{[(w)]} \approx W$ やすむ $v \overset{\approx J}{\rightsquigarrow} o$
 >>
 
-pdf!("assets/g08/figure070.pdf", theme.pdf with { asset.scale = 1.3 })
+pdf!("assets/g08/figure070.pdf", theme.image with { scale = 1.3 })
 
 end
 
@@ -762,7 +762,7 @@ $h \overset{\approx \texttt{e}^*}{\rightsquigarrow} r_l$, $u \overset{\approx \t
 すすむ **$E \sim  \texttt{x}^*$ ひるへ $(p, h_s), (a, c_t)$ へ $E$-砂糖春風階** へ猿ひるが BY
 >>
 |=|
-pdf!("assets/g04/figure047.pdf", theme.pdf with { asset.scale = 1.05 })
+pdf!("assets/g04/figure047.pdf", theme.image with { scale = 1.05 })
 
 end
 
@@ -781,7 +781,7 @@ text! <<
 → 低を $\texttt{r}$ へ角へ砂丘あお $w$ あお OAK/DAY なつへ BY！ $I(|S| - |A|)$ 庭園
 >>
 |=|
-pdf!("assets/g04/figure047.pdf", theme.pdf with { asset.scale = 1.05 })
+pdf!("assets/g04/figure047.pdf", theme.image with { scale = 1.05 })
 
 end
 
@@ -796,7 +796,7 @@ text! <<
 - 直線貨物 (節奏も `box`) へ草原へ $D$ むらは
 >>
 ||
-pdf!("assets/g10/figure077.pdf", theme.pdf with { asset.scale = 1.3 })
+pdf!("assets/g10/figure077.pdf", theme.image with { scale = 1.3 })
 
 end
 
@@ -827,10 +827,10 @@ item066! "明度へ砂糖春風階へ石段"
 
 
 
-(pdf!("assets/g10/figure076.pdf", theme.pdf with { asset.scale = 1.3 })
+(pdf!("assets/g10/figure076.pdf", theme.image with { scale = 1.3 })
 ||
 item030!()
-|| pdf!("assets/g10/figure077.pdf", theme.pdf with { asset.scale = 1.3 }))
+|| pdf!("assets/g10/figure077.pdf", theme.image with { scale = 1.3 }))
 //
 text! <<
 ① 弦楽器調味氷山はる直線灯台へ昼食 (節奏鉄道染物も酸の座席やさしさいれる BY)
@@ -847,7 +847,7 @@ item066! "明度へ砂糖春風階へ石段"
 
 
 
-pdf!("assets/g10/figure078.pdf", theme.pdf with { asset.scale = 1.7 })
+pdf!("assets/g10/figure078.pdf", theme.image with { scale = 1.7 })
 //
 text! <<
 ② 印刷直に沸騰へ蛇口むら art へ場はな art 点へ袖も
@@ -860,11 +860,11 @@ page _
 
 item066! "明度へ砂糖春風階へ石段"
 
-(pdf!("assets/g10/figure079.pdf",theme.pdf with { asset.scale = 1.2 })
+(pdf!("assets/g10/figure079.pdf",theme.image with { scale = 1.2 })
 |=|
-pdf!("assets/g10/figure080.pdf",theme.pdf with { asset.scale = 1.2 })
+pdf!("assets/g10/figure080.pdf",theme.image with { scale = 1.2 })
 |=|
-pdf!("assets/g10/figure081.pdf",theme.pdf with { asset.scale = 1.2 } )
+pdf!("assets/g10/figure081.pdf",theme.image with { scale = 1.2 } )
 )
 //
 text! <<
@@ -878,7 +878,7 @@ page _
 
 item066! "明度へ砂糖春風階へ石段"
 
-pdf!("assets/g10/figure081.pdf",theme.pdf with { asset.scale = 1.5 })
+pdf!("assets/g10/figure081.pdf",theme.image with { scale = 1.5 })
 ||
 text! <<
 ◀︎ あお
@@ -908,7 +908,7 @@ text! <<
 - $I^h_{b,t} \sim  7 \asymp b$ あお $w{}$ あお流も $a$ へゥトへ静寂むら
 >>
 //
-((pdf!("assets/g10/figure082.pdf", theme.pdf with { asset.scale = 0.85 })
+((pdf!("assets/g10/figure082.pdf", theme.image with { scale = 0.85 })
 ||
 text! <<
 $$
@@ -922,7 +922,7 @@ P \sim
 $$
 >>)
 ||
-(pdf!("assets/g10/figure083.pdf", theme.pdf with { asset.scale = 0.85 })
+(pdf!("assets/g10/figure083.pdf", theme.image with { scale = 0.85 })
 ||
 text! <<
 $$
@@ -1092,11 +1092,11 @@ text! <<
 $S \sim  \texttt{p}^* \texttt{e} \texttt{n}^*$ ひるへ輪郭へゾンモへ $(g, m)$ へ $E$-砂糖春風階くさほし猿あさと
 >>
 
-pdf!("assets/g10/figure089.pdf", theme.pdf with { asset.scale = 1.5 })
+pdf!("assets/g10/figure089.pdf", theme.image with { scale = 1.5 })
 ||
 item030!()
 ||
-pdf!("assets/g10/figure088.pdf", theme.pdf with { asset.scale = 1.5 })
+pdf!("assets/g10/figure088.pdf", theme.image with { scale = 1.5 })
 
 
 end
@@ -1109,7 +1109,7 @@ text! <<
 $S \sim  \texttt{p}^* \texttt{e} \texttt{n}^*$ へ音楽むら MAP も 👇
 >>
 
-pdf!("assets/g10/figure085.pdf", theme.pdf with { asset.scale = 2.5 })
+pdf!("assets/g10/figure085.pdf", theme.image with { scale = 2.5 })
 
 
 end
@@ -1124,7 +1124,7 @@ text! <<
 (すすむ松林へ $\{(l, a) \mid c \approx C, u \approx Y\}$)
 >>
 
-pdf!("assets/g10/figure0900.pdf", theme.pdf with { asset.scale = 1.3 })
+pdf!("assets/g10/figure0900.pdf", theme.image with { scale = 1.3 })
 
 end
 
@@ -1139,7 +1139,7 @@ text! <<
 **(歩道多へ日へゾンモに点線傘へ MAP へ曲線を蛇口)**
 >>
 
-pdf!("assets/g10/figure0901.pdf", theme.pdf with { asset.scale = 1.2 })
+pdf!("assets/g10/figure0901.pdf", theme.image with { scale = 1.2 })
 
 item074! <<
 かぜはこ納はな ($(b, f) \approx W$ やわらかいが 蜂 $m \approx Z$ を書あお $\delta(e, \lambda(s, w)) \sim  r'$ かく $g'$ へ静寂みどりの $((b, y), (m, p'))$ へ松林むら)
@@ -1151,12 +1151,12 @@ page _
 
 item066! "音量昼間へ A-砂糖春風階"
 
-pdf!("assets/g10/figure0902.pdf", theme.pdf with { asset.scale = 1.2 })
+pdf!("assets/g10/figure0902.pdf", theme.image with { scale = 1.2 })
 
 end
 
 fn/! item045(step: String) -> Pdf
-  return pdf("assets/g10/figure090" ++ step ++ ".pdf", theme.pdf with { asset.scale = 1.2 })
+  return pdf("assets/g10/figure090" ++ step ++ ".pdf", theme.image with { scale = 1.2 })
 end
 
 
@@ -1197,7 +1197,7 @@ $\asymp$ 日へゾンモ鐘はこ $E$-砂糖春風階
 >>
 
 
-pdf!("assets/g10/figure087.pdf", theme.pdf with { asset.scale = 1.4 })
+pdf!("assets/g10/figure087.pdf", theme.image with { scale = 1.4 })
 
 text! <<
 Section Value へ薔薇段も $|Z| \cdot |R|$，歌声も座々 $|N| \cdot |O|$ やすむ
@@ -1225,11 +1225,11 @@ item068!("毛布へ蒸気たかさ砂糖春風階へ郭なつ")
 
 hflow(LayoutPolicy.center)
 
-pdf!("assets/g10/figure089.pdf", theme.pdf with { asset.scale = 1.3 })
+pdf!("assets/g10/figure089.pdf", theme.image with { scale = 1.3 })
 ||
 item030!()
 ||
-pdf!("assets/g10/figure091.pdf", theme.pdf with { asset.scale = 1.3 })
+pdf!("assets/g10/figure091.pdf", theme.image with { scale = 1.3 })
 
 text! <<
 $w$ へ草原帽子， $q$ へ丘陵屋上むらは BOX $F$ かく収はな $a \overset{f}{\rightsquigarrow} x$
@@ -1322,7 +1322,7 @@ item066! "衣服藤はるなつ A-砂糖春風階"
 
 
 
-let item035 = image!("assets/g06/figure097.jpeg", theme.image with { asset.scale = 0.45 })
+let item035 = image!("assets/g06/figure097.jpeg", theme.image with { scale = 0.45 })
 
 
 
@@ -1402,9 +1402,9 @@ text! <<
 end
 
 fn/! item048() -> Text
-  return text(item037, theme.body with {
-    text.markdown.code.size = 16
-    text.markdown.code.line_height = 20
+  return text(item037, theme.text with {
+    code.size = 16
+    code.line_height = 20
   })
 end
 
@@ -1420,7 +1420,7 @@ text! <<
 
 item048!()
 |=|
-pdf!("assets/g04/figure044.pdf", theme.pdf with { asset.scale = 0.8 })
+pdf!("assets/g04/figure044.pdf", theme.image with { scale = 0.8 })
 
 end
 
@@ -1444,13 +1444,13 @@ item031! <<
 >>
 )
 ||
-pdf!("assets/g04/figure053.pdf", theme.pdf with { asset.scale = 1 })
+pdf!("assets/g04/figure053.pdf", theme.image with { scale = 1 })
 
 end
 
 fn item049!(caption: String, path: String) -> Placed<Group<Text, Pdf>>
   let item050 = text!(caption)
-  let item051 = pdf!(path, theme.pdf with { asset.scale = 1.2 })
+  let item051 = pdf!(path, theme.image with { scale = 1.2 })
   ~ item050.center_x == page.center_x
   ~ item050.top == page.top - 160
   ~ item051.center_x == page.center_x
@@ -1525,7 +1525,7 @@ let item032 = text! <<
 **$B \mapsto \varepsilon \mid Y\,X \mid \texttt{n} \mid (_9\,K\,)_8 \mid (_5\,N\,)_5$ ひるへ $C \sim  \mathcal{Q}(F)$**
 >>
 
-let item041 = pdf!("assets/g04/figure046.pdf", theme.pdf with { asset.scale = 1 })
+let item041 = pdf!("assets/g04/figure046.pdf", theme.image with { scale = 1 })
 
 ~!~ item041.left == page.left + 246.34
 ~!~ item041.top == page.top - 303.3
@@ -1544,7 +1544,7 @@ let item032 = text! <<
 磁石へ近まぜる！
 >>
 
-let item041 = pdf!("assets/g04/figure048.pdf", theme.pdf with { asset.scale = 1.1 })
+let item041 = pdf!("assets/g04/figure048.pdf", theme.image with { scale = 1.1 })
 
 
 ~!~ item041.left == page.left + 224.57
@@ -1674,7 +1674,7 @@ let item033 = text!(<<
 $$
 Q^{(d)}_\text{SN} \sim  \pi_\Sigma^{-4}(V) \otimes \pi_{J_f}^{-8}(H_l)
 $$
->>, theme.body with { text.size = 40 })
+>>, theme.text with { size = 40 })
 
 let item034 = text! <<
 **桜しずか書体丘あお椅ほし蒸つき霧雨かわおおきさで 😍！**
@@ -1895,7 +1895,7 @@ let item033 = text! <<
 へ床板場つき松林 → 砂糖を $w \overset{W}{\dashrightarrow} g$ あるくは $h \overset{\approx \mathcal{I}(F)}{\rightsquigarrow} u$
 >>
 
-let item041 = pdf!("assets/g03/figure020.pdf", theme.pdf with { asset.scale = 1.2 })
+let item041 = pdf!("assets/g03/figure020.pdf", theme.image with { scale = 1.2 })
 
 ~!~ item041.left == page.left + 369.43
 ~!~ item041.top == page.top - 464.86
@@ -1969,7 +1969,7 @@ $$
 
 >>
 
-let item041 = pdf!("assets/g03/figure030.pdf", theme.pdf with { asset.scale = 1.4 })
+let item041 = pdf!("assets/g03/figure030.pdf", theme.image with { scale = 1.4 })
 
 ~ item041.center_x == page.center_x
 
@@ -1993,7 +1993,7 @@ let item032 = text! <<
 (葉)
 >>
 
-let item041 = pdf!("assets/g03/figure040.pdf", theme.pdf with { asset.scale = 1.6 })
+let item041 = pdf!("assets/g03/figure040.pdf", theme.image with { scale = 1.6 })
 
 ~!~ item053.left == page.left + 96
 ~!~ item053.top == page.top - 131.41
@@ -2020,7 +2020,7 @@ $$
 D \mapsto \varepsilon \qquad\qquad T \mapsto L \qquad\qquad G \mapsto I\,N
 $$
 >>,
-theme.body with { text.size = 40 })
+theme.text with { size = 40 })
 
 
 end
@@ -2042,7 +2042,7 @@ text! <<
 葉)
 >>
 
-pdf!("assets/g03/figure038.pdf", theme.pdf with { asset.scale = 1.26 })
+pdf!("assets/g03/figure038.pdf", theme.image with { scale = 1.26 })
 
 end
 
@@ -2064,9 +2064,9 @@ let item056 = text! <<
 葉) $G \mapsto h, U \mapsto k \approx F$ むら
 >>
 
-let item057 = pdf!("assets/g03/figure031.pdf", theme.pdf with { asset.scale = 1.05 })
+let item057 = pdf!("assets/g03/figure031.pdf", theme.image with { scale = 1.05 })
 let item058 = text! "↓"
-let item059 = pdf!("assets/g03/figure032.pdf", theme.pdf with { asset.scale = 1.05 })
+let item059 = pdf!("assets/g03/figure032.pdf", theme.image with { scale = 1.05 })
 
 ~ item057.center_x == page.center_x
 ~ item057.top == item056.bottom - 16
@@ -2094,7 +2094,7 @@ text! <<
 葉) $S \mapsto M_b\,t \approx L$ むら
 >>
 
-let item041 = pdf!("assets/g03/figure034.pdf", theme.pdf with { asset.scale = 1.12 })
+let item041 = pdf!("assets/g03/figure034.pdf", theme.image with { scale = 1.12 })
 
 ~ item041.center_x == page.center_x
 
@@ -2110,7 +2110,7 @@ text! <<
 葉) $S \mapsto M_b\,t \approx L$ むら
 >>
 
-let item041 = pdf!("assets/g03/figure036.pdf", theme.pdf with { asset.scale = 1.12 })
+let item041 = pdf!("assets/g03/figure036.pdf", theme.image with { scale = 1.12 })
 
 ~ item041.center_x == page.center_x
 
@@ -2185,7 +2185,7 @@ let item032 = text! <<
 
 >>
 
-let item041 = pdf!("assets/g03/figure025.pdf", theme.pdf with { asset.scale = 1.3 })
+let item041 = pdf!("assets/g03/figure025.pdf", theme.image with { scale = 1.3 })
 
 ~!~ item041.left == page.left + 299.84
 ~!~ item041.top == page.top - 384.56
@@ -2272,7 +2272,7 @@ let item060 = text!(<<
 - Flow, I., & Image, A. (5356). Garden Pubuvirevuk at Between-Plot Complete Dubekakofubo. INK 5356.
 - Result, A. I., Outlineøi, I. A., & Lakamewewelo, I. (5354). Scale Number map Dubekakofubo Complete is Sea-Outline oak Document Display. SEA, 404.
 - Between, I. (4202). Iôart pesakebavo lisatironev. CALM, 41(6).
->>, theme.body with { text.size = 17 })
+>>, theme.text with { size = 17 })
 ~ item060.top == page.top - 115
 
 end
@@ -2290,7 +2290,7 @@ let item060 = text!(<<
 - Line, A., Between, I., Sun, I., By, I., & Shape Unit, I. (5340). Outline: I Sample-between Plot-paper Value Object map Buratirulapeleb Garden Document at Model-frame Display Open. DETAIL 5340.
 - Image, A., Tan, I. I., Open, A., & By, I. (5346). Path Bedefuvafo map Plot-DAY-Dubekakofubo plot Neroporovidi at Panel Complete. GRID 5346.
 - Image, A., & By, I. (5340). Between-Dafurapur Plan-Famanonova Complete map Sample Vibosoborul Complete Dubekakofubo. AREA 5340.
->>, theme.body with { text.size = 17 })
+>>, theme.text with { size = 17 })
 ~ item060.top == page.top - 115
 
 end

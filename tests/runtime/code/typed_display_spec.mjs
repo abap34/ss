@@ -28,7 +28,7 @@ try {
   const codes = dump.nodes.filter(node => node.placement?.display.kind === "text" && node.render.kind === "code");
   assert.equal(codes.length, 3);
   assert.deepEqual(codes.map(node => node.render.code.language), ["python", "plain", "python"]);
-  assert.deepEqual(codes.map(node => node.render.text.font_size), [18, 22, 18]);
+  assert.deepEqual(codes.map(node => node.render.code.font_size), [18, 22, 18]);
   assert.deepEqual(codes.map(node => node.placement.page), [dump.page_order[0], dump.page_order[0], dump.page_order[1]]);
   assert.deepEqual(codes[0].render.code.keyword_color, color("cf222e"));
   assert.deepEqual(codes[2].render.code.keyword_color, color("ff7b72"));
@@ -64,7 +64,7 @@ page constructors
   let unused = c::code("UNPLACED")
   let first: Placed<c::Code> = c::code!("return 17\n", "python")
   let second: Placed<c::Code> = c::code_file!("snippet.py", "python")
-  let third = place!(reusable with { style = c::CodeBlockStyle {} with { text.size = 22 } })
+  let third = place!(reusable with { style = default_text_style with { code.size = 22 } })
   ~ first.left == page.left + 64
   ~ first.top == page.top - 64
   ~ second.left == first.left
@@ -79,12 +79,12 @@ end
   assert.equal(placed.length, 3);
   assert(!constructed.nodes.some(node => node.content === "UNPLACED"));
   assert.deepEqual(placed.map(node => node.content), Array(3).fill("return 17\n"));
-  assert.deepEqual(placed.map(node => node.render.text.font_size), [16, 16, 22]);
+  assert.deepEqual(placed.map(node => node.render.code.font_size), [16, 16, 22]);
   assert.deepEqual(placed[0].placement.input, placed[1].placement.input);
   assert.equal(new Set(placed.map(node => node.id)).size, 3);
   for (const node of placed) {
     assert.deepEqual(node.fields, {});
-    assert.equal(node.render.text.font.family, "monospace");
+    assert.equal(node.render.code.font.family, "monospace");
     assert.deepEqual(node.render.code.keyword_color, color("cf222e"));
   }
   await writeFile(path.join(project, "snippet.py"), "return 29\n");
