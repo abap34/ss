@@ -4,11 +4,49 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-11-20
+
+### Added
+
+- Added document and page themes through `theme!()`. Standard components use
+  their page's theme by default.
+- Added `note!()` to set the current page's speaker notes.
+- Added numeric stage ranges such as `stages i { 1:3 }`, with support for
+  custom steps and descending order.
+- Added `with` settings to placed composition expressions, such as
+  `(left |=| right) with { gap = 48 }`.
+
+### Changed
+
+- Reorganized `Theme` around `page`, `text`, `image`, and `path_shape`, and
+  simplified the shared style types.
+- Updated `ss init` with a short sample deck, separating slide content,
+  themes, and reusable components into `slide.ss`, `theme.ss`, and `components.ss`.
+- Updated nixpkgs ([#25](https://github.com/abap34/ss/pull/25)). Contributed by @natsukagami.
+
+### Fixed
+
+- Limited field completion inside `with { ... }` to record properties.
+- Improved recovery from syntax errors in included sources, with diagnostics
+  pointing to the original file locations.
+- Fixed PDF preview failures caused by mismatched versions of the editor
+  and PDF runtime.
+- Preserved selection controls and input focus when the preview is unchanged,
+  and fixed synchronization during continuous source editing.
+- Kept the WYSIWYG preview visible when opening source.
+- Updated Zed's pinned grammar to support `include`, `stages`, `show`, and
+  numeric stage ranges.
+
 ### Removed
 
-- Removed `ss check` and `ss watch check`. Use `ss render` to build a deck or
-  `ss watch render` to rebuild it on changes. `ss dump` evaluates a document
-  or a standalone module and writes JSON.
+- Removed `ss check` and `ss watch check`; rendering and dumping already
+  perform the required evaluation.
+- Removed `GroupLayout` and mutable placement composition settings.
+  Composition settings are now specified directly with `with`.
+
+### Thanks
+
+Thanks to @natsukagami for contributing to this release!
 
 ## [0.9.1] - 2026-11-09
 
