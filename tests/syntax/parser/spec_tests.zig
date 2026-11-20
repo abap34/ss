@@ -618,11 +618,11 @@ test "syntax spec: void functions may omit explicit return values" {
 
 test "syntax spec: function types and lambdas are source syntax" {
     var parsed = try parse(
-        \\fn make_label(text_value: String) -> Page -> Placement
+        \\fn make_label(text_value: String) -> Page -> Placed<Text>
         \\  return (page_value: Page) |-> place_on!(page_value, text(text_value))
         \\end
         \\
-        \\fn use(callback: (Page -> Placement) -> Document, pair: (Page, Document) -> Placement, thunk: () -> Number) -> Number
+        \\fn use(callback: (Page -> Placed<Text>) -> Document, pair: (Page, Document) -> Placed<Text>, thunk: () -> Number) -> Number
         \\  return thunk()
         \\end
         \\
@@ -634,7 +634,7 @@ test "syntax spec: function types and lambdas are source syntax" {
     try testing.expectEqual(@as(usize, 1), make_label.result_type.fn_params.len);
     try testing.expectEqual(Type.Kind.page, make_label.result_type.fn_params[0].kind);
     try testing.expect(make_label.result_type.fn_result != null);
-    try testing.expectEqual(Type.Kind.placement, make_label.result_type.fn_result.?.kind);
+    try testing.expectEqual(Type.Kind.placed, make_label.result_type.fn_result.?.kind);
     switch (make_label.statements.items[0].kind.return_expr) {
         .lambda => |lambda| {
             try testing.expectEqual(@as(usize, 1), lambda.params.items.len);
@@ -830,7 +830,7 @@ test "syntax spec: enum declarations require nonempty braces" {
 test "syntax spec: failed constant and type declarations release parsed ownership" {
     try expectParseErrorWithoutLeaks(
         error.ExpectedChar,
-        "const value: (Page -> Placement)?\n",
+        "const value: (Page -> Placed<Text>)?\n",
     );
     try expectParseErrorWithoutLeaks(error.ExpectedChar, "type Mode\n");
     try expectParseErrorWithoutLeaks(error.ExpectedIdentifier,
@@ -951,7 +951,7 @@ test "syntax spec: type declarations survive every allocation failure" {
         parseAndDeinitSource,
         .{
             \\type Card {
-            \\  handler: Selection<(Page -> Placement)?> = build
+            \\  handler: Selection<(Page -> Placed<Text>)?> = build
             \\}
             \\
         },
@@ -961,7 +961,7 @@ test "syntax spec: type declarations survive every allocation failure" {
         parseAndDeinitSource,
         .{
             \\type Theme {
-            \\  handler: Selection<(Page -> Placement)?> = build
+            \\  handler: Selection<(Page -> Placed<Text>)?> = build
             \\}
             \\
         },
@@ -970,7 +970,7 @@ test "syntax spec: type declarations survive every allocation failure" {
 
 test "syntax spec: optional types compose with functions and selections" {
     var parsed = try parse(
-        \\fn keep(callback: (Page -> Placement)?, maker: Page -> Placement?, items: Selection<Text>?) -> Void
+        \\fn keep(callback: (Page -> Placed<Text>)?, maker: Page -> Placed<Text>?, items: Selection<Text>?) -> Void
         \\end
         \\
     );
@@ -981,12 +981,12 @@ test "syntax spec: optional types compose with functions and selections" {
     try testing.expectEqual(Type.Kind.optional, callback.kind);
     try testing.expectEqual(Type.Kind.function, callback.optional_child.?.kind);
     try testing.expectEqual(Type.Kind.page, callback.optional_child.?.fn_params[0].kind);
-    try testing.expectEqual(Type.Kind.placement, callback.optional_child.?.fn_result.?.kind);
+    try testing.expectEqual(Type.Kind.placed, callback.optional_child.?.fn_result.?.kind);
 
     const maker = keep.params.items[1].ty;
     try testing.expectEqual(Type.Kind.function, maker.kind);
     try testing.expectEqual(Type.Kind.optional, maker.fn_result.?.kind);
-    try testing.expectEqual(Type.Kind.placement, maker.fn_result.?.optional_child.?.kind);
+    try testing.expectEqual(Type.Kind.placed, maker.fn_result.?.optional_child.?.kind);
 
     const items = keep.params.items[2].ty;
     try testing.expectEqual(Type.Kind.optional, items.kind);
@@ -998,7 +998,7 @@ test "syntax spec: optional types compose with functions and selections" {
 test "syntax spec: failed function declarations release parsed ownership" {
     try expectParseErrorWithoutLeaks(
         error.ExpectedChar,
-        "fn bad(items: Selection<(Page -> Placement)?) -> Void\nend\n",
+        "fn bad(items: Selection<(Page -> Placed<Text>)?) -> Void\nend\n",
     );
     try expectParseErrorWithoutLeaks(error.RequiredParameterAfterDefault,
         \\fn bad(a: Number = 1, b: Number) -> Number
@@ -1025,7 +1025,7 @@ test "syntax spec: expression parsing survives every allocation failure" {
         \\  body: String = "body"
         \\}
         \\const default_tone: String = "soft"
-        \\fn choose(callback: (Page -> Placement)?, tone: String = "soft") -> Placement
+        \\fn choose(callback: (Page -> Placed<Text>)?, tone: String = "soft") -> Placed<Text>
         \\  let applied = ((value: String) |-> classes::text(value))(tone)
         \\  let updated = Theme { body = tone } with {
         \\    body.text.size = -(1 + 2)
@@ -1068,7 +1068,7 @@ test "syntax spec: module cloning survives every allocation failure" {
         \\type Card {
         \\  label: String = "caption"
         \\}
-        \\fn choose(tone: String = "soft") -> Placement
+        \\fn choose(tone: String = "soft") -> Placed<Text>
         \\  let applied = ((value: String) |-> text(value))(tone)
         \\  let updated = Card { label = tone } with { label = applied }
         \\  return docctx().background_fill? ?? updated
@@ -2500,11 +2500,11 @@ test "syntax spec: constraint value registration releases parsed ownership" {
 
 test "syntax spec: nested selection arguments retain function and optional children" {
     const source_text =
-        \\fn keep(items: Selection<Selection<(Page -> Placement)?>>) -> Void
+        \\fn keep(items: Selection<Selection<(Page -> Placed<Text>)?>>) -> Void
         \\end
-        \\fn unary(items: Selection<Page> -> Selection<Placement>) -> Void
+        \\fn unary(items: Selection<Page> -> Selection<Placed<Text>>) -> Void
         \\end
-        \\fn multiple(items: (Selection<Page>, Selection<Placement>) -> Selection<Page>) -> Void
+        \\fn multiple(items: (Selection<Page>, Selection<Placed<Text>>) -> Selection<Page>) -> Void
         \\end
     ;
     var parsed = try parse(source_text);
@@ -2517,7 +2517,7 @@ test "syntax spec: nested selection arguments retain function and optional child
     const callback = optional.optional_child.?;
     try testing.expectEqual(Type.Kind.function, callback.kind);
     try testing.expectEqual(Type.Kind.page, callback.fn_params[0].kind);
-    try testing.expectEqual(Type.Kind.placement, callback.fn_result.?.kind);
+    try testing.expectEqual(Type.Kind.placed, callback.fn_result.?.kind);
     try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source_text});
     try allocation_testing.checkAllAllocationFailures(testing.allocator, cloneAndDeinitModule, .{&parsed.module});
 }

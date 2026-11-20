@@ -52,16 +52,15 @@ page ordered
   let decoration = text!("Decoration")
   let b = text!("Paint B")
   let g = group!(b, a)
-  let first_child = first(children(g))
   let first_text = first(select<Text>(g))
-  ~ first_child.width == 180
+  ~ b.width == 180
   ~ first_text.width == 140
 end
 
 page expanded
   let badge = place!(Badge { title = "Title" })
   let g = group!(badge)
-  let nested = first(children(g))
+  let nested = first(select<Badge>(g))
   let leaf = first(select<Text>(nested))
   ~ leaf.width == 240
   align_group!(g)

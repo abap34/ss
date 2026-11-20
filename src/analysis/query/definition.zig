@@ -69,6 +69,11 @@ fn appendResolvedTarget(
     if (context.isQualifiedCallableQualifier()) return false;
     if (context.importSpecAtOffset()) return false;
     const module = snapshot.moduleForPath(req.path) orelse return false;
+    if (context.reference_offset) |offset| {
+        const binding = snapshot.placementReferenceAt(module.id, module.offset(offset)) orelse return true;
+        const span = if (context.targetKindIs(.placement_page)) binding.page_name_span else binding.name_span;
+        return appendTargetFromSpan(allocator, out, snapshot, binding.module_id, span, req.path);
+    }
     if (context.typeParameter()) |parameter| {
         return appendTargetFromSpan(allocator, out, snapshot, module.id, .{ .start = module.offset(parameter.span.start), .end = module.offset(parameter.span.end) }, req.path);
     }

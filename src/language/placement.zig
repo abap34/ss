@@ -14,10 +14,9 @@ pub fn member(name: []const u8) ?Member {
     return null;
 }
 
-/// Returns a borrowed type. Placement erasure deliberately omits the input;
-/// arbitrary record fields remain accessible only through Placed<T>.value.
+/// Returns a borrowed type. Input fields are accessed through Placed<T>.value.
 pub fn memberType(receiver: ast.Type, name: []const u8) ?ast.Type {
-    if (receiver.kind != .placed and receiver.kind != .placement) return null;
+    if (receiver.kind != .placed) return null;
     return switch (member(name) orelse return null) {
         .value => receiver.placedInput(),
         .page => ast.Type.page,

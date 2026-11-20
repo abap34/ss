@@ -1,0 +1,22 @@
+================================================================================
+References and dereference coexist with intersection and multiplication
+================================================================================
+
+page main
+  let r = &later
+  let s = &other::later
+  let value = (*r).value
+  let n = a * *b
+  let both = a & b
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (page_declaration
+    name: (identifier)
+    (let_statement name: (identifier) value: (binding_reference (identifier)))
+    (let_statement name: (identifier) value: (binding_reference (qualified_identifier module: (identifier) name: (identifier))))
+    (let_statement name: (identifier) value: (member_expression object: (parenthesized_expression (unary_expression (identifier))) member: (identifier)))
+    (let_statement name: (identifier) value: (binary_expression (identifier) (unary_expression (identifier))))
+    (let_statement name: (identifier) value: (binary_expression (identifier) (identifier)))))

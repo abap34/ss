@@ -50,6 +50,14 @@ fn resolveHover(allocator: std.mem.Allocator, snapshot: anytype, req: types.Sour
 
     if (context.expired()) return null;
     const module = snapshot.moduleForPath(req.path) orelse return null;
+    if (context.reference_offset) |offset| {
+        const binding = snapshot.placementReferenceAt(module.id, module.offset(offset)) orelse return null;
+        if (context.targetKindIs(.placement_page)) return .{ .markdown = try std.fmt.allocPrint(allocator, "```ss\npage {s}\n```", .{context.target}) };
+        const ty = binding.ty orelse return null;
+        const label = try ty.formatAlloc(allocator);
+        defer allocator.free(label);
+        return .{ .markdown = try std.fmt.allocPrint(allocator, "```ss\n&{s}: Ref<{s}>\n```", .{ context.target, label }) };
+    }
     if (context.typeParameter()) |parameter| return .{
         .markdown = try std.fmt.allocPrint(allocator, "Type parameter `{s}`", .{parameter.name}),
     };

@@ -9,6 +9,20 @@ const Owner = dependencies.PropertyOwner;
 const Key = dependencies.PropertyKey;
 const testing = std.testing;
 
+test "closed reference reads distinguish unreachable paths from unknown targets" {
+    const inputs = compiler.core.placement_inputs;
+    const candidates = inputs.BindingTargets{ .ids = &.{ 1, 3 } };
+    const reached = inputs.ReadPath{};
+    try testing.expectEqualSlices(u32, &.{ 1, 3 }, try reached.reads(candidates));
+    try testing.expectError(error.UnresolvedPlacementReference, reached.reads(.{}));
+    const unknown = inputs.ReadPath{ .unknown_target = true };
+    try testing.expectError(error.UnresolvedPlacementReference, unknown.reads(.{}));
+    // A known alternative cannot mask a potentially untracked reference.
+    try testing.expectError(error.UnresolvedPlacementReference, reached.join(unknown).reads(candidates));
+    const unreachable_path = inputs.ReadPath{ .no_value = true, .unknown_target = true };
+    try testing.expectEqual(@as(usize, 0), (try unreachable_path.reads(.{})).len);
+}
+
 const MatchingVisitor = struct {
     read: Resource,
     seen: []bool,

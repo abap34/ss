@@ -104,7 +104,7 @@ type Card {
   style: Style
 }
 const identity: (Number) -> Number = (x: Number) |-> x
-fn consume(value: (Page -> Placement)?, items: Selection<Placed<Card>>) -> Void
+fn consume(value: (Page -> Placed<Card>)?, items: Selection<Placed<Card>>) -> Void
   return
 end
 fn make(style: Style = Style {}) -> Style = style with {}

@@ -14,7 +14,7 @@ test "core value text spec: placement references round trip exact node identifie
         var parsed = try core.value_text.parsePropertyValue(testing.allocator, text);
         defer core.value_text.deinitParsedPropertyValue(testing.allocator, &parsed);
         try testing.expectEqual(id, parsed.object);
-        var typed = try core.value_text.typedPropertyValue(testing.allocator, text, ast.Type.placement);
+        var typed = try core.value_text.typedPropertyValue(testing.allocator, text, (ast.Type{ .kind = .placed, .arguments = &.{ast.Type.recordType("Text")} }));
         defer core.value_text.deinitParsedPropertyValue(testing.allocator, &typed);
         try testing.expectEqual(id, typed.object);
     }
@@ -179,7 +179,7 @@ fn exerciseAppliedRecordTypes(allocator: std.mem.Allocator) !void {
     defer placed.deinit(allocator);
     var selected = try Type.selectionOf(allocator, placed);
     defer selected.deinit(allocator);
-    var record = core.RecordValue.init(try Type.recordType("Box").inModule(2).withArguments(allocator, &.{ action, selected, Type.placement }));
+    var record = core.RecordValue.init(try Type.recordType("Box").inModule(2).withArguments(allocator, &.{ action, selected, placed }));
     defer record.deinit(allocator);
     try record.fields.append(allocator, .{ .name = "count", .value = .{ .number = 3 } });
     var copy = try record.clone(allocator);

@@ -315,8 +315,8 @@ page demo
 ${scenario.policy ?? "vflow(LayoutPolicy.top)"}
 ${scenario.header ?? ""}
 ${scenario.composition ? `let pair = place!(text("${scenario.reverse ? "Move me" : "Guide"}", TextBlockStyle {} with { layout.wrap = WrapMode.off }) ${scenario.composition} text("${scenario.reverse ? "Guide" : "Move me"}", TextBlockStyle {} with { layout.wrap = WrapMode.off }))
-let ${scenario.reverse ? "item" : "guide"} = first(children(pair))
-let ${scenario.reverse ? "guide" : "item"} = first(children(pair) - selection(${scenario.reverse ? "item" : "guide"}))` : `${scenario.guide ?? 'let guide = text!("Guide", TextBlockStyle {} with { layout.wrap = WrapMode.off })'}
+let ${scenario.reverse ? "item" : "guide"} = first(select<Text>(pair))
+let ${scenario.reverse ? "guide" : "item"} = first(select<Text>(pair) - selection(${scenario.reverse ? "item" : "guide"}))` : `${scenario.guide ?? 'let guide = text!("Guide", TextBlockStyle {} with { layout.wrap = WrapMode.off })'}
 ${scenario.item ?? 'let item = text!("Move me", TextBlockStyle {} with { layout.wrap = WrapMode.off })'}`}
 ${scenario.fixGuide === false || scenario.guide ? "" : `~ guide.left == page.left + ${scenario.guideLeft ?? 100}\n~ guide.top == page.top - 100`}
 ${scenario.body}

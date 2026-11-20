@@ -153,6 +153,19 @@ pub fn typeForExpr(allocator: std.mem.Allocator, budget: ?QueryBudget, snapshot:
     return switch (expr) {
         .record => |record| try typeForConstruction(allocator, budget, snapshot, module_id, offset, record),
         .record_update => |update| try typeForExpr(allocator, budget, snapshot, module_id, offset, update.target.*),
+        .binding_ref => |ref| blk: {
+            const span = ref.ident.reference().name_span orelse break :blk null;
+            const module = snapshot.moduleById(module_id) orelse break :blk null;
+            const base = for (module.source_files) |file| {
+                if (offset >= file.offset and offset <= file.offset + file.source.len) break file.offset;
+            } else 0;
+            const binding = snapshot.placementReferenceAt(module_id, base + span.start) orelse break :blk null;
+            break :blk try (ast.Type{ .kind = .reference }).withArguments(allocator, &.{binding.ty orelse break :blk null});
+        },
+        .dereference => |read| blk: {
+            const handle = (try typeForExpr(allocator, budget, snapshot, module_id, offset, read.target.*)) orelse break :blk null;
+            break :blk if (handle.kind == .reference and handle.arguments.len == 1) handle.arguments[0] else null;
+        },
         .ident => |ident| blk: {
             switch (try selectedValue(budget, snapshot, module_id, offset, ident.reference())) {
                 .local => |binding| {
@@ -225,7 +238,7 @@ fn typeForPrimitiveCall(allocator: std.mem.Allocator, budget: ?QueryBudget, snap
         const query = registry.lookupQueryOp(call.args.items[1].string.text) orelse return null;
         if (query.preserves_input_type) {
             const input = (try typeForExpr(allocator, budget, snapshot, module_id, offset, call.args.items[0])) orelse return null;
-            if (input.kind != .placed and input.kind != .placement) return null;
+            if (input.kind != .placed) return null;
             return try ast.Type.selectionOf(allocator, input);
         }
         return registry.queryOutputType(query);
@@ -242,10 +255,10 @@ fn typeForPrimitiveCall(allocator: std.mem.Allocator, budget: ?QueryBudget, snap
             const left = (try typeForExpr(allocator, budget, snapshot, module_id, offset, call.args.items[0])) orelse return null;
             const right = (try typeForExpr(allocator, budget, snapshot, module_id, offset, call.args.items[1])) orelse return null;
             if (left.kind == .selection and right.kind == .selection) {
-                if (registry.selectionPlacementItem(descriptor.op, left.selectionItem(), right.selectionItem())) |item| {
+                if (registry.selectionAlgebraItem(descriptor.op, left.selectionItem(), right.selectionItem())) |item| {
                     return try ast.Type.selectionOf(allocator, item);
                 }
-                if (left.selectionItem().kind == .page and right.selectionItem().kind == .page) return left;
+                return null;
             }
         },
         else => {},
@@ -365,7 +378,7 @@ pub fn fieldForType(allocator: std.mem.Allocator, budget: ?QueryBudget, snapshot
         }
         return recordField(budget, snapshot, settingsId(snapshot) orelse return null, name);
     }
-    if (ty.kind == .placed or ty.kind == .placement) {
+    if (ty.kind == .placed) {
         const field_type = @import("../../language/placement.zig").memberType(ty, name) orelse return null;
         return .{ .name = name, .value_type = field_type, .type_label = try field_type.formatAlloc(allocator) };
     }

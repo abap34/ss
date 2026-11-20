@@ -345,6 +345,9 @@ pub const HoleFact = struct {
 };
 
 pub const AnalysisSnapshot = struct {
+    const ScheduledBinding = struct { module_id: core.SourceModuleId, name_span: ?ast.Span, page_name_span: ?ast.Span, ty: ?ast.Type };
+    scheduled_bindings: []ScheduledBinding = &.{},
+    placement_uses: std.AutoHashMapUnmanaged(core.BindingLocation, u32) = .empty,
     settings_module_id: ?core.SourceModuleId = null,
     syntax_storage: ?SyntaxStorage = null,
     type_storage: ?TypeStorage = null,
@@ -392,6 +395,15 @@ pub const AnalysisSnapshot = struct {
         snapshot.type_definitions = try collectTypeDefinitions(allocator, state);
         snapshot.type_storage = TypeStorage.init(allocator);
         const type_storage = &snapshot.type_storage.?;
+        const arena = type_storage.arena.allocator();
+        snapshot.scheduled_bindings = try arena.alloc(ScheduledBinding, state.scheduled_bindings.items.len);
+        for (snapshot.scheduled_bindings, state.scheduled_bindings.items) |*fact, binding| fact.* = .{
+            .module_id = binding.module_id,
+            .name_span = binding.name_span,
+            .page_name_span = binding.page_name_span,
+            .ty = if (binding.ty) |ty| try type_storage.retain(ty) else null,
+        };
+        snapshot.placement_uses = try state.source_map.placement_uses.clone(arena);
         snapshot.holes = if (holes) |tables| try cloneHoles(allocator, type_storage, tables) else &.{};
         snapshot.value_bindings = try collectValueBindings(allocator, type_storage, state);
         snapshot.variable_bindings = try collectVariableBindings(allocator, type_storage, state);
@@ -400,6 +412,11 @@ pub const AnalysisSnapshot = struct {
         snapshot.enum_cases = try collectEnumCases(allocator, declaration_index.types.items);
         try snapshot.indexDeclarations();
         return snapshot;
+    }
+
+    pub fn placementReferenceAt(self: *const AnalysisSnapshot, module_id: core.SourceModuleId, offset: usize) ?ScheduledBinding {
+        const id = self.placement_uses.get(.{ .module_id = module_id, .offset = offset }) orelse return null;
+        return self.scheduled_bindings[id];
     }
 
     fn indexDeclarations(self: *AnalysisSnapshot) !void {

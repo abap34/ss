@@ -6,16 +6,8 @@ fn filter<T>(items: Selection<T>, predicate: T -> Bool) -> Selection<T>
   return selection_filter(items, predicate)
 end
 
-fn selection<T>(item: T) -> Selection<T>
+fn selection<T>(item: Placed<T>) -> Selection<Placed<T>>
   return select(item, "self_placement")
-end
-
-fn children(base: Placement) -> Selection<Placement>
-  return select(base, "children")
-end
-
-fn descendants(base: Placement) -> Selection<Placement>
-  return select(base, "descendants")
 end
 
 fn doc_pages() -> Selection<Page>

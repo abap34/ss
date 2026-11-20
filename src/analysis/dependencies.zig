@@ -145,6 +145,16 @@ pub const AccessSummary = struct {
         try self.escaped_objects.append(self.allocator, identity);
     }
 
+    pub fn applyBindingReads(self: *AccessSummary, state: *const core.DocumentState, unit: core.placement_inputs.ReadUnit) !void {
+        if (state.displays.inputs.reads.get(unit)) |reads| for (reads.ids) |id| {
+            try self.addRead(.{ .placement_binding = .{ .id = id, .name = state.scheduled_bindings.items[id].name } });
+        };
+        for (self.placements.items) |def| {
+            for (def.steps.items, 0..) |*step, i| try step.applyBindingReads(state, unit.display(def.call_id, i));
+        }
+        for (self.drawings.items) |def| try def.condition.applyBindingReads(state, unit.drawing(def.key));
+    }
+
     pub fn addDrawing(self: *AccessSummary, key: u64, origin: core.SourceOrigin, condition: AccessSummary) std.mem.Allocator.Error!void {
         for (self.drawings.items) |*existing| if (existing.key == key) {
             try existing.condition.mergeArm(condition, false);
@@ -329,6 +339,7 @@ pub fn appendResource(
     options: AccessSummaryFormatOptions,
 ) !void {
     switch (resource) {
+        .placement_binding => |binding| try out.print(allocator, "PlacementBinding({s}, {d})", .{ binding.name, binding.id }),
         .variable => |variable| {
             try out.appendSlice(allocator, "Variable(");
             try out.appendSlice(allocator, "scope=");
@@ -628,6 +639,7 @@ const AbstractValue = struct {
     present: Alternatives = .bottom,
     id: usize = 0,
     candidates: []const Callable = &.{},
+    targets: core.placement_inputs.BindingTargets = .{},
     path: core.placement_inputs.ReadPath = .{},
     fields: []const Field = &.{},
     property_target: ?PropertyTarget = null,
@@ -648,7 +660,7 @@ const AbstractValue = struct {
     fn eql(left: AbstractValue, right: AbstractValue, depth: usize) bool {
         if (depth >= max_value_depth) return false;
         if (left.truth != right.truth or left.present != right.present) return false;
-        if (!left.path.eql(right.path)) return false;
+        if (!left.path.eql(right.path) or !left.targets.eql(right.targets)) return false;
         if (left.candidates.len != right.candidates.len or left.fields.len != right.fields.len or
             !resourceScopeEql(left.page_scope, right.page_scope) or !left.placement.eql(right.placement)) return false;
         if (!sameTarget(left.property_target, right.property_target)) return false;
@@ -1180,6 +1192,7 @@ pub const Analyzer = struct {
                 defer facts.deinit();
                 try summary.merge(facts.summary);
                 if (!names.isDiscardBindingName(binding.name)) {
+                    if (binding.binding_id) |id| try summary.addWrite(.{ .placement_binding = .{ .id = id, .name = binding.name } });
                     if (let_policy == .scheduled) try summary.addWrite(Resource.makeVariable(self.variable_scope, binding.name));
                     const target = try self.bindingPropertyTarget(binding.name, facts.property_target, let_policy);
                     try self.environment.put(binding.name, .{
@@ -1267,7 +1280,19 @@ pub const Analyzer = struct {
     fn analyzeExpr(self: *Analyzer, value: ast.Expr) anyerror!AccessSummary {
         if (self.sema.state) |state| try state.checkAnalysisCanceled();
         return switch (value) {
-            .hole => AccessSummary.init(self.allocator),
+            .hole, .binding_ref => AccessSummary.init(self.allocator),
+            .dereference => |operand| blk: {
+                var result = try self.analyzeExpr(operand.target.*);
+                errdefer result.deinit();
+                // The closed call analysis has already recorded all reads for
+                // scheduled units. Open dependency queries may still have local evidence.
+                if (self.run_cache == null) if (self.sema.state) |state| {
+                    const handle = try self.expressionValue(operand.target.*);
+                    for (handle.targets.ids) |id|
+                        try result.addRead(.{ .placement_binding = .{ .id = id, .name = state.scheduled_bindings.items[id].name } });
+                };
+                break :blk result;
+            },
             .ident => |ident| blk: {
                 const name = ident.name;
                 var summary = AccessSummary.init(self.allocator);
@@ -1472,6 +1497,7 @@ pub const Analyzer = struct {
         var result = try self.withPropertyTarget(try self.newValue(candidates.items, fields.items), joinPropertyTargets(left.property_target, right.property_target));
         result = self.withAlternatives(result, left.truth.join(right.truth), left.present.join(right.present));
         result = self.withPath(result, left.path.join(right.path));
+        result = self.withBindingTargets(result, try left.targets.merge(right.targets, allocator));
         result.page_scope = if (resourceScopeEql(left.page_scope, right.page_scope)) left.page_scope else .any;
         result.placement = left.placement.join(right.placement);
         if (left.children) |left_children| if (right.children) |right_children| {
@@ -1546,6 +1572,16 @@ pub const Analyzer = struct {
         return result;
     }
 
+    fn withBindingTargets(self: *Analyzer, value: AbstractValue, targets: core.placement_inputs.BindingTargets) AbstractValue {
+        if (targets.ids.len == 0 or value.targets.eql(targets)) return value;
+        var result = value;
+        const counter = if (self.run_cache) |cache| &cache.next_value_id else &self.next_value_id;
+        result.id = counter.*;
+        counter.* += 1;
+        result.targets = targets;
+        return result;
+    }
+
     fn expressionValue(self: *Analyzer, expr: ast.Expr) anyerror!AbstractValue {
         if (self.value_depth >= max_value_depth) return error.FunctionAnalysisLimitExceeded;
         self.value_depth += 1;
@@ -1555,6 +1591,18 @@ pub const Analyzer = struct {
             .number, .color, .enum_case, .string => self.withAlternatives(.{}, .bottom, .yes),
             .none => self.withAlternatives(.{}, .bottom, .no),
             .optional_check => |check| self.withAlternatives(.{}, (try self.expressionValue(check.target.*)).present, .yes),
+            .binding_ref => |ref| if (ref.binding_id) |id| self.withBindingTargets(self.withAlternatives(.{}, .bottom, .yes), try core.placement_inputs.BindingTargets.one(self.value_storage.allocator(), id)) else .{},
+            .dereference => |operand| blk: {
+                const state = self.sema.state orelse break :blk .{};
+                const handle = try self.expressionValue(operand.target.*);
+                if (handle.path.no_value) break :blk handle;
+                var result = AbstractValue{};
+                for (handle.targets.ids) |id| {
+                    if (id >= state.displays.inputs.bindings.len) continue;
+                    result = try self.joinValues(result, try self.bindingInput(id));
+                }
+                break :blk result;
+            },
             .ident => |ident| try self.withPropertyTarget(try self.callableValue(ident.reference()), (self.environment.get(ident.name) orelse Binding{}).property_target),
             .lambda => |lambda| blk: {
                 const allocator = self.value_storage.allocator();
@@ -1644,6 +1692,7 @@ pub const Analyzer = struct {
         }
         var result = try self.newValue(candidates, fields.items);
         result = self.withAlternatives(result, input.truth, input.present);
+        result = self.withBindingTargets(result, input.targets);
         result = self.withPath(result, input.path);
         if (input.reference) |reference| switch (reference) {
             .unknown => result = try self.withPropertyTarget(result, PropertyTarget.any()),
@@ -1731,16 +1780,6 @@ pub const Analyzer = struct {
                         result_type = query.output_type;
                         switch (query.op) {
                             .self_placement => result = self.withPath(scope, scope.path.selection(.yes)),
-                            .children, .descendants => {
-                                if (scope.children) |children| {
-                                    result = .{};
-                                    for (children) |child| result = try self.joinValues(result, child);
-                                    if (query.op == .descendants) result.placement.depth.max = null;
-                                } else {
-                                    result.page_scope = scope.page_scope;
-                                    result.placement = if (query.op == .children) scope.placement.children() else scope.placement.descendants();
-                                }
-                            },
                             else => {},
                         }
                     }
@@ -2699,7 +2738,7 @@ pub const Analyzer = struct {
         return summary;
     }
 
-    fn applySelectSummary(self: *Analyzer, summary: *AccessSummary, arg_facts: []const CallArgument) !void {
+    fn applySelectSummary(_: *Analyzer, summary: *AccessSummary, arg_facts: []const CallArgument) !void {
         const query_name = argumentString(arg_facts, 1) orelse {
             try summary.addRead(Resource.makeObjects());
             try summary.addSelectionRead(Resource.makeObjects());
@@ -2711,16 +2750,6 @@ pub const Analyzer = struct {
         };
         switch (query.op) {
             .document_pages => try summary.addSelectionRead(Resource.makePages(null)),
-            // Display-generated children are produced after registration.
-            .children, .descendants => {
-                const scope: AbstractValue = if (arg_facts.len > 0) arg_facts[0].values else .{};
-                if (scope.children != null) {
-                    if (query.op == .descendants) try self.addScopedPlacementRead(summary, scope, null, false);
-                } else try summary.addSelectionRead(.{ .objects = .{
-                    .page_scope = scope.page_scope,
-                    .placement = if (query.op == .children) scope.placement.children() else scope.placement.descendants(),
-                } });
-            },
             // A singleton snapshots the supplied identity, not a collection.
             // Its argument dependencies have already been collected.
             .self_placement => {},
@@ -2745,7 +2774,7 @@ pub const Analyzer = struct {
                 break :blk null;
             },
             .call => |call| try self.propertyTargetCall(call),
-            .member, .apply => (try self.expressionValue(expr)).property_target,
+            .member, .apply, .dereference => (try self.expressionValue(expr)).property_target,
             .coalesce => |coalesce| blk: {
                 const target = try self.propertyTargetExpr(coalesce.target.*);
                 const fallback = try self.propertyTargetExpr(coalesce.fallback.*);
@@ -2801,7 +2830,6 @@ pub const Analyzer = struct {
         const query = registry.lookupQueryOp(query_name) orelse return PropertyTarget.any();
         return switch (query.op) {
             .document_pages, .previous_page => PropertyTarget.page(null),
-            .children, .descendants => PropertyTarget.object(),
             .self_placement => if (call.args.items.len > 0)
                 (try self.propertyTargetExpr(call.args.items[0])) orelse PropertyTarget.any()
             else
@@ -2936,7 +2964,7 @@ pub const Analyzer = struct {
             .any, .parameter, .unresolved, .hole => true,
             .optional => if (ty.optional_child) |child| mayReturnProperty(kind, child.*) else true,
             .string, .color, .enum_type => kind == .string_literal,
-            .page, .document, .placed, .placement, .selection => kind == .property_target,
+            .page, .document, .placed, .selection => kind == .property_target,
             else => false,
         };
     }
@@ -2986,11 +3014,11 @@ pub const Analyzer = struct {
         return switch (ty.kind) {
             .document => PropertyTarget.document(),
             .page => PropertyTarget.page(null),
-            .placed, .placement => PropertyTarget.object(),
+            .placed => PropertyTarget.object(),
             .selection => switch (ty.selectionItem().kind) {
                 .page => PropertyTarget.page(null),
                 .any => PropertyTarget.object(),
-                .placed, .placement => PropertyTarget.object(),
+                .placed => PropertyTarget.object(),
                 else => null,
             },
             .optional => if (ty.optional_child) |child| self.propertyTargetForType(child.*) else null,
@@ -3052,6 +3080,8 @@ fn appendCompositionKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), v
     try appendPlacementScopeKey(allocator, out, value.placement);
     try out.appendSlice(allocator, &.{ @backingInt(value.truth), @backingInt(value.present) });
     try out.appendSlice(allocator, &.{ @backingInt(value.path.items), @intFromBool(value.path.no_value), @intFromBool(value.path.unknown_target) });
+    try appendKeyInt(allocator, out, value.targets.ids.len);
+    for (value.targets.ids) |id| try appendKeyInt(allocator, out, id);
     if (value.children) |children| {
         try out.append(allocator, 'c');
         try appendKeyInt(allocator, out, children.len);
@@ -3096,6 +3126,10 @@ fn appendResourceListKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), 
 
 fn appendResourceKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), resource: Resource) !void {
     switch (resource) {
+        .placement_binding => |binding| {
+            try out.append(allocator, 'b');
+            try appendKeyInt(allocator, out, binding.id);
+        },
         .variable => |variable| {
             try out.append(allocator, 'v');
             try appendResourceScopeKey(allocator, out, variable.scope);

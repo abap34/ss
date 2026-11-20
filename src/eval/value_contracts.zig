@@ -3,24 +3,7 @@ const ast = @import("ast");
 const core = @import("core");
 
 pub fn runtimeKind(value: core.Value) core.ValueTag {
-    return switch (value) {
-        .none => .none,
-        .document => .document,
-        .page => .page,
-        .object => .object,
-        .selection => .selection,
-        .anchor => .anchor,
-        .function => .function,
-        .string => .string,
-        .enum_case => .enum_case,
-        .record => .record,
-        .group => .group,
-        .path => .path,
-        .number => .number,
-        .boolean => .boolean,
-        .constraints => .constraints,
-        .void => .void,
-    };
+    return std.meta.activeTag(value);
 }
 
 pub fn ensureValueConformsToType(
@@ -83,17 +66,20 @@ pub fn valueConformsToType(state: anytype, value: core.Value, expected: ast.Type
             else => false,
         };
     }
-    if (expected.kind == .placed or expected.kind == .placement) {
+    if (expected.kind == .reference) {
+        if (value != .binding_ref or value.binding_ref >= state.scheduled_bindings.items.len or expected.arguments.len != 1) return false;
+        return ast.Type.eql(expected.arguments[0], state.scheduled_bindings.items[value.binding_ref].ty orelse return false);
+    }
+    if (expected.kind == .placed) {
         if (value != .object) return false;
         const node = state.getNode(value.object) orelse return false;
         const placement = node.placement orelse return false;
-        if (expected.kind == .placement) return expected.arguments.len == 0;
         return valueConformsToType(state, placement.value, expected.placedInput() orelse return false);
     }
     if (expected.kind == .selection) {
         if (value != .selection) return false;
         const item = expected.selectionItem();
-        if (item.kind == .placed or item.kind == .placement) {
+        if (item.kind == .placed) {
             if (value.selection.item_tag != .object) return false;
             for (value.selection.ids.items) |id| {
                 if (!valueConformsToType(state, .{ .object = id }, item)) return false;
@@ -117,7 +103,8 @@ fn expectedRuntimeKind(expected: ast.Type) ?core.ValueTag {
         .none => .none,
         .document => .document,
         .page => .page,
-        .placed, .placement => .object,
+        .placed => .object,
+        .reference => .binding_ref,
         .selection => .selection,
         .anchor => .anchor,
         .function => .function,

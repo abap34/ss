@@ -8,6 +8,8 @@ pub const SourceNameKind = enum {
     callable_qualifier,
     callable_name,
     identifier,
+    placement_reference,
+    placement_page,
     type_name,
     type_parameter,
     member_name,
@@ -22,6 +24,7 @@ pub const SourceNameTarget = struct {
     kind: SourceNameKind,
     qualifier: ?[]const u8 = null,
     construction: ?ast.RecordExpr = null,
+    reference_offset: ?usize = null,
 };
 
 pub const RecordUpdatePathTarget = struct {
@@ -589,7 +592,7 @@ fn callableInExpr(budget: ?QueryBudget, expr: ast.Expr, offset: usize) ?Callable
             break :blk null;
         },
         .member => |member| callableInExpr(budget, member.target.*, offset),
-        .optional_check => |check| callableInExpr(budget, check.target.*, offset),
+        .optional_check, .dereference => |check| callableInExpr(budget, check.target.*, offset),
         .coalesce => |coalesce| blk: {
             if (callableInExpr(budget, coalesce.target.*, offset)) |target| break :blk target;
             break :blk callableInExpr(budget, coalesce.fallback.*, offset);
@@ -628,6 +631,13 @@ fn sourceNameInType(budget: ?QueryBudget, ty: ast.Type, offset: usize) ?SourceNa
 fn sourceNameInExpr(budget: ?QueryBudget, expr: ast.Expr, offset: usize) ?SourceNameTarget {
     if (expired(budget)) return null;
     return switch (expr) {
+        .binding_ref => |ref| blk: {
+            const name = ref.ident.reference();
+            const span = name.name_span orelse break :blk null;
+            if (spanContainsOffset(span, offset)) break :blk .{ .text = name.name, .kind = .placement_reference, .reference_offset = span.start };
+            if (spanContainsOptional(name.qualifier_span, offset)) break :blk .{ .text = name.qualifier.?, .kind = .placement_page, .reference_offset = span.start };
+            break :blk null;
+        },
         .ident => |ident| if (ident.reference().isQualified()) sourceNameInCallable(ident.reference(), offset) else if (spanContainsOptional(ident.name_span, offset)) .{
             .text = ident.name,
             .kind = .identifier,
@@ -715,7 +725,7 @@ fn sourceNameInExpr(budget: ?QueryBudget, expr: ast.Expr, offset: usize) ?Source
             };
             break :blk null;
         },
-        .optional_check => |check| sourceNameInExpr(budget, check.target.*, offset),
+        .optional_check, .dereference => |check| sourceNameInExpr(budget, check.target.*, offset),
         .coalesce => |coalesce| blk: {
             if (sourceNameInExpr(budget, coalesce.target.*, offset)) |target| break :blk target;
             break :blk sourceNameInExpr(budget, coalesce.fallback.*, offset);
@@ -767,7 +777,7 @@ fn recordUpdatePathInExpr(budget: ?QueryBudget, expr: ast.Expr, offset: usize) ?
             }
             break :blk null;
         },
-        .optional_check => |check| recordUpdatePathInExpr(budget, check.target.*, offset),
+        .optional_check, .dereference => |check| recordUpdatePathInExpr(budget, check.target.*, offset),
         .coalesce => |coalesce| blk: {
             if (recordUpdatePathInExpr(budget, coalesce.target.*, offset)) |target| break :blk target;
             break :blk recordUpdatePathInExpr(budget, coalesce.fallback.*, offset);
@@ -832,7 +842,7 @@ fn recordUpdateCompletionInExpr(budget: ?QueryBudget, expr: ast.Expr, offset: us
             };
             break :blk null;
         },
-        .optional_check => |check| recordUpdateCompletionInExpr(budget, check.target.*, offset),
+        .optional_check, .dereference => |check| recordUpdateCompletionInExpr(budget, check.target.*, offset),
         .coalesce => |coalesce| blk: {
             if (recordUpdateCompletionInExpr(budget, coalesce.target.*, offset)) |target| break :blk target;
             break :blk recordUpdateCompletionInExpr(budget, coalesce.fallback.*, offset);
@@ -908,7 +918,7 @@ fn memberInExpr(budget: ?QueryBudget, expr: ast.Expr, offset: usize) ?MemberTarg
             }
             break :blk null;
         },
-        .optional_check => |check| memberInExpr(budget, check.target.*, offset),
+        .optional_check, .dereference => |check| memberInExpr(budget, check.target.*, offset),
         .coalesce => |coalesce| blk: {
             if (memberInExpr(budget, coalesce.target.*, offset)) |target| break :blk target;
             break :blk memberInExpr(budget, coalesce.fallback.*, offset);

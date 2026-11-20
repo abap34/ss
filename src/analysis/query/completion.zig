@@ -466,7 +466,7 @@ fn propertyTargetForType(snapshot: anytype, ty: ast.Type) ?PropertyTarget {
         .document, .page => .{ .settings = ty },
         .record => if (ty.nominalId() != null) .{ .record = ty } else null,
         .group => .{ .record = ty },
-        .placed, .placement => .{ .placement = ty },
+        .placed => .{ .placement = ty },
         else => null,
     };
 }

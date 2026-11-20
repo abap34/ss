@@ -289,6 +289,15 @@ const Printer = struct {
     fn expr(self: *Printer, value: ast.Expr) anyerror!void {
         switch (value) {
             .ident => |ident| try self.text(ident.name),
+            .binding_ref => |ref| {
+                try self.text("&");
+                try self.text(ref.ident.name);
+            },
+            .dereference => |ref| {
+                try self.text("*(");
+                try self.expr(ref.target.*);
+                try self.text(")");
+            },
             .hole => try self.text("<hole>"),
             .string => |literal| try self.stringLiteral(literal.text),
             .color => |color| {

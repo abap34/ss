@@ -389,6 +389,9 @@ pub fn buildDocumentStateWithOptions(
         var transform = @import("instantiate.zig").Transform{ .allocator = allocator, .next_expression_id = &state.next_expression_id };
         for (state.modules.entries.items) |*module| {
             try @import("scheduled_bindings.zig").collect(&state, module);
+            var refs = try @import("scheduled_bindings.zig").Resolver.init(&state, module);
+            defer refs.deinit();
+            transform.references = &refs;
             try transform.module(&module.syntax);
         }
         try semantics.rebuildConstDeclarations(&state);

@@ -27,6 +27,7 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
         .{ .path = "tests/runtime/math/typed_display_spec.mjs", .name = "test-typed-latex", .description = "Check immutable LaTeX bodies, configuration, and rendering" },
         .{ .path = "tests/runtime/graphics/path/typed_spec.mjs", .name = "test-typed-path", .description = "Check immutable vector paths, dimensions, composition, and rendering" },
         .{ .path = "tests/runtime/math/formula/spec.mjs", .name = "test-typed-math", .description = "Check typed formula construction, composition, and rendering" },
+        .{ .path = "tests/runtime/document/references/spec.mjs", .name = "test-placement-references", .description = "Check placement references, alias dependencies, and reference diagnostics" },
         .{ .path = "tests/runtime/document/bindings/spec.mjs", .name = "test-forward-bindings", .description = "Check scheduled forward bindings, scopes, dependencies, and cycles" },
         .{ .path = "tests/runtime/document/typed_page_numbers_spec.mjs", .name = "test-typed-document", .description = "Check typed page numbers, contents, and references in a multi-page document" },
         .{ .path = "tests/runtime/cli_diagnostics_runtime_spec.mjs" },

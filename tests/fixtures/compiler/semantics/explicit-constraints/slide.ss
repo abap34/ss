@@ -1,6 +1,6 @@
 import std:themes/default as *
 
-fn beside(a: Placement, b: Placement, gap: Number = 24) -> Constraints
+fn beside<A, B>(a: Placed<A>, b: Placed<B>, gap: Number = 24) -> Constraints
   return constraints(
     (b.left == a.right + gap),
     (b.top == a.top)

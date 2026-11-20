@@ -130,12 +130,12 @@ fn collectLambdaDefinitions(
             for (update.fields.items) |field| try collectLambdaDefinitions(allocator, state, source, module_id, field.value, definitions, scope);
         },
         .member => |member| try collectLambdaDefinitions(allocator, state, source, module_id, member.target.*, definitions, scope),
-        .optional_check => |check| try collectLambdaDefinitions(allocator, state, source, module_id, check.target.*, definitions, scope),
+        .optional_check, .dereference => |check| try collectLambdaDefinitions(allocator, state, source, module_id, check.target.*, definitions, scope),
         .coalesce => |coalesce| {
             try collectLambdaDefinitions(allocator, state, source, module_id, coalesce.target.*, definitions, scope);
             try collectLambdaDefinitions(allocator, state, source, module_id, coalesce.fallback.*, definitions, scope);
         },
-        .hole, .ident, .string, .color, .number, .boolean, .none, .enum_case => {},
+        .hole, .ident, .binding_ref, .string, .color, .number, .boolean, .none, .enum_case => {},
     }
 }
 

@@ -323,6 +323,8 @@ const GraphBuilder = struct {
         for (block.statements, 0..) |stmt, i| {
             var summary = try self.statementSummary(&analyzer, module, stmt);
             errdefer summary.deinit();
+            if (self.state.displays.inputs.reads.count() != 0)
+                try summary.applyBindingReads(self.state, .{ .statement = &block.statements[i] });
             try self.units.append(self.allocator, .{
                 .module_id = module.id,
                 .source = module.source,

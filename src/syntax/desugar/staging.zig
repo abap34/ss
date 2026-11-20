@@ -174,7 +174,7 @@ const Rewriter = struct {
                 try self.expr(update.target, shadowed);
                 for (update.fields.items) |*field| try self.expr(&field.value, shadowed);
             },
-            .optional_check => |*check| try self.expr(check.target, shadowed),
+            .optional_check, .dereference => |*check| try self.expr(check.target, shadowed),
             .coalesce => |*coalesce| {
                 try self.expr(coalesce.target, shadowed);
                 try self.expr(coalesce.fallback, shadowed);

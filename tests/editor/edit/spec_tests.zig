@@ -582,7 +582,7 @@ fn checkReferencePins(allocator: std.mem.Allocator) !void {
     const source =
         \\page Example
         \\  let pair = place!(text("Guide") |=| text("Item"))
-        \\  let item = first(children(pair))
+        \\  let item = first(select<Text>(pair))
         \\  ;; Preserve the local relation.
         \\  ~!~ item.left ==
         \\    pair.center_x + 16 ;; Keep this comment.
@@ -625,7 +625,7 @@ fn checkReferencePins(allocator: std.mem.Allocator) !void {
     try std.testing.expectEqualStrings(
         \\page Example
         \\  let pair = place!(text("Guide") |=| text("Item"))
-        \\  let item = first(children(pair))
+        \\  let item = first(select<Text>(pair))
         \\  ;; Preserve the local relation.
         \\  ~!~ pair.left == page.left + 96
         \\  ~!~ item.left ==

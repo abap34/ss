@@ -50,10 +50,10 @@ fn queryWithAllocator(allocator: std.mem.Allocator, state: *core.DocumentState, 
 test "typed queries: adopted subtrees keep their original display dependencies through helpers" {
     const cases = [_]struct { expression: []const u8, expected: []const u8 }{
         .{ .expression = "selection_count(select<Text>(root))", .expected = "2" },
-        .{ .expression = "selection_count(descendants(root))", .expected = "4" },
-        .{ .expression = "selection_count(select<Text>(first(children(root))))", .expected = "2" },
-        .{ .expression = "selection_count(children(first(children(root))))", .expected = "1" },
-        .{ .expression = "selection_count(children(first(select<Group>(root))))", .expected = "2" },
+        .{ .expression = "selection_count(select<Badge>(root))", .expected = "1" },
+        .{ .expression = "selection_count(select<Text>(first(select<Badge>(root))))", .expected = "2" },
+        .{ .expression = "selection_count(select<Group>(first(select<Badge>(root))))", .expected = "1" },
+        .{ .expression = "selection_count(select<Text>(first(select<Group>(root))))", .expected = "2" },
     };
     for (cases) |case| {
         const source = try std.fmt.allocPrint(testing.allocator,
@@ -62,7 +62,7 @@ test "typed queries: adopted subtrees keep their original display dependencies t
             \\  return text(self.value.title) // text("Detail")
             \\end
             \\fn wrap!<T>(item: Placed<T>) -> Placed<Group<T>> = group!(item)
-            \\fn count(root: Placement) -> Number = {s}
+            \\fn count<T>(root: Placed<T>) -> Number = {s}
             \\page main
             \\  let badge = place!(Badge {{ title = "Title" }})
             \\  let root = wrap!(badge)
@@ -130,7 +130,7 @@ test "typed queries: placing functions can read the children of their own groups
         \\import std:prelude as *
         \\fn make_pair!(target: Page) -> Placed<Group<Text, Text>>
         \\  let root = place_on!(target, group(text("First"), text("Second")))
-        \\  let count = selection_count(children(root))
+        \\  let count = selection_count(select<Text>(root))
         \\  place_on!(target, text(str(count)))
         \\  return root
         \\end
@@ -158,19 +158,19 @@ test "typed queries: placing functions can read the children of their own groups
 
 test "typed queries: structural group reads compose through nested scopes and helpers" {
     const cases = [_]struct { expression: []const u8, expected: []const u8 }{
-        .{ .expression = "selection_count(children(root))", .expected = "2" },
-        .{ .expression = "selection_count(descendants(root))", .expected = "4" },
+        .{ .expression = "selection_count(select<Group>(root))", .expected = "1" },
+        .{ .expression = "selection_count(select<Group<Text, Text>>(root))", .expected = "1" },
         .{ .expression = "selection_count(select<Text>(root))", .expected = "3" },
-        .{ .expression = "selection_count(children(first(select<Group<Text, Text>>(root))))", .expected = "2" },
-        .{ .expression = "selection_count(children(first(select<Text>(root))))", .expected = "0" },
-        .{ .expression = "count_children(root)", .expected = "2" },
-        .{ .expression = "count_children(first(select<Group<Text, Text>>(root)))", .expected = "2" },
-        .{ .expression = "(() |-> count_children(root))()", .expected = "2" },
+        .{ .expression = "selection_count(select<Text>(first(select<Group<Text, Text>>(root))))", .expected = "2" },
+        .{ .expression = "selection_count(select<Text>(first(select<Text>(root))))", .expected = "0" },
+        .{ .expression = "count_texts(root)", .expected = "3" },
+        .{ .expression = "count_texts(first(select<Group<Text, Text>>(root)))", .expected = "2" },
+        .{ .expression = "(() |-> count_texts(root))()", .expected = "3" },
     };
     for (cases) |case| {
         const source = try std.fmt.allocPrint(testing.allocator,
             \\import std:prelude as *
-            \\fn count_children(target: Placement) -> Number = selection_count(children(target))
+            \\fn count_texts<T>(target: Placed<T>) -> Number = selection_count(select<Text>(target))
             \\fn inspect!(target: Page) -> Placed<Text>
             \\  let root = place_on!(target, group(text("First"), group(text("Second"), text("Third"))))
             \\  return place_on!(target, text(str({s})))
@@ -196,7 +196,7 @@ test "typed queries: inline group registration supplies children before querying
     var state = try document(
         \\import std:prelude as *
         \\fn count!(target: Page) -> Placed<Text>
-        \\  return place_on!(target, text(str(selection_count(children(place_on!(target, group(text("First"), text("Second"))))))))
+        \\  return place_on!(target, text(str(selection_count(select<Text>(place_on!(target, group(text("First"), text("Second"))))))))
         \\end
         \\page main
         \\  count!(pagectx())
@@ -257,10 +257,10 @@ test "typed queries: exact generic input types and selection algebra keep typed 
         \\  let b = label!("Second")
         \\  let numbers: Selection<Placed<Label<Number>>> = select<Label<Number>>(pagectx())
         \\  let words = select<Label<String>>(pagectx())
-        \\  let mixed: Selection<Placement> = words | numbers
-        \\  let remaining: Selection<Placed<Label<Number>>> = numbers - words
+        \\  let mixed: Selection<Placed<Label<Number>>> = numbers | numbers
+        \\  let remaining: Selection<Placed<Label<Number>>> = numbers - (numbers - numbers)
         \\  let common: Selection<Placed<Label<Number>>> = mixed & numbers
-        \\  let first_item: Placement = first(mixed)
+        \\  let first_item: Placed<Label<Number>> = first(mixed)
         \\  ~ first_item.left == page.left + 12
         \\  let empty = difference(numbers, numbers)
         \\  let unique = numbers | numbers
@@ -283,7 +283,7 @@ test "typed queries: exact generic input types and selection algebra keep typed 
         defer selection.deinit(testing.allocator);
         try testing.expectEqualSlices(core.NodeId, &.{root}, selection.ids.items);
     }
-    try testing.expectEqualStrings("2:1:1:0:1:3:99", core.nodeDisplayContent(state.getNode(roots[2]).?));
+    try testing.expectEqualStrings("1:1:1:0:1:3:99", core.nodeDisplayContent(state.getNode(roots[2]).?));
     var pages = try core.prepared.prepare(testing.allocator, &state);
     defer pages.deinit(testing.allocator);
     var layout = try core.layout.solveDocument(&state, null, .{ .jobs = 1 });
@@ -313,12 +313,12 @@ test "typed queries: shared display helpers retain each input subtree without de
     var state = try document(
         \\import std:text/content as native
         \\type Label { title: String }
-        \\type Reader { target: Placement }
+        \\type Reader { target: Placed<Label> }
         \\fn/! label(title: String) -> Label = Label { title = title }
         \\fn display(self: Placed<Label>) -> native::Text
         \\  return native::Text { content = native::TextContent { source = self.value.title } }
         \\end
-        \\fn texts(scope: Placement) -> Selection<Placed<native::Text>> = select<native::Text>(scope)
+        \\fn texts<T>(scope: Placed<T>) -> Selection<Placed<native::Text>> = select<native::Text>(scope)
         \\fn display(self: Placed<Reader>) -> native::Text
         \\  let selected = texts(self.value.target)
         \\  return native::Text { content = native::TextContent { source = join(selected, ",", (t: Placed<native::Text>) |-> t.value.content.source) } }
@@ -486,11 +486,11 @@ test "typed queries: filtering preserves subtree facts for predicates and return
     var state = try document(
         \\import std:text/content as native
         \\type Label { title: String }
-        \\type Reader { target: Placement }
+        \\type Reader { target: Placed<Label> }
         \\fn/! label(title: String) -> Label = Label { title = title }
         \\fn display(self: Placed<Label>) -> native::Text = native::Text { content = native::TextContent { source = self.value.title } }
         \\fn display(self: Placed<Reader>) -> native::Text
-        \\  let chosen: Selection<Placement> = filter(selection(self.value.target), (p: Placement) |-> selection_count(children(p)) > 0)
+        \\  let chosen: Selection<Placed<Label>> = filter(selection(self.value.target), (p: Placed<Label>) |-> selection_count(select<native::Text>(p)) > 0)
         \\  let leaves = select<native::Text>(first(chosen))
         \\  return native::Text { content = native::TextContent { source = join(leaves, ",", (t: Placed<native::Text>) |-> t.value.content.source) } }
         \\end
@@ -594,17 +594,17 @@ test "typed queries: child helpers wait for displays and preserve each captured 
         \\import std:text/content as native
         \\type Heading { title: String }
         \\type Wrapped { content: Heading }
-        \\type Reader { target: Placement }
+        \\type Reader<T> { target: Placed<T> }
         \\fn/! wrapped(title: String) -> Wrapped = Wrapped { content = Heading { title = title } }
         \\fn display(self: Placed<Heading>) -> native::Text = native::Text { content = native::TextContent { source = self.value.title } }
         \\fn display(self: Placed<Wrapped>) -> Heading = self.value.content
-        \\fn child_count(target: Placement) -> Number = selection_count(children(target))
-        \\fn display(self: Placed<Reader>) -> native::Text
-        \\  let same: Placed<Reader> = first(selection(self))
+        \\fn child_count<T>(target: Placed<T>) -> Number = selection_count(select<Heading>(target))
+        \\fn display<T>(self: Placed<Reader<T>>) -> native::Text
+        \\  let same: Placed<Reader<T>> = first(selection(self))
         \\  let target = same.value.target
         \\  let read = () |-> child_count(target)
-        \\  let direct: Selection<Placement> = children(target)
-        \\  let all: Selection<Placement> = descendants(target)
+        \\  let direct: Selection<Placed<Heading>> = select<Heading>(target)
+        \\  let all: Selection<Placed<native::Text>> = select<native::Text>(target)
         \\  let result = str(read()) ++ ":" ++ str(selection_count(all)) ++ ":" ++ str(selection_count(selection(self)))
         \\  return native::Text { content = native::TextContent { source = result } }
         \\end
@@ -613,8 +613,8 @@ test "typed queries: child helpers wait for displays and preserve each captured 
         \\  let second_target = place_on!(pagectx(), native::Text { content = native::TextContent { source = "Second" } })
         \\  place_on!(pagectx(), Reader { target = first_target })
         \\  place_on!(pagectx(), Reader { target = second_target })
-        \\  let child = first(children(first_target))
-        \\  let leaf = first(descendants(child))
+        \\  let child = first(select<Heading>(first_target))
+        \\  let leaf = first(select<native::Text>(child))
         \\  ~ leaf.left == page.left + 24
         \\end
     );
@@ -624,7 +624,7 @@ test "typed queries: child helpers wait for displays and preserve each captured 
     try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
     const roots = state.placementRootsOf(state.graph.page_order.items[0]);
     try testing.expectEqual(@as(usize, 4), roots.len);
-    for (roots[2..], [_][]const u8{ "1:2:1", "0:0:1" }) |root, expected| {
+    for (roots[2..], [_][]const u8{ "1:1:1", "0:0:1" }) |root, expected| {
         try testing.expectEqualStrings(expected, core.nodeDisplayContent(state.getNode(state.childrenOf(root).?[0]).?));
     }
     var pages = try core.prepared.prepare(testing.allocator, &state);
@@ -636,10 +636,11 @@ test "typed queries: child helpers wait for displays and preserve each captured 
 }
 
 test "typed queries: reading one's own children during display rejects a dependency cycle" {
-    for ([_][]const u8{ "children", "descendants" }) |query| {
+    for ([_][]const u8{ "select<native::Text>", "texts" }) |query| {
         const source = try std.fmt.allocPrint(testing.allocator,
             \\import std:text/content as native
             \\type Reader {{}}
+            \\fn texts<T>(target: Placed<T>) -> Selection<Placed<native::Text>> = select<native::Text>(target)
             \\fn display(self: Placed<Reader>) -> native::Text
             \\  return native::Text {{ content = native::TextContent {{ source = str(selection_count({s}(self))) }} }}
             \\end
@@ -655,8 +656,8 @@ test "typed queries: reading one's own children during display rejects a depende
     }
 }
 
-test "typed queries: child and singleton queries require a placement reference" {
-    for ([_][]const u8{ "children", "descendants", "selection" }) |query| {
+test "typed queries: singleton queries require a placed input" {
+    for ([_][]const u8{"selection"}) |query| {
         for ([_][]const u8{ "7", "Heading { title = \"Value\" }", "pagectx()", "text(\"Value\")" }) |input| {
             const source = try std.fmt.allocPrint(testing.allocator,
                 \\type Heading {{ title: String }}
@@ -674,12 +675,12 @@ test "typed queries: child and singleton queries require a placement reference" 
     }
 }
 
-test "typed queries: a child display can count direct siblings but not unfinished descendants" {
-    for ([_][]const u8{ "children", "descendants" }) |query| {
+test "typed queries: a child display can count typed siblings but not its unfinished output" {
+    for ([_][]const u8{ "select<Child>", "select<native::Text>" }) |query| {
         const source = try std.fmt.allocPrint(testing.allocator,
             \\import std:text/content as native
             \\type Parent {{}}
-            \\type Child {{ parent: Placement }}
+            \\type Child {{ parent: Placed<Parent> }}
             \\fn display(self: Placed<Parent>) -> Child = Child {{ parent = self }}
             \\fn display(self: Placed<Child>) -> native::Text
             \\  let peers = {s}(self.value.parent)
@@ -692,7 +693,7 @@ test "typed queries: a child display can count direct siblings but not unfinishe
         defer testing.allocator.free(source);
         var state = try document(source);
         defer state.deinit();
-        if (std.mem.eql(u8, query, "descendants")) {
+        if (std.mem.eql(u8, query, "select<native::Text>")) {
             try testing.expectError(error.ExecutionDependencyCycle, analyzeGraph(&state));
             continue;
         }
@@ -709,9 +710,9 @@ test "typed queries: shared typed subtree helpers preserve the receiver path and
     var state = try document(
         \\import std:text/content as native
         \\type Parent {}
-        \\type Child { parent: Placement }
+        \\type Child { parent: Placed<Parent> }
         \\fn display(self: Placed<Parent>) -> Child = Child { parent = self }
-        \\fn count_children(target: Placement) -> Number = selection_count(select<Child>(target))
+        \\fn count_children<T>(target: Placed<T>) -> Number = selection_count(select<Child>(target))
         \\fn display(self: Placed<Child>) -> native::Text
         \\  let peers = count_children(self.value.parent)
         \\  let nested = count_children(self)
@@ -798,7 +799,7 @@ test "typed queries: group child captures distinguish dependency summaries" {
         \\  return group(native::Text { content = native::TextContent { source = "A" } }, native::Text { content = native::TextContent { source = "B" } })
         \\end
         \\fn display(self: Placed<Reader>) -> native::Text = native::Text { content = native::TextContent { source = self.value.read() } }
-        \\fn reader(target: Placement) -> Reader
+        \\fn reader<T>(target: Placed<T>) -> Reader
         \\  return Reader { read = () |-> str(selection_count(select<native::Text>(target))) }
         \\end
         \\fn reuse(value: Group<Reader>) -> Group<Reader> = value

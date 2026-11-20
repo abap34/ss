@@ -86,7 +86,7 @@ pub fn presence(ty: ast.Type) Alternatives {
 
 pub fn needsValueFlow(ty: ast.Type) bool {
     return switch (ty.kind) {
-        .boolean, .function, .record, .group, .optional, .any, .parameter, .placed, .placement, .page, .document, .selection => true,
+        .boolean, .function, .record, .group, .optional, .any, .parameter, .placed, .reference, .page, .document, .selection => true,
         else => false,
     };
 }

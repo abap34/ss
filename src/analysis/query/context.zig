@@ -14,6 +14,7 @@ pub const Context = struct {
     parsed: source_query.ParsedSource = .{},
     offset: usize,
     semantic_offset: usize,
+    reference_offset: ?usize = null,
     budget: ?types.QueryBudget = null,
 
     pub fn init(allocator: std.mem.Allocator, req: types.SourceRequest) !Context {
@@ -40,6 +41,7 @@ pub const Context = struct {
             .target_kind = target.kind,
             .qualifier = target.qualifier,
             .construction = target.construction,
+            .reference_offset = target.reference_offset,
             .parsed = parsed,
             .offset = req.offset,
             .semantic_offset = req.offset,
@@ -109,6 +111,7 @@ const TargetAtOffset = struct {
     kind: ?cursor.SourceNameKind = null,
     qualifier: ?[]u8 = null,
     construction: ?ast.RecordExpr = null,
+    reference_offset: ?usize = null,
 };
 
 fn targetAtOffset(allocator: std.mem.Allocator, text: []const u8, offset: usize, program: ?*const ast.Module, budget: ?types.QueryBudget) !?TargetAtOffset {
@@ -121,6 +124,7 @@ fn targetAtOffset(allocator: std.mem.Allocator, text: []const u8, offset: usize,
                 .kind = target.kind,
                 .qualifier = if (target.qualifier) |qualifier| try allocator.dupe(u8, qualifier) else null,
                 .construction = target.construction,
+                .reference_offset = target.reference_offset,
             };
         }
     }

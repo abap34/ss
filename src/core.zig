@@ -52,6 +52,7 @@ pub const nodeContent = model.nodeContent;
 pub const nodeDisplayContent = model.nodeDisplayContent;
 pub const nodePayloadKind = model.nodePayloadKind;
 pub const DocumentState = @import("core/document_state.zig").DocumentState;
+pub const BindingLocation = @import("core/document_state.zig").BindingLocation;
 pub const SourceModuleKind = @import("core/document_state.zig").SourceModuleKind;
 pub const SourceModuleId = @import("core/document_state.zig").SourceModuleId;
 pub const SourceModule = @import("core/document_state.zig").SourceModule;

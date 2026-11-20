@@ -21,6 +21,7 @@ fn write(object: *json.Object, value: core.Value) anyerror!void {
         .string => |text| try object.stringField("value", text),
         .number => |number| try object.floatField("value", number, "{d}"),
         .boolean => |boolean| try object.boolField("value", boolean),
+        .binding_ref => |id| try object.intField("binding", id),
         .document, .page, .object => |id| try object.intField("id", id),
         .enum_case => |case| {
             try object.stringField("type", case.enum_name);

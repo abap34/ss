@@ -38,8 +38,8 @@ const cases = [
   },
   {
     name: "builtin-type-names",
-    source: "fn types(a: Document, b: Page, c: Anchor, d: String, e: Color, f: Number, g: Bool, h: Constraints, i: Path, j: None, k: Selection<Page>, l: Group<Text, Image>, m: Placed<Text>, n: Placement) -> Void\n  return\nend\n",
-    typeNames: ["Document", "Page", "Anchor", "String", "Color", "Number", "Bool", "Constraints", "Path", "None", "Selection", "Page", "Group", "Text", "Image", "Placed", "Text", "Placement", "Void"],
+    source: "fn types(a: Document, b: Page, c: Anchor, d: String, e: Color, f: Number, g: Bool, h: Constraints, i: Path, j: None, k: Selection<Page>, l: Group<Text, Image>, m: Placed<Text>, n: Ref<Placed<Text>>) -> Void\n  return\nend\n",
+    typeNames: ["Document", "Page", "Anchor", "String", "Color", "Number", "Bool", "Constraints", "Path", "None", "Selection", "Page", "Group", "Text", "Image", "Placed", "Text", "Ref", "Placed", "Text", "Void"],
   },
   {
     name: "lowercase-type-declarations",

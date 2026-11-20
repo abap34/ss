@@ -248,8 +248,8 @@ end
     await expectFailure(name, `${prelude}
 page conflict
 let g = place!(text("A") ${operator} text("B"))
-let a = first(children(g))
-let b = first(children(g) - selection(a))
+let a = first(select<Text>(g))
+let b = first(select<Text>(g) - selection(a))
 ${dimensions}
 end
 `, name === "insufficient-space" ? "InvalidWidthAllocation" : "ConstraintConflict");
@@ -258,8 +258,8 @@ end
   const updated = await dumpSource("equal-horizontal-update", `${prelude}
 page update
 let g = place!(text("A") |=| text("B"))
-let a = first(children(g))
-let b = first(children(g) - selection(a))
+let a = first(select<Text>(g))
+let b = first(select<Text>(g) - selection(a))
 ~ g.width == 800
 ~ g.height == 300
 ~ g.left == page.left + 80
@@ -284,7 +284,7 @@ let g = place!(text("Move me") ${operator} text("Guide"))
 ~ g.top == page.top - 100
 ~ g.width == 800
 ~ g.height == 300
-let a = first(children(g))
+let a = first(select<Text>(g))
 ~!~ a.left == page.left + 97
 ~!~ a.top == page.top - ${offset}
 end
@@ -495,7 +495,7 @@ async function testVerticalSplitWidths() {
   ]) {
     const { dump } = await dumpSource(`vertical-width-${name}`, `page main
 let g = place!(text("Short") /=/ text("Second line"))
-let a = first(children(g))
+let a = first(select<Text>(g))
 ${constraints}
 end
 `);
@@ -733,8 +733,8 @@ async function testConstraintUpdate() {
   const { dump } = await dumpSource("updated", `${prelude}
 page main
 let placed = place!(box("A", 120, 80) || box("B", 180, 60))
-let a = first(children(placed))
-let b = first(children(placed) - selection(a))
+let a = first(select<Box>(placed))
+let b = first(select<Box>(placed) - selection(a))
 let c = place!(box("C", 90, 50))
 ${anchor}
 ~!~ b.top == a.bottom - 24
@@ -865,8 +865,8 @@ async function testConflictsAndMixedDirections() {
   await expectFailure("conflict", `${prelude}
 page main
 let placed = place!(box("A", 120, 80) || box("B", 180, 60))
-let a = first(children(placed))
-let b = first(children(placed) - selection(a))
+let a = first(select<Box>(placed))
+let b = first(select<Box>(placed) - selection(a))
 ~ b.left == a.right + 64
 end
 `, "ConstraintConflict");
@@ -902,8 +902,8 @@ ${documentPolicy ? `document\nvflow_doc(LayoutPolicy.${documentPolicy})\nend\n` 
 page main
 ${pagePolicy ? `vflow(LayoutPolicy.${pagePolicy})` : ""}
 let placed = place!(box("A", 120, 80) || box("B", 180, 60))
-let a = first(children(placed))
-let b = first(children(placed) - selection(a))
+let a = first(select<Box>(placed))
+let b = first(select<Box>(placed) - selection(a))
 ${before}
 ~ a.left == page.left + 80
 ${fixedLeft ? "~ a.top == page.top - 80" : ""}

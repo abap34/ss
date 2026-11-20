@@ -82,8 +82,6 @@ import std:query as {
   previous_page,
   selection,
   filter,
-  children,
-  descendants,
   doc_pages,
   pages,
 }

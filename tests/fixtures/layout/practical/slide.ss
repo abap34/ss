@@ -98,15 +98,15 @@ Read the result and confirm the next step.
     group(rectangle(472, 424, VectorStyle { stroke = no_stroke() }), a, b),
     group(rectangle(472, 424, VectorStyle { stroke = no_stroke() }), c, d)
   ))
-  let frame = first(children(content))
-  let left = first(children(content) - selection(frame))
-  let right = first(children(content) - selection(frame) - selection(left))
-  let left_frame = first(children(left))
-  let right_frame = first(children(right))
-  let upper_left = first(children(left) - selection(left_frame))
-  let lower_left = first(children(left) - selection(left_frame) - selection(upper_left))
-  let upper_right = first(children(right) - selection(right_frame))
-  let lower_right = first(children(right) - selection(right_frame) - selection(upper_right))
+  let frame = first(select<PathShape>(content))
+  let left = first(select<Group<PathShape, Text, Text>>(content))
+  let right = first(select<Group<PathShape, Text, Text>>(content) - selection(left))
+  let left_frame = first(select<PathShape>(left))
+  let right_frame = first(select<PathShape>(right))
+  let upper_left = first(select<Text>(left))
+  let lower_left = first(select<Text>(left) - selection(upper_left))
+  let upper_right = first(select<Text>(right))
+  let lower_right = first(select<Text>(right) - selection(upper_right))
   ~ content.left == page.left + 120
   ~ content.top == page.top - 180
   ~ left_frame.left == frame.left + 12
@@ -185,10 +185,10 @@ page image_caption
 Each bar uses the same baseline. The caption stays below the complete image.
 >>
   let content = place!(((diagram_value // caption_value) with { gap = 20 }) || annotation_value)
-  let column = first(children(content))
-  let annotation = first(children(content) - selection(column))
-  let diagram = first(children(column))
-  let caption = first(children(column) - selection(diagram))
+  let column = first(select<Group<Image, Text>>(content))
+  let annotation = first(select<Text>(content) - select<Text>(column))
+  let diagram = first(select<Image>(column))
+  let caption = first(select<Text>(column))
   ~ diagram.width == 640
   ~ caption.width == 640
   ~ annotation.width == 280

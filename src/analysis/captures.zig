@@ -114,12 +114,12 @@ pub const Index = struct {
                 for (update.fields.items) |field| try self.expr(field.value, references);
             },
             .member => |member| try self.expr(member.target.*, references),
-            .optional_check => |check| try self.expr(check.target.*, references),
+            .optional_check, .dereference => |check| try self.expr(check.target.*, references),
             .coalesce => |coalesce| {
                 try self.expr(coalesce.target.*, references);
                 try self.expr(coalesce.fallback.*, references);
             },
-            .hole, .string, .color, .number, .boolean, .none, .enum_case => {},
+            .hole, .binding_ref, .string, .color, .number, .boolean, .none, .enum_case => {},
         }
     }
 };

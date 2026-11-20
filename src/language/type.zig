@@ -61,7 +61,7 @@ pub const Type = struct {
         unresolved,
         placed,
         group,
-        placement,
+        reference,
         selection,
         anchor,
         function,
@@ -83,7 +83,6 @@ pub const Type = struct {
     pub const any = Type{ .kind = .any };
     pub const document = Type{ .kind = .document };
     pub const page = Type{ .kind = .page };
-    pub const placement = Type{ .kind = .placement };
     pub const anchor = Type{ .kind = .anchor };
     pub const function = Type{ .kind = .function };
     pub const string = Type{ .kind = .string };
@@ -357,7 +356,6 @@ pub const Type = struct {
             return acceptsResolved(child.*, actual);
         }
         if (actual.kind == .optional) return false;
-        if (expected.kind == .placement and actual.kind == .placed) return actual.placedInput() != null;
         if (expected.kind == .parameter or actual.kind == .parameter) return eql(expected, actual);
         if (expected.kind == .color or actual.kind == .color) {
             return expected.kind == .color and actual.kind == .color;
@@ -517,8 +515,8 @@ pub const Type = struct {
             .page => "Page",
             .unresolved => "UnresolvedType",
             .placed => "Placed",
+            .reference => "Ref",
             .group => "Group",
-            .placement => "Placement",
             .selection => "Selection",
             .anchor => "Anchor",
             .function => "Function",

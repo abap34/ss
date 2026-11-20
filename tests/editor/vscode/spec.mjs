@@ -61,7 +61,8 @@ async function testBuiltinTypeSyntax() {
   const keyword = new RegExp(grammar.repository.keywords.patterns[0].match, "g");
   assert(JSON.stringify("if true\nelse\nend".match(keyword)) === '["if","else","end"]', "conditional statements must retain their keywords");
   const builtinType = new RegExp(grammar.repository.keywords.patterns[1].match, "g");
-  assert(JSON.stringify("Placed<Text> Placement".match(builtinType)) === '["Placed","Placement"]', "placement types must highlight");
+  assert(JSON.stringify("Ref<Placed<Text>>".match(builtinType)) === '["Ref","Placed"]', "placement types must highlight");
+  assert("Placement".match(builtinType) === null, "removed placement erasure must not highlight as a built-in type");
 }
 
 async function testZedDeclarationIndentation() {
@@ -120,7 +121,7 @@ async function testCompositionOperatorSyntax() {
     ["a / 2", ["/"]],
     ["a|b&c-d", ["|", "&", "-"]],
     ["a?.field ?? fallback", ["?.", "??"]],
-    ["(a: Placement) |-> a", [":", "|->"]],
+    ["(a: Placed<Text>) |-> a", [":", "<", ">", "|->"]],
   ]) {
     assert(JSON.stringify(source.match(operator)) === JSON.stringify(expected), `operator tokens differ: ${source}`);
   }

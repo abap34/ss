@@ -37,7 +37,7 @@ test "constraint values returned or used as statements do not register themselve
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     var state = try evaluate(arena.allocator(),
-        \\fn relation(a: Placement, b: Placement) -> Constraints
+        \\fn relation(a: Placed<Text>, b: Placed<Text>) -> Constraints
         \\  return (a.left == b.right + 24)
         \\end
         \\page main
@@ -59,7 +59,7 @@ test "constraint registration is explicit and a bundle is reusable" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     var state = try evaluate(arena.allocator(),
-        \\fn relation(a: Placement, b: Placement) -> Constraints
+        \\fn relation<A, B>(a: Placed<A>, b: Placed<B>) -> Constraints
         \\  return (a.left == b.right + 24)
         \\end
         \\page main
@@ -183,7 +183,7 @@ test "anchor operators normalize offsets and preserve numeric equality" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     var state = try evaluate(arena.allocator(),
-        \\fn relation(a: Placement, b: Placement) -> Constraints
+        \\fn relation<A, B>(a: Placed<A>, b: Placed<B>) -> Constraints
         \\  return a.left + 4 == 30 + b.right - 2
         \\end
         \\page main

@@ -186,7 +186,7 @@ pub const DefinitionScopeKind = enum {
     page,
 };
 
-const BindingLocation = struct {
+pub const BindingLocation = struct {
     module_id: SourceModuleId,
     offset: usize,
 };
@@ -289,6 +289,7 @@ pub const DocumentSourceMap = struct {
     pages: std.ArrayList(PageSource) = .empty,
     definitions: std.ArrayList(Definition) = .empty,
     binding_types: std.AutoHashMap(BindingLocation, BindingType),
+    placement_uses: std.AutoHashMapUnmanaged(BindingLocation, u32) = .empty,
     inferred_values: std.heap.ArenaAllocator,
 
     fn init(allocator: Allocator) DocumentSourceMap {
@@ -305,6 +306,7 @@ pub const DocumentSourceMap = struct {
         }
         self.definitions.deinit(allocator);
         self.binding_types.deinit();
+        self.placement_uses.deinit(allocator);
         self.inferred_values.deinit();
     }
 };
@@ -350,10 +352,12 @@ pub const DocumentState = struct {
     scheduled_bindings: std.ArrayList(struct {
         name: []const u8,
         name_span: ?ast.Span,
+        page_name_span: ?ast.Span,
         page_index: ?usize,
         module_id: SourceModuleId,
         initializer: *const ast.Expr,
         ty: ?ast.Type,
+        referenced: bool = false,
     }) = .empty,
     graph: DocumentGraph,
     constraints: DocumentConstraints,

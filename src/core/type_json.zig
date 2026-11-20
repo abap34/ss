@@ -63,11 +63,12 @@ pub fn parse(allocator: std.mem.Allocator, value: json.Value) anyerror!Type {
         ty.nominal_module_id = @intCast(module.integer);
     }
     if (json.fieldValue(object, "arguments")) |arguments| {
-        if (kind != .record and kind != .group and kind != .selection and kind != .placed) return error.InvalidValueTag;
+        if (kind != .record and kind != .group and kind != .selection and kind != .reference and kind != .placed) return error.InvalidValueTag;
         ty.arguments = try parseTypes(allocator, arguments.*);
         ty.owns_arguments = true;
     }
-    if ((kind == .selection or kind == .placed) and ty.arguments.len != 1) return error.InvalidValueTag;
+    if ((kind == .selection or kind == .reference or kind == .placed) and ty.arguments.len != 1) return error.InvalidValueTag;
+    if (kind == .reference and ty.arguments[0].kind != .placed) return error.InvalidValueTag;
     if (json.fieldValue(object, "child")) |child| {
         if (kind != .optional) return error.InvalidValueTag;
         ty.optional_child = try parseChild(allocator, child.*);
