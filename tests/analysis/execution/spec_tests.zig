@@ -22,7 +22,7 @@ const CancelFunctionAnalysis = struct {
 
     fn canceled(context: *const anyopaque) bool {
         const self: *CancelFunctionAnalysis = @ptrCast(@alignCast(@constCast(context)));
-        self.triggered = self.triggered or self.analyzer.value_bindings.contains("argument");
+        self.triggered = self.triggered or (self.analyzer.environment.get("argument") != null);
         return self.triggered;
     }
 };

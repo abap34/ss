@@ -319,7 +319,7 @@ const GraphBuilder = struct {
         const scope: dependencies.ResourceScope = if (block.page_id) |id| .{ .page = id } else .{ .document = module.id };
         var analyzer = dependencies.Analyzer.initWithScopeAndCache(self.allocator, &sema, scope, self.run_cache);
         defer analyzer.deinit();
-        if (block.statement_start != 0) try analyzer.bindPrecedingStatements(module.syntax.document_statements.items[0..block.statement_start]);
+        try analyzer.bindScheduledStatements(if (block.page_id != null) block.statements else module.syntax.document_statements.items);
         for (block.statements, 0..) |stmt, i| {
             var summary = try self.statementSummary(&analyzer, module, stmt);
             errdefer summary.deinit();
@@ -400,7 +400,7 @@ fn buildDependencyEdges(allocator: std.mem.Allocator, units: []const ExecutionUn
 
     var writer_index = resource_index.ResourceWriterIndex.init(allocator);
     defer writer_index.deinit();
-    const Setting = @import("setting_facts.zig").Key;
+    const Setting = @import("defined_settings.zig").Key;
     var present = std.HashMap(Setting, void, Setting.Context, std.hash_map.default_max_load_percentage).init(allocator);
     defer present.deinit();
     for (units, 0..) |writer, unit_index| {

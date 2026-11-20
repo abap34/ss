@@ -35,6 +35,10 @@ pub fn statement(pass: anytype, stmt: ast.Statement) anyerror!Exits {
         .return_void => try pass.onReturn(null),
         .if_stmt => |branch| {
             const truth = try pass.condition(branch.condition);
+            // A pending input has no successor yet. Discovery revisits its
+            // readers when it grows; closed analyses promote missing facts to
+            // either before applying this transfer function.
+            if (truth == .bottom) return .{ .next = false };
             if (truth == .yes) return pass.arm(branch.then_statements.items, 0);
             if (truth == .no) return pass.arm(branch.else_statements.items, 0);
             const yes = try pass.arm(branch.then_statements.items, 0);
@@ -48,14 +52,14 @@ pub fn statement(pass: anytype, stmt: ast.Statement) anyerror!Exits {
     return Exits.stop;
 }
 
-pub const Coalesce = enum { left, right, both };
+pub const Coalesce = enum { pending, left, right, both };
 
 pub fn coalesce(present: Alternatives) Coalesce {
     return switch (present) {
         .yes => .left,
         .no => .right,
-        // Until there is a proof, either operand may supply the value.
-        .bottom, .either => .both,
+        .bottom => .pending,
+        .either => .both,
     };
 }
 
@@ -64,7 +68,8 @@ pub fn memberPresence(receiver: Alternatives, field: Alternatives, optional: boo
     return switch (receiver) {
         .yes => field,
         .no => .no,
-        .bottom, .either => if (field == .bottom) .either else field.join(.no),
+        .bottom => .bottom,
+        .either => if (field == .bottom) .either else field.join(.no),
     };
 }
 

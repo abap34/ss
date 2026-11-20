@@ -27,6 +27,9 @@ pub const Context = return_facts.Cache;
 const InferenceOptions = struct {
     context: *Context,
     validate_contracts: bool = true,
+    binding_query: ?*@import("binding_types.zig").Solver = null,
+    need_literal: bool = false,
+    declaration_scope: bool = true,
 };
 
 const addUserReport = @import("diagnostics.zig").addUserReport;
@@ -47,18 +50,6 @@ fn addUserReportAtSpan(
     const precise_origin = if (origin.span != null) origin.withSpan(span.?) else origin;
 
     return addUserReport(state, precise_origin, code, fmt, args);
-}
-
-fn checkedLetBindingInfo(
-    allocator: std.mem.Allocator,
-    state: ?*core.DocumentState,
-    binding: anytype,
-    inferred: TypeInfo,
-    origin: core.SourceOrigin,
-) !TypeInfo {
-    const annotation = binding.type_annotation orelse return inferred;
-    try ensureType(state, allocator, inferred, annotation, origin);
-    return infoFromType(annotation);
 }
 
 fn firstHoleInArgs(args: []const ast.Expr) ?ast.HoleId {
@@ -159,12 +150,14 @@ fn exprInfoWithOptions(
         },
         .ident => |ident| blk: {
             const name = ident.name;
-            switch (try options.context.name_resolution.resolveValue(sema, TypeInfo, ident.reference(), env.get(name))) {
+            switch (try options.context.name_resolution.resolveValue(sema, TypeInfo, ident.reference(), try lexicalValue(env, ident.reference(), options))) {
                 .local => |info| {
                     if (info.failed) return error.AlreadyDiagnosed;
                     break :blk info;
                 },
                 .constant => |resolved| {
+                    if (options.binding_query != null and (!options.need_literal or resolved.decl.value_type.kind != .string))
+                        break :blk infoFromType(resolved.decl.value_type);
                     if (options.context.invalid_declarations.contains(resolved.key)) return error.AlreadyDiagnosed;
                     if (options.context.visiting.contains(resolved.key)) break :blk infoFromType(resolved.decl.value_type);
                     try options.context.visiting.put(resolved.key, {});
@@ -173,7 +166,9 @@ fn exprInfoWithOptions(
                     defer constant_env.deinit();
                     const constant_sema = sema.forModule(resolved.module_id);
                     const constant_origin = core.SourceOrigin.at(originPathForModule(&constant_sema), resolved.decl.span);
-                    const value = try exprInfoWithOptions(allocator, state, &constant_sema, &constant_env, resolved.decl.value, constant_origin, options);
+                    var nested = options;
+                    nested.declaration_scope = false;
+                    const value = try exprInfoWithOptions(allocator, state, &constant_sema, &constant_env, resolved.decl.value, constant_origin, nested);
                     break :blk semantic_types.refineTypeInfo(infoFromType(resolved.decl.value_type), value);
                 },
                 .function => |resolved| {
@@ -196,9 +191,31 @@ fn exprInfoWithOptions(
         .record => |record| try inferRecordInfo(allocator, state, sema, env, record, origin, options),
         .record_update => |update| try inferRecordUpdateInfo(allocator, state, sema, env, update, origin, options),
         .member => |member| try inferMemberInfo(allocator, state, sema, env, member, origin, options),
-        .optional_check => |check| try inferOptionalCheckInfo(allocator, state, sema, env, check.target.*, origin, options),
+        .optional_check => |check| if (options.binding_query != null) infoFromType(Type.boolean) else try inferOptionalCheckInfo(allocator, state, sema, env, check.target.*, origin, options),
         .coalesce => |coalesce| try inferCoalesceInfo(allocator, state, sema, env, coalesce, origin, options),
     };
+}
+
+// Trial inference uses the same lexical lookup and result-type rules as normal
+// checking. It cannot instantiate functions, record editor facts or emit errors.
+pub fn bindingResult(allocator: std.mem.Allocator, sema: *const SemanticEnv, stmt: *const ast.Statement, solver: *@import("binding_types.zig").Solver, literal: bool) !TypeInfo {
+    var trial = Context.init(allocator);
+    defer trial.deinit();
+    var env = TypeEnv.init(allocator);
+    defer env.deinit();
+    return exprInfoWithOptions(allocator, null, sema, &env, stmt.kind.let_binding.expr, core.SourceOrigin.at(originPathForModule(sema), stmt.span), .{
+        .context = &trial,
+        .validate_contracts = false,
+        .binding_query = solver,
+        .need_literal = literal,
+    });
+}
+
+fn lexicalValue(env: *const TypeEnv, name: ast.CallableName, options: InferenceOptions) !?TypeInfo {
+    if (name.isQualified()) return null;
+    if (env.get(name.name)) |value| return value;
+    if (options.declaration_scope) if (options.binding_query) |q| return q.local(name.name, options.need_literal);
+    return null;
 }
 
 fn inferRecordInfo(
@@ -225,6 +242,10 @@ fn inferRecordInfo(
         return error.InvalidType;
     };
     const generic = record_decl.decl.type_params.items.len != 0;
+    const projected = options.binding_query != null;
+    var ty = Type.recordType(record_decl.name).inModule(record_decl.module_id);
+    if (projected and (!generic or record.type_args.items.len != 0))
+        return infoFromType(if (generic) try ty.withArguments(allocator, record.type_args.items) else ty);
     if (!generic or record.type_args.items.len != 0) {
         try semantic_types.ensureTypeArgumentCount(state, record_decl.decl.type_params.items.len, record.type_args.items.len, origin);
     }
@@ -238,47 +259,43 @@ fn inferRecordInfo(
             return error.InvalidType;
         }
         try seen.put(field_expr.name, {});
-        if (sema.recordField(.{ .module_id = record_decl.module_id, .name = record_decl.name }, field_expr.name) == null) {
+        const field = sema.recordField(ty.nominalId().?, field_expr.name) orelse {
             try addUserReportAtSpan(state, origin, field_expr.name_span, "UnknownField", "type '{s}' has no field '{s}'", .{ record.type_name, field_expr.name });
             return error.InvalidType;
-        }
-        actual.* = try exprInfoWithOptions(allocator, state, sema, env, field_expr.value, origin, options);
-    }
-    var ty = Type.recordType(record_decl.name).inModule(record_decl.module_id);
-    if (generic) {
-        const bindings = try allocator.alloc(Type.Substitution, record_decl.decl.type_params.items.len);
-        defer allocator.free(bindings);
-        const known = try allocator.alloc(bool, bindings.len);
-        defer allocator.free(known);
-        @memset(known, false);
-        for (bindings, 0..) |*binding, index| binding.* = .{
-            .parameter = .{ .module_id = record_decl.module_id, .declaration_start = record_decl.decl.span.start, .index = @intCast(index) },
-            .replacement = Type.any,
         };
-        const generic_arguments = @import("generic_arguments.zig");
+        actual.* = if (projected and !@import("generic_arguments.zig").hasParameter(field.value_type))
+            infoFromType(Type.any)
+        else
+            exprInfoWithOptions(allocator, state, sema, env, field_expr.value, origin, options) catch |err| switch (err) {
+                error.PendingBindingType => infoFromType(Type.any),
+                else => return err,
+            };
+    }
+    if (generic) {
+        const args = try @import("generic_arguments.zig").Arguments.init(allocator, record_decl.module_id, record_decl.decl.span.start, record_decl.decl.type_params.items.len);
+        defer args.deinit(allocator);
         if (record.type_args.items.len != 0) {
-            for (bindings, record.type_args.items, known) |*binding, argument, *is_known| {
-                binding.replacement = argument;
-                is_known.* = generic_arguments.isConcrete(argument);
-            }
+            try args.explicit(record.type_args.items);
         } else {
             for (record.fields.items, actuals) |field_expr, actual| {
                 const field = sema.recordField(ty.nominalId().?, field_expr.name).?;
-                generic_arguments.infer(field.value_type, actual.ty, bindings, known) catch {
+                args.match(field.value_type, actual.ty) catch {
                     try addUserReport(state, origin, "ConflictingTypeArguments", "fields infer different types for a parameter of '{s}'", .{record.type_name});
                     return error.InvalidType;
                 };
             }
         }
-        for (known, record_decl.decl.type_params.items) |is_known, parameter| if (!is_known) {
+        for (args.known, record_decl.decl.type_params.items) |is_known, parameter| if (!is_known) {
+            if (projected) return error.PendingBindingType;
             try addUserReport(state, origin, "CannotInferTypeArgument", "cannot determine concrete type argument '{s}' for '{s}'", .{ parameter.name, record.type_name });
             return error.InvalidType;
         };
-        const arguments = try allocator.alloc(Type, bindings.len);
+        const arguments = try allocator.alloc(Type, args.bindings.len);
         defer allocator.free(arguments);
-        for (arguments, bindings) |*argument, binding| argument.* = binding.replacement;
+        for (arguments, args.bindings) |*argument, binding| argument.* = binding.replacement;
         ty = try ty.withArguments(allocator, arguments);
     }
+    if (projected) return infoFromType(ty);
     errdefer ty.deinit(allocator);
     for (record.fields.items, actuals) |field_expr, actual| {
         var expected = (try sema.recordFieldType(allocator, ty, field_expr.name)).?;
@@ -351,6 +368,7 @@ fn checkRecordInstanceDefaults(
     var env = TypeEnv.init(allocator);
     defer env.deinit();
     for (declaration.fields.items) |field| {
+        try @import("semantics.zig").checkFieldTypeAnnotation(allocator, state, sema, sema.module_id, originPathForModule(sema), field);
         const default = field.default_value orelse continue;
         const origin = core.SourceOrigin.at(originPathForModule(sema), field.span);
         const actual = try exprInfoWithOptions(allocator, state, sema, &env, default.*, origin, options);
@@ -368,7 +386,7 @@ fn inferRecordUpdateInfo(
     options: InferenceOptions,
 ) !TypeInfo {
     const target_info = try exprInfoWithOptions(allocator, state, sema, env, update.target.*, origin, options);
-    if (target_info.hole != null) return target_info;
+    if (target_info.hole != null or options.binding_query != null) return target_info;
     if (target_info.ty.kind != .record and target_info.ty.kind != .group) {
         const actual = try typeInfoLabelAlloc(allocator, target_info);
         defer allocator.free(actual);
@@ -457,7 +475,7 @@ fn inferMemberInfo(
     if (member.name_hole) |hole_id| return infoFromHole(hole_id);
     if (member.target.* == .ident) {
         const enum_name = member.target.ident.name;
-        if ((try options.context.name_resolution.resolveValue(sema, TypeInfo, member.target.ident.reference(), env.get(enum_name))) == .unknown) {
+        if ((try options.context.name_resolution.resolveValue(sema, TypeInfo, member.target.ident.reference(), try lexicalValue(env, member.target.ident.reference(), options))) == .unknown) {
             if (sema.enumExists(null, enum_name)) {
                 if (member.optional) {
                     try addUserReportAtSpan(state, origin, member.name_span, "InvalidOptionalMember", "enum cases use '.'; '?.' requires a value receiver", .{});
@@ -638,7 +656,7 @@ fn inferCallInfo(
     options: InferenceOptions,
 ) anyerror!TypeInfo {
     if (call.callee.name_hole) |hole_id| return infoFromHole(hole_id);
-    const binding = try options.context.name_resolution.resolveValue(sema, TypeInfo, call.callee, env.get(call.callee.name));
+    const binding = try options.context.name_resolution.resolveValue(sema, TypeInfo, call.callee, try lexicalValue(env, call.callee, options));
     if (call.type_args.items.len != 0) {
         const expected_count = switch (binding) {
             .function => |resolved| resolved.decl.type_params.items.len,
@@ -667,6 +685,7 @@ fn inferCallInfo(
             return error.UnknownFunction;
         },
         .function => |resolved| blk: {
+            if (options.binding_query != null) break :blk try declaredCallResult(allocator, sema, env, call, origin, resolved, options);
             if (resolved.decl.type_params.items.len != 0 and resolved.decl.instance_id == null) {
                 if (firstHoleInArgs(call.args.items)) |id| break :blk infoFromHole(id);
             }
@@ -683,6 +702,62 @@ fn inferCallInfo(
             return error.UnknownFunction;
         },
     };
+}
+
+// Arguments that cannot constrain the result are left to normal checking.
+// A missing argument type need not block other evidence for the same parameter.
+fn declaredCallResult(allocator: std.mem.Allocator, sema: *const SemanticEnv, env: *const TypeEnv, call: ast.CallExpr, origin: core.SourceOrigin, definition: semantic_env.ResolvedFunction, options: InferenceOptions) !TypeInfo {
+    const generic = @import("generic_arguments.zig");
+    const func = definition.decl;
+    const literal_result = options.need_literal and func.result_type.kind == .string;
+    if (!generic.hasParameter(func.result_type) and !literal_result) return infoFromType(func.result_type);
+    const args = try generic.Arguments.init(allocator, definition.module_id, func.span.start, func.type_params.items.len);
+    if (call.type_args.items.len != 0) {
+        try args.explicit(call.type_args.items);
+    } else {
+        for (call.args.items, 0..) |arg, i| {
+            if (i >= func.params.items.len) return error.InvalidArity;
+            const pattern = func.params.items[i].ty;
+            if (!args.constrains(pattern, func.result_type) and !(literal_result and generic.hasParameter(pattern))) continue;
+            const actual = exprInfoWithOptions(allocator, null, sema, env, arg, origin, options) catch |err| switch (err) {
+                error.PendingBindingType => continue,
+                else => return err,
+            };
+            try args.match(pattern, actual.ty);
+        }
+    }
+    if (!args.determines(func.result_type)) return error.PendingBindingType;
+    const solver = options.binding_query.?;
+    if (options.declaration_scope and call.type_args.items.len == 0) if (call.callee.call_id) |id| {
+        if (!solver.context.binding_arguments.contains(id)) {
+            const store = options.binding_query.?.state.inferenceAllocator();
+            var evidence: std.ArrayList(Type.Substitution) = .empty;
+            for (args.bindings, args.known) |b, known| {
+                if (known and generic.mentions(func.result_type, b.parameter)) try evidence.append(store, .{ .parameter = b.parameter, .replacement = try b.replacement.clone(store) });
+            }
+            try solver.context.binding_arguments.put(id, evidence.items);
+        }
+    };
+    const result = try func.result_type.substitute(allocator, args.bindings);
+    if (!options.need_literal or result.kind != .string) return infoFromType(result);
+    // A named selection is the one place where the *value* of a String
+    // determines a type. Reuse ordinary return-fact inference in the trial
+    // arena, without installing an instance or touching the editor's cache.
+    var concrete = func;
+    if (args.bindings.len != 0) {
+        for (args.known) |known| if (!known) return error.PendingBindingType;
+        concrete = try func.clone(allocator);
+        var next: u64 = 0;
+        var transform = @import("instantiate.zig").Transform{ .allocator = allocator, .next_expression_id = &next, .substitutions = args.bindings };
+        try transform.function(&concrete);
+    }
+    if (call.args.items.len > concrete.params.items.len) return error.InvalidArity;
+    const actuals = try allocator.alloc(TypeInfo, call.args.items.len);
+    for (actuals, call.args.items) |*out, arg| out.* = try exprInfoWithOptions(allocator, null, sema, env, arg, origin, options);
+    var nested = options;
+    nested.declaration_scope = false;
+    const def_sema = sema.forModule(definition.module_id);
+    return inferUserFunctionReturnInfo(allocator, null, &def_sema, concrete, actuals, nested);
 }
 
 fn instantiateFunction(
@@ -702,28 +777,29 @@ fn instantiateFunction(
         try addUserReport(state, origin, "InvalidArity", "expected {d}..{d} arguments, got {d}", .{ contracts.requiredParamCount(func), func.params.items.len, call.args.items.len });
         return error.InvalidArity;
     }
-    const bindings = try allocator.alloc(Type.Substitution, func.type_params.items.len);
-    defer allocator.free(bindings);
-    const known = try allocator.alloc(bool, bindings.len);
-    defer allocator.free(known);
-    @memset(known, false);
-    for (bindings, 0..) |*binding, index| {
-        binding.* = .{
-            .parameter = .{ .module_id = definition.module_id, .declaration_start = func.span.start, .index = @intCast(index) },
-            .replacement = Type.any,
-        };
-    }
     const generic_arguments = @import("generic_arguments.zig");
+    const args = try generic_arguments.Arguments.init(allocator, definition.module_id, func.span.start, func.type_params.items.len);
+    defer args.deinit(allocator);
+    const bindings = args.bindings;
+    const known = args.known;
     if (call.type_args.items.len != 0) {
-        for (bindings, call.type_args.items, known) |*binding, argument, *is_known| {
-            binding.replacement = argument;
-            is_known.* = generic_arguments.isConcrete(argument);
-        }
+        try args.explicit(call.type_args.items);
     } else {
-        for (call.args.items, func.params.items[0..call.args.items.len]) |arg, parameter| {
-            const actual = try exprInfoWithOptions(allocator, state, caller_sema, env, arg, origin, options);
-            generic_arguments.infer(parameter.ty, actual.ty, bindings, known) catch {
-                try addUserReport(state, origin, "ConflictingTypeArguments", "arguments infer different types for a parameter of '{s}'", .{func.name});
+        const fixed = if (call.callee.call_id) |id| options.context.binding_arguments.get(id) else null;
+        for (fixed orelse &.{}) |b| {
+            bindings[b.parameter.index] = b;
+            known[b.parameter.index] = true;
+        }
+        for (call.args.items, func.params.items[0..call.args.items.len], 0..) |arg, parameter, index| {
+            const at = callArgumentOrigin(call, index, origin);
+            const actual = try exprInfoWithOptions(allocator, state, caller_sema, env, arg, at, options);
+            if (fixed != null and args.determines(parameter.ty)) {
+                var expected = try parameter.ty.substitute(allocator, bindings);
+                defer expected.deinit(allocator);
+                try ensureType(state, allocator, actual, expected, at);
+            }
+            args.match(parameter.ty, actual.ty) catch {
+                try addUserReport(state, at, "ConflictingTypeArguments", "arguments infer different types for a parameter of '{s}'", .{func.name});
                 return error.InvalidType;
             };
         }
@@ -774,6 +850,7 @@ fn instantiateBoundFunction(
         body_sema.record_source_facts = false;
         const checker = @import("check.zig");
         const path = originPathForModule(&body_sema);
+        try @import("semantics.zig").checkFunctionTypeAnnotations(allocator, state, &body_sema, definition.module_id, path, entry.declaration);
         checker.checkFunction(context, allocator, state, &body_sema, path, entry.declaration) catch |err| {
             if (err == error.OutOfMemory or err == error.Canceled) return err;
             try addUserReport(state, origin, "InvalidInstantiation", "instantiation of '{s}' failed; see the function body diagnostic", .{func.name});
@@ -915,6 +992,7 @@ fn inferFunctionValueCallInfo(
         try addUserReport(state, origin, "TypeMismatch", "expected Function, got {s}", .{actual_label});
         return error.InvalidType;
     }
+    if (options.binding_query != null) return infoFromType(callee_info.ty.fn_result.?.*);
     if (args.len != callee_info.ty.fn_params.len) {
         if (firstHoleInArgs(args)) |hole_id| return infoFromHole(hole_id);
         try addUserReport(state, origin, "InvalidArity", "expected {d}, got {d}", .{ callee_info.ty.fn_params.len, args.len });
@@ -954,9 +1032,10 @@ fn inferUserCallInfo(
     defer allocator.free(actual_arguments);
     for (call.args.items, 0..) |arg, index| {
         const param = func.params.items[index];
-        const actual = try exprInfoWithOptions(allocator, state, caller_sema, env, arg, origin, options);
+        const at = callArgumentOrigin(call, index, origin);
+        const actual = try exprInfoWithOptions(allocator, state, caller_sema, env, arg, at, options);
         if (needs_facts) actual_arguments[index] = actual;
-        try ensureType(state, allocator, actual, param.ty, origin);
+        try ensureType(state, allocator, actual, param.ty, at);
     }
     if (options.context.invalid_declarations.contains(core.functionDeclarationKey(callee_sema.module_id, func))) return error.AlreadyDiagnosed;
     if (!needs_facts) return infoFromType(func.result_type);
@@ -987,11 +1066,39 @@ fn inferPrimitiveCallInfo(
         }
         return error.InvalidArity;
     }
+    if (options.binding_query != null) {
+        // Value dependencies (including callbacks and placement scopes) are
+        // checked later. Only operands selecting the result type are demanded.
+        switch (descriptor.result_policy) {
+            .first_arg, .argument_type, .placement, .first_selection_item => {
+                const index: usize = if (descriptor.result_policy == .first_selection_item) 0 else descriptor.result_arg_index;
+                if (index >= call.args.items.len) return error.InvalidArity;
+                const input = try exprInfoWithOptions(allocator, null, sema, env, call.args.items[index], origin, options);
+                if (input.hole != null) return input;
+                return switch (descriptor.result_policy) {
+                    .placement => infoFromType(try Type.placedOf(allocator, input.ty)),
+                    .first_selection_item => infoFromType(try selectionItemType(null, input, origin)),
+                    else => input,
+                };
+            },
+            .select_query => if (call.type_args.items.len == 1) {
+                return infoFromType(try Type.selectionOf(allocator, try Type.placedOf(allocator, call.type_args.items[0])));
+            },
+            .declared => switch (descriptor.op) {
+                // These overloads (and literal concatenation) inspect their arguments.
+                .group, .group_placed, .add, .sub, .num_eq, .concat => {},
+                else => return infoFromType(registry.primitiveResultType(descriptor) orelse return error.InvalidType),
+            },
+            .selection_algebra => {},
+        }
+    }
     const argument_infos = try allocator.alloc(TypeInfo, call.args.items.len);
     defer allocator.free(argument_infos);
     for (call.args.items, 0..) |arg, index| {
         const arg_origin = if (call.callee.composition != null) callArgumentOrigin(call, index, origin) else origin;
-        const actual = try exprInfoWithOptions(allocator, state, sema, env, arg, arg_origin, options);
+        var arg_options = options;
+        if (descriptor.result_policy == .select_query and index == 1) arg_options.need_literal = true;
+        const actual = try exprInfoWithOptions(allocator, state, sema, env, arg, arg_origin, arg_options);
         argument_infos[index] = actual;
         if (isPrimitiveFunctionArgument(descriptor, index)) continue;
         if (actual.hole == null and actual.ty.kind == .void and descriptor.op != .draw_when) {
@@ -1166,7 +1273,7 @@ fn inferUserFunctionReturnInfo(
         .state = state,
         .sema = sema,
         .origin_path = originPathForModule(sema),
-        .options = .{ .context = context, .validate_contracts = false },
+        .options = if (options.binding_query != null) options else .{ .context = context, .validate_contracts = false },
         .env = &env,
         .result = &returns,
     };
@@ -1212,7 +1319,7 @@ const TypeReturnFlow = struct {
         const binding = stmt.kind.let_binding;
         if (language_names.isDiscardBindingName(binding.name)) return;
         const inferred = try exprInfoWithOptions(self.allocator, self.state, self.sema, self.env, binding.expr, self.origin, self.options);
-        const info = try checkedLetBindingInfo(self.allocator, self.state, binding, inferred, self.origin);
+        const info = try semantic_types.checkedAnnotation(self.allocator, self.state, inferred, binding.type_annotation, self.origin);
         try self.env.put(binding.name, info);
     }
 

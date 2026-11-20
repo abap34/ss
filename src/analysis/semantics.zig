@@ -149,25 +149,9 @@ pub fn checkTypeAnnotations(
         }
 
         for (module.syntax.functions.items) |func| {
-            const origin = core.SourceOrigin.at(origin_path, func.span);
-
-            for (func.params.items) |param| {
-                const diagnostic_count = state.diagnostics.entries.items.len;
-                checkTypeAnnotation(state, sema, module_id, param.ty, origin) catch |err| {
-                    try continueAfterDiagnostic(state, diagnostic_count, err);
-                    had_diagnostics = true;
-                };
-                if (param.default_value) |default_value| {
-                    const expr_diagnostic_count = state.diagnostics.entries.items.len;
-                    checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, default_value.*) catch |err| {
-                        try continueAfterDiagnostic(state, expr_diagnostic_count, err);
-                        had_diagnostics = true;
-                    };
-                }
-            }
-            const result_diagnostic_count = state.diagnostics.entries.items.len;
-            checkResultTypeAnnotation(state, sema, module_id, func.result_type, origin) catch |err| {
-                try continueAfterDiagnostic(state, result_diagnostic_count, err);
+            const diagnostic_count = state.diagnostics.entries.items.len;
+            checkFunctionTypeAnnotations(allocator, state, sema, module_id, origin_path, func) catch |err| {
+                try continueAfterDiagnostic(state, diagnostic_count, err);
                 had_diagnostics = true;
             };
         }
@@ -207,7 +191,40 @@ pub fn checkTypeAnnotations(
     if (had_diagnostics) return error.DiagnosticsFailed;
 }
 
-fn checkFieldTypeAnnotation(
+pub fn checkFunctionTypeAnnotations(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv, module_id: core.SourceModuleId, origin_path: []const u8, func: ast.FunctionDecl) !void {
+    var had_diagnostics = false;
+    const origin = core.SourceOrigin.at(origin_path, func.span);
+
+    for (func.params.items) |param| {
+        const diagnostic_count = state.diagnostics.entries.items.len;
+        checkTypeAnnotation(state, sema, module_id, param.ty, origin) catch |err| {
+            try continueAfterDiagnostic(state, diagnostic_count, err);
+            had_diagnostics = true;
+        };
+        if (param.default_value) |default_value| {
+            const expr_diagnostic_count = state.diagnostics.entries.items.len;
+            checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, default_value.*) catch |err| {
+                try continueAfterDiagnostic(state, expr_diagnostic_count, err);
+                had_diagnostics = true;
+            };
+        }
+    }
+    const result_diagnostic_count = state.diagnostics.entries.items.len;
+    checkResultTypeAnnotation(state, sema, module_id, func.result_type, origin) catch |err| {
+        try continueAfterDiagnostic(state, result_diagnostic_count, err);
+        had_diagnostics = true;
+    };
+    for (func.statements.items) |stmt| {
+        const diagnostic_count = state.diagnostics.entries.items.len;
+        checkStatementTypeAnnotations(allocator, state, sema, module_id, origin_path, stmt) catch |err| {
+            try continueAfterDiagnostic(state, diagnostic_count, err);
+            had_diagnostics = true;
+        };
+    }
+    if (had_diagnostics) return error.DiagnosticsFailed;
+}
+
+pub fn checkFieldTypeAnnotation(
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
     sema: *const SemanticEnv,

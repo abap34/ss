@@ -413,6 +413,9 @@ test "lambda parameters shadow outer names only within their lexical extent" {
         \\  let nested = (x: Number) |-> ((x: String) |-> x)("Inner")
         \\  let sibling = (n: Number) |-> n
         \\  let outside = x
+        \\  let forward = (later: Number) |-> later
+        \\  let before = later
+        \\  let later = "Later"
         \\end
     ;
     var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
@@ -432,6 +435,8 @@ test "lambda parameters shadow outer names only within their lexical extent" {
         .{ .needle = "|-> n", .name = "n", .ty = "Number", .declaration = "n: Number" },
         .{ .needle = "outside = x", .name = "x", .ty = "String", .declaration = "x = \"Outer\"" },
         .{ .needle = "x: String", .name = "x", .ty = "String", .declaration = "x: String" },
+        .{ .needle = "|-> later", .name = "later", .ty = "Number", .declaration = "later: Number" },
+        .{ .needle = "before = later", .name = "later", .ty = "String", .declaration = "later = \"Later\"" },
     };
     var index = try @import("utils").source.LineIndex.init(testing.allocator, source);
     defer index.deinit(testing.allocator);

@@ -1411,10 +1411,11 @@ test "analysis queries: fields never fall back to unrelated value names" {
     try testing.expectEqual(@as(usize, 0), absent.len);
 }
 
-test "analysis queries: let initializer resolves outside its own binding" {
+test "analysis queries: function-local let initializer resolves outside its own binding" {
     var case = try CompletionCase.init(
-        \\page main
+        \\fn make() -> Text
         \\  let text = text("Body")
+        \\  return text
         \\end
     );
     defer case.deinit();
@@ -1428,6 +1429,25 @@ test "analysis queries: let initializer resolves outside its own binding" {
     var local = (try snapshot_api.hoverAt(case.allocator, snapshot, declaration, clock.options())) orelse return error.ExpectedHover;
     defer local.deinit(case.allocator);
     try testing.expect(std.mem.indexOf(u8, local.markdown, "text: Text") != null);
+}
+
+test "analysis queries: scheduled let initializer resolves its own binding" {
+    var case = try CompletionCase.init(
+        \\page main
+        \\  let text: String = text("Body")
+        \\end
+    );
+    defer case.deinit();
+    const snapshot = try case.snapshotFor(case.source);
+    var clock = DeadlineClock{};
+    const req = query_types.SourceRequest{ .path = case.path, .source = case.source, .offset = offsetAfter(case.source, "= text") - 1 };
+    var hover = (try snapshot_api.hoverAt(case.allocator, snapshot, req, clock.options())) orelse return error.ExpectedHover;
+    defer hover.deinit(case.allocator);
+    try testing.expect(std.mem.indexOf(u8, hover.markdown, "text: String") != null);
+    const targets = try snapshot_api.definitionAt(case.allocator, snapshot, req, clock.options());
+    defer case.allocator.free(targets);
+    try testing.expectEqual(@as(usize, 1), targets.len);
+    try testing.expectEqual(@as(usize, 1), targets[0].line);
 }
 
 test "analysis queries: constant record receivers precede enum names" {

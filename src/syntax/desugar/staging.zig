@@ -66,7 +66,12 @@ pub fn expand(allocator: std.mem.Allocator, module: *ast.Module, failure: *Failu
                     page.source_name = page.name;
                     page.name = name;
                     var rewriter = Rewriter{ .allocator = allocator, .stages = stages, .index = index, .failure = failure, .cancellation = cancellation };
-                    try rewriter.statements(page.statements.items, false);
+                    // Page-level lets are visible throughout the page; inner
+                    // branch locals still shadow only after their initializer.
+                    const shadowed = for (page.statements.items) |stmt| {
+                        if (stmt.kind == .let_binding and std.mem.eql(u8, stmt.kind.let_binding.name, stages.name)) break true;
+                    } else false;
+                    try rewriter.statements(page.statements.items, shadowed);
                 }
             }
             try pages.append(allocator, page);

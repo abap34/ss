@@ -136,7 +136,7 @@ fn analyzeDocumentStateSemantics(
     var inference_context = infer.Context.init(allocator);
     defer inference_context.deinit();
 
-    try checkDocumentDeclarations(allocator, state, &sema);
+    try checkDocumentDeclarations(&inference_context, allocator, state, &sema);
     try checkDocumentBodies(&inference_context, allocator, state, &sema);
     // Effects of overloaded constructors require the checked argument types.
     const call_start = utils.profile.start();
@@ -145,7 +145,7 @@ fn analyzeDocumentStateSemantics(
     return declaration_index;
 }
 
-fn checkDocumentDeclarations(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) !void {
+fn checkDocumentDeclarations(context: *infer.Context, allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) !void {
     {
         const measure_start = utils.profile.start();
         defer utils.profile.recordAnalysis(.semantics_types, measure_start);
@@ -158,6 +158,7 @@ fn checkDocumentDeclarations(allocator: std.mem.Allocator, state: *core.Document
         try semantics.checkDuplicateValueDeclarations(allocator, state);
         try semantics.checkTypeAnnotations(allocator, state, sema);
         try semantics.checkDisplayDeclarations(allocator, state);
+        try @import("binding_types.zig").resolve(context, state, sema);
         {
             const type_fields_start = utils.profile.start();
             defer utils.profile.recordAnalysis(.semantics_type_fields, type_fields_start);
@@ -386,7 +387,10 @@ pub fn buildDocumentStateWithOptions(
         try state.rebuildDeclarationIndex();
         try semantics.resolveEnumCaseExpressionsAndDefaults(allocator, &state, &sema);
         var transform = @import("instantiate.zig").Transform{ .allocator = allocator, .next_expression_id = &state.next_expression_id };
-        for (state.modules.entries.items) |*module| try transform.module(&module.syntax);
+        for (state.modules.entries.items) |*module| {
+            try @import("scheduled_bindings.zig").collect(&state, module);
+            try transform.module(&module.syntax);
+        }
         try semantics.rebuildConstDeclarations(&state);
         try semantics.rebuildFunctionDeclarations(&state);
     }

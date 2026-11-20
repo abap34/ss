@@ -346,6 +346,15 @@ pub const DocumentState = struct {
     type_instances: @import("type_instances.zig").Store,
     displays: @import("native_display.zig").Store,
     next_expression_id: u64 = 0,
+    // Entries borrow the checked module tree and generation-owned inferred types.
+    scheduled_bindings: std.ArrayList(struct {
+        name: []const u8,
+        name_span: ?ast.Span,
+        page_index: ?usize,
+        module_id: SourceModuleId,
+        initializer: *const ast.Expr,
+        ty: ?ast.Type,
+    }) = .empty,
     graph: DocumentGraph,
     constraints: DocumentConstraints,
     source_map: DocumentSourceMap,
@@ -462,6 +471,7 @@ pub const DocumentState = struct {
     fn deinitWithInputOwnership(self: *DocumentState, inputs: InputOwnership) void {
         self.declaration_index.deinit();
         self.allocator.destroy(self.declaration_index);
+        self.scheduled_bindings.deinit(self.allocator);
         self.instantiations.deinit();
         self.type_instances.deinit();
         self.displays.deinit();
@@ -1294,24 +1304,7 @@ pub const DocumentState = struct {
 
     fn ensureValueTag(self: *DocumentState, value: Value, expected: ValueTag, context: []const u8) !void {
         _ = self;
-        const actual: ValueTag = switch (value) {
-            .none => .none,
-            .document => .document,
-            .page => .page,
-            .object => .object,
-            .selection => .selection,
-            .anchor => .anchor,
-            .function => .function,
-            .string => .string,
-            .enum_case => .enum_case,
-            .record => .record,
-            .group => .group,
-            .path => .path,
-            .number => .number,
-            .boolean => .boolean,
-            .constraints => .constraints,
-            .void => .void,
-        };
+        const actual = std.meta.activeTag(value);
         if (actual != expected) {
             std.debug.print("runtime value type mismatch in {s}: expected {s}, got {s}\n", .{
                 context,

@@ -36,46 +36,46 @@ pub const Key = struct {
     };
 };
 
-pub const Facts = struct {
+pub const Definitions = struct {
     const Entry = struct { key: Key, present: bool };
     entries: std.ArrayList(Entry) = .empty,
 
-    pub fn deinit(self: *Facts, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *Definitions, allocator: std.mem.Allocator) void {
         self.entries.deinit(allocator);
     }
 
-    pub fn clear(self: *Facts) void {
+    pub fn clear(self: *Definitions) void {
         self.entries.clearRetainingCapacity();
     }
 
-    fn get(self: Facts, key: Key) ?Entry {
-        for (self.entries.items) |fact| if (fact.key.eql(key)) return fact;
+    fn get(self: Definitions, key: Key) ?Entry {
+        for (self.entries.items) |definition| if (definition.key.eql(key)) return definition;
         return null;
     }
 
-    fn add(self: *Facts, allocator: std.mem.Allocator, fact: Entry) !void {
-        for (self.entries.items) |*old| if (old.key.eql(fact.key)) {
-            old.present = old.present or fact.present;
+    fn add(self: *Definitions, allocator: std.mem.Allocator, definition: Entry) !void {
+        for (self.entries.items) |*old| if (old.key.eql(definition.key)) {
+            old.present = old.present or definition.present;
             return;
         };
-        try self.entries.append(allocator, fact);
+        try self.entries.append(allocator, definition);
     }
 
-    pub fn define(self: *Facts, allocator: std.mem.Allocator, owner: resources.PropertyOwner, name: []const u8, present: bool) !void {
+    pub fn define(self: *Definitions, allocator: std.mem.Allocator, owner: resources.PropertyOwner, name: []const u8, present: bool) !void {
         const key = Key.from(owner, name) orelse return;
         try self.add(allocator, .{ .key = key, .present = present });
     }
 
-    pub fn include(self: *Facts, allocator: std.mem.Allocator, other: Facts) !void {
-        for (other.entries.items) |fact| try self.add(allocator, fact);
+    pub fn include(self: *Definitions, allocator: std.mem.Allocator, other: Definitions) !void {
+        for (other.entries.items) |definition| try self.add(allocator, definition);
     }
 
-    pub fn intersect(self: *Facts, other: Facts) void {
+    pub fn intersect(self: *Definitions, other: Definitions) void {
         var i: usize = 0;
         while (i < self.entries.items.len) {
-            const fact = &self.entries.items[i];
-            if (other.get(fact.key)) |rhs| {
-                fact.present = fact.present and rhs.present;
+            const definition = &self.entries.items[i];
+            if (other.get(definition.key)) |rhs| {
+                definition.present = definition.present and rhs.present;
                 i += 1;
             } else {
                 _ = self.entries.swapRemove(i);
@@ -83,15 +83,15 @@ pub const Facts = struct {
         }
     }
 
-    pub fn satisfies(self: Facts, read: resources.Resource) bool {
+    pub fn satisfies(self: Definitions, read: resources.Resource) bool {
         if (self.entries.items.len == 0 or read != .property) return false;
         const name = read.property.key.displayName() orelse return false;
         if (read.property.unless_defined_on) |page| {
-            if (self.get(.{ .page = page, .name = name })) |fact| if (fact.present) return true;
+            if (self.get(.{ .page = page, .name = name })) |definition| if (definition.present) return true;
         }
         const key = Key.from(read.property.owner, name) orelse return false;
-        for (self.entries.items) |fact| {
-            if (key.page == fact.key.page and core.PropertyPath.contains(fact.key.name, key.name)) return true;
+        for (self.entries.items) |definition| {
+            if (key.page == definition.key.page and core.PropertyPath.contains(definition.key.name, key.name)) return true;
         }
         return false;
     }
@@ -100,18 +100,18 @@ pub const Facts = struct {
 // Intersection over reachable predecessors. An unreachable predecessor is
 // different from a reachable one that defines no settings.
 pub const Join = struct {
-    facts: Facts = .{},
+    definitions: Definitions = .{},
     reachable: bool = false,
 
     pub fn deinit(self: *Join, allocator: std.mem.Allocator) void {
-        self.facts.deinit(allocator);
+        self.definitions.deinit(allocator);
     }
 
-    pub fn add(self: *Join, allocator: std.mem.Allocator, path: Facts) !void {
+    pub fn add(self: *Join, allocator: std.mem.Allocator, path: Definitions) !void {
         if (self.reachable) {
-            self.facts.intersect(path);
+            self.definitions.intersect(path);
         } else {
-            try self.facts.include(allocator, path);
+            try self.definitions.include(allocator, path);
             self.reachable = true;
         }
     }

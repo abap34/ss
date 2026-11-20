@@ -71,6 +71,17 @@ pub const Store = struct {
     /// Checked calls that adopt existing placements instead of displaying inputs.
     adoptions: std.AutoHashMap(u64, ast.Type),
 
+    // Before input discovery converges, only the complete set of checked
+    // display plans can rule out a producer, including expanded group children.
+    pub fn canProduce(self: *const Store, input: ast.Type) bool {
+        for (self.plans.items) |plan| for (plan.steps.items) |step| {
+            if (ast.Type.accepts(input, step.input) or ast.Type.accepts(step.input, input)) return true;
+        };
+        var it = self.adoptions.valueIterator();
+        while (it.next()) |ty| if (ast.Type.accepts(input, ty.*) or ast.Type.accepts(ty.*, input)) return true;
+        return false;
+    }
+
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{ .allocator = allocator, .call_targets = .init(allocator), .adoptions = .init(allocator), .inputs = .init(allocator) };
     }

@@ -72,48 +72,46 @@ pub const FieldRef = struct {
     name_span: ?ast.Span = null,
 };
 
-pub fn visibleVariable(budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, offset: usize, name: []const u8) ?core.Definition {
+fn visibleBinding(comptime T: type, items: []const T, budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, offset: usize, name: []const u8) ?T {
     if (expired(budget)) return null;
     const scope = requestScope(budget, snapshot, module_id, offset);
-    var best: ?core.Definition = null;
-    var best_start: usize = 0;
-    for (snapshot.definitions) |item| {
+    var best: ?T = null;
+    for (items) |item| {
         if (expired(budget)) return null;
-        if (item.kind != .variable) continue;
-        if (item.module_id != module_id) continue;
-        if (!std.mem.eql(u8, item.name, name)) continue;
-        if (!(offset >= item.span_start and offset < item.span_end) and (offset < item.visible_start or offset > item.visible_end)) continue;
+        if (@hasField(T, "kind")) if (item.kind != .variable) continue;
+        if (item.module_id != module_id or !std.mem.eql(u8, item.name, name)) continue;
+        const at_declaration = offset >= item.span_start and offset < item.span_end;
+        if (!at_declaration and (offset < item.visible_start or offset > item.visible_end)) continue;
         if (!scopeMatches(item.scope_kind, item.scope_name, scope)) continue;
-        if (best == null or item.span_start >= best_start) {
-            best = item;
-            best_start = item.span_start;
+        if (best) |previous| {
+            const at_previous = offset >= previous.span_start and offset < previous.span_end;
+            if (at_previous != at_declaration) {
+                if (!at_declaration) continue;
+            } else {
+                // Lexical nesting takes precedence over declaration order.
+                // A later scheduled let cannot hide an inner lambda parameter.
+                const extent = item.visible_end -| item.visible_start;
+                const previous_extent = previous.visible_end -| previous.visible_start;
+                if (extent > previous_extent or (extent == previous_extent and item.span_start < previous.span_start)) continue;
+            }
         }
+        best = item;
     }
     return best;
 }
 
+pub fn visibleVariable(budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, offset: usize, name: []const u8) ?core.Definition {
+    return visibleBinding(core.Definition, snapshot.definitions, budget, snapshot, module_id, offset, name);
+}
+
 pub fn visibleVariableBinding(budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, offset: usize, name: []const u8) ?VariableBinding {
-    if (expired(budget)) return null;
-    const scope = requestScope(budget, snapshot, module_id, offset);
-    var best: ?VariableBinding = null;
-    var best_start: usize = 0;
-    for (snapshot.variable_bindings) |binding| {
-        if (expired(budget)) return null;
-        if (binding.module_id != module_id) continue;
-        if (!std.mem.eql(u8, binding.name, name)) continue;
-        if (!(offset >= binding.span_start and offset < binding.span_end) and (offset < binding.visible_start or offset > binding.visible_end)) continue;
-        if (!scopeMatches(binding.scope_kind, binding.scope_name, scope)) continue;
-        if (best == null or binding.span_start >= best_start) {
-            best = .{
-                .name = binding.name,
-                .type_label = binding.type_label,
-                .value_type = binding.value_type,
-                .module_id = binding.module_id,
-            };
-            best_start = binding.span_start;
-        }
-    }
-    return best;
+    const binding = visibleBinding(@import("../snapshot.zig").VariableBinding, snapshot.variable_bindings, budget, snapshot, module_id, offset, name) orelse return null;
+    return .{
+        .name = binding.name,
+        .type_label = binding.type_label,
+        .value_type = binding.value_type,
+        .module_id = binding.module_id,
+    };
 }
 
 pub fn variableBindingVisibleAt(budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, offset: usize, binding: anytype) bool {

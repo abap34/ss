@@ -138,6 +138,31 @@ test "return facts: only reachable returns contribute to a literal query" {
     try testing.expectEqualStrings("label", (try analysis.expression(0)).string_literal.?);
 }
 
+test "return facts: annotated locals preserve literals and callable results" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var analysis = try Analysis.init(arena.allocator(),
+        \\fn label() -> String
+        \\  let prefix: String = "self_"
+        \\  let result: String = prefix ++ "placement"
+        \\  return result
+        \\end
+        \\fn callback() -> () -> String
+        \\  let result: () -> String = label
+        \\  return result
+        \\end
+        \\document
+        \\  let name = label()
+        \\  let fn_value = callback()
+        \\end
+    );
+    defer analysis.deinit();
+    try testing.expectEqualStrings("self_placement", (try analysis.expression(0)).string_literal.?);
+    const callback = try analysis.expression(1);
+    try testing.expectEqual(@as(usize, 1), callback.function_labels.len);
+    try testing.expectEqualStrings("label", callback.function_labels[0]);
+}
+
 test "return facts: module identity participates in the cache key" {
     var analysis = try Analysis.init(testing.allocator,
         \\fn value() -> String
@@ -249,9 +274,9 @@ test "dependency return caches distinguish argument facts and default arguments"
     // Seed distinct placement resources at the dependency-analysis boundary.
     // This cache test does not load the stdlib or evaluate placement calls.
     for ([_][]const u8{ "left", "right" }) |name| {
-        try analyzer.property_target_bindings.put(name, .{ .owner = .{ .object = .{
+        try analyzer.environment.put(name, .{ .policy = .scheduled, .property_target = .{ .owner = .{ .object = .{
             .identity = .{ .scope = .{ .document = 0 }, .name = name },
-        } } });
+        } } } });
     }
     var summary = try analyzer.documentStatements(analysis.syntax.document_statements.items[0..5]);
     defer summary.deinit();
@@ -259,15 +284,15 @@ test "dependency return caches distinguish argument facts and default arguments"
     var reused = try analyzer.documentStatements(analysis.syntax.document_statements.items[5..]);
     defer reused.deinit();
     try testing.expectEqual(body_analyses, cache.return_body_analyses);
-    try testing.expectEqualStrings("first", analyzer.string_bindings.get("first").?);
-    try testing.expectEqualStrings("second", analyzer.string_bindings.get("second").?);
-    try testing.expectEqualStrings("default", analyzer.string_bindings.get("omitted").?);
+    try testing.expectEqualStrings("first", analyzer.environment.get("first").?.string_literal.?);
+    try testing.expectEqualStrings("second", analyzer.environment.get("second").?.string_literal.?);
+    try testing.expectEqualStrings("default", analyzer.environment.get("omitted").?.string_literal.?);
     for ([_]struct { binding: []const u8, original: []const u8 }{
         .{ .binding = "a", .original = "left" },
         .{ .binding = "b", .original = "right" },
         .{ .binding = "again", .original = "left" },
     }) |item| {
-        const target = analyzer.property_target_bindings.get(item.binding).?;
+        const target = analyzer.environment.get(item.binding).?.property_target.?;
         try testing.expectEqualStrings(item.original, target.owner.object.identity.?.name);
     }
 }

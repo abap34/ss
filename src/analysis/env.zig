@@ -6,6 +6,7 @@ pub fn ValueEnv(comptime Value: type) type {
 
         allocator: std.mem.Allocator,
         values: std.StringHashMap(Value),
+        scheduled: ?*const @import("scheduled_bindings.zig").Scope = null,
 
         pub fn init(allocator: std.mem.Allocator) Self {
             return .{
@@ -22,6 +23,7 @@ pub fn ValueEnv(comptime Value: type) type {
             return .{
                 .allocator = self.allocator,
                 .values = try self.values.clone(),
+                .scheduled = self.scheduled,
             };
         }
 

@@ -182,15 +182,15 @@ test "desugar: integer stages preserve literal values, order, and inclusive endp
     }
 }
 
-test "desugar: integer stages preserve lexical shadowing and callable errors" {
+test "desugar: integer stages preserve parameter shadowing and callable errors" {
     var parsed = try syntax.parseSurface(testing.allocator,
         \\page Demo
         \\  stages i { 3 7 }
         \\  let identity = (i: Number) |-> i
         \\  let captured = (n: Number) |-> i
         \\  let invalid = i()
-        \\  let i = i + 10
-        \\  let local = i
+        \\  let adjusted = i + 10
+        \\  let local = adjusted
         \\end
     );
     defer parsed.deinit(testing.allocator);
@@ -202,7 +202,7 @@ test "desugar: integer stages preserve lexical shadowing and callable errors" {
         try testing.expectEqual(value, statements[1].kind.let_binding.expr.lambda.body.number);
         try testing.expectEqual(value, statements[2].kind.let_binding.expr.apply.callee.number);
         try testing.expectEqual(value, statements[3].kind.let_binding.expr.call.args.items[0].number);
-        try testing.expectEqualStrings("i", statements[4].kind.let_binding.expr.ident.name);
+        try testing.expectEqualStrings("adjusted", statements[4].kind.let_binding.expr.ident.name);
     }
 }
 
@@ -460,21 +460,20 @@ test "desugar: arithmetic string and boolean operators produce primitive calls" 
     try expectBoolean(logical_not.args.items[0], false);
 }
 
-test "desugar: stage variables shadow callable names until rebound" {
+test "desugar: scheduled callables shadow stage names throughout the page" {
     var expanded = try expandSource(
         \\fn s() -> Number = 99
         \\page Demo
         \\  stages s { first second }
-        \\  let invalid = s()
+        \\  let before = s(41)
         \\  let s = (value: Number) |-> value
         \\  let valid = s(42)
         \\end
     );
     defer expanded.deinit(testing.allocator);
-    for (expanded.pages.items, 0..) |page, index| {
-        const invalid = page.statements.items[0].kind.let_binding.expr;
-        try testing.expect(invalid == .apply);
-        try testing.expectEqual(@as(f32, @floatFromInt(index)), invalid.apply.callee.number);
+    for (expanded.pages.items) |page| {
+        const before = page.statements.items[0].kind.let_binding.expr;
+        try testing.expectEqualStrings("s", before.call.callee.name);
         const valid = page.statements.items[2].kind.let_binding.expr;
         try testing.expectEqualStrings("s", valid.call.callee.name);
     }

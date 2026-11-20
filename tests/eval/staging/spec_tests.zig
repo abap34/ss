@@ -79,8 +79,8 @@ test "staging: numeric values survive captures, record updates, branches, and le
         \\  text!(str(sample.value))
         \\  text!(str(updated.value))
         \\  text!(str(offset))
-        \\  let i = i + 20
-        \\  text!(str(i))
+        \\  let adjusted = i + 20
+        \\  text!(str(adjusted))
         \\  text!(str(captured()))
         \\end
     );
@@ -162,7 +162,7 @@ test "staging: bindings from separate show blocks compose outside the blocks" {
     }
 }
 
-test "staging: flattened scopes preserve stage shadowing and predicate captures" {
+test "staging: flattened scopes preserve stage predicates and captured values" {
     var state = try document(
         \\fn draw_when!() -> Number = 999
         \\fn content!(enabled: Bool) -> Placed<Text>
@@ -176,10 +176,10 @@ test "staging: flattened scopes preserve stage shadowing and predicate captures"
         \\page Demo
         \\  stages s { first second }
         \\  show s == s.second
-        \\    let s = 42
-        \\    text!(str(s))
+        \\    let value = 42
+        \\    text!(str(value))
         \\  end
-        \\  text!(str(s))
+        \\  text!(str(value))
         \\  content!(false)
         \\end
     );

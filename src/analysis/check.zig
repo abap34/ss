@@ -26,7 +26,9 @@ const addUserReport = @import("diagnostics.zig").addUserReport;
 
 pub fn continueAfterDiagnostic(state: *const core.DocumentState, diagnostic_count_before: usize, err: anyerror) !void {
     if (err == error.OutOfMemory or err == error.Canceled) return err;
-    if ((err == error.AlreadyDiagnosed or err == error.DiagnosticsFailed) and state.diagnostics.entries.items.len != 0) return;
+    // A failed binding may refer to a later declaration that owns its diagnostic.
+    if (err == error.ForwardBindingDiagnostic or err == error.AlreadyDiagnosed) return;
+    if (err == error.DiagnosticsFailed and state.diagnostics.entries.items.len != 0) return;
     if (state.diagnostics.entries.items.len > diagnostic_count_before) return;
     return err;
 }
@@ -144,6 +146,7 @@ pub fn checkPageStatements(
     {
         var env = TypeEnv.init(allocator);
         defer env.deinit();
+        try seedScheduledTypes(inference_context, &env, program.document_statements.items);
         for (program.document_statements.items) |stmt| {
             const diagnostic_count = state.diagnostics.entries.items.len;
             checkTopLevelStatement(inference_context, allocator, state, sema, origin_path, .document, &env, stmt) catch |err| {
@@ -155,6 +158,7 @@ pub fn checkPageStatements(
     for (program.pages.items) |page| {
         var env = TypeEnv.init(allocator);
         defer env.deinit();
+        try seedScheduledTypes(inference_context, &env, page.statements.items);
 
         for (page.statements.items) |stmt| {
             const diagnostic_count = state.diagnostics.entries.items.len;
@@ -166,6 +170,15 @@ pub fn checkPageStatements(
         }
     }
     if (had_diagnostics) return error.DiagnosticsFailed;
+}
+
+fn seedScheduledTypes(context: *infer.Context, env: *TypeEnv, statements: []const ast.Statement) !void {
+    for (statements) |stmt| if (stmt.kind == .let_binding) {
+        const binding = stmt.kind.let_binding;
+        if (binding.binding_id) |id| if (!env.contains(binding.name)) {
+            try env.put(binding.name, context.binding_infos.get(id) orelse .{ .binding_id = id, .failed = true });
+        };
+    };
 }
 
 fn checkTopLevelStatement(
@@ -202,11 +215,22 @@ fn checkTopLevelStatementInner(
         .hole => return,
         .let_binding => |binding| {
             const binds_name = !language_names.isDiscardBindingName(binding.name);
-            if (binds_name) try rejectDuplicateBinding(state, env, binding.name, origin);
+            if (binds_name) {
+                const existing = env.get(binding.name);
+                if (binding.binding_id == null or existing == null or existing.?.binding_id != binding.binding_id)
+                    try rejectDuplicateBinding(state, env, binding.name, origin);
+            }
             const inferred = try inferExprInfo(inference_context, allocator, state, sema, env, binding.expr, origin);
-            const info = try checkedLetBindingInfo(allocator, state, binding, inferred, origin);
+            var info = try semantic_types.checkedAnnotation(allocator, state, inferred, binding.type_annotation, origin);
             try rejectVoidValue(state, info, origin);
             if (!binds_name) return;
+            info.binding_id = binding.binding_id;
+            if (binding.binding_id) |id| {
+                const slot = &state.scheduled_bindings.items[id].ty;
+                if (slot.*) |resolved| {
+                    if (info.hole == null) try ensureType(state, allocator, info, resolved, origin);
+                } else slot.* = info.ty;
+            }
             try env.put(binding.name, info);
             if (sema.record_source_facts) try recordBindingType(state, sema.module_id, binding.name_span, info);
         },
@@ -264,18 +288,6 @@ fn rejectVoidValue(state: *core.DocumentState, info: semantic_types.TypeInfo, or
     if (info.ty.kind != .void) return;
     try addUserReport(state, origin, "VoidValue", "void results can only be used as statements", .{});
     return error.InvalidType;
-}
-
-fn checkedLetBindingInfo(
-    allocator: std.mem.Allocator,
-    state: *core.DocumentState,
-    binding: anytype,
-    inferred: semantic_types.TypeInfo,
-    origin: core.SourceOrigin,
-) !semantic_types.TypeInfo {
-    const annotation = binding.type_annotation orelse return inferred;
-    try ensureType(state, allocator, inferred, annotation, origin);
-    return infoFromType(annotation);
 }
 
 fn validateAnchorRef(
@@ -392,7 +404,7 @@ fn checkStatementInner(
             const binds_name = !language_names.isDiscardBindingName(binding.name);
             if (binds_name) try rejectDuplicateBinding(state, env, binding.name, origin);
             const inferred = try inferExprInfo(inference_context, allocator, state, sema, env, binding.expr, origin);
-            const info = try checkedLetBindingInfo(allocator, state, binding, inferred, origin);
+            const info = try semantic_types.checkedAnnotation(allocator, state, inferred, binding.type_annotation, origin);
             try rejectVoidValue(state, info, origin);
             if (!binds_name) return;
             try env.put(binding.name, info);

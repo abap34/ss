@@ -68,6 +68,13 @@ pub const Index = struct {
 
     pub fn lambdaNames(self: *Index, lambda: ast.LambdaExpr) anyerror![]const []const u8 {
         if (self.names(lambda)) |existing| return existing;
+        const result = try self.expressionNames(lambda.body.*, lambda.params.items);
+        errdefer self.allocator.free(result);
+        try self.lambdas.put(lambda.body, result);
+        return result;
+    }
+
+    pub fn expressionNames(self: *Index, value: ast.Expr, parameters: []const ast.ParamDecl) anyerror![]const []const u8 {
         var references = References{
             .allocator = self.allocator,
             .parameters = .init(self.allocator),
@@ -75,12 +82,9 @@ pub const Index = struct {
         };
         defer references.parameters.deinit();
         defer references.free.deinit(self.allocator);
-        for (lambda.params.items) |param| try references.parameters.put(param.name, {});
-        try self.expr(lambda.body.*, &references);
-        const result = try self.allocator.dupe([]const u8, references.free.keys());
-        errdefer self.allocator.free(result);
-        try self.lambdas.put(lambda.body, result);
-        return result;
+        for (parameters) |param| try references.parameters.put(param.name, {});
+        try self.expr(value, &references);
+        return self.allocator.dupe([]const u8, references.free.keys());
     }
 
     fn expr(self: *Index, value: ast.Expr, references: ?*References) anyerror!void {

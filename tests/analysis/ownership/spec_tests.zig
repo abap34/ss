@@ -27,6 +27,57 @@ test "analysis environments own binding maps and borrow immutable values at ever
     try allocation_testing.checkAllAllocationFailures(testing.allocator, exerciseEnvironment, .{});
 }
 
+fn exerciseDependencyEnvironment(allocator: std.mem.Allocator) !void {
+    const dependencies = compiler.analysis.dependencies;
+    var env = dependencies.BindingEnvironment.init(allocator);
+    defer env.deinit();
+    const reads = [_]dependencies.Resource{dependencies.Resource.makeVariable(.{ .document = 0 }, "source")};
+    try env.put("item", .{
+        .policy = .scheduled,
+        .values = .{ .truth = .yes },
+        .string_literal = "outer",
+        .property_target = .{ .owner = .document },
+        .selection_reads = &reads,
+    });
+    {
+        var scope = env.pushClone() catch |err| {
+            try testing.expectEqualStrings("outer", env.get("item").?.string_literal.?);
+            try testing.expect(env.get("item").?.selection_reads[0].eql(reads[0]));
+            return err;
+        };
+        defer scope.restore();
+        try env.put("item", .{ .string_literal = "inner" });
+        try testing.expectEqual(.bottom, env.get("item").?.values.truth);
+        try testing.expect(env.get("item").?.property_target == null);
+        try testing.expectEqual(@as(usize, 0), env.get("item").?.selection_reads.len);
+        try testing.expectEqualStrings("outer", scope.saved.get("item").?.string_literal.?);
+        try testing.expectEqual(@as(usize, 1), scope.saved.get("item").?.selection_reads.len);
+        {
+            var fresh = env.pushFresh();
+            defer fresh.restore();
+            try testing.expect(env.get("item") == null);
+            try env.put("item", .{ .string_literal = "fresh", .selection_reads = &reads });
+        }
+        try testing.expectEqualStrings("inner", env.get("item").?.string_literal.?);
+    }
+    try testing.expectEqual(.scheduled, env.get("item").?.policy);
+    try testing.expectEqual(.yes, env.get("item").?.values.truth);
+    try testing.expect(env.get("item").?.property_target.?.owner == .document);
+    try testing.expectEqualStrings("outer", env.get("item").?.string_literal.?);
+    try testing.expect(env.get("item").?.selection_reads[0].eql(reads[0]));
+    // Replacement can borrow the entry it replaces. Failure must preserve it.
+    const previous = env.get("item").?;
+    env.put("item", previous) catch |err| {
+        try testing.expectEqualStrings("outer", env.get("item").?.string_literal.?);
+        try testing.expect(env.get("item").?.selection_reads[0].eql(reads[0]));
+        return err;
+    };
+}
+
+test "dependency environments isolate nested scopes and restore all facts at every allocation failure" {
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, exerciseDependencyEnvironment, .{});
+}
+
 fn parsedState(source: []const u8) !core.DocumentState {
     const allocator = testing.allocator;
     const text = try allocator.dupe(u8, source);

@@ -9,6 +9,7 @@ pub const HoleType = syntax_hole.HoleType;
 
 // Optional facts use null only for unknown. An unreached return uses ?TypeInfo.
 pub const TypeInfo = struct {
+    binding_id: ?u32 = null,
     ty: Type = Type.any,
     hole: ?HoleType = null,
     failed: bool = false,
@@ -74,6 +75,18 @@ pub fn refineTypeInfo(annotation: TypeInfo, actual: TypeInfo) TypeInfo {
     var result = actual;
     result.ty = annotation.ty;
     return result;
+}
+
+pub fn checkedAnnotation(
+    allocator: std.mem.Allocator,
+    state: ?*core.DocumentState,
+    inferred: TypeInfo,
+    annotation: ?Type,
+    origin: core.SourceOrigin,
+) !TypeInfo {
+    const expected = annotation orelse return inferred;
+    try ensureType(state, allocator, inferred, expected, origin);
+    return refineTypeInfo(infoFromType(expected), inferred);
 }
 
 pub fn singleFunctionLabel(allocator: std.mem.Allocator, label: []const u8) ![]const []const u8 {

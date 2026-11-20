@@ -67,6 +67,8 @@ pub const Cache = struct {
     visiting: std.HashMap(core.FunctionKey, void, core.FunctionKeyContext, std.hash_map.default_max_load_percentage),
     invalid_declarations: std.HashMap(core.FunctionKey, void, core.FunctionKeyContext, std.hash_map.default_max_load_percentage),
     name_resolution: @import("cache.zig").NameResolutionCache,
+    binding_arguments: std.AutoHashMap(u64, []const Type.Substitution),
+    binding_infos: std.AutoHashMap(u32, TypeInfo),
     expression_visits: usize = 0,
     body_analyses: usize = 0,
     cache_hits: usize = 0,
@@ -76,6 +78,8 @@ pub const Cache = struct {
         return .{
             .allocator = allocator,
             .results = .init(allocator),
+            .binding_arguments = .init(allocator),
+            .binding_infos = .init(allocator),
             .visiting = .init(allocator),
             .invalid_declarations = .init(allocator),
             .name_resolution = .init(allocator),
@@ -87,6 +91,8 @@ pub const Cache = struct {
         while (keys.next()) |key| self.allocator.free(key.arguments);
         self.results.deinit();
         self.visiting.deinit();
+        self.binding_arguments.deinit();
+        self.binding_infos.deinit();
         self.invalid_declarations.deinit();
         self.name_resolution.deinit();
     }

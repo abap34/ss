@@ -905,6 +905,7 @@ pub fn Tree(comptime surface: bool) type {
                     name: []const u8,
                     name_span: ?Span = null,
                     type_annotation: ?Type = null,
+                    binding_id: ?u32 = null,
                     expr: Expr,
                 },
                 return_expr: Expr,
@@ -924,6 +925,7 @@ pub fn Tree(comptime surface: bool) type {
                     name: []const u8,
                     name_span: ?Span = null,
                     type_annotation: ?Type = null,
+                    binding_id: ?u32 = null,
                     expr: Expr,
                 },
                 return_expr: Expr,
@@ -981,6 +983,7 @@ pub fn Tree(comptime surface: bool) type {
                             break :blk .{ .let_binding = .{
                                 .name = name,
                                 .name_span = value.name_span,
+                                .binding_id = value.binding_id,
                                 .type_annotation = annotation,
                                 .expr = try value.expr.clone(allocator),
                             } };
