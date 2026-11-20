@@ -14,7 +14,7 @@ version = "0.7.0"
 
 [grammars.ss]
 repository = "https://github.com/abap34/ss"
-rev = "4e8d98e12bbf2396e08f689562e165c757955b6d"
+rev = "d6f2db07eda7529da558bc20d46e9ff03825e9d6"
 path = "editor/tree-sitter-ss"
 
 [language_servers.ss]
