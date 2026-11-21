@@ -3,6 +3,11 @@ const compiler = @import("compiler");
 const testing = std.testing;
 
 const root = "/include-spec/main.ss";
+const clock_context: u8 = 0;
+
+fn frozenNow(_: *const anyopaque) i128 {
+    return 0;
+}
 
 fn parse(overlay: *const compiler.module_loader.SourceOverlay, text: []const u8) !compiler.syntax.Module {
     var includes = compiler.module_loader.IncludeLoader{ .io = testing.io, .overlay = overlay };
@@ -106,7 +111,10 @@ test "include snapshots map cross-file definitions and semantic errors to physic
     inline for (requests) |item| {
         const offset = std.mem.lastIndexOf(u8, item[1], item[2]).? + item[2].len - 2;
         for ([_]u32{ 1000, 0 }) |budget_ms| {
-            const targets = try api.definitionAt(testing.allocator, &snapshot, .{ .path = item[0], .source = item[1], .offset = offset }, .{ .budget_ms = budget_ms });
+            const targets = try api.definitionAt(testing.allocator, &snapshot, .{ .path = item[0], .source = item[1], .offset = offset }, .{
+                .budget_ms = budget_ms,
+                .clock = .{ .context = &clock_context, .now_ns = frozenNow },
+            });
             defer testing.allocator.free(targets);
             try testing.expectEqual(@as(usize, 1), targets.len);
             try testing.expectEqualStrings(item[3], targets[0].path.?);
@@ -125,6 +133,51 @@ test "include snapshots map cross-file definitions and semantic errors to physic
         found = true;
     }
     try testing.expect(found);
+}
+
+test "include snapshots resolve forward document and staged page bindings across physical sources" {
+    const api = compiler.analysis.snapshot;
+    const child_path = "/include-spec/child.ss";
+    const main_source =
+        \\document
+        \\  let result = suffix
+        \\  let prefix = "Root"
+        \\end
+        \\include "child.ss"
+    ;
+    const child_source =
+        \\document
+        \\  let suffix = prefix ++ " child"
+        \\end
+        \\page Child
+        \\  stages i { 1:2 }
+        \\  let copy = title
+        \\  let title = text!("Included")
+        \\end
+    ;
+    var sources = api.SourceSet.init(testing.allocator, testing.io);
+    defer sources.deinit();
+    try sources.put(root, main_source);
+    try sources.put(child_path, child_source);
+    var snapshot = try api.build(testing.allocator, &sources, root, "/include-spec", .{});
+    defer snapshot.deinit();
+    try testing.expect(!snapshot.diagnostics.hasErrors());
+    const requests = .{
+        .{ root, main_source, "= suffix", child_path, @as(usize, 1) },
+        .{ child_path, child_source, "= prefix", root, @as(usize, 2) },
+        .{ child_path, child_source, "= title", child_path, @as(usize, 6) },
+    };
+    inline for (requests) |item| {
+        const offset = std.mem.indexOf(u8, item[1], item[2]).? + item[2].len - 2;
+        const targets = try api.definitionAt(testing.allocator, &snapshot, .{ .path = item[0], .source = item[1], .offset = offset }, .{
+            .budget_ms = 1000,
+            .clock = .{ .context = &clock_context, .now_ns = frozenNow },
+        });
+        defer testing.allocator.free(targets);
+        try testing.expectEqual(@as(usize, 1), targets.len);
+        try testing.expectEqualStrings(item[3], targets[0].path.?);
+        try testing.expectEqual(item[4], targets[0].line);
+    }
 }
 
 test "include syntax owns included type names across cloning and allocation failures" {
