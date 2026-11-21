@@ -14,7 +14,6 @@ permissions:
   contents: write
 
 env:
-  ZIG_VERSION: 0.17.0
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
@@ -30,50 +29,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Select tagged release sources and current completion validation
+      - name: Select tagged release sources
         run: |
           cp release/tools/check-vscode-package.py "$RUNNER_TEMP/check-vscode-package.py"
           python3 release/tools/prepare-vscode-publication.py "$RELEASE_TAG"
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            ca-certificates \
-            curl \
-            git \
-            libcairo2-dev \
-            libgdk-pixbuf-2.0-dev \
-            librsvg2-dev \
-            libpango1.0-dev \
-            libqpdf-dev \
-            pkg-config \
-            qpdf \
-            xz-utils
-
-      - name: Restore Zig compiler cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.local/zig
-          key: ${{ runner.os }}-${{ runner.arch }}-zig-${{ env.ZIG_VERSION }}
-
-      - name: Install Zig
-        run: |
-          set -euo pipefail
-          case "$(uname -m)" in
-            x86_64) zig_arch="x86_64-linux" ;;
-            aarch64|arm64) zig_arch="aarch64-linux" ;;
-            *) echo "unsupported runner architecture: $(uname -m)" >&2; exit 1 ;;
-          esac
-
-          mkdir -p "$HOME/.local/zig"
-          if [ ! -x "$HOME/.local/zig/zig" ]; then
-            curl --retry 5 --retry-delay 2 --connect-timeout 20 --max-time 300 -fsSL \
-              "https://ziglang.org/download/${ZIG_VERSION}/zig-${zig_arch}-${ZIG_VERSION}.tar.xz" \
-              -o /tmp/zig.tar.xz
-            tar -xJf /tmp/zig.tar.xz -C "$HOME/.local/zig" --strip-components=1
-          fi
-          echo "$HOME/.local/zig" >> "$GITHUB_PATH"
 
       - name: Check release metadata
         run: release/tools/preflight.py "$RELEASE_TAG"
@@ -90,18 +49,6 @@ jobs:
       - name: Install VS Code extension packages
         working-directory: editor/vscode
         run: npm ci
-
-      - name: Validate Zig and LSP
-        run: |
-          set -euo pipefail
-          release_version="${RELEASE_TAG#v}"
-          zig build test
-          git restore -- tests/runtime/harness.mjs tests/runtime/lsp_completion_runtime_spec.mjs
-          git diff --exit-code
-          zig build -Doptimize=ReleaseFast -Dversion="$release_version" -Dcommit="$RELEASE_COMMIT"
-          zig-out/bin/ss --version
-          tests/smoke/project.sh
-          node tests/smoke/lsp.mjs
 
       - name: Test tree-sitter grammar
         working-directory: editor/tree-sitter-ss

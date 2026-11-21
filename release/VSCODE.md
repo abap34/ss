@@ -4,12 +4,10 @@ To publish an existing normal release tag, run `Publish VS Code extension`
 with `workflow_dispatch` on `main` and set its `tag` input to the release tag,
 for example `v0.8.4`.
 
-The workflow resolves that exact tag and builds its sources. It retains only
-the current completion test and its harness during validation: these tests
-allow incomplete LSP responses while requiring complete, correct candidates
-within five seconds. The full Zig test suite still runs. Before building the
-release binary and packaging the extension, the workflow restores both test
-files to the tag and requires a clean tracked working tree.
+The workflow resolves that exact tag, checks its release metadata and grammar,
+then builds and verifies the VSIX from the tagged sources. Zig and LSP checks
+run in the regular CI workflow. Confirm that CI passed for the exact release
+commit before publishing, following the release checklist in `release/README.md`.
 
 The package keeps the tagged extension version. The workflow publishes it to
 Marketplace when `VSCE_PAT` is configured and attaches the VSIX to the existing

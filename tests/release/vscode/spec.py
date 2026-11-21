@@ -80,7 +80,11 @@ class PublicationTests(unittest.TestCase):
         self.git("init", "-q")
         self.git("config", "user.name", "Test")
         self.git("config", "user.email", "test@example.com")
-        for name in (*publication.VALIDATION_FILES, "source.zig", "release/VERSION"):
+        self.files = (
+            "editor/vscode/package.json", "source.zig", "release/VERSION",
+            "tests/runtime/harness.mjs", "tests/runtime/lsp_completion_runtime_spec.mjs",
+        )
+        for name in self.files:
             target = self.root / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text("original release\n")
@@ -88,10 +92,10 @@ class PublicationTests(unittest.TestCase):
         self.git("commit", "-qm", "Release sources")
         self.release_commit = self.git("rev-parse", "HEAD")
         self.git("tag", "v0.8.4")
-        for name in (*publication.VALIDATION_FILES, "source.zig"):
+        for name in self.files:
             (self.root / name).write_text("current main\n")
         self.git("add", ".")
-        self.git("commit", "-qm", "Later implementation and validation")
+        self.git("commit", "-qm", "Later sources and tests")
         self.control_commit = self.git("rev-parse", "HEAD")
 
     def git(self, *args):
@@ -100,12 +104,8 @@ class PublicationTests(unittest.TestCase):
     def test_release_sources_and_version_remain_exactly_at_the_tag(self):
         self.assertEqual(publication.prepare(self.root, "v0.8.4"), self.release_commit)
         self.assertEqual(self.git("rev-parse", "HEAD"), self.release_commit)
-        self.assertEqual((self.root / "source.zig").read_text(), "original release\n")
-        self.assertEqual((self.root / "release/VERSION").read_text(), "original release\n")
-        for name in publication.VALIDATION_FILES:
-            self.assertEqual((self.root / name).read_text(), "current main\n")
-        self.assertEqual(set(self.git("diff", "--name-only").splitlines()), set(publication.VALIDATION_FILES))
-        self.git("restore", "--", *publication.VALIDATION_FILES)
+        for name in self.files:
+            self.assertEqual((self.root / name).read_text(), "original release\n")
         self.assertEqual(self.git("status", "--porcelain"), "")
 
     def test_invalid_or_missing_tags_leave_checkout_unchanged(self):
