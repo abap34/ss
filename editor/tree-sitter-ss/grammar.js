@@ -213,6 +213,7 @@ module.exports = grammar({
       $.composition_expression,
       $.binary_expression,
       $.unary_expression,
+      $.binding_reference,
       $.lambda_expression,
       $.property_default_expression,
       $.property_exists_expression,
@@ -252,7 +253,8 @@ module.exports = grammar({
       field("right", $._expression),
     )),
 
-    unary_expression: $ => prec(PREC.unary, seq(choice("-", "!"), $._expression)),
+    binding_reference: $ => prec(PREC.unary, seq("&", choice($.identifier, $.qualified_identifier))),
+    unary_expression: $ => prec(PREC.unary, seq(choice("-", "!", "*"), $._expression)),
     text_call_expression: $ => prec(PREC.call, seq(
       field("function", $.callable_identifier),
       field("text", choice($.string, $.block_text)),

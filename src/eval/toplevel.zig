@@ -93,6 +93,7 @@ pub const EvalContext = struct {
     state: *core.DocumentState,
     functions: *const core.FunctionMap,
     closures: ClosureStore,
+    placements_by_binding: []?core.NodeId = &.{},
     module_id: core.SourceModuleId = 0,
     execution_unit: ?usize = null,
     pending_drawings: std.ArrayList(PendingDrawing) = .empty,
@@ -120,6 +121,8 @@ pub const EvalContext = struct {
             .cancellation = options.cancellation,
         };
         errdefer result.deinit();
+        result.placements_by_binding = try allocator.alloc(?core.NodeId, state.scheduled_bindings.items.len);
+        @memset(result.placements_by_binding, null);
         try checkCancellation(&result);
         try result.name_resolution_cache.reserve(state);
         try result.display_inputs.resize(allocator, graph.units.items.len);
@@ -139,6 +142,7 @@ pub const EvalContext = struct {
         self.pending_drawings.deinit(self.allocator);
         for (self.display_inputs.items) |*inputs| inputs.deinit(self.allocator);
         self.display_inputs.deinit(self.allocator);
+        self.allocator.free(self.placements_by_binding);
         self.display_entries.deinit();
         self.frames.deinit();
         self.closures.deinit();
@@ -734,6 +738,14 @@ fn evalExpr(
         .record => |record| try evalRecord(evaluation, page_id, scope, env, current_origin, record),
         .record_update => |update| try evalRecordUpdate(evaluation, page_id, scope, env, current_origin, update),
         .member => |member| try evalMember(evaluation, page_id, scope, env, current_origin, member),
+        .binding_ref => |ref| .{ .binding_ref = ref.binding_id orelse return error.InvalidReferenceTarget },
+        .dereference => |operand| blk: {
+            var handle = try evalExpr(evaluation, page_id, scope, env, current_origin, operand.target.*);
+            defer handle.deinit(evaluation.allocator);
+            if (handle != .binding_ref) return error.ExpectedPlacementReference;
+            if (handle.binding_ref >= evaluation.placements_by_binding.len) return error.InvalidReferenceTarget;
+            break :blk .{ .object = evaluation.placements_by_binding[handle.binding_ref] orelse return error.UnscheduledPlacementReference };
+        },
         .optional_check => |check| blk: {
             var value = try evalExpr(evaluation, page_id, scope, env, current_origin, check.target.*);
             defer value.deinit(state.allocator);
@@ -1543,12 +1555,6 @@ fn evalSelectCall(
         .previous_page => {
             return try state.select(state.allocator, base, core.Query.previousPage());
         },
-        .children => {
-            return try state.select(state.allocator, base, core.Query.children());
-        },
-        .descendants => {
-            return try state.select(state.allocator, base, core.Query.descendants());
-        },
         .document_pages => {
             return try state.select(state.allocator, base, core.Query.documentPages());
         },
@@ -1911,6 +1917,12 @@ fn executeStatement(
                 try addValueObjectSources(state, page_id, evaluation.module_id, binding.name, null, stmt.span, value);
             }
             try env.putOwned(binding.name, value);
+            if (binding.binding_id) |id| {
+                if (state.scheduled_bindings.items[id].referenced) {
+                    if (value != .object or evaluation.placements_by_binding[id] != null) return error.InvalidReferenceTarget;
+                    evaluation.placements_by_binding[id] = value.object;
+                }
+            }
         },
         .return_expr => |expr| {
             const value = try evalExpr(evaluation, page_id, scope, env, origin, expr);

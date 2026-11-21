@@ -19,8 +19,8 @@ fn display(self: Placed<Box>) -> PathShape
 end
 `;
 const pair = `let stack = place!(box("A", 240, 80) // box("B", 120, 60))
-let a = first(children(stack))
-let b = first(children(stack) - selection(a))`;
+let a = first(select<Box>(stack))
+let b = first(select<Box>(stack) - selection(a))`;
 let count = 0;
 const failures = [];
 

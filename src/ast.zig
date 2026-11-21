@@ -18,6 +18,7 @@ pub const PageDecl = Expanded.PageDecl;
 pub const ConstDecl = Expanded.ConstDecl;
 pub const FunctionDecl = Expanded.FunctionDecl;
 pub const ParamDecl = Expanded.ParamDecl;
+pub const BindingRefExpr = Expanded.BindingRefExpr;
 pub const CallableName = Expanded.CallableName;
 pub const CallExpr = Expanded.CallExpr;
 pub const ApplyExpr = Expanded.ApplyExpr;

@@ -254,7 +254,7 @@ test "dependency return caches distinguish argument facts and default arguments"
     const allocator = arena.allocator();
     var analysis = try Analysis.init(allocator,
         \\fn label(value: String = "default") -> String = value
-        \\fn keep(value: Placement) -> Placement = value
+        \\fn keep(value: Placed<Text>) -> Placed<Text> = value
         \\document
         \\  let first = label("first")
         \\  let second = label("second")

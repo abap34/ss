@@ -79,9 +79,9 @@ fn firstHoleInExpr(expr: ast.Expr) ?ast.HoleId {
             break :blk null;
         },
         .member => |member| firstHoleInExpr(member.target.*),
-        .optional_check => |check| firstHoleInExpr(check.target.*),
+        .optional_check, .dereference => |check| firstHoleInExpr(check.target.*),
         .coalesce => |coalesce| firstHoleInExpr(coalesce.target.*) orelse firstHoleInExpr(coalesce.fallback.*),
-        .ident, .string, .color, .number, .boolean, .none, .enum_case => null,
+        .ident, .binding_ref, .string, .color, .number, .boolean, .none, .enum_case => null,
     };
 }
 
@@ -185,6 +185,16 @@ fn exprInfoWithOptions(
             try addUserReportAtSpan(state, origin, ident.name_span, "UnknownIdentifier", "unknown identifier: {s}", .{name});
             return error.UnknownIdentifier;
         },
+        .binding_ref => |ref| try placementReferenceInfo(allocator, state, sema, env, ref, origin, options),
+        .dereference => |operand| blk: {
+            const info = try exprInfoWithOptions(allocator, state, sema, env, operand.target.*, origin, options);
+            if (info.hole != null) break :blk info;
+            if (info.ty.kind != .reference or info.ty.arguments.len != 1) {
+                try addUserReport(state, origin, "ExpectedPlacementReference", "prefix '*' requires a Ref to a placement", .{});
+                return error.InvalidType;
+            }
+            break :blk infoFromType(info.ty.arguments[0]);
+        },
         .call => |call| try inferCallInfo(allocator, state, sema, env, call, origin, options),
         .apply => |apply| try inferApplyInfo(allocator, state, sema, env, apply.callee.*, apply.args.items, origin, options),
         .lambda => |lambda| try inferLambdaInfo(allocator, state, sema, env, lambda, origin, options),
@@ -218,6 +228,29 @@ fn lexicalValue(env: *const TypeEnv, name: ast.CallableName, options: InferenceO
     return null;
 }
 
+fn placementReferenceInfo(allocator: std.mem.Allocator, state: ?*core.DocumentState, sema: *const SemanticEnv, env: *const TypeEnv, ref: ast.BindingRefExpr, origin: core.SourceOrigin, options: InferenceOptions) !TypeInfo {
+    const owner = sema.state orelse return error.InvalidType;
+    if (ref.ambiguous_page) {
+        try addUserReportAtSpan(state, origin, ref.ident.name_span, "AmbiguousReferencePage", "'{s}' does not identify a single stage page", .{ref.ident.name});
+        return error.InvalidType;
+    }
+    const local = if (ref.ident.reference().isQualified()) null else env.get(ref.ident.name);
+    if (ref.binding_id == null or (local != null and local.?.binding_id != ref.binding_id)) {
+        try addUserReportAtSpan(state, origin, ref.ident.name_span, "InvalidReferenceTarget", "'&{s}' must name a document or page placement binding", .{ref.ident.name});
+        return error.InvalidType;
+    }
+    const target = owner.scheduled_bindings.items[ref.binding_id.?];
+    const ty = if (options.binding_query) |q| try q.reference(ref.binding_id.?) else target.ty orelse return error.ForwardBindingDiagnostic;
+    if (ty.kind != .placed) {
+        try addUserReportAtSpan(state, origin, ref.ident.name_span, "InvalidReferenceTarget", "'{s}' is not bound to a placement", .{target.name});
+        return error.InvalidType;
+    }
+    if (state) |mutable| if (ref.ident.reference().name_span) |span| {
+        try mutable.source_map.placement_uses.put(mutable.allocator, .{ .module_id = sema.module_id, .offset = span.start }, ref.binding_id.?);
+    };
+    return infoFromType(try (Type{ .kind = .reference }).withArguments(allocator, &.{ty}));
+}
+
 fn inferRecordInfo(
     allocator: std.mem.Allocator,
     state: ?*core.DocumentState,
@@ -229,7 +262,7 @@ fn inferRecordInfo(
 ) !TypeInfo {
     const record_decl = sema.record(record.module_id, record.type_name) orelse {
         if (sema.resolveTypeNameInContext(record.module_id orelse sema.module_id, record.type_name)) |ty| {
-            if (ty.kind == .placed or ty.kind == .placement) {
+            if (ty.kind == .placed) {
                 try addUserReportAtSpan(state, origin, record.type_name_span, "InvalidTypeConstruction", "{s} is a placement reference; use place! to register an input value", .{record.type_name});
                 return error.InvalidType;
             }
@@ -515,7 +548,7 @@ fn inferMemberInfoFromTargetInfo(
         try addUserReportAtSpan(state, origin, member_span, "InvalidOptionalMember", "optional receivers require ?. or an explicit fallback with ?? before member access", .{});
         return error.InvalidType;
     }
-    if (target_info.ty.kind == .placed or target_info.ty.kind == .placement) {
+    if (target_info.ty.kind == .placed) {
         const field_type = @import("../language/placement.zig").memberType(target_info.ty, member_name) orelse {
             const label = try typeLabelAlloc(allocator, target_info.ty);
             defer allocator.free(label);
@@ -1123,19 +1156,17 @@ fn inferPrimitiveCallInfo(
         const child_infos = argument_infos[0..argument_count];
         const selection = child_infos.len == 1 and child_infos[0].ty.kind == .selection;
         const placed = descriptor.op == .group_placed or (call.callee.composition != null and child_infos.len > 0 and
-            (argument_infos[0].ty.kind == .placed or argument_infos[0].ty.kind == .placement));
+            argument_infos[0].ty.kind == .placed);
         const children = try allocator.alloc(Type, if (selection) 0 else child_infos.len);
         defer allocator.free(children);
-        var erased = selection;
         for (child_infos, 0..) |info, index| {
             if (info.hole != null) return info;
             const ty = if (selection) info.ty.selectionItem() else info.ty;
             if (placed) {
-                if (ty.kind != .placed and ty.kind != .placement) {
+                if (ty.kind != .placed) {
                     try addUserReport(state, callArgumentOrigin(call, index, origin), "InvalidGroupInput", "placed composition requires placement references; place each input first", .{});
                     return error.InvalidType;
                 }
-                if (ty.kind == .placement) erased = true;
                 if (!selection) children[index] = ty.placedInput() orelse Type.any;
             } else {
                 if (selection or (ty.kind != .record and ty.kind != .group)) {
@@ -1145,7 +1176,7 @@ fn inferPrimitiveCallInfo(
                 children[index] = ty;
             }
         }
-        const group_type = try (Type{ .kind = .group }).withArguments(allocator, if (erased) &.{} else children);
+        const group_type = try (Type{ .kind = .group }).withArguments(allocator, if (selection) &.{} else children);
         if (!placed) return infoFromType(group_type);
         if (state) |owner| if (options.validate_contracts) if (call.callee.call_id) |id| {
             if (!owner.displays.adoptions.contains(id)) {
@@ -1162,6 +1193,9 @@ fn inferPrimitiveCallInfo(
         if (sema.primitiveArgType(descriptor, index)) |expected| {
             try ensureType(state, allocator, actual, expected, origin);
         }
+    }
+    if (descriptor.op == .anchor) {
+        try semantic_types.ensurePlaced(state, allocator, argument_infos[0], callArgumentOrigin(call, 0, origin));
     }
     if (descriptor.result_policy == .placement) {
         const input = argument_infos[descriptor.result_arg_index];
@@ -1217,7 +1251,7 @@ fn returnTypeNeedsInferredFacts(ty: Type) bool {
         .record,
         .placed,
         .group,
-        .placement,
+        .reference,
         .path,
         .parameter,
         .unresolved,
@@ -1390,7 +1424,7 @@ fn primitiveResultTypeInfo(
 fn selectionItemType(state: ?*core.DocumentState, info: TypeInfo, origin: core.SourceOrigin) !Type {
     return switch (info.ty.selectionItem().kind) {
         .page => Type.page,
-        .placed, .placement => info.ty.selectionItem(),
+        .placed => info.ty.selectionItem(),
         else => {
             try addUserReport(state, origin, "UnknownSelectionItemType", "this operation requires a Selection of pages or placements; specify the element type in the Selection annotation", .{});
             return error.InvalidType;
@@ -1482,26 +1516,22 @@ fn inferSelectionAlgebraInfo(
 
     const left_item = left.ty.selectionItem();
     const right_item = right.ty.selectionItem();
-    if (registry.selectionPlacementItem(op, left_item, right_item)) |item| {
+    if (registry.selectionAlgebraItem(op, left_item, right_item)) |item| {
         return infoFromType(try Type.selectionOf(allocator, item));
     }
 
-    if (left.ty.selectionItem().kind != right.ty.selectionItem().kind) {
-        const left_label = try typeLabelAlloc(allocator, left.ty);
-        defer allocator.free(left_label);
-        const right_label = try typeLabelAlloc(allocator, right.ty);
-        defer allocator.free(right_label);
-        try addUserReport(
-            state,
-            origin,
-            "InvalidSelectionAlgebra",
-            "cannot combine {s} and {s}",
-            .{ left_label, right_label },
-        );
-        return error.InvalidType;
-    }
-
-    return infoFromType(Type.selection(.page));
+    const left_label = try typeLabelAlloc(allocator, left.ty);
+    defer allocator.free(left_label);
+    const right_label = try typeLabelAlloc(allocator, right.ty);
+    defer allocator.free(right_label);
+    try addUserReport(
+        state,
+        origin,
+        "InvalidSelectionAlgebra",
+        "cannot combine {s} and {s}; selection element types must match",
+        .{ left_label, right_label },
+    );
+    return error.InvalidType;
 }
 
 fn inferSelectCallInfo(
@@ -1525,7 +1555,7 @@ fn inferSelectCallInfo(
         const scope = argument_infos[0];
         if (scope.hole != null) return scope;
         switch (scope.ty.kind) {
-            .document, .page, .placed, .placement => {},
+            .document, .page, .placed => {},
             else => {
                 try addUserReport(state, origin, "InvalidSelectionScope", "select<T> requires a Document, Page, or placement scope", .{});
                 return error.InvalidType;
@@ -1554,6 +1584,7 @@ fn inferSelectCallInfo(
         return error.InvalidArity;
     }
     const base = argument_infos[0];
+    if (query.preserves_input_type) try semantic_types.ensurePlaced(state, allocator, base, callArgumentOrigin(call, 0, origin));
     try ensureType(state, allocator, base, registry.queryInputType(query), origin);
     for (query.extra_arg_types, 0..) |expected, extra_index| {
         const arg_index = 2 + extra_index;
@@ -1682,7 +1713,7 @@ fn validateMemberTargetPropertySetPath(
         if (segment.name_hole != null) return;
         const owner_type = current_info.ty;
         current_info = try inferMemberInfoFromTargetInfo(allocator, state, sema, current_info, segment.name, segment.span, origin);
-        if (index == path.len - 1 and (owner_type.kind == .placed or owner_type.kind == .placement) and current_info.hole == null) {
+        if (index == path.len - 1 and owner_type.kind == .placed and current_info.hole == null) {
             try addUserReportAtSpan(state, origin, segment.span, "ImmutablePlacement", "placement member '{s}' is read-only", .{segment.name});
             return error.InvalidType;
         }

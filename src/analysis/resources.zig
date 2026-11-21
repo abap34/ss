@@ -3,6 +3,7 @@ const core = @import("core");
 const Type = @import("ast").Type;
 
 pub const ResourceKind = enum {
+    placement_binding,
     variable,
     pages,
     objects,
@@ -253,6 +254,7 @@ pub const PlacementScope = struct {
 };
 
 pub const Resource = union(ResourceKind) {
+    placement_binding: struct { id: u32, name: []const u8 },
     variable: struct {
         scope: ResourceScope,
         name: []const u8,
@@ -275,6 +277,7 @@ pub const Resource = union(ResourceKind) {
 
     pub fn eql(self: Resource, other: Resource) bool {
         return switch (self) {
+            .placement_binding => |binding| other == .placement_binding and binding.id == other.placement_binding.id,
             .variable => |variable| other == .variable and resourceScopeEql(variable.scope, other.variable.scope) and std.mem.eql(u8, variable.name, other.variable.name),
             .pages => |scope| other == .pages and resourceScopeEql(scope, other.pages),
             .objects => |left| other == .objects and left.placement.eql(other.objects.placement) and optionalTypeEql(left.input_type, other.objects.input_type) and left.owner.eql(other.objects.owner) and resourceScopeEql(left.page_scope, other.objects.page_scope),
@@ -284,6 +287,7 @@ pub const Resource = union(ResourceKind) {
 
     pub fn intersects(self: Resource, other: Resource) bool {
         return switch (self) {
+            .placement_binding => |binding| other == .placement_binding and binding.id == other.placement_binding.id,
             .variable => |left| switch (other) {
                 .variable => |right| left.scope.intersects(right.scope) and std.mem.eql(u8, left.name, right.name),
                 else => false,

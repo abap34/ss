@@ -87,6 +87,13 @@ pub const ReadPath = struct {
             .difference => if (a == .no) .no else if (b == .no) a else .either,
         };
     }
+
+    // Called after discovery, in the caller's abstract argument environment.
+    pub fn reads(self: ReadPath, targets: BindingTargets) error{UnresolvedPlacementReference}![]const u32 {
+        if (self.no_value) return &.{};
+        if (self.unknown_target or targets.ids.len == 0) return error.UnresolvedPlacementReference;
+        return targets.ids;
+    }
 };
 
 // Generation-owned immutable input facts shared by call and dependency analysis.
@@ -96,6 +103,7 @@ pub const Value = struct {
     unknown: bool = false,
     truth: Alternatives = .bottom,
     present: Alternatives = .bottom,
+    targets: BindingTargets = .{},
     candidates: []const Callable = &.{},
     fields: []const Field = &.{},
     children: []const Value = &.{},
@@ -126,10 +134,39 @@ pub const Closure = struct {
 
 pub const Entry = struct { input: ast.Type, receiver: Value };
 
+// Group closed dereference facts by the unit that will evaluate the read.
+// The statement identity is from the expanded module, so two callers or two
+// stages sharing a callee (and a source span) never acquire each other's edges.
+pub const ReadUnit = struct {
+    statement: *const ast.Statement,
+    phase: enum { statement, display, drawing } = .statement,
+    call: u64 = 0,
+    step: usize = 0,
+
+    pub fn display(self: ReadUnit, call: u64, step: usize) ReadUnit {
+        return .{ .statement = self.statement, .phase = .display, .call = call, .step = step };
+    }
+
+    pub fn drawing(self: ReadUnit, call: u64) ReadUnit {
+        return .{ .statement = self.statement, .phase = .drawing, .call = call };
+    }
+};
+
 pub const Store = struct {
     arena: std.heap.ArenaAllocator,
     entries: std.ArrayList(Entry) = .empty,
     bindings: []const Value = &.{},
+    reads: std.AutoHashMapUnmanaged(ReadUnit, BindingTargets) = .empty,
+
+    pub fn recordRead(self: *Store, unit: ReadUnit, targets: BindingTargets) !void {
+        const arena = self.arena.allocator();
+        const entry = try self.reads.getOrPut(arena, unit);
+        const old: BindingTargets = if (entry.found_existing) entry.value_ptr.* else .{};
+        const all = try old.merge(targets, arena);
+        // merge can borrow either input; the observation was made in a shorter-lived arena.
+        entry.value_ptr.* = if (all.ids.ptr == targets.ids.ptr) .{ .ids = try arena.dupe(u32, all.ids) } else all;
+    }
+
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{ .arena = .init(allocator) };
     }
@@ -140,7 +177,53 @@ pub const Store = struct {
 
     pub fn clear(self: *Store) void {
         _ = self.arena.reset(.free_all);
+        self.reads = .empty;
         self.entries = .empty;
         self.bindings = &.{};
+    }
+};
+
+// Sorted, immutable binding IDs. Copies through records and closures share the
+// same set; joining an existing subset allocates nothing.
+pub const BindingTargets = struct {
+    ids: []const u32 = &.{},
+
+    pub fn eql(a: BindingTargets, b: BindingTargets) bool {
+        return std.mem.eql(u32, a.ids, b.ids);
+    }
+
+    pub fn one(allocator: std.mem.Allocator, id: u32) !BindingTargets {
+        return .{ .ids = try allocator.dupe(u32, &.{id}) };
+    }
+
+    pub fn merge(a: BindingTargets, b: BindingTargets, allocator: std.mem.Allocator) !BindingTargets {
+        if (a.ids.len == 0) return b;
+        if (b.ids.len == 0 or a.ids.ptr == b.ids.ptr and a.ids.len == b.ids.len) return a;
+        var i: usize = 0;
+        var j: usize = 0;
+        var shared: usize = 0;
+        while (i < a.ids.len and j < b.ids.len) {
+            if (a.ids[i] == b.ids[j]) {
+                shared += 1;
+                i += 1;
+                j += 1;
+            } else if (a.ids[i] < b.ids[j]) i += 1 else j += 1;
+        }
+        if (shared == b.ids.len) return a;
+        if (shared == a.ids.len) return b;
+        const result = try allocator.alloc(u32, a.ids.len + b.ids.len - shared);
+        i = 0;
+        j = 0;
+        for (result) |*id| {
+            if (j == b.ids.len or (i < a.ids.len and a.ids[i] < b.ids[j])) {
+                id.* = a.ids[i];
+                i += 1;
+            } else {
+                id.* = b.ids[j];
+                j += 1;
+                if (i < a.ids.len and a.ids[i] == id.*) i += 1;
+            }
+        }
+        return .{ .ids = result };
     }
 };

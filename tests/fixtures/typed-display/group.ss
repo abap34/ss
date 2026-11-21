@@ -19,9 +19,9 @@ def twice(value):
 
 page first
   let item = place!(example)
-  let body = first(children(item))
-  let title = first(children(body))
-  let code = first(children(body) - selection(title))
+  let body = first(select<Group<text_api::Text, code_api::Code>>(item))
+  let title = first(select<text_api::Text>(body))
+  let code = first(select<code_api::Code>(body))
   ~ title.left == page.left + 64
   ~ title.top == page.top - 64
   ~ code.left == title.left
@@ -30,9 +30,9 @@ end
 
 page reused
   let item = place!(example with { title = "# Reused input, independent children" })
-  let body = first(children(item))
-  let title = first(children(body))
-  let code = first(children(body) - selection(title))
+  let body = first(select<Group<text_api::Text, code_api::Code>>(item))
+  let title = first(select<text_api::Text>(body))
+  let code = first(select<code_api::Code>(body))
   ~ title.left == page.left + 64
   ~ title.top == page.top - 64
   ~ code.left == title.left

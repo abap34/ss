@@ -6,6 +6,33 @@ const contracts = @import("compiler").evaluation_contracts;
 const eval_value = @import("compiler").evaluation_values;
 const testing = std.testing;
 
+test "runtime contracts: binding references require the registered binding type" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var state = try core.DocumentState.init(allocator, try allocator.dupe(u8, "."), try allocator.dupe(u8, "refs.ss"), try allocator.dupe(u8, ""), ast.Module.init());
+    defer state.deinit();
+    const specific = Type{ .kind = .placed, .arguments = &.{.{ .kind = .group, .arguments = &.{Type.recordType("Text").inModule(1)} }} };
+    const erased = Type{ .kind = .placed, .arguments = &.{.{ .kind = .group }} };
+    const reference = Type{ .kind = .reference, .arguments = &.{specific} };
+    const other = Type{ .kind = .reference, .arguments = &.{erased} };
+    const initializer = ast.Expr{ .number = 0 };
+    for ([_]Type{ specific, erased }) |ty| try state.scheduled_bindings.append(allocator, .{
+        .name = "target",
+        .name_span = null,
+        .page_name_span = null,
+        .page_index = null,
+        .module_id = 0,
+        .initializer = &initializer,
+        .ty = ty,
+    });
+    for ([_]Type{ reference, other }, 0..) |expected, index| {
+        try testing.expect(contracts.valueConformsToType(&state, .{ .binding_ref = @intCast(index) }, expected));
+        try testing.expect(!contracts.valueConformsToType(&state, .{ .binding_ref = @intCast(1 - index) }, expected));
+        try testing.expect(!contracts.valueConformsToType(&state, .{ .binding_ref = 2 }, expected));
+    }
+}
+
 test "runtime contracts: nominal values retain all applied type arguments" {
     const allocator = testing.allocator;
     var number_box = try Type.recordType("Box").inModule(1).withArguments(allocator, &.{Type.number});
@@ -74,23 +101,19 @@ test "runtime contracts: placement references validate the complete registered i
     try testing.expectEqual(core.Anchor.right, anchor.anchor.node.anchor);
     try testing.expectError(error.UnknownField, eval_value.placementMember(&state, placed.object, "content"));
     const invalid = core.Value{ .object = page };
+    try testing.expect(!contracts.valueConformsToType(&state, .{ .object = 999 }, expected));
     try testing.expect(contracts.valueConformsToType(&state, placed, expected));
-    try testing.expect(contracts.valueConformsToType(&state, placed, Type.placement));
     try testing.expect(!contracts.valueConformsToType(&state, placed, different));
     try testing.expect(!contracts.valueConformsToType(&state, value, expected));
     try testing.expect(!contracts.valueConformsToType(&state, invalid, expected));
-    try testing.expect(!contracts.valueConformsToType(&state, invalid, Type.placement));
-    try testing.expect(!contracts.valueConformsToType(&state, .{ .object = 999 }, Type.placement));
     var selected = core.Value{ .selection = .init(.object, "placements") };
     defer selected.deinit(allocator);
     try selected.selection.ids.append(allocator, placed.object);
     var selection_type = try Type.selectionOf(allocator, expected);
     defer selection_type.deinit(allocator);
     try testing.expect(contracts.valueConformsToType(&state, selected, selection_type));
-    try testing.expect(contracts.valueConformsToType(&state, selected, Type.selection(.placement)));
     try selected.selection.ids.append(allocator, invalid.object);
     try testing.expect(!contracts.valueConformsToType(&state, selected, selection_type));
-    try testing.expect(!contracts.valueConformsToType(&state, selected, Type.selection(.placement)));
 }
 
 test "runtime contracts: unresolved names reject values even inside optional and generic types" {

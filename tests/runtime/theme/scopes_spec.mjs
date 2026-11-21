@@ -15,7 +15,7 @@ function run(args, error) {
   if (error) {
     assert.notEqual(r.status, 0);
     assert.match(r.stderr, new RegExp(error));
-    assert.doesNotMatch(r.stderr, /LoweringFailed/);
+    assert.doesNotMatch(r.stderr, /LoweringFailed|UnscheduledPlacementReference/);
   } else assert.equal(r.status, 0, r.stderr);
 }
 async function source(text) {
@@ -296,23 +296,30 @@ end`);
     assert.equal(text(await json(["dump", "--quiet", input]))[0].render.text.font_size, size);
   }
 
-  // The caller chooses another page at runtime; display must use that page's settings.
-  const cross = await source(`type Marker { label: String }
+  // An ordinary page query has a dynamic destination. A resolved placement
+  // reference additionally rules out a dependency on the caller's page theme.
+  for (const [destination, exact] of [
+    ["first(filter(pages(docctx()), (p: Page) |-> page_index(p) == 2))", false],
+    ["(*&destination::anchor).page", true],
+  ]) {
+    const cross = await source(`type Marker { label: String }
 fn display(self: Placed<Marker>) -> Text = text(self.value.label, theme_for(pagectx()).text)
-page destination
-  theme!(Theme {} with { text.size = 37 })
-end
 page caller
-  place_on!(first(pages(docctx())), Marker { label = "Moved" })
+  place_on!(${destination}, Marker { label = "Moved" })
   theme!(Theme {} with { text.size = 16 })
+end
+page destination
+  let anchor = text!("Anchor")
+  theme!(Theme {} with { text.size = 37 })
 end`);
-  const moved = text(await json(["dump", "--quiet", cross])).find(n => n.content === "Moved");
-  assert.equal(moved.render.text.font_size, 37);
+    const moved = text(await json(["dump", "--quiet", cross])).find(n => n.content === "Moved");
+    assert.equal(moved.render.text.font_size, 37);
 
-  const routes = await json(["debug", "schedule", cross]);
-  const dest = parent(routes, "theme!(");
-  const target = display(routes, parent(routes, "place_on!("));
-  assert(edge(routes, dest, target));
+    const routes = await json(["debug", "schedule", cross]);
+    const target = display(routes, parent(routes, "place_on!("));
+    assert(edge(routes, parent(routes, "theme!(", 1), target));
+    if (exact) assert(!edge(routes, parent(routes, "theme!("), target));
+  }
 
   // Defining an optional setting as none settles the local read but still
   // requires the fallback.

@@ -89,7 +89,7 @@ fn exprExpectedTypes(
     holes: *syntax_hole.Result,
 ) !void {
     switch (expr) {
-        .hole, .ident, .string, .color, .number, .boolean, .none, .enum_case => {},
+        .hole, .ident, .binding_ref, .string, .color, .number, .boolean, .none, .enum_case => {},
         .call => |call| {
             try callArgExpectedTypes(allocator, sema, call, holes);
             for (call.args.items) |arg| try exprExpectedTypes(allocator, sema, arg, holes);
@@ -108,7 +108,7 @@ fn exprExpectedTypes(
             try exprExpectedTypes(allocator, sema, update.target.*, holes);
             for (update.fields.items) |field| try exprExpectedTypes(allocator, sema, field.value, holes);
         },
-        .optional_check => |check| try exprExpectedTypes(allocator, sema, check.target.*, holes),
+        .optional_check, .dereference => |check| try exprExpectedTypes(allocator, sema, check.target.*, holes),
         .coalesce => |coalesce| {
             try exprExpectedTypes(allocator, sema, coalesce.target.*, holes);
             try exprExpectedTypes(allocator, sema, coalesce.fallback.*, holes);
@@ -188,6 +188,6 @@ fn expectExpr(allocator: std.mem.Allocator, holes: *syntax_hole.Result, expr: as
         },
         // Result types do not determine the argument, callee, member receiver,
         // presence-test operand, or individual record field types.
-        .call, .apply, .record, .optional_check, .ident, .string, .color, .number, .boolean, .none, .enum_case => {},
+        .call, .apply, .record, .optional_check, .dereference, .ident, .binding_ref, .string, .color, .number, .boolean, .none, .enum_case => {},
     }
 }

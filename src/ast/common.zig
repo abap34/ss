@@ -509,6 +509,18 @@ pub const IdentifierExpr = struct {
     }
 };
 
+pub const BindingRefExpr = struct {
+    ident: IdentifierExpr,
+    binding_id: ?u32 = null,
+    ambiguous_page: bool = false,
+
+    pub fn clone(self: BindingRefExpr, allocator: Allocator) !BindingRefExpr {
+        var result = self;
+        result.ident = try self.ident.clone(allocator);
+        return result;
+    }
+};
+
 pub const AnchorRef = struct {
     kind: enum {
         page,

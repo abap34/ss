@@ -3,6 +3,37 @@ const analysis = @import("analysis");
 const allocation_testing = @import("allocation_testing");
 const testing = std.testing;
 
+test "analysis query spec: placement references navigate to a forward binding and its page" {
+    const path = "stdlib/internal/placement-reference-query.ss";
+    const source =
+        \\import std:prelude as *
+        \\page reader
+        \\  let target = text!("Local")
+        \\  let ref = &other::target
+        \\end
+        \\page other
+        \\  let target = text!("Remote")
+        \\end
+    ;
+    var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+    defer sources.deinit();
+    try sources.put(path, source);
+    var snapshot = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{});
+    defer snapshot.deinit();
+    try testing.expect(!snapshot.diagnostics.hasErrors());
+    const start = std.mem.indexOf(u8, source, "&other::target").?;
+    for ([_]usize{ 2, 9 }, [_]usize{ 5, 6 }, [_][]const u8{ "page other", "Ref<Placed<Text>>" }) |within, line, label| {
+        const req = analysis.query.types.SourceRequest{ .source = source, .path = path, .offset = start + within };
+        var hover = (try analysis.snapshot.hoverAt(testing.allocator, &snapshot, req, .{ .budget_ms = 1000 })) orelse return error.ExpectedHover;
+        defer hover.deinit(testing.allocator);
+        try testing.expect(std.mem.indexOf(u8, hover.markdown, label) != null);
+        const definitions = try analysis.snapshot.definitionAt(testing.allocator, &snapshot, req, .{ .budget_ms = 1000 });
+        defer testing.allocator.free(definitions);
+        try testing.expectEqual(@as(usize, 1), definitions.len);
+        try testing.expectEqual(line, definitions[0].line);
+    }
+}
+
 test "analysis query spec: document and page settings share value fields and their definitions" {
     const path = "stdlib/internal/settings-query-test.ss";
     const source =
@@ -607,14 +638,14 @@ test "analysis query spec: generic type parameters retain their lexical scope an
     try testing.expectEqual(@as(usize, 2), count);
 }
 
-test "analysis query spec: placement members expose concrete input and hide erased fields" {
+test "analysis query spec: placement members expose concrete and generic inputs" {
     const path = "stdlib/internal/placement-query-test.ss";
     const source =
         \\type Box<T> { value: T }
         \\fn read(item: Placed<Box<Number>>) -> Number = item.value.value
-        \\fn owner(item: Placement) -> Page = item.page
-        \\fn document_of(item: Placement) -> Document = item.document
-        \\fn left(item: Placement) -> Anchor = item.left
+        \\fn owner<T>(item: Placed<T>) -> Page = item.page
+        \\fn document_of<T>(item: Placed<T>) -> Document = item.document
+        \\fn left<T>(item: Placed<T>) -> Anchor = item.left
     ;
     var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
     defer sources.deinit();
@@ -623,24 +654,28 @@ test "analysis query spec: placement members expose concrete input and hide eras
     defer snapshot.deinit();
     try testing.expect(!snapshot.diagnostics.hasErrors());
     try expectAppliedField(&snapshot, path, source, "item.value.value", "value", "Number", 0);
-    for ([_]struct { needle: []const u8, label: []const u8, ty: []const u8, has_value: bool }{
-        .{ .needle = "item.value", .label = "value", .ty = "Box<Number>", .has_value = true },
-        .{ .needle = "item.page", .label = "page", .ty = "Page", .has_value = false },
-        .{ .needle = "item.document", .label = "document", .ty = "Document", .has_value = false },
-        .{ .needle = "item.left", .label = "left", .ty = "Anchor", .has_value = false },
+    for ([_]struct { needle: []const u8, label: []const u8, ty: []const u8, input_type: []const u8 }{
+        .{ .needle = "item.value", .label = "value", .ty = "Box<Number>", .input_type = "Box<Number>" },
+        .{ .needle = "item.page", .label = "page", .ty = "Page", .input_type = "T" },
+        .{ .needle = "item.document", .label = "document", .ty = "Document", .input_type = "T" },
+        .{ .needle = "item.left", .label = "left", .ty = "Anchor", .input_type = "T" },
     }) |case| {
         const request = analysis.query.types.SourceRequest{ .path = path, .source = source, .offset = std.mem.indexOf(u8, source, case.needle).? + case.needle.len - 1 };
         var completion = try analysis.snapshot.completeAt(testing.allocator, &snapshot, request, .{ .budget_ms = 1000 });
         defer completion.deinit(testing.allocator);
         var found = false;
+        var found_value = false;
         for (completion.items) |item| {
             try testing.expect(!std.mem.eql(u8, item.label, "content"));
-            if (!case.has_value) try testing.expect(!std.mem.eql(u8, item.label, "value"));
+            if (std.mem.eql(u8, item.label, "value")) {
+                try testing.expectEqualStrings(case.input_type, item.detail orelse "");
+                found_value = true;
+            }
             if (!std.mem.eql(u8, item.label, case.label)) continue;
             try testing.expectEqualStrings(case.ty, item.detail orelse "");
             found = true;
         }
-        try testing.expect(found);
+        try testing.expect(found and found_value);
         var hover = (try analysis.snapshot.hoverAt(testing.allocator, &snapshot, request, .{ .budget_ms = 1000 })) orelse return error.ExpectedHover;
         defer hover.deinit(testing.allocator);
         try testing.expect(std.mem.indexOf(u8, hover.markdown, case.ty) != null);

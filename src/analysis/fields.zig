@@ -60,6 +60,8 @@ fn checkFieldDefault(
     var env = TypeEnv.init(allocator);
     defer env.deinit();
     const actual = infer.exprInfo(allocator, state, sema, &env, default_value, origin) catch |err| switch (err) {
+        // The target initializer (or its type cycle) owns the diagnostic.
+        error.ForwardBindingDiagnostic => return,
         error.InvalidType, error.UnknownIdentifier => return error.InvalidType,
         else => return err,
     };

@@ -22,7 +22,7 @@ const CancelFunctionAnalysis = struct {
 
     fn canceled(context: *const anyopaque) bool {
         const self: *CancelFunctionAnalysis = @ptrCast(@alignCast(@constCast(context)));
-        self.triggered = self.triggered or (self.analyzer.environment.get("argument") != null);
+        self.triggered = self.triggered or self.analyzer.environment.get("argument") != null;
         return self.triggered;
     }
 };
@@ -81,8 +81,8 @@ test "type facts preserve generic arguments and outlive individual analyzers" {
     var state = try document(
         \\type Holder<T> { item: T }
         \\fn number(value: Holder<Number>) -> Number = value.item
-        \\fn first(value: Holder<Placement>) -> Number = value.item.x
-        \\fn second(value: Holder<Placement>) -> Number = value.item.x
+        \\fn first(value: Holder<Placed<Text>>) -> Number = value.item.x
+        \\fn second(value: Holder<Placed<Text>>) -> Number = value.item.x
         \\document
         \\  let a = number(input)
         \\  let b = first(input)
@@ -138,7 +138,7 @@ fn analyzeCachedTypeFacts(allocator: std.mem.Allocator, state: *core.DocumentSta
 
 test "cached type facts release every partially constructed field tree" {
     var state = try document(
-        \\type Inner { item: Placement }
+        \\type Inner { item: Placed<Text> }
         \\type Outer { inner: Inner }
         \\fn read(value: Outer) -> Number = value.inner.item.x
         \\document

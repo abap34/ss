@@ -112,6 +112,7 @@ const AbstractValue = struct {
 
     allocator: std.mem.Allocator,
     labels: *const Labels = &.{},
+    targets: placement_inputs.BindingTargets = .{},
     path: placement_inputs.ReadPath = .{},
     truth: placement_inputs.Alternatives = .bottom,
     present: placement_inputs.Alternatives = .bottom,
@@ -161,13 +162,13 @@ const AbstractValue = struct {
     }
 
     fn isEmpty(self: AbstractValue) bool {
-        return self.path.eql(.{}) and self.truth == .bottom and self.present == .bottom and !self.unknown and !self.unknown_objects and !self.unknown_string and !self.unknown_reference and self.labels.count() == 0 and
+        return self.path.eql(.{}) and self.truth == .bottom and self.present == .bottom and self.targets.ids.len == 0 and !self.unknown and !self.unknown_objects and !self.unknown_string and !self.unknown_reference and self.labels.count() == 0 and
             self.objects.count() == 0 and self.fields.count() == 0 and self.children.len == 0 and
             self.reference == null and self.string_literal == null and self.selected_types.len == 0;
     }
 
     fn sameSnapshot(self: AbstractValue, other: AbstractValue) bool {
-        return self.path.eql(other.path) and self.truth == other.truth and self.present == other.present and self.labels == other.labels and self.fields == other.fields and self.objects == other.objects and
+        return self.path.eql(other.path) and self.truth == other.truth and self.present == other.present and self.targets.eql(other.targets) and self.labels == other.labels and self.fields == other.fields and self.objects == other.objects and
             self.children.ptr == other.children.ptr and self.children.len == other.children.len and
             self.selected_types.ptr == other.selected_types.ptr and self.selected_types.len == other.selected_types.len and
             self.unknown == other.unknown and self.unknown_objects == other.unknown_objects and
@@ -200,9 +201,10 @@ const AbstractValue = struct {
         }
         var next = self.*;
         next.path = self.path.join(other.path);
+        next.targets = try self.targets.merge(other.targets, self.allocator);
         next.truth = self.truth.join(other.truth);
         next.present = self.present.join(other.present);
-        var changed = !next.path.eql(self.path) or next.truth != self.truth or next.present != self.present;
+        var changed = !next.path.eql(self.path) or next.truth != self.truth or next.present != self.present or next.targets.ids.len != self.targets.ids.len;
         for (other.selected_types) |ty| {
             if (try next.addSelectedType(ty)) changed = true;
         }
@@ -394,7 +396,7 @@ const Activation = struct {
     owner: ?ast.FunctionDecl,
 };
 
-const CallSummary = struct { value: AbstractValue, places_objects: bool };
+const CallSummary = struct { value: AbstractValue, places_objects: bool, reads: placement_inputs.BindingTargets = .{} };
 const ActivationState = union(enum) { active, complete: CallSummary };
 const EffectFrame = struct {
     function: ?core.FunctionKey = null,
@@ -581,6 +583,8 @@ const CallKeys = struct {
             @intFromBool(value.unknown_reference),   @backingInt(value.truth),
             @backingInt(value.present),
         });
+        try self.appendInteger(out, value.targets.ids.len);
+        for (value.targets.ids) |id| try self.appendInteger(out, id);
         if (value.reference) |reference| {
             try out.append(self.key_allocator, @as(u8, @backingInt(reference)) + 1);
             if (reference == .page) try self.appendPage(out, reference.page);
@@ -727,6 +731,7 @@ const InputExporter = struct {
             .path = value.path,
             .truth = value.truth,
             .present = value.present,
+            .targets = .{ .ids = try allocator.dupe(u32, value.targets.ids) },
             .selected_types = selected_types,
             .unknown = value.unknown,
             .candidates = candidates,
@@ -789,6 +794,9 @@ const Analyzer = struct {
     closures: Closures,
     capture_index: captures.Index,
     require_known_calls: bool = false,
+    read_unit: ?placement_inputs.ReadUnit = null,
+    read_observations: usize = 0,
+    display_reads: ?*placement_inputs.BindingTargets = null,
     current_origin: ?core.SourceOrigin = null,
     current_page: ?placement_inputs.PageKey = null,
     call_depth: usize = 0,
@@ -800,7 +808,7 @@ const Analyzer = struct {
     bindings: BindingPropagation,
     inputs_changed: bool = false,
     typed_inputs: std.ArrayList(struct { input: ast.Type, receiver: AbstractValue }) = .empty,
-    typed_displays: std.ArrayList(struct { call: u64, plan: usize, receiver: AbstractValue, origin: ?core.SourceOrigin }) = .empty,
+    typed_displays: std.ArrayList(struct { call: u64, unit: ?placement_inputs.ReadUnit, plan: usize, receiver: AbstractValue, origin: ?core.SourceOrigin }) = .empty,
 
     fn init(allocator: std.mem.Allocator, key_allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) Analyzer {
         return .{
@@ -887,7 +895,7 @@ const Analyzer = struct {
                 if (self.inputs_complete) return;
                 // Only a converged producer set can prove a selection empty.
                 // Propagate that fact through the same binding worklist before
-                // validating executed calls.
+                // validating executed calls and dereferences.
                 self.inputs_complete = true;
             }
         }
@@ -982,6 +990,8 @@ const Analyzer = struct {
         var returns = AbstractValue.init(self.allocator);
         var pass = CallFlow{ .analyzer = self, .env = &env, .returns = &returns, .owner = null };
         for (statements) |*stmt| {
+            if (self.require_known_calls and self.bindings.entries.len != 0) self.read_unit = .{ .statement = stmt };
+            defer self.read_unit = null;
             _ = try pass.visit(stmt.*, false);
         }
     }
@@ -1027,6 +1037,7 @@ const Analyzer = struct {
                     defer self.effect_frames.items[frame_index].forwarding_depth -= 1;
                     try self.recordPlacement();
                 }
+                try self.recordReads(cached.reads, self.display_reads);
                 return cached.value;
             },
         };
@@ -1035,6 +1046,12 @@ const Analyzer = struct {
         self.sema = self.sema.forModule(activation.label.moduleId());
         defer self.sema = previous;
 
+        // A display is read-only. Cache its transitive binding reads alongside
+        // its result, and replay them in each caller's execution unit.
+        const parent_reads = self.display_reads;
+        var reads = placement_inputs.BindingTargets{};
+        if (self.checking_display and self.read_unit != null) self.display_reads = &reads;
+        defer self.display_reads = parent_reads;
         const stored_key = if (memoize) try self.allocator.dupe(u8, key) else key;
         try self.activations.put(stored_key, .active);
         var result = AbstractValue.init(self.allocator);
@@ -1055,8 +1072,9 @@ const Analyzer = struct {
                 try result.unionWith(body_labels);
             },
         }
+        try self.recordReads(reads, parent_reads);
         if (memoize) {
-            try self.activations.put(stored_key, .{ .complete = .{ .value = result, .places_objects = self.effect_frames.items[frame_index].places_objects } });
+            try self.activations.put(stored_key, .{ .complete = .{ .value = result, .places_objects = self.effect_frames.items[frame_index].places_objects, .reads = reads } });
         }
         return result;
     }
@@ -1130,6 +1148,15 @@ const Analyzer = struct {
             }
         }
     };
+
+    fn recordReads(self: *Analyzer, reads: placement_inputs.BindingTargets, capture: ?*placement_inputs.BindingTargets) !void {
+        if (reads.ids.len == 0) return;
+        const unit = self.read_unit orelse return;
+        self.read_observations += 1;
+        if (capture) |parent| {
+            parent.* = try parent.merge(reads, self.allocator);
+        } else try self.state.displays.inputs.recordRead(unit, reads);
+    }
 
     fn localValue(self: *Analyzer, env: *const FunctionEnv, name: ast.CallableName) !?AbstractValue {
         if (name.isQualified() or name.resolution != .lexical) return null;
@@ -1218,6 +1245,31 @@ const Analyzer = struct {
                 value.present = control.memberPresence(target.present, value.present, member.optional);
                 return value;
             },
+            .binding_ref => |ref| {
+                var value = AbstractValue.init(self.allocator);
+                value.present = .yes;
+                if (ref.binding_id) |id| value.targets = try placement_inputs.BindingTargets.one(self.allocator, id);
+                return value;
+            },
+            .dereference => |operand| {
+                const handle = try self.expressionValue(operand.target.*, env, owner);
+                if (handle.path.no_value) return handle;
+                if (self.require_known_calls) {
+                    _ = handle.path.reads(handle.targets) catch {
+                        try self.state.addValidationDiagnostic(.@"error", null, null, self.current_origin, .{
+                            .user_report = .{ .code = "UnresolvedPlacementReference", .message = try self.state.allocator.dupe(u8, "cannot establish the possible placement bindings read by '*'") },
+                        });
+                        return error.UnresolvedPlacementReference;
+                    };
+                    try self.recordReads(handle.targets, self.display_reads);
+                }
+                if (!self.collecting_inputs and !self.require_known_calls) return AbstractValue.unknownValue(self.allocator);
+                var result = AbstractValue.init(self.allocator);
+                for (handle.targets.ids) |id| {
+                    try result.unionWith(try self.bindings.read(id));
+                }
+                return result;
+            },
             .optional_check => |check| {
                 return .{ .allocator = self.allocator, .truth = (try self.expressionValue(check.target.*, env, owner)).present, .present = .yes };
             },
@@ -1297,6 +1349,11 @@ const Analyzer = struct {
                             try callback_args.append(self.allocator, value);
                         }
                         try callback_args.appendSlice(self.allocator, arg_labels.items[callback_spec.function_arg_index + 1 ..]);
+                        const caller_unit = self.read_unit;
+                        if (primitive.op == .draw_when) if (caller_unit) |u| {
+                            self.read_unit = u.drawing(call.callee.call_id.?);
+                        };
+                        defer self.read_unit = caller_unit;
                         const returned = try self.invokeValue(callback, callback_args.items, owner);
                         if (primitive.op == .selection_filter) {
                             if (self.collecting_inputs and returned.truth == .bottom) return AbstractValue.init(self.allocator);
@@ -1424,7 +1481,7 @@ const Analyzer = struct {
                     var document = AbstractValue.presentValue(self.allocator);
                     document.reference = .document;
                     try receiver.putField("document", document);
-                    if (self.collecting_inputs or self.require_known_calls) try self.typed_displays.append(self.allocator, .{ .plan = plan, .receiver = receiver, .origin = self.current_origin, .call = id });
+                    if (self.collecting_inputs or self.require_known_calls) try self.typed_displays.append(self.allocator, .{ .plan = plan, .receiver = receiver, .origin = self.current_origin, .call = id, .unit = self.read_unit });
                     return receiver;
                 };
                 if (args.len > primitive.result_arg_index) return args[primitive.result_arg_index];
@@ -1501,6 +1558,9 @@ const Analyzer = struct {
             defer self.allocator.free(receivers);
             receivers[0] = registration.receiver;
             for (plan.steps.items, 0..) |step, index| {
+                const caller_unit = self.read_unit;
+                if (registration.unit) |u| self.read_unit = u.display(registration.call, index);
+                defer self.read_unit = caller_unit;
                 if (self.collecting_inputs) try self.rememberInput(step.input, receivers[index]);
                 switch (step.target) {
                     .native => |native| if (native.resolve) |key| {
@@ -1707,9 +1767,10 @@ const Analyzer = struct {
         const frame_index = self.effect_frames.items.len;
         try self.effect_frames.append(self.allocator, .{});
         defer _ = self.effect_frames.pop();
+        const before_reads = self.read_observations;
         const before_displays = self.typed_displays.items.len;
         const value = try self.expressionValue(resolved.decl.value, &env, null);
-        const unit_effect = before_displays != self.typed_displays.items.len;
+        const unit_effect = self.read_unit != null and (before_reads != self.read_observations or before_displays != self.typed_displays.items.len);
         if (memoize and !unit_effect) try self.const_values.put(resolved.key, .{ .value = value, .places_objects = self.effect_frames.items[frame_index].places_objects });
         return value;
     }

@@ -53,12 +53,10 @@ test "language registry spec: query output types are declared in the registry" {
     const pages = registry.lookupQueryOp("document_pages").?;
     try testing.expect(Type.eql(Type.selection(.page), registry.queryOutputType(pages)));
 
-    for ([_][]const u8{ "children", "descendants", "self_placement" }) |name| {
-        const query = registry.lookupQueryOp(name).?;
-        try testing.expect(Type.eql(Type.placement, registry.queryInputType(query)));
-        try testing.expect(Type.eql(Type.selection(.placement), registry.queryOutputType(query)));
-        try testing.expectEqual(std.mem.eql(u8, name, "self_placement"), query.preserves_input_type);
-    }
+    const singleton = registry.lookupQueryOp("self_placement").?;
+    try testing.expect(singleton.preserves_input_type);
+    try testing.expect(registry.lookupQueryOp("children") == null);
+    try testing.expect(registry.lookupQueryOp("descendants") == null);
 
     const previous = registry.lookupQueryOp("previous_page").?;
     const previous_type = registry.queryOutputType(previous);
@@ -74,5 +72,17 @@ test "language registry spec: group and placement primitives declare typed resul
     try testing.expectEqual(@as(usize, 0), registry.lookupSyntaxCall("group").?.min_arity);
     const place = registry.lookupPrimitiveCall("place_on!").?;
     try testing.expectEqual(registry.PrimitiveResultPolicy.placement, place.result_policy);
-    try testing.expect(Type.eql(Type.placement, registry.primitiveResultType(place).?));
+    try testing.expect(registry.primitiveResultType(place) == null);
+}
+
+test "language registry spec: selection algebra preserves only equal element types" {
+    const text = Type{ .kind = .placed, .arguments = &.{Type.recordType("Text").inModule(1)} };
+    const image = Type{ .kind = .placed, .arguments = &.{Type.recordType("Image").inModule(1)} };
+    for ([_]registry.PrimitiveCall{ .selection_union, .selection_intersection, .sub }) |op| {
+        try testing.expect(Type.eql(text, registry.selectionAlgebraItem(op, text, text).?));
+        try testing.expect(Type.eql(Type.page, registry.selectionAlgebraItem(op, Type.page, Type.page).?));
+        try testing.expect(registry.selectionAlgebraItem(op, text, image) == null);
+        try testing.expect(registry.selectionAlgebraItem(op, image, text) == null);
+        try testing.expect(registry.selectionAlgebraItem(op, Type.page, text) == null);
+    }
 }

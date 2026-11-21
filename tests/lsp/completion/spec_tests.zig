@@ -253,7 +253,7 @@ test "analysis completion: dot module and normal positions keep candidate kinds 
         try expectHas(result, "text!");
         try expectHas(result, "String");
         try expectHas(result, "Placed");
-        try expectHas(result, "Placement");
+        try expectMissing(result, "Placement");
         try expectHas(result, "Selection");
         try expectHas(result, "Align");
         try expectHas(result, "Text");

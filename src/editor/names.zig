@@ -129,7 +129,7 @@ pub const Generator = struct {
                 for (update.fields.items) |field| try self.reserveExpr(field.value);
             },
             .member => |member| try self.reserveExpr(member.target.*),
-            .optional_check => |check| try self.reserveExpr(check.target.*),
+            .optional_check, .dereference => |check| try self.reserveExpr(check.target.*),
             .coalesce => |coalesce| {
                 try self.reserveExpr(coalesce.target.*);
                 try self.reserveExpr(coalesce.fallback.*);

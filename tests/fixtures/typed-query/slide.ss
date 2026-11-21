@@ -22,7 +22,7 @@ end
 page body
   let a = wrapped!("First")
   let b = heading!("Second")
-  let heading: Placement = first(children(a))
-  let text: Placement = first(descendants(heading))
+  let heading: Placed<Heading> = first(select<Heading>(a))
+  let text: Placed<native::Text> = first(select<native::Text>(heading))
   ~ text.left == page.left + 48
 end

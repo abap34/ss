@@ -2,6 +2,8 @@ const std = @import("std");
 const Type = @import("language_type").Type;
 
 const testing = std.testing;
+const placed_text = Type{ .kind = .placed, .arguments = &.{Type.recordType("Text").inModule(1)} };
+const selected_text = Type{ .kind = .selection, .arguments = &.{placed_text} };
 
 fn expectFormat(ty: Type, expected: []const u8) !void {
     const actual = try ty.formatAlloc(testing.allocator);
@@ -13,19 +15,19 @@ test "type spec: any is the explicit wildcard in acceptance checks" {
     try testing.expect(Type.accepts(Type.any, Type.number));
     try testing.expect(Type.accepts(Type.string, Type.any));
     try testing.expect(Type.accepts(Type.selection(.any), Type.selection(.page)));
-    try testing.expect(Type.accepts(Type.selection(.any), Type.selection(.placement)));
-    try testing.expect(!Type.accepts(Type.selection(.page), Type.selection(.placement)));
+    try testing.expect(Type.accepts(Type.selection(.any), selected_text));
+    try testing.expect(!Type.accepts(Type.selection(.page), selected_text));
 }
 
 test "type spec: erased selections cannot acquire a concrete element type" {
     const erased = Type.selection(.any);
     try testing.expect(Type.accepts(erased, Type.selection(.page)));
-    try testing.expect(Type.accepts(erased, Type.selection(.placement)));
+    try testing.expect(Type.accepts(erased, selected_text));
     try testing.expect(!Type.accepts(Type.selection(.page), erased));
-    try testing.expect(!Type.accepts(Type.selection(.placement), erased));
+    try testing.expect(!Type.accepts(selected_text, erased));
     var erased_result = try Type.functionType(testing.allocator, &.{}, erased);
     defer erased_result.deinit(testing.allocator);
-    var placement_result = try Type.functionType(testing.allocator, &.{}, Type.selection(.placement));
+    var placement_result = try Type.functionType(testing.allocator, &.{}, selected_text);
     defer placement_result.deinit(testing.allocator);
     try testing.expect(!Type.accepts(placement_result, erased_result));
     try testing.expect(Type.accepts(erased_result, placement_result));
@@ -37,11 +39,11 @@ test "type spec: nominal values require the same declaration identity" {
     try testing.expect(Type.accepts(text, Type.recordType("Text").inModule(1)));
     try testing.expect(!Type.accepts(text, image));
     try testing.expect(!Type.accepts(text, text.inModule(2)));
-    try testing.expect(!Type.accepts(text, Type.placement));
-    try testing.expect(!Type.accepts(Type.placement, text));
+    try testing.expect(!Type.accepts(text, placed_text));
+    try testing.expect(!Type.accepts(placed_text, text));
 }
 
-test "type spec: selections retain exact inputs and permit only one way placement erasure" {
+test "type spec: selections retain exact inputs" {
     var text = try Type.placedOf(testing.allocator, Type.recordType("Text").inModule(1));
     defer text.deinit(testing.allocator);
     var image = try Type.placedOf(testing.allocator, Type.recordType("Image").inModule(1));
@@ -50,11 +52,9 @@ test "type spec: selections retain exact inputs and permit only one way placemen
     defer text_selection.deinit(testing.allocator);
     var image_selection = try Type.selectionOf(testing.allocator, image);
     defer image_selection.deinit(testing.allocator);
-    const erased = Type.selection(.placement);
     try testing.expect(Type.accepts(text_selection, text_selection));
     try testing.expect(!Type.accepts(text_selection, image_selection));
-    try testing.expect(!Type.accepts(text_selection, erased));
-    try testing.expect(Type.accepts(erased, image_selection));
+    try testing.expect(!Type.accepts(image_selection, text_selection));
 }
 
 test "type spec: formatting exposes the source-level type constructor shape" {
@@ -102,23 +102,23 @@ test "type spec: enum and color are not plain strings statically" {
 }
 
 test "type spec: function types format as source-level arrows" {
-    var unary = try Type.functionType(testing.allocator, &.{Type.page}, Type.placement);
+    var unary = try Type.functionType(testing.allocator, &.{Type.page}, placed_text);
     defer unary.deinit(testing.allocator);
-    try expectFormat(unary, "Page -> Placement");
+    try expectFormat(unary, "Page -> Placed<Text>");
 
-    var multi = try Type.functionType(testing.allocator, &.{ Type.page, Type.document }, Type.placement);
+    var multi = try Type.functionType(testing.allocator, &.{ Type.page, Type.document }, placed_text);
     defer multi.deinit(testing.allocator);
-    try expectFormat(multi, "(Page, Document) -> Placement");
+    try expectFormat(multi, "(Page, Document) -> Placed<Text>");
 
     var zero = try Type.functionType(testing.allocator, &.{}, Type.number);
     defer zero.deinit(testing.allocator);
     try expectFormat(zero, "() -> Number");
 
-    var callback = try Type.functionType(testing.allocator, &.{Type.page}, Type.placement);
+    var callback = try Type.functionType(testing.allocator, &.{Type.page}, placed_text);
     defer callback.deinit(testing.allocator);
     var higher_order = try Type.functionType(testing.allocator, &.{callback}, Type.document);
     defer higher_order.deinit(testing.allocator);
-    try expectFormat(higher_order, "(Page -> Placement) -> Document");
+    try expectFormat(higher_order, "(Page -> Placed<Text>) -> Document");
 }
 
 test "type spec: function acceptance checks parameters and result types" {
@@ -292,7 +292,7 @@ test "rigid type parameters still support optional lifting" {
     try testing.expect(!Type.accepts(param, optional));
 }
 
-test "type spec: placed inputs remain invariant while placement erasure is one way" {
+test "type spec: placed inputs retain their nominal identity" {
     var inner = try Type.recordType("Box").inModule(4).withArguments(testing.allocator, &.{Type.number});
     defer inner.deinit(testing.allocator);
     var placed = try Type.placedOf(testing.allocator, inner);
@@ -300,16 +300,15 @@ test "type spec: placed inputs remain invariant while placement erasure is one w
     var different = try Type.placedOf(testing.allocator, inner.inModule(5));
     defer different.deinit(testing.allocator);
     try expectFormat(placed, "Placed<Box<Number>>");
-    try expectFormat(Type.placement, "Placement");
-    try testing.expect(Type.accepts(Type.placement, placed));
-    try testing.expect(!Type.accepts(placed, Type.placement));
+    try testing.expect(!Type.accepts(placed_text, placed));
+    try testing.expect(!Type.accepts(placed, placed_text));
     try testing.expect(!Type.accepts(placed, different));
     try testing.expect(!Type.accepts(placed, inner));
     try testing.expect(!Type.accepts(inner, placed));
     var selection = try Type.selectionOf(testing.allocator, placed);
     defer selection.deinit(testing.allocator);
-    try testing.expect(Type.accepts(Type.selection(.placement), selection));
-    try testing.expect(!Type.accepts(selection, Type.selection(.placement)));
+    try testing.expect(!Type.accepts(selected_text, selection));
+    try testing.expect(!Type.accepts(selection, selected_text));
     var copy = try placed.clone(testing.allocator);
     defer copy.deinit(testing.allocator);
     try testing.expect(Type.eql(copy, placed));
@@ -339,7 +338,7 @@ test "type spec: groups retain child order, arity and nested nominal types" {
     try testing.expect(!Type.accepts(pair, reversed));
     try testing.expect(!Type.accepts(pair, repeated));
     try testing.expect(!Type.accepts(pair, nested));
-    try testing.expect(!Type.accepts(Type.placement, pair));
+    try testing.expect(!Type.accepts(placed_text, pair));
 }
 
 fn exerciseUnresolvedNames(allocator: std.mem.Allocator) !void {
@@ -388,7 +387,25 @@ test "type spec: group tuple erasure preserves placement identity without recove
     defer common.deinit(testing.allocator);
     try testing.expect(Type.accepts(common, placed));
     try testing.expect(!Type.accepts(placed, common));
-    try testing.expect(Type.accepts(Type.placement, common));
+    try testing.expect(!Type.accepts(placed_text, common));
     try testing.expect(!Type.eql(specific, erased));
     try testing.expect(!Type.accepts(Type.recordType("Box").inModule(1), common));
+}
+
+test "type spec: binding references keep exact placement types under optional lifting" {
+    const specific = Type{ .kind = .placed, .arguments = &.{.{ .kind = .group, .arguments = &.{Type.recordType("Text").inModule(1)} }} };
+    const erased = Type{ .kind = .placed, .arguments = &.{.{ .kind = .group }} };
+    const reference = Type{ .kind = .reference, .arguments = &.{specific} };
+    const other = Type{ .kind = .reference, .arguments = &.{erased} };
+    try testing.expect(Type.accepts(erased, specific));
+    try testing.expect(Type.accepts(reference, reference));
+    try testing.expect(!Type.accepts(other, reference));
+    try testing.expect(!Type.accepts(reference, other));
+    var optional = try Type.optional(testing.allocator, reference);
+    defer optional.deinit(testing.allocator);
+    var other_optional = try Type.optional(testing.allocator, other);
+    defer other_optional.deinit(testing.allocator);
+    try testing.expect(Type.accepts(optional, reference));
+    try testing.expect(!Type.accepts(other_optional, reference));
+    try testing.expect(!Type.accepts(other_optional, optional));
 }

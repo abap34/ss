@@ -81,6 +81,10 @@ pub const Solver = struct {
         return error.PendingBindingType;
     }
 
+    pub fn reference(self: *Solver, id: u32) !ast.Type {
+        return (try self.demand(self.roots[id])).ty;
+    }
+
     pub fn local(self: *Solver, name: []const u8, require_literal: bool) !?types.TypeInfo {
         const scope = self.scopes.items[self.nodes.items[self.current].scope];
         const binding_index = scope.names.get(name) orelse return null;

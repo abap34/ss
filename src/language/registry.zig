@@ -117,8 +117,6 @@ pub fn primitiveAllowsDisplayEvaluation(op: PrimitiveCall) bool {
 pub const QueryOp = enum {
     self_placement,
     previous_page,
-    children,
-    descendants,
     document_pages,
 };
 
@@ -175,13 +173,10 @@ pub const QueryDescriptor = struct {
     summary: []const u8,
 };
 
-pub fn selectionPlacementItem(op: PrimitiveCall, left: Type, right: Type) ?Type {
-    if ((left.kind != .placed and left.kind != .placement) or
-        (right.kind != .placed and right.kind != .placement)) return null;
+pub fn selectionAlgebraItem(op: PrimitiveCall, left: Type, right: Type) ?Type {
+    if ((left.kind != .placed and left.kind != .page) or !Type.eql(left, right)) return null;
     return switch (op) {
-        .selection_union => if (Type.eql(left, right)) left else Type.placement,
-        .selection_intersection => if (left.kind == .placement) right else left,
-        .sub => left,
+        .selection_union, .selection_intersection, .sub => left,
         else => null,
     };
 }
@@ -191,7 +186,7 @@ const primitive_descriptors = [_]PrimitiveDescriptor{
     .{ .op = .pagectx, .name = "pagectx", .min_arity = 0, .max_arity = 0, .arg_names = &.{}, .arg_types = &.{}, .result_type = Type.page, .context = .page, .summary = "Return the current page context" },
     .{ .op = .docctx, .name = "docctx", .min_arity = 0, .max_arity = 0, .arg_names = &.{}, .arg_types = &.{}, .result_type = Type.document, .summary = "Return the current document context" },
     .{ .op = .select, .name = "select", .min_arity = 1, .max_arity = 255, .arg_names = &.{ "scope", "query_name" }, .arg_types = &.{ Type.any, Type.string }, .type_parameter_count = 1, .result_type = Type.selection(.any), .result_policy = .select_query, .summary = "Select typed placements within a document, page, or placement subtree" },
-    .{ .op = .anchor, .name = "anchor", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "placement", "anchor_name" }, .arg_types = &.{ Type.placement, Type.string }, .result_type = Type.anchor, .summary = "Return a placement anchor" },
+    .{ .op = .anchor, .name = "anchor", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "placement", "anchor_name" }, .arg_types = &.{ Type.any, Type.string }, .result_type = Type.anchor, .summary = "Return a placement anchor" },
     .{ .op = .page_anchor, .name = "page_anchor", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "page", "anchor_name" }, .arg_types = &.{ Type.page, Type.string }, .result_type = Type.anchor, .summary = "Return a page anchor" },
     .{ .op = .min, .name = "min", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.number, .summary = "Return the smaller number" },
     .{ .op = .max, .name = "max", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.number, Type.number }, .result_type = Type.number, .summary = "Return the larger number" },
@@ -212,9 +207,9 @@ const primitive_descriptors = [_]PrimitiveDescriptor{
     .{ .op = .selection_empty, .name = "selection_empty", .min_arity = 1, .max_arity = 1, .arg_names = &.{"selection"}, .arg_types = &.{Type.selection(.any)}, .result_type = Type.boolean, .summary = "Return whether a Selection has no members" },
     .{ .op = .selection_count, .name = "selection_count", .min_arity = 1, .max_arity = 1, .arg_names = &.{"selection"}, .arg_types = &.{Type.selection(.any)}, .result_type = Type.number, .summary = "Return the number of members in a Selection" },
     .{ .op = .group, .name = "group", .min_arity = 1, .max_arity = 255, .arg_names = &.{"child"}, .arg_types = &.{Type.any}, .result_type = .{ .kind = .group }, .summary = "Combine unplaced presentation values, preserving each child type and position" },
-    .{ .op = .group_placed, .name = "group!", .min_arity = 0, .max_arity = 255, .arg_names = &.{"child"}, .arg_types = &.{Type.any}, .result_type = Type.placement, .places_objects = true, .summary = "Group existing same-page roots without copying their identities or constraints" },
+    .{ .op = .group_placed, .name = "group!", .min_arity = 0, .max_arity = 255, .arg_names = &.{"child"}, .arg_types = &.{Type.any}, .result_type = null, .places_objects = true, .summary = "Group existing same-page roots without copying their identities or constraints" },
     .{ .op = .new_page, .name = "new_page", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "document", "title" }, .arg_types = &.{ Type.document, Type.string }, .result_type = Type.page, .summary = "Create a page in the scheduled document graph" },
-    .{ .op = .place_on, .name = "place_on!", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "page", "value" }, .arg_types = &.{ Type.page, Type.any }, .result_type = Type.placement, .result_policy = .placement, .result_arg_index = 1, .places_objects = true, .summary = "Place an immutable presentation value on a page" },
+    .{ .op = .place_on, .name = "place_on!", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "page", "value" }, .arg_types = &.{ Type.page, Type.any }, .result_type = null, .result_policy = .placement, .result_arg_index = 1, .places_objects = true, .summary = "Place an immutable presentation value on a page" },
     .{ .op = .constraints, .name = "constraints", .min_arity = 0, .max_arity = 255, .arg_names = &.{"constraint_set"}, .arg_types = &.{Type.constraints}, .result_type = Type.constraints, .summary = "Bundle a ConstraintSet" },
     .{ .op = .report_error, .name = "report_error", .min_arity = 1, .max_arity = 1, .arg_names = &.{"message"}, .arg_types = &.{Type.string}, .result_type = Type.string, .summary = "Report error diagnostics from user-defined checks" },
     .{ .op = .report_warning, .name = "report_warning", .min_arity = 1, .max_arity = 1, .arg_names = &.{"message"}, .arg_types = &.{Type.string}, .result_type = Type.string, .summary = "Report warning diagnostics from user-defined checks" },
@@ -243,10 +238,8 @@ const syntax_descriptors = [_]PrimitiveDescriptor{
 };
 
 const query_descriptors = [_]QueryDescriptor{
-    .{ .op = .self_placement, .name = "self_placement", .arity = 2, .input_name = "base", .input_type = Type.placement, .extra_arg_names = &.{}, .extra_arg_types = &.{}, .output_type = Type.selection(.placement), .preserves_input_type = true, .summary = "Return the placement itself as a typed one-element selection" },
+    .{ .op = .self_placement, .name = "self_placement", .arity = 2, .input_name = "base", .input_type = Type.any, .extra_arg_names = &.{}, .extra_arg_types = &.{}, .output_type = Type.selection(.any), .preserves_input_type = true, .summary = "Return the placement itself as a typed one-element selection" },
     .{ .op = .previous_page, .name = "previous_page", .arity = 2, .input_name = "base", .input_type = Type.page, .extra_arg_names = &.{}, .extra_arg_types = &.{}, .output_type = .{ .kind = .optional, .optional_child = @constCast(&Type.page) }, .summary = "Return the previous page, or none for the first page" },
-    .{ .op = .children, .name = "children", .arity = 2, .input_name = "base", .input_type = Type.placement, .extra_arg_names = &.{}, .extra_arg_types = &.{}, .output_type = Type.selection(.placement), .summary = "Select direct display children" },
-    .{ .op = .descendants, .name = "descendants", .arity = 2, .input_name = "base", .input_type = Type.placement, .extra_arg_names = &.{}, .extra_arg_types = &.{}, .output_type = Type.selection(.placement), .summary = "Select all display descendants in construction order" },
     .{ .op = .document_pages, .name = "document_pages", .arity = 2, .input_name = "base", .input_type = Type.document, .extra_arg_names = &.{}, .extra_arg_types = &.{}, .output_type = Type.selection(.page), .summary = "Select all pages in the document" },
 };
 

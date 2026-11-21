@@ -756,14 +756,17 @@ const Parser = struct {
             if (!source.startsWithAt(self.source, self.pos, "<")) return try ast.Type.selectionOf(self.allocator, ast.Type.any);
             return try self.parseNamedTypeArguments(.{ .kind = .selection });
         }
+        if (std.mem.eql(u8, name.text, "Ref")) {
+            self.allocator.free(name.text);
+            return try self.parseNamedTypeArguments(.{ .kind = .reference });
+        }
         if (std.mem.eql(u8, name.text, "Group")) {
             self.allocator.free(name.text);
             return try self.parseNamedTypeArguments(.{ .kind = .group });
         }
-        if (std.mem.eql(u8, name.text, "Placed") or std.mem.eql(u8, name.text, "Placement")) {
-            const kind: ast.Type.Kind = if (std.mem.eql(u8, name.text, "Placed")) .placed else .placement;
+        if (std.mem.eql(u8, name.text, "Placed")) {
             self.allocator.free(name.text);
-            return try self.parseNamedTypeArguments(.{ .kind = kind });
+            return try self.parseNamedTypeArguments(.{ .kind = .placed });
         }
         const class_name = self.source[name.span.start..name.span.end];
         self.allocator.free(name.text);
@@ -1641,6 +1644,19 @@ const Parser = struct {
     fn parseUnaryExpr(self: *Parser) anyerror!Expr {
         try self.checkCanceled();
         source.skipInlineSpaces(self.source, &self.pos);
+        if (!self.eof() and self.source[self.pos] == '&') {
+            self.pos += 1;
+            source.skipInlineSpaces(self.source, &self.pos);
+            const name = try self.parseQualifiedTypeNameWithSpan();
+            return .{ .binding_ref = .{ .ident = .{ .name = name.text, .name_span = name.span } } };
+        }
+        if (!self.eof() and self.source[self.pos] == '*') {
+            self.pos += 1;
+            const operand = try self.allocator.create(Expr);
+            errdefer self.allocator.destroy(operand);
+            operand.* = try self.parseUnaryExpr();
+            return .{ .dereference = .{ .target = operand } };
+        }
         if (!self.eof() and self.source[self.pos] == '!' and !source.startsWithAt(self.source, self.pos, "!=")) {
             const operator_start = self.pos;
             self.pos += 1;

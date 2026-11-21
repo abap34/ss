@@ -29,6 +29,7 @@ pub fn Tree(comptime surface: bool) type {
         pub const Span = common.Span;
         pub const StringLiteral = common.StringLiteral;
         pub const IdentifierExpr = common.IdentifierExpr;
+        pub const BindingRefExpr = common.BindingRefExpr;
         pub const AnchorRef = common.AnchorRef;
         pub const formatRecordPath = common.formatRecordPath;
         pub const recordPathsOverlap = common.recordPathsOverlap;
@@ -699,15 +700,15 @@ pub fn Tree(comptime surface: bool) type {
             }
         };
 
-        pub const OptionalCheckExpr = struct {
+        pub const UnaryExpr = struct {
             target: *Expr,
 
-            pub fn deinit(self: *OptionalCheckExpr, allocator: Allocator) void {
+            pub fn deinit(self: *UnaryExpr, allocator: Allocator) void {
                 self.target.deinit(allocator);
                 allocator.destroy(self.target);
             }
 
-            pub fn clone(self: OptionalCheckExpr, allocator: Allocator) anyerror!OptionalCheckExpr {
+            pub fn clone(self: UnaryExpr, allocator: Allocator) anyerror!UnaryExpr {
                 const target = try allocator.create(Expr);
                 errdefer allocator.destroy(target);
                 target.* = try self.target.clone(allocator);
@@ -748,6 +749,8 @@ pub fn Tree(comptime surface: bool) type {
 
         const ExpandedExpr = union(enum) {
             ident: IdentifierExpr,
+            binding_ref: BindingRefExpr,
+            dereference: UnaryExpr,
             hole: HoleId,
             string: StringLiteral,
             color: []const u8,
@@ -761,7 +764,7 @@ pub fn Tree(comptime surface: bool) type {
             record: RecordExpr,
             record_update: RecordUpdateExpr,
             enum_case: EnumCaseExpr,
-            optional_check: OptionalCheckExpr,
+            optional_check: UnaryExpr,
             coalesce: CoalesceExpr,
 
             pub fn deinit(self: *Expr, allocator: Allocator) void {
@@ -775,6 +778,8 @@ pub fn Tree(comptime surface: bool) type {
 
         const SurfaceExpr = union(enum) {
             ident: IdentifierExpr,
+            binding_ref: BindingRefExpr,
+            dereference: UnaryExpr,
             hole: HoleId,
             string: StringLiteral,
             color: []const u8,
@@ -788,7 +793,7 @@ pub fn Tree(comptime surface: bool) type {
             record: RecordExpr,
             record_update: RecordUpdateExpr,
             enum_case: EnumCaseExpr,
-            optional_check: OptionalCheckExpr,
+            optional_check: UnaryExpr,
             coalesce: CoalesceExpr,
 
             operation: OperationExpr,
@@ -805,6 +810,7 @@ pub fn Tree(comptime surface: bool) type {
         fn deinitExpr(self: *Expr, allocator: Allocator) void {
             switch (self.*) {
                 .ident => |*ident| ident.deinit(allocator),
+                .binding_ref => |*ref| ref.ident.deinit(allocator),
                 .color => |text| allocator.free(text),
                 .string => |*literal| literal.deinit(allocator),
                 .call => |*call| call.deinit(allocator),
@@ -814,7 +820,7 @@ pub fn Tree(comptime surface: bool) type {
                 .record => |*record| record.deinit(allocator),
                 .record_update => |*update| update.deinit(allocator),
                 .enum_case => |*enum_case| enum_case.deinit(allocator),
-                .optional_check => |*check| check.deinit(allocator),
+                .optional_check, .dereference => |*check| check.deinit(allocator),
                 .coalesce => |*coalesce| coalesce.deinit(allocator),
                 else => if (surface) {
                     if (self.* == .operation) self.operation.deinit(allocator);
@@ -837,6 +843,8 @@ pub fn Tree(comptime surface: bool) type {
                 .record => |record| .{ .record = try record.clone(allocator) },
                 .record_update => |update| .{ .record_update = try update.clone(allocator) },
                 .enum_case => |enum_case| .{ .enum_case = try enum_case.clone(allocator) },
+                .binding_ref => |ident| .{ .binding_ref = try ident.clone(allocator) },
+                .dereference => |value| .{ .dereference = try value.clone(allocator) },
                 .optional_check => |check| .{ .optional_check = try check.clone(allocator) },
                 .coalesce => |coalesce| .{ .coalesce = try coalesce.clone(allocator) },
                 else => if (surface and self == .operation) .{ .operation = try self.operation.clone(allocator) } else .none,

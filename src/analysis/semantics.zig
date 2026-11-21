@@ -344,7 +344,7 @@ fn resolveExprTypeReferences(
     sema: *const SemanticEnv,
 ) !void {
     switch (expr.*) {
-        .ident, .hole, .string, .color, .number, .boolean, .none, .enum_case => {},
+        .ident, .hole, .binding_ref, .string, .color, .number, .boolean, .none, .enum_case => {},
         .call => |*call| {
             for (call.type_args.items) |*argument| try resolveTypeReference(argument, module_id, sema);
             for (call.args.items) |*arg| try resolveExprTypeReferences(allocator, arg, module_id, sema);
@@ -367,7 +367,7 @@ fn resolveExprTypeReferences(
             for (update.fields.items) |*field| try resolveExprTypeReferences(allocator, &field.value, module_id, sema);
         },
         .member => |*member| try resolveExprTypeReferences(allocator, member.target, module_id, sema),
-        .optional_check => |*check| try resolveExprTypeReferences(allocator, check.target, module_id, sema),
+        .optional_check, .dereference => |*check| try resolveExprTypeReferences(allocator, check.target, module_id, sema),
         .coalesce => |*coalesce| {
             try resolveExprTypeReferences(allocator, coalesce.target, module_id, sema);
             try resolveExprTypeReferences(allocator, coalesce.fallback, module_id, sema);
@@ -662,7 +662,7 @@ fn resolveExprEnumCases(
     expr: *ast.Expr,
 ) !void {
     switch (expr.*) {
-        .ident, .hole, .string, .color, .number, .boolean, .none, .enum_case => {},
+        .ident, .hole, .binding_ref, .string, .color, .number, .boolean, .none, .enum_case => {},
         .call => |*call| {
             for (call.args.items) |*arg| try resolveExprEnumCases(allocator, module_id, sema, env, arg);
         },
@@ -690,7 +690,7 @@ fn resolveExprEnumCases(
             try resolveExprEnumCases(allocator, module_id, sema, env, update.target);
             for (update.fields.items) |*field| try resolveExprEnumCases(allocator, module_id, sema, env, &field.value);
         },
-        .optional_check => |*check| try resolveExprEnumCases(allocator, module_id, sema, env, check.target),
+        .optional_check, .dereference => |*check| try resolveExprEnumCases(allocator, module_id, sema, env, check.target),
         .coalesce => |*coalesce| {
             try resolveExprEnumCases(allocator, module_id, sema, env, coalesce.target);
             try resolveExprEnumCases(allocator, module_id, sema, env, coalesce.fallback);
@@ -857,7 +857,7 @@ fn checkExprTypeAnnotations(
     expr: ast.Expr,
 ) !void {
     switch (expr) {
-        .ident, .hole, .string, .color, .number, .boolean, .none, .enum_case => {},
+        .ident, .hole, .binding_ref, .string, .color, .number, .boolean, .none, .enum_case => {},
         .call => |call| {
             const origin = core.SourceOrigin{ .path = origin_path, .span = call.callee.span };
             for (call.type_args.items) |argument| try checkTypeAnnotation(state, sema, module_id, argument, origin);
@@ -927,7 +927,7 @@ fn checkExprTypeAnnotations(
             if (had_diagnostics) return error.DiagnosticsFailed;
         },
         .member => |member| try checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, member.target.*),
-        .optional_check => |check| try checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, check.target.*),
+        .optional_check, .dereference => |check| try checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, check.target.*),
         .coalesce => |coalesce| {
             try checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, coalesce.target.*);
             try checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, coalesce.fallback.*);
@@ -955,8 +955,17 @@ fn checkTypeAnnotation(
     }
     if (ty.kind == .unresolved) return reportUnknownType(state, origin, ty.class_name orelse "");
     for (ty.arguments) |argument| try checkTypeAnnotation(state, sema, module_id, argument, origin);
-    if (ty.kind == .selection or ty.kind == .placed) try semantic_types.ensureTypeArgumentCount(state, 1, ty.arguments.len, origin);
-    if (ty.kind != .selection and ty.kind != .placed and ty.kind != .group and ty.kind != .record) try semantic_types.ensureTypeArgumentCount(state, 0, ty.arguments.len, origin);
+    if (ty.kind == .selection or ty.kind == .reference or ty.kind == .placed) try semantic_types.ensureTypeArgumentCount(state, 1, ty.arguments.len, origin);
+    if (ty.kind != .selection and ty.kind != .reference and ty.kind != .placed and ty.kind != .group and ty.kind != .record) try semantic_types.ensureTypeArgumentCount(state, 0, ty.arguments.len, origin);
+    if (ty.kind == .reference and ty.arguments.len == 1) {
+        switch (ty.arguments[0].kind) {
+            .placed, .parameter, .hole => {},
+            else => {
+                try state.addValidationDiagnostic(.@"error", null, null, origin, .{ .user_report = .{ .code = "InvalidReferenceType", .message = try state.allocator.dupe(u8, "Ref requires a placement type such as Placed<Text>") } });
+                return error.InvalidType;
+            },
+        }
+    }
     if (ty.kind == .enum_type or ty.kind == .color or ty.kind == .none or ty.kind == .hole or ty.kind == .parameter) return;
     if (ty.kind == .optional) {
         if (ty.optional_child) |child| try checkTypeAnnotation(state, sema, module_id, child.*, origin);

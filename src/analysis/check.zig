@@ -226,6 +226,10 @@ fn checkTopLevelStatementInner(
             if (!binds_name) return;
             info.binding_id = binding.binding_id;
             if (binding.binding_id) |id| {
+                if (state.scheduled_bindings.items[id].referenced and info.hole == null and info.ty.kind != .placed) {
+                    try addUserReport(state, origin, "InvalidReferenceTarget", "'{s}' is referenced with '&' and must be bound to a placement", .{binding.name});
+                    return error.InvalidType;
+                }
                 const slot = &state.scheduled_bindings.items[id].ty;
                 if (slot.*) |resolved| {
                     if (info.hole == null) try ensureType(state, allocator, info, resolved, origin);
@@ -309,7 +313,7 @@ fn validateAnchorRef(
             const info = try resolveAnchorPathInfo(state, sema, env, origin, path);
             if (info.hole != null) return;
             if (!isPlacementReference(info) and (is_target or info.ty.kind != .page)) {
-                try ensureType(state, allocator, info, Type.placement, origin);
+                try semantic_types.ensurePlaced(state, allocator, info, origin);
             }
         },
     }
@@ -334,7 +338,7 @@ fn resolveAnchorPathInfo(
     };
     while (iter.next()) |field_name| {
         if (info.hole != null) return info;
-        if (info.ty.kind == .placed or info.ty.kind == .placement) {
+        if (info.ty.kind == .placed) {
             const field_type = @import("../language/placement.zig").memberType(info.ty, field_name) orelse {
                 const label = try semantic_types.typeLabelAlloc(state.inferenceAllocator(), info.ty);
                 defer state.inferenceAllocator().free(label);
@@ -363,7 +367,7 @@ fn resolveAnchorPathInfo(
 
 fn isPlacementReference(info: semantic_types.TypeInfo) bool {
     return switch (info.ty.kind) {
-        .placed, .placement => true,
+        .placed => true,
         else => false,
     };
 }

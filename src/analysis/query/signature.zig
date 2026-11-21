@@ -7,8 +7,13 @@ pub fn formatPrimitiveSignature(
     allocator: std.mem.Allocator,
     descriptor: registry.PrimitiveDescriptor,
 ) ![]const u8 {
-    if (descriptor.op == .group) return allocator.dupe(u8, "group(value1: T1, ...) -> Group<T1, ...>");
-    if (descriptor.op == .select) return allocator.dupe(u8, "select<T>(scope) -> Selection<Placed<T>>");
+    switch (descriptor.op) {
+        .group => return allocator.dupe(u8, "group(value1: T1, ...) -> Group<T1, ...>"),
+        .group_placed => return allocator.dupe(u8, "group!(child1: Placed<T1>, ...) -> Placed<Group<T1, ...>>"),
+        .place_on => return allocator.dupe(u8, "place_on!(page: Page, value: T) -> Placed<T>"),
+        .select => return allocator.dupe(u8, "select<T>(scope) -> Selection<Placed<T>>"),
+        else => {},
+    }
     var params = std.ArrayList(u8).empty;
     defer params.deinit(allocator);
     for (descriptor.arg_names, 0..) |_, index| {
@@ -31,6 +36,8 @@ pub fn formatPrimitiveParam(
     index: usize,
 ) ![]const u8 {
     const name = descriptor.arg_names[index];
+    if (descriptor.op == .anchor and index == 0) return std.fmt.allocPrint(allocator, "{s}: Placed<T>", .{name});
+    if (descriptor.op == .place_on and index == 1) return std.fmt.allocPrint(allocator, "{s}: T", .{name});
     if (registry.primitiveArgType(descriptor, index)) |ty| {
         const label = try ty.formatAlloc(allocator);
         defer allocator.free(label);
@@ -165,6 +172,12 @@ fn formatExpr(allocator: std.mem.Allocator, expr: ast.Expr) ![]const u8 {
             const target = try formatExpr(allocator, member.target.*);
             defer allocator.free(target);
             break :blk std.fmt.allocPrint(allocator, "{s}{s}{s}", .{ target, if (member.optional) "?." else ".", member.name });
+        },
+        .binding_ref => |ref| std.fmt.allocPrint(allocator, "&{s}", .{ref.ident.name}),
+        .dereference => |ref| blk: {
+            const target = try formatExpr(allocator, ref.target.*);
+            defer allocator.free(target);
+            break :blk std.fmt.allocPrint(allocator, "*({s})", .{target});
         },
         .optional_check => |check| blk: {
             const target = try formatExpr(allocator, check.target.*);

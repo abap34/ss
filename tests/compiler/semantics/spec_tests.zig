@@ -4817,14 +4817,14 @@ test "compiler semantics: placed nested groups expose layout anchors" {
 
 test "compiler semantics: constraints resolve placement references stored in ordinary values" {
     try buildSource(
-        \\type Parts { root: Placement left: Placement right: Placement }
-        \\fn make_parts(root: Placement, left: Placement, right: Placement) -> Parts
+        \\type Parts { root: Placed<Group<Text, Text>> left: Placed<Text> right: Placed<Text> }
+        \\fn make_parts(root: Placed<Group<Text, Text>>, left: Placed<Text>, right: Placed<Text>) -> Parts
         \\  return Parts { root = root left = left right = right }
         \\end
         \\page main
         \\  let root = place!(group(text("left"), text("right")))
-        \\  let left = first(children(root))
-        \\  let right = first(children(root) - selection(left))
+        \\  let left = first(select<Text>(root))
+        \\  let right = first(select<Text>(root) - selection(left))
         \\  let parts = make_parts(root, left, right)
         \\  let caption = text!("caption")
         \\  ~ caption.top == parts.root.bottom - 16
@@ -5617,16 +5617,15 @@ test "compiler semantics: constant concatenation and argument facts resolve quer
 test "compiler semantics: return joins and selection algebra preserve justified placement types" {
     try expectVariableTypes(
         \\type Card {}
-        \\type Other {}
+        \\
         \\fn display(self: Placed<Card>) -> Text = text("Card")
-        \\fn display(self: Placed<Other>) -> Text = text("Other")
-        \\fn choose(flag: Bool, card: Placed<Card>, value: Placement) -> Placement
+        \\fn choose<T>(flag: Bool, card: Placed<T>, value: Placed<T>) -> Placed<T>
         \\  if flag
         \\    return card
         \\  end
         \\  return value
         \\end
-        \\fn reverse(flag: Bool, card: Placed<Card>, value: Placement) -> Placement
+        \\fn reverse<T>(flag: Bool, card: Placed<T>, value: Placed<T>) -> Placed<T>
         \\  if flag
         \\    return value
         \\  end
@@ -5634,22 +5633,22 @@ test "compiler semantics: return joins and selection algebra preserve justified 
         \\end
         \\page main
         \\  let card = place!(Card {})
-        \\  let other = place!(Other {})
+        \\  let other = place!(Card {})
         \\  let chosen = choose(false, card, other)
         \\  let reversed = reverse(true, card, other)
         \\  let cards = selection(card)
-        \\  let others: Selection<Placement> = selection(other)
+        \\  let others: Selection<Placed<Card>> = selection(other)
         \\  let combined = cards | others
         \\  let common = others & cards
         \\  let remaining = others - cards
         \\  let kept = cards - others
         \\end
     , &.{
-        .{ .name = "chosen", .scope_kind = "page", .scope_name = "main", .type_label = "Placement" },
-        .{ .name = "reversed", .scope_kind = "page", .scope_name = "main", .type_label = "Placement" },
-        .{ .name = "combined", .scope_kind = "page", .scope_name = "main", .type_label = "Selection<Placement>" },
+        .{ .name = "chosen", .scope_kind = "page", .scope_name = "main", .type_label = "Placed<Card>" },
+        .{ .name = "reversed", .scope_kind = "page", .scope_name = "main", .type_label = "Placed<Card>" },
+        .{ .name = "combined", .scope_kind = "page", .scope_name = "main", .type_label = "Selection<Placed<Card>>" },
         .{ .name = "common", .scope_kind = "page", .scope_name = "main", .type_label = "Selection<Placed<Card>>" },
-        .{ .name = "remaining", .scope_kind = "page", .scope_name = "main", .type_label = "Selection<Placement>" },
+        .{ .name = "remaining", .scope_kind = "page", .scope_name = "main", .type_label = "Selection<Placed<Card>>" },
         .{ .name = "kept", .scope_kind = "page", .scope_name = "main", .type_label = "Selection<Placed<Card>>" },
     });
 }
@@ -6177,7 +6176,7 @@ test "compiler semantics: callbacks must accept every supplied argument" {
 
 test "compiler semantics: primitive callbacks accept broader parameter types" {
     try expectObjectContent(
-        \\fn label(item: Placement?) -> String = "X"
+        \\fn label(item: Placed<Heading>?) -> String = "X"
         \\page main
         \\  heading!("A")
         \\  text!(join(select<Heading>(docctx()), "", label))
@@ -6481,7 +6480,7 @@ test "compiler semantics: explicit constraint registration rejects page anchor m
 
 test "compiler semantics: functions with constraint statements require a current page" {
     try expectLoweringErrorDiagnostic(
-        \\fn pin(item: Placement) -> Void
+        \\fn pin(item: Placed<Text>) -> Void
         \\  ~ item.left == page.left + 40
         \\end
         \\document
@@ -6494,14 +6493,14 @@ test "compiler semantics: functions with constraint statements require a current
 
 test "compiler semantics: function constraint anchors are checked without invocation" {
     try expectDiagnostic(
-        \\fn pin(item: Placement, label: String) -> Void
+        \\fn pin(item: Placed<Text>, label: String) -> Void
         \\  ~ item.left == label.right
         \\end
         \\page main
         \\end
     , "case.ss:bytes:", "TypeMismatch");
     try expectDiagnostic(
-        \\fn pin(item: Placement) -> Void
+        \\fn pin(item: Placed<Text>) -> Void
         \\  ~ item.left == missing.right
         \\end
         \\page main
@@ -6623,7 +6622,7 @@ test "compiler semantics: first and callbacks retain explicit page element types
 
 test "compiler semantics: first requires a known selection element type" {
     try expectDiagnostic(
-        \\fn invalid(items: Selection) -> Placement
+        \\fn invalid(items: Selection) -> Placed<Text>
         \\  return first(items)
         \\end
         \\page main
@@ -6633,10 +6632,10 @@ test "compiler semantics: first requires a known selection element type" {
 
 test "compiler semantics: selection callbacks require known element types" {
     const operations = [_][]const u8{
-        "foreach(items, (item: Placement) |-> \"item\")",
-        "foreach_enumerate(items, (item: Placement, index: Number) |-> \"item\")",
-        "join(items, \",\", (item: Placement) |-> \"item\")",
-        "fold(items, \"\", (acc: String, item: Placement) |-> acc ++ \"item\")",
+        "foreach(items, (item: Placed<Text>) |-> \"item\")",
+        "foreach_enumerate(items, (item: Placed<Text>, index: Number) |-> \"item\")",
+        "join(items, \",\", (item: Placed<Text>) |-> \"item\")",
+        "fold(items, \"\", (acc: String, item: Placed<Text>) |-> acc ++ \"item\")",
     };
     for (operations) |operation| {
         const source = try std.fmt.allocPrint(testing.allocator, "fn invalid(items: Selection) -> Void\n  {s}\nend\npage main\nend\n", .{operation});
@@ -6929,7 +6928,7 @@ test "compiler semantics: child page reads follow typed group display expansion"
     try expectObjectContent(
         \\page main
         \\  let root = place!(group(text("A")))
-        \\  let child = first(children(root))
+        \\  let child = first(select<Text>(root))
         \\  text!(str(page_index(child.page)))
         \\end
     , "1");
@@ -7135,7 +7134,7 @@ test "compiler semantics: explicit type arguments cannot be ignored" {
         \\end
     , "case.ss:bytes:", "InvalidTypeArity");
     try expectDiagnostic(
-        \\fn read(value: Selection<Page, Placement>) -> Void
+        \\fn read(value: Selection<Page, Placed<Text>>) -> Void
         \\end
         \\page main
         \\end
@@ -7481,11 +7480,11 @@ test "compiler semantics: placed parameters expose typed input ownership and anc
         \\fn unwrap<T>(item: Placed<T>) -> T = item.value
         \\fn read(item: Placed<Box<Number>>) -> Number = unwrap(item).value
         \\fn optional(item: Placed<Box<Number>>?) -> Number = item?.value?.value ?? 0
-        \\fn owner(item: Placement) -> Page = item.page
-        \\fn document_of(item: Placement) -> Document = item.document
-        \\fn erase(item: Placed<Box<Number>>) -> Placement = item
-        \\fn left(item: Placement) -> Anchor = item.left
-        \\fn align(a: Placement, b: Placed<Box<Number>>) -> Constraints
+        \\fn owner<T>(item: Placed<T>) -> Page = item.page
+        \\fn document_of<T>(item: Placed<T>) -> Document = item.document
+        \\fn keep<T>(item: Placed<T>) -> Placed<T> = item
+        \\fn left<T>(item: Placed<T>) -> Anchor = item.left
+        \\fn align<T>(a: Placed<T>, b: Placed<Box<Number>>) -> Constraints
         \\  return a.left == b.right + 12
         \\end
         \\page main
@@ -7497,14 +7496,14 @@ test "compiler semantics: placement references reject missing arguments and arbi
     const cases = [_]struct { source: []const u8, diagnostic: []const u8 }{
         .{ .source = "fn read(item: Placed) -> Void\nend\n", .diagnostic = "InvalidTypeArity" },
         .{ .source = "fn read(item: Placed<Number, String>) -> Void\nend\n", .diagnostic = "InvalidTypeArity" },
-        .{ .source = "fn read(item: Placement<Number>) -> Void\nend\n", .diagnostic = "InvalidTypeArity" },
+        .{ .source = "fn read(item: Placement<Number>) -> Void\nend\n", .diagnostic = "UnknownType" },
         .{ .source = "fn read(item: Placed<Void>) -> Void\nend\n", .diagnostic = "InvalidVoidType" },
-        .{ .source = "fn read(item: Placement) -> Number = item.value\n", .diagnostic = "UnknownField" },
+        .{ .source = "fn read(item: Placement) -> Number = item.value\n", .diagnostic = "UnknownType" },
         .{ .source = "type Item { title: String }\nfn read(item: Placed<Item>) -> String = item.title\n", .diagnostic = "UnknownField" },
-        .{ .source = "fn read(item: Placement) -> Placed<Number> = item\n", .diagnostic = "TypeMismatch" },
+        .{ .source = "fn read(item: Placed<String>) -> Placed<Number> = item\n", .diagnostic = "TypeMismatch" },
         .{ .source = "fn mutate(item: Placed<Number>) -> Void\nitem.value = 3\nend\n", .diagnostic = "ImmutablePlacement" },
         .{ .source = "page main\nlet fake = Placed<Number> {}\nend\n", .diagnostic = "InvalidTypeConstruction" },
-        .{ .source = "page main\nlet fake = Placement {}\nend\n", .diagnostic = "InvalidTypeConstruction" },
+        .{ .source = "page main\nlet fake = Placement {}\nend\n", .diagnostic = "UnknownType" },
     };
     for (cases) |case| try expectDiagnostic(case.source, "bytes:", case.diagnostic);
 }
@@ -7523,7 +7522,7 @@ test "compiler semantics: each display declaration body is checked independently
 test "compiler semantics: display declarations require an owned type and one unspecialized receiver" {
     const cases = [_]struct { source: []const u8, diagnostic: []const u8 }{
         .{ .source = "fn display() -> Number = 1\n", .diagnostic = "InvalidDisplaySignature" },
-        .{ .source = "fn display(self: Placement) -> Number = 1\n", .diagnostic = "InvalidDisplaySignature" },
+        .{ .source = "fn display(self: Text) -> Number = 1\n", .diagnostic = "InvalidDisplaySignature" },
         .{ .source = "fn display(self: Placed<Number>) -> Number = self.value\n", .diagnostic = "InvalidDisplaySignature" },
         .{ .source = "type A {}\nfn display(self: Placed<A>) -> Void\nend\n", .diagnostic = "InvalidDisplaySignature" },
         .{ .source = "type A {}\nfn display(self: Placed<A>) -> Placed<A> = self\n", .diagnostic = "InvalidDisplaySignature" },
@@ -7961,14 +7960,14 @@ test "compiler semantics: variable dumps preserve generic values and placement t
         \\  let value = Box { item = 7 }
         \\  let placed = place!(value)
         \\  let input = placed.value
-        \\  let all: Placement = placed
+        \\  let all: Placed<Box<Number>> = placed
         \\  let selected = select<Box<Number>>(pagectx())
         \\end
     , &.{
         .{ .name = "value", .scope_kind = "page", .scope_name = "main", .type_label = "Box<Number>" },
         .{ .name = "placed", .scope_kind = "page", .scope_name = "main", .type_label = "Placed<Box<Number>>" },
         .{ .name = "input", .scope_kind = "page", .scope_name = "main", .type_label = "Box<Number>" },
-        .{ .name = "all", .scope_kind = "page", .scope_name = "main", .type_label = "Placement" },
+        .{ .name = "all", .scope_kind = "page", .scope_name = "main", .type_label = "Placed<Box<Number>>" },
         .{ .name = "selected", .scope_kind = "page", .scope_name = "main", .type_label = "Selection<Placed<Box<Number>>>" },
     });
 }

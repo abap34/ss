@@ -180,6 +180,63 @@ test "include snapshots resolve forward document and staged page bindings across
     }
 }
 
+test "include reference queries map page and binding targets to their physical declarations" {
+    const api = compiler.analysis.snapshot;
+    const child_path = "/include-spec/child.ss";
+    const main_source =
+        \\page Reader
+        \\  let peer = &Target::item
+        \\  let own = text!("Local")
+        \\end
+        \\include "child.ss"
+    ;
+    const child_source =
+        \\page Target
+        \\  let peer = &Reader::own
+        \\  let item = text!("Included")
+        \\end
+        \\page Repeated
+        \\  stages i { 1:2 }
+        \\  let self_ref = &Repeated::item
+        \\  let item = text!(str(i))
+        \\end
+    ;
+    var sources = api.SourceSet.init(testing.allocator, testing.io);
+    defer sources.deinit();
+    try sources.put(root, main_source);
+    try sources.put(child_path, child_source);
+    var snapshot = try api.build(testing.allocator, &sources, root, "/include-spec", .{});
+    defer snapshot.deinit();
+    try testing.expect(!snapshot.diagnostics.hasErrors());
+    const requests = .{
+        .{ root, main_source, "&Target::item", 2, child_path, 0, "page Target" },
+        .{ root, main_source, "&Target::item", 10, child_path, 2, "Ref<Placed<Text>>" },
+        .{ child_path, child_source, "&Reader::own", 2, root, 0, "page Reader" },
+        .{ child_path, child_source, "&Reader::own", 10, root, 2, "Ref<Placed<Text>>" },
+        .{ child_path, child_source, "&Repeated::item", 2, child_path, 4, "page Repeated" },
+        .{ child_path, child_source, "&Repeated::item", 12, child_path, 7, "Ref<Placed<Text>>" },
+    };
+    const options = compiler.analysis.query.types.QueryOptions{
+        .budget_ms = 1000,
+        .clock = .{ .context = &clock_context, .now_ns = frozenNow },
+    };
+    inline for (requests) |item| {
+        const request = compiler.analysis.query.types.SourceRequest{
+            .path = item[0],
+            .source = item[1],
+            .offset = std.mem.indexOf(u8, item[1], item[2]).? + item[3],
+        };
+        var hover = (try api.hoverAt(testing.allocator, &snapshot, request, options)) orelse return error.ExpectedHover;
+        defer hover.deinit(testing.allocator);
+        try testing.expect(std.mem.indexOf(u8, hover.markdown, item[6]) != null);
+        const targets = try api.definitionAt(testing.allocator, &snapshot, request, options);
+        defer testing.allocator.free(targets);
+        try testing.expectEqual(@as(usize, 1), targets.len);
+        try testing.expectEqualStrings(item[4], targets[0].path.?);
+        try testing.expectEqual(@as(usize, item[5]), targets[0].line);
+    }
+}
+
 test "include syntax owns included type names across cloning and allocation failures" {
     var overlay = compiler.module_loader.SourceOverlay.init(testing.allocator);
     defer overlay.deinit();

@@ -17,6 +17,7 @@ const Entries = std.ArrayList(WriteEntry);
 // once in a query result, including writes with wildcard keys or owners.
 pub const ResourceWriterIndex = struct {
     allocator: Allocator,
+    bindings: std.AutoHashMapUnmanaged(u32, WriteEntry) = .{},
     variables: std.StringHashMapUnmanaged(ScopedEntries) = .{},
     pages: ScopedEntries = .{},
     objects: Entries = .empty,
@@ -30,6 +31,7 @@ pub const ResourceWriterIndex = struct {
     }
 
     pub fn deinit(self: *ResourceWriterIndex) void {
+        self.bindings.deinit(self.allocator);
         deinitValues(self.allocator, &self.variables);
         self.pages.deinit(self.allocator);
         self.objects.deinit(self.allocator);
@@ -42,6 +44,7 @@ pub const ResourceWriterIndex = struct {
     pub fn addWrite(self: *ResourceWriterIndex, unit_index: usize, resource: Resource) !void {
         const entry = WriteEntry{ .unit_index = unit_index, .resource = resource };
         switch (resource) {
+            .placement_binding => |binding| try self.bindings.putNoClobber(self.allocator, binding.id, entry),
             .variable => |variable| {
                 const scoped = try getBucket(self.allocator, &self.variables, variable.name);
                 try scoped.add(self.allocator, variable.scope, entry);
@@ -71,6 +74,7 @@ pub const ResourceWriterIndex = struct {
 
     fn visitBuckets(self: *const ResourceWriterIndex, read: Resource, visitor: anytype) !void {
         switch (read) {
+            .placement_binding => |binding| if (self.bindings.get(binding.id)) |entry| try visitor.visit(entry),
             .variable => |variable| {
                 if (self.variables.getPtr(variable.name)) |scoped| try scoped.visit(variable.scope, visitor);
             },

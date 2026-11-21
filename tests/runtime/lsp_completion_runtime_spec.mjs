@@ -579,10 +579,11 @@ end
   const completion = await completionInTempProject("ss-lsp-broken-type-", brokenTypeSource, positionAfter(brokenTypeSource, "value: "));
   assertUniqueCompletionLabels(completion, "broken type-name completion");
   assertCompletionHas(completion, "String", "broken type-name completion");
-  for (const name of ["Group", "Placed", "Placement"]) {
+  for (const name of ["Group", "Placed"]) {
     assertCompletionHas(completion, name, "broken type-name completion");
   }
   assertCompletionHas(completion, "Selection", "broken type-name completion");
+  assertCompletionMissing(completion, ["Placement"], "broken type-name completion");
   assertCompletionHas(completion, "LocalMode", "broken type-name completion");
   assertCompletionHas(completion, "LocalCard", "broken type-name completion");
 }

@@ -191,6 +191,26 @@ pub fn ensureType(
     return error.InvalidType;
 }
 
+pub fn ensurePlaced(
+    state: ?*core.DocumentState,
+    allocator: std.mem.Allocator,
+    actual: TypeInfo,
+    origin: core.SourceOrigin,
+) !void {
+    if (actual.hole != null or holeIdFromType(actual.ty) != null or actual.ty.placedInput() != null) return;
+    if (state) |sink| {
+        const label = try typeInfoLabelAlloc(allocator, actual);
+        defer allocator.free(label);
+        try sink.addValidationDiagnostic(.@"error", null, null, origin, .{
+            .user_report = .{
+                .code = "TypeMismatch",
+                .message = try std.fmt.allocPrint(sink.allocator, "expected Placed<T>, got {s}", .{label}),
+            },
+        });
+    }
+    return error.InvalidType;
+}
+
 // Stored properties must have a function-free value type. Placement and
 // page references do not embed the properties of their referents.
 pub fn isPropertyStorable(allocator: std.mem.Allocator, sema: *const @import("../language/env.zig").SemanticEnv, ty: Type) !bool {

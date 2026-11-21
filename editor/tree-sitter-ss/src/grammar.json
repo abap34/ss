@@ -1796,6 +1796,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "binding_reference"
+        },
+        {
+          "type": "SYMBOL",
           "name": "lambda_expression"
         },
         {
@@ -2116,6 +2120,32 @@
         ]
       }
     },
+    "binding_reference": {
+      "type": "PREC",
+      "value": 10,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "STRING",
+            "value": "&"
+          },
+          {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "identifier"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "qualified_identifier"
+              }
+            ]
+          }
+        ]
+      }
+    },
     "unary_expression": {
       "type": "PREC",
       "value": 10,
@@ -2132,6 +2162,10 @@
               {
                 "type": "STRING",
                 "value": "!"
+              },
+              {
+                "type": "STRING",
+                "value": "*"
               }
             ]
           },

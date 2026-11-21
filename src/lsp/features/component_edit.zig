@@ -176,6 +176,7 @@ fn statementReferences(statement: ast.Statement, binding: []const u8) bool {
 fn exprReferences(expr: ast.Expr, binding: []const u8) bool {
     return switch (expr) {
         .ident => |ident| std.mem.eql(u8, ident.name, binding),
+        .binding_ref => |ref| std.mem.eql(u8, ref.ident.name, binding),
         .call => |call| blk: {
             for (call.args.items) |arg| if (exprReferences(arg, binding)) break :blk true;
             break :blk false;
@@ -205,7 +206,7 @@ fn exprReferences(expr: ast.Expr, binding: []const u8) bool {
             for (update.fields.items) |field| if (exprReferences(field.value, binding)) break :blk true;
             break :blk false;
         },
-        .optional_check => |check| exprReferences(check.target.*, binding),
+        .optional_check, .dereference => |check| exprReferences(check.target.*, binding),
         .coalesce => |coalesce| exprReferences(coalesce.target.*, binding) or
             exprReferences(coalesce.fallback.*, binding),
         .hole, .string, .color, .number, .boolean, .none, .enum_case => false,

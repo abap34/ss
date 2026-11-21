@@ -359,23 +359,23 @@ test "nominal placements: selections retain their input declaration module" {
     try testing.expect(selection.selectionItem().placedInput().?.nominalId().?.eql(cloned.selectionItem().placedInput().?.nominalId().?));
 }
 
-test "nominal placements: erased receivers do not select an arbitrary input field" {
+test "nominal placements: placed receivers require explicit input access" {
     try exercise(
         \\import "a" as a
         \\import "b" as b
-        \\fn read(value: Placement) -> String
+        \\fn read(value: Placed<a::Box>) -> String
         \\  return value.amount
         \\end
     , first_placed, second_placed, "UnknownField:");
 }
 
-test "nominal placements: erasure cannot defer incompatible input arguments to evaluation" {
+test "nominal placements: generic identity preserves incompatible input types" {
     try exercise(
         \\import "a" as a
         \\import "b" as b
-        \\fn erase(value: Placed<b::Box>) -> Placement = value
+        \\fn keep<T>(value: Placed<T>) -> Placed<T> = value
         \\page main
-        \\  let value = erase(b::box!())
+        \\  let value = keep(b::box!())
         \\  let invalid = a::accept(value)
         \\end
     , first_placed, second_placed, "TypeMismatch:");

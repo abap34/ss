@@ -6,6 +6,7 @@ const ast = @import("ast");
 pub const Transform = struct {
     allocator: std.mem.Allocator,
     next_expression_id: *u64,
+    references: ?*@import("scheduled_bindings.zig").Resolver = null,
     substitutions: []const ast.Type.Substitution = &.{},
 
     pub fn module(self: *Transform, value: *ast.Module) !void {
@@ -18,8 +19,15 @@ pub const Transform = struct {
             try self.ty(&field.value_type);
             if (field.default_value) |default| try self.expr(default);
         };
+        if (self.references) |refs| refs.active = &refs.document;
         try self.statements(value.document_statements.items);
-        for (value.pages.items) |*page| try self.statements(page.statements.items);
+        for (value.pages.items, 0..) |*page, index| {
+            if (self.references) |refs| {
+                refs.active = &refs.pages[index];
+                refs.page_index = index;
+            }
+            try self.statements(page.statements.items);
+        }
     }
 
     pub fn record(self: *Transform, value: *ast.RecordDecl) !void {
@@ -97,11 +105,12 @@ pub const Transform = struct {
                 for (update.fields.items) |*field| try self.expr(&field.value);
             },
             .member => |*member| try self.expr(member.target),
-            .optional_check => |*check| try self.expr(check.target),
+            .optional_check, .dereference => |*check| try self.expr(check.target),
             .coalesce => |*coalesce| {
                 try self.expr(coalesce.target);
                 try self.expr(coalesce.fallback);
             },
+            .binding_ref => |*ref| if (self.references) |refs| try refs.resolve(ref),
             .ident, .hole, .string, .color, .number, .boolean, .none, .enum_case => {},
         }
     }
