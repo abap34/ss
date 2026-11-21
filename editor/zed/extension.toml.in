@@ -12,11 +12,6 @@ capabilities = []
 kind = "Rust"
 version = "0.7.0"
 
-[grammars.ss]
-repository = "https://github.com/abap34/ss"
-rev = "d6f2db07eda7529da558bc20d46e9ff03825e9d6"
-path = "editor/tree-sitter-ss"
-
 [language_servers.ss]
 language = "ss"
 

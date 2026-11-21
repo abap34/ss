@@ -1,4 +1,3 @@
-import importlib.util
 import os
 from pathlib import Path
 import sys
@@ -9,10 +8,8 @@ from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[4]
-spec = importlib.util.spec_from_file_location("zed_grammar", ROOT / "editor/zed/tools/check-grammar.py")
-grammar = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = grammar
-spec.loader.exec_module(grammar)
+sys.path.insert(0, str(ROOT / "editor/zed/tools"))
+import grammar
 
 
 class GrammarReferenceTests(unittest.TestCase):
@@ -63,6 +60,17 @@ class GrammarReferenceTests(unittest.TestCase):
         for fields, message in cases:
             with self.subTest(fields=fields), self.assertRaisesRegex(ValueError, message):
                 grammar.read_reference(self.manifest(**fields))
+
+    def test_local_grammar_requires_explicit_development_mode(self):
+        manifest = self.manifest(repository=self.source.as_uri())
+        with self.assertRaisesRegex(ValueError, "HTTPS GitHub"):
+            grammar.read_reference(manifest)
+        self.assertEqual(grammar.read_reference(manifest, allow_local=True).repository, self.source.as_uri())
+
+    def test_development_mode_still_rejects_nonlocal_file_urls(self):
+        for repository in ["file://server/grammar", "file:relative", "file:///grammar?query", "file:///grammar#fragment"]:
+            with self.subTest(repository=repository), self.assertRaisesRegex(ValueError, "HTTPS GitHub"):
+                grammar.read_reference(self.manifest(repository=repository), allow_local=True)
 
     def test_fetches_published_grammar_into_an_empty_repository(self):
         reference = self.publish()

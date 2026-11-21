@@ -25,11 +25,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Test grammar reference verification
-        run: python3 tests/editor/zed/reference/spec.py
-
-      - name: Check published Zed grammar
-        run: python3 editor/zed/tools/check-grammar.py
+      - name: Test Zed extension generation and grammar references
+        run: |
+          python3 tests/editor/zed/reference/spec.py
+          python3 tests/editor/zed/generation/spec.py
 
   test:
     name: Zig 0.17 build test

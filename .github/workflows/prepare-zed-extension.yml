@@ -1,0 +1,53 @@
+name: Prepare Zed extension
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+    paths:
+      - "editor/zed/**"
+      - "editor/tree-sitter-ss/**"
+      - "tests/editor/zed/**"
+      - ".github/workflows/prepare-zed-extension.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Generate and verify Zed extension
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: editor/tree-sitter-ss/package-lock.json
+
+      - name: Install tree-sitter tools
+        working-directory: editor/tree-sitter-ss
+        run: npm ci
+
+      - name: Prepare extension from the published commit
+        run: python3 editor/zed/tools/prepare.py release --revision "$GITHUB_SHA" --output "$RUNNER_TEMP/ss-zed-release"
+
+      - name: Test generated grammar and Zed queries
+        run: node tests/editor/zed/spec.mjs "$RUNNER_TEMP/ss-zed-release/extension"
+
+      - name: Upload generated extension
+        uses: actions/upload-artifact@v4
+        with:
+          name: ss-zed-extension
+          path: ${{ runner.temp }}/ss-zed-release/extension
+          if-no-files-found: error
