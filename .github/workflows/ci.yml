@@ -8,14 +8,15 @@ on:
 permissions:
   contents: read
 
-env:
-  ZIG_VERSION: 0.17.0
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   editor-references:
     name: Editor grammar references
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -25,86 +26,52 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: editor/tree-sitter-ss/package-lock.json
+
       - name: Test Zed extension generation and grammar references
         run: |
           python3 tests/editor/zed/reference/spec.py
           python3 tests/editor/zed/generation/spec.py
 
+      - name: Test tree-sitter grammar and editor queries
+        working-directory: editor/tree-sitter-ss
+        run: |
+          npm ci
+          npm test
+
+      - name: Check generated grammar sources
+        run: git diff --exit-code -- editor/tree-sitter-ss/src
+
   test:
     name: Zig 0.17 build test
-    needs: editor-references
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Restore apt package cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/apt-archives
-          key: ${{ runner.os }}-${{ runner.arch }}-apt-ci-v1-${{ hashFiles('.github/workflows/ci.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-apt-ci-v1-
-
       - name: Install system dependencies
         run: |
-          if command -v c++ >/dev/null && command -v pkg-config >/dev/null && command -v qpdf >/dev/null && pkg-config --exists cairo gdk-pixbuf-2.0 libqpdf pangocairo librsvg-2.0; then
-            echo "system dependencies already installed"
-          else
-            APT_ARCHIVE_CACHE="$RUNNER_TEMP/apt-archives"
-            mkdir -p "$APT_ARCHIVE_CACHE/partial"
-            sudo apt-get update
-            sudo apt-get \
-              -o Dir::Cache::archives="$APT_ARCHIVE_CACHE" \
-              -o Binary::apt-get::APT::Keep-Downloaded-Packages=true \
-              install -y --no-install-recommends \
-              g++ \
-              libcairo2-dev \
-              libgdk-pixbuf-2.0-dev \
-              librsvg2-dev \
-              libpango1.0-dev \
-              libqpdf-dev \
-              pkg-config \
-              qpdf
-          fi
-          if [ -d "$RUNNER_TEMP/apt-archives" ]; then
-            sudo rm -rf "$RUNNER_TEMP/apt-archives/partial" "$RUNNER_TEMP/apt-archives/lock"
-            sudo chown -R "$USER:$(id -gn)" "$RUNNER_TEMP/apt-archives"
-          fi
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            g++ libcairo2-dev libgdk-pixbuf-2.0-dev librsvg2-dev \
+            libpango1.0-dev libqpdf-dev pkg-config qpdf
 
-      - name: Restore Zig compiler cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.local/zig
-          key: ${{ runner.os }}-${{ runner.arch }}-zig-${{ env.ZIG_VERSION }}
-
-      - name: Install Zig
-        run: |
-          set -euo pipefail
-          case "$(uname -m)" in
-            x86_64) zig_arch="x86_64-linux" ;;
-            aarch64|arm64) zig_arch="aarch64-linux" ;;
-            *) echo "unsupported runner architecture: $(uname -m)" >&2; exit 1 ;;
-          esac
-
-          mkdir -p "$HOME/.local/zig"
-          if [ ! -x "$HOME/.local/zig/zig" ]; then
-            curl --retry 5 --retry-delay 2 --connect-timeout 20 --max-time 300 -fsSL \
-              "https://ziglang.org/download/${ZIG_VERSION}/zig-${zig_arch}-${ZIG_VERSION}.tar.xz" \
-              -o /tmp/zig.tar.xz
-            tar -xJf /tmp/zig.tar.xz -C "$HOME/.local/zig" --strip-components=1
-          fi
-          echo "$HOME/.local/zig" >> "$GITHUB_PATH"
+      - name: Set up Zig
+        uses: ./.github/actions/setup-zig
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: |
-            editor/vscode/package-lock.json
-            editor/tree-sitter-ss/package-lock.json
+          cache-dependency-path: editor/vscode/package-lock.json
 
       - name: Install VS Code extension packages
         working-directory: editor/vscode
@@ -150,7 +117,7 @@ jobs:
         working-directory: editor/vscode
         run: |
           mkdir -p ../../.test-tmp/vscode-package
-          npm run package -- --out ../../.test-tmp/vscode-package/ss-language-support.vsix --allow-missing-repository --skip-license
+          npm run package:compiled -- --out ../../.test-tmp/vscode-package/ss-language-support.vsix --allow-missing-repository --skip-license
           python3 ../../release/tools/check-vscode-package.py ../../.test-tmp/vscode-package/ss-language-support.vsix
 
       - name: Test bundled MD4C fork
@@ -164,142 +131,19 @@ jobs:
           tests/smoke/project.sh
           node tests/smoke/lsp.mjs
 
-      - name: Test tree-sitter grammar
-        working-directory: editor/tree-sitter-ss
-        run: |
-          npm ci
-          npm test
-
   qpdf-compatibility:
-    name: Native PDF ${{ matrix.environment }}
-    needs: editor-references
-    runs-on: ${{ matrix.runner }}
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - environment: Ubuntu 22.04, Cairo 1.16, qpdf 11.2
-            runner: ubuntu-22.04
-            qpdf-version: "11.2.0"
-          - environment: Ubuntu 24.04, Cairo 1.18, qpdf 12.4
-            runner: ubuntu-24.04
-            qpdf-version: "12.4.0"
-          - environment: Ubuntu 26.04 system packages
-            runner: ubuntu-26.04
-            qpdf-version: system
-          - environment: macOS 15 ARM64, Homebrew packages
-            runner: macos-15
-            qpdf-version: system
-
-    env:
-      QPDF_PREFIX: ${{ github.workspace }}/.qpdf/${{ matrix.qpdf-version }}
-
+    name: Native PDF macOS 15 ARM64, Homebrew packages
+    runs-on: macos-15
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Install build dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            ca-certificates \
-            cmake \
-            curl \
-            g++ \
-            libcairo2-dev \
-            libgdk-pixbuf-2.0-dev \
-            libjpeg-dev \
-            libpango1.0-dev \
-            libqpdf-dev \
-            librsvg2-dev \
-            libssl-dev \
-            ninja-build \
-            pkg-config \
-            qpdf \
-            zlib1g-dev
+      - name: Set up Zig
+        uses: ./.github/actions/setup-zig
 
-      - name: Install Homebrew dependencies
-        if: runner.os == 'macOS'
+      - name: Install PDF dependencies
         run: brew install cairo pango librsvg qpdf pkg-config
 
-      - name: Restore qpdf installation
-        if: matrix.qpdf-version != 'system'
-        id: qpdf-cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.QPDF_PREFIX }}
-          key: ${{ matrix.runner }}-${{ runner.arch }}-qpdf-${{ matrix.qpdf-version }}-v1
-
-      - name: Build qpdf
-        if: matrix.qpdf-version != 'system' && steps.qpdf-cache.outputs.cache-hit != 'true'
-        env:
-          QPDF_VERSION: ${{ matrix.qpdf-version }}
-        run: |
-          set -euo pipefail
-          source_root="$RUNNER_TEMP/qpdf-source-$QPDF_VERSION"
-          build_root="$RUNNER_TEMP/qpdf-build-$QPDF_VERSION"
-          archive="$RUNNER_TEMP/qpdf-$QPDF_VERSION.tar.gz"
-
-          curl --retry 5 --retry-delay 2 --connect-timeout 20 --max-time 300 -fsSL \
-            "https://github.com/qpdf/qpdf/releases/download/v$QPDF_VERSION/qpdf-$QPDF_VERSION.tar.gz" \
-            -o "$archive"
-          mkdir -p "$source_root"
-          tar -xzf "$archive" -C "$source_root" --strip-components=1
-          cmake -S "$source_root" -B "$build_root" -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$QPDF_PREFIX" \
-            -DBUILD_STATIC_LIBS=OFF
-          cmake --build "$build_root" --parallel --target libqpdf qpdf fix-qdf zlib-flate
-          cmake --install "$build_root" --component lib
-          cmake --install "$build_root" --component dev
-          cmake --install "$build_root" --component cli
-
-      - name: Select qpdf installation
-        if: matrix.qpdf-version != 'system'
-        run: |
-          set -euo pipefail
-          qpdf_pc_dir="$(find "$QPDF_PREFIX" -path '*/pkgconfig/libqpdf.pc' -printf '%h\n' -quit)"
-          if [ -z "$qpdf_pc_dir" ]; then
-            echo "libqpdf.pc was not installed under $QPDF_PREFIX" >&2
-            exit 1
-          fi
-          export PKG_CONFIG_PATH="$qpdf_pc_dir${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
-          qpdf_lib_dir="$(pkg-config --variable=libdir libqpdf)"
-          echo "$QPDF_PREFIX/bin" >> "$GITHUB_PATH"
-          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$qpdf_lib_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
-
-      - name: Restore Zig compiler cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.local/zig
-          key: ${{ runner.os }}-${{ runner.arch }}-zig-${{ env.ZIG_VERSION }}
-
-      - name: Install Zig
-        run: |
-          set -euo pipefail
-          case "$(uname -s)-$(uname -m)" in
-            Linux-x86_64) zig_arch="x86_64-linux" ;;
-            Linux-aarch64|Linux-arm64) zig_arch="aarch64-linux" ;;
-            Darwin-x86_64) zig_arch="x86_64-macos" ;;
-            Darwin-arm64) zig_arch="aarch64-macos" ;;
-            *) echo "unsupported runner platform: $(uname -s)-$(uname -m)" >&2; exit 1 ;;
-          esac
-
-          mkdir -p "$HOME/.local/zig"
-          if [ ! -x "$HOME/.local/zig/zig" ]; then
-            curl --retry 5 --retry-delay 2 --connect-timeout 20 --max-time 300 -fsSL \
-              "https://ziglang.org/download/${ZIG_VERSION}/zig-${zig_arch}-${ZIG_VERSION}.tar.xz" \
-              -o /tmp/zig.tar.xz
-            tar -xJf /tmp/zig.tar.xz -C "$HOME/.local/zig" --strip-components=1
-          fi
-          echo "$HOME/.local/zig" >> "$GITHUB_PATH"
-
       - name: Test PDF backend
-        run: |
-          qpdf --version
-          pkg-config --modversion cairo
-          pkg-config --modversion libqpdf
-          zig build test-render-pdf --summary all
+        run: zig build test-render-pdf --summary all

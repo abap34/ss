@@ -13,6 +13,7 @@ jobs:
   update:
     name: Sync upstream grammars
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Check out repository

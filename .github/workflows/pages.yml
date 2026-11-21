@@ -3,6 +3,9 @@ name: Pages
 on:
   push:
     branches: [main]
+    paths:
+      - src/layout/trace-viewer.html
+      - .github/workflows/pages.yml
   workflow_dispatch:
 
 permissions:
@@ -20,6 +23,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
