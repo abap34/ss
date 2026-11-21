@@ -3,7 +3,6 @@ import os
 from pathlib import Path
 import sys
 import tempfile
-import tomllib
 import unittest
 from unittest.mock import patch
 
@@ -97,10 +96,7 @@ language = "ss"
         self.assertFalse((extension / "extension.wasm").exists())
         self.assertFalse((extension / prepare.TEMPLATE).exists())
 
-    def test_release_takes_extension_and_grammar_from_the_same_published_commit(self):
-        self.write("editor/zed/src/lib.rs", "// Local changes\n")
-        self.write("editor/zed/languages/ss/highlights.scm", "; Local queries\n")
-        self.write(f"{grammar.GRAMMAR_PATH}/src/parser.c", "// Local parser\n")
+    def test_release_uses_the_checked_out_commit(self):
         report = self.generate("release", self.revision)
         self.assertEqual(report["repository"], self.origin.as_uri())
         self.assertEqual(report["revision"], self.revision)
@@ -109,28 +105,44 @@ language = "ss"
         self.assertFalse((self.output / "grammar").exists())
         grammar.check_reference(self.manifest(), allow_local=True)
 
-    def test_release_can_prepare_an_older_manifest_without_the_template(self):
-        (self.source / "editor/zed/extension.toml.in").unlink()
-        old = self.template + f'\n[grammars.ss]\nrepository = "https://github.com/example/old"\nrev = "{"a" * 40}"\npath = "old"\n'
-        self.write("editor/zed/extension.toml", old)
-        revision = self.commit()
-        grammar.run_git("-C", self.source, "push", "--quiet", self.origin, "HEAD:refs/heads/published")
-        self.write("editor/zed/extension.toml.in", self.template)
-        self.generate("release", revision)
-        manifest = tomllib.loads(self.manifest().read_text())
-        self.assertEqual(manifest["grammars"]["ss"]["rev"], revision)
-        self.assertEqual(manifest["grammars"]["ss"]["repository"], self.origin.as_uri())
-        self.assertEqual(manifest["language_servers"]["ss"]["language"], "ss")
-
-    def test_unpublished_revision_cannot_borrow_the_source_repository_objects(self):
+    def test_release_rejects_modified_and_untracked_sources(self):
         self.generate()
         before = self.manifest().read_bytes()
+        for name in ("editor/zed/src/lib.rs", "editor/zed/languages/ss/highlights.scm",
+                     f"{grammar.GRAMMAR_PATH}/src/parser.c", f"{grammar.GRAMMAR_PATH}/src/new.h"):
+            target = self.source / name
+            original = target.read_bytes() if target.exists() else None
+            with self.subTest(name=name):
+                target.write_text("Local changes\n")
+                with self.assertRaisesRegex(ValueError, "sources must be clean"):
+                    self.generate("release", self.revision)
+                self.assertEqual(self.manifest().read_bytes(), before)
+            if original is None:
+                target.unlink()
+            else:
+                target.write_bytes(original)
+
+    def test_release_rejects_a_revision_other_than_the_checkout(self):
+        self.write("unrelated.txt", "New commit\n")
+        current = self.commit()
+        with self.assertRaisesRegex(ValueError, "checked-out commit"):
+            self.generate("release", self.revision)
+        self.assertEqual(grammar.run_git("-C", self.source, "rev-parse", "HEAD"), current)
+
+    def test_release_omits_ignored_source_files(self):
+        self.write(".gitignore", "editor/zed/src/local.rs\n")
+        revision = self.commit()
+        self.write("editor/zed/src/local.rs", "// Ignored local file\n")
+        self.generate("release", revision)
+        self.assertFalse((self.output / "extension/src/local.rs").exists())
+
+    def test_unpublished_revision_cannot_borrow_the_source_repository_objects(self):
         self.write(f"{grammar.GRAMMAR_PATH}/src/parser.c", "// Unpublished parser\n")
         revision = self.commit()
+        self.generate("release", revision)
         inherited = {"GIT_DIR": str(self.source / ".git"), "GIT_OBJECT_DIRECTORY": str(self.source / ".git/objects")}
         with patch.dict(os.environ, inherited), self.assertRaisesRegex(RuntimeError, "cannot fetch grammar revision"):
-            self.generate("release", revision)
-        self.assertEqual(self.manifest().read_bytes(), before)
+            grammar.check_reference(self.manifest(), allow_local=True)
 
     def test_failed_generation_keeps_the_previous_extension(self):
         self.generate()

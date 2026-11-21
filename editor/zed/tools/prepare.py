@@ -1,15 +1,14 @@
-"""Generate a Zed extension with a local grammar snapshot or a published commit."""
+"""Generate a Zed extension from a development snapshot or a clean release checkout."""
 import argparse
 from dataclasses import asdict
 import json
 from pathlib import Path
 import re
 import shutil
-import tarfile
 import tempfile
 import tomllib
 
-from grammar import GRAMMAR_FILES, GRAMMAR_PATH, GRAMMAR_SOURCES, GrammarReference, fetch_reference, run_git
+from grammar import GRAMMAR_FILES, GRAMMAR_PATH, GRAMMAR_SOURCES, GrammarReference, run_git
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -36,10 +35,6 @@ def copy_sources(source, destination, paths):
 
 
 def render_manifest(template, reference):
-    # Older published releases used extension.toml directly. Replace its grammar
-    # table too, keeping their extension sources and grammar at the same commit.
-    tomllib.loads(template)
-    template = re.sub(r"(?ms)^\[grammars\.ss\][ \t]*\n.*?(?=^\[|\Z)", "", template)
     fields = {"repository": reference.repository, "rev": reference.revision, "path": reference.path}
     rendered = template.rstrip() + "\n\n[grammars.ss]\n" + "".join(
         f"{name} = {json.dumps(value)}\n" for name, value in fields.items()
@@ -65,19 +60,6 @@ def snapshot_grammar(root, directory, published_path):
     return GrammarReference(published_path.as_uri(), revision, GRAMMAR_PATH)
 
 
-def export_extension(repository, revision, directory):
-    names = run_git("--git-dir", repository, "ls-tree", "--name-only", f"{revision}:{EXTENSION_PATH}").splitlines()
-    manifest = TEMPLATE if TEMPLATE in names else "extension.toml"
-    paths = [f"{EXTENSION_PATH}/{name}" for name in (*EXTENSION_SOURCES, manifest)]
-    with tempfile.TemporaryDirectory(prefix="ss-zed-export-") as temporary:
-        archive = Path(temporary) / "extension.tar"
-        run_git("--git-dir", repository, "archive", f"--output={archive}", revision, "--", *paths)
-        with tarfile.open(archive) as contents:
-            contents.extractall(directory, filter="data")
-    source = directory / EXTENSION_PATH
-    return source, (source / manifest).read_text()
-
-
 def prepare(mode, output, *, revision=None, root=ROOT):
     if mode not in {"dev", "release"}:
         raise ValueError("mode must be dev or release")
@@ -85,6 +67,13 @@ def prepare(mode, output, *, revision=None, root=ROOT):
         raise ValueError("--revision is only used for release preparation")
     if mode == "release" and (revision is None or not re.fullmatch(r"[0-9a-f]{40}", revision)):
         raise ValueError("release preparation requires a full commit SHA")
+    if mode == "release":
+        if run_git("-C", root, "rev-parse", "HEAD") != revision:
+            raise ValueError("release revision must match the checked-out commit")
+        sources = [f"{EXTENSION_PATH}/{name}" for name in (*EXTENSION_SOURCES, TEMPLATE)]
+        sources.extend(f"{GRAMMAR_PATH}/{name}" for name in GRAMMAR_SOURCES)
+        if run_git("-C", root, "status", "--porcelain", "--untracked-files=all", "--", *sources):
+            raise ValueError("release extension and grammar sources must be clean")
     output = Path(output).absolute()
     if output.is_symlink():
         raise ValueError("output must not be a symlink")
@@ -106,13 +95,15 @@ def prepare(mode, output, *, revision=None, root=ROOT):
         template = (source / TEMPLATE).read_text()
         if mode == "dev":
             reference = snapshot_grammar(root, prepared / "grammar", output / "grammar")
+            extension_sources = EXTENSION_SOURCES
         else:
             repository = tomllib.loads(template)["repository"]
             reference = GrammarReference(repository, revision, GRAMMAR_PATH)
-            fetched = fetch_reference(reference, work / "published.git")
-            source, template = export_extension(fetched, revision, work / "sources")
+            tracked = run_git("-C", root, "ls-files", "-z", "--",
+                              *(f"{EXTENSION_PATH}/{name}" for name in EXTENSION_SOURCES))
+            extension_sources = [Path(name).relative_to(EXTENSION_PATH) for name in tracked.split("\0") if name]
         extension = prepared / "extension"
-        copy_sources(source, extension, EXTENSION_SOURCES)
+        copy_sources(source, extension, extension_sources)
         (extension / "extension.toml").write_text(render_manifest(template, reference))
         report = {"generator": "ss-zed", "mode": mode, "extension": str(output / "extension"), **asdict(reference)}
         (prepared / MARKER).write_text(json.dumps(report, indent=2) + "\n")
@@ -132,14 +123,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("dev", "release"))
     parser.add_argument("--output", type=Path, required=True, help="Directory for the generated extension and grammar")
-    parser.add_argument("--revision", help="Full published commit SHA; defaults to HEAD in release mode")
+    parser.add_argument("--revision", help="Expected checkout commit SHA; defaults to HEAD in release mode")
     arguments = parser.parse_args()
     try:
         revision = arguments.revision
         if arguments.mode == "release" and revision is None:
             revision = run_git("-C", ROOT, "rev-parse", "--verify", "HEAD^{commit}")
         report = prepare(arguments.mode, arguments.output, revision=revision)
-    except (OSError, RuntimeError, ValueError, tarfile.TarError) as error:
+    except (OSError, RuntimeError, ValueError) as error:
         parser.exit(1, f"Zed extension preparation failed: {error}\n")
     print(json.dumps(report))
 
