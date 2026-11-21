@@ -74,7 +74,7 @@ Update the changelog section that becomes the GitHub Release notes:
 Before declaring the candidate ready, collect the latest CI results for its
 implementation commit and recent failed release workflows. Batch related `gh`
 reads into one read-only collection script and save run metadata and failed-job
-logs under `.agent-artifacts/release-review/`, creating that directory first.
+logs in a directory chosen for the release, creating that directory first.
 For each relevant failure, record its run URL, commit SHA, failed step, cause,
 and the corresponding fix and regression result. If logs have expired, report
 that limit. Investigate failed or missing CI; do not infer success from a local
@@ -187,8 +187,8 @@ prepare the release metadata from that commit in an isolated worktree:
 
 ```sh
 release/tools/prepare-release.py --base <commit> \
-  --worktree .agent-artifacts/release-worktrees/vX.Y.Z vX.Y.Z
-cd .agent-artifacts/release-worktrees/vX.Y.Z
+  --worktree ../ss-release-vX.Y.Z vX.Y.Z
+cd ../ss-release-vX.Y.Z
 git rev-parse HEAD^
 timeout --kill-after=10s 30m release/tools/pre-release-check.sh vX.Y.Z
 git tag -a vX.Y.Z -m "ss vX.Y.Z"
@@ -222,9 +222,9 @@ selected implementation commits:
 release/tools/prepare-release.py \
   --from-tag v0.7.1 \
   --cherry-pick 1b52cb25ef9e9eee5e5b73268a12a39920dabfee \
-  --worktree .agent-artifacts/release-worktrees/v0.7.1-patch.1 \
+  --worktree ../ss-release-v0.7.1-patch.1 \
   v0.7.1-patch.1
-cd .agent-artifacts/release-worktrees/v0.7.1-patch.1
+cd ../ss-release-v0.7.1-patch.1
 git log --oneline v0.7.1..HEAD
 timeout --kill-after=10s 30m release/tools/pre-release-check.sh v0.7.1-patch.1
 git tag -a v0.7.1-patch.1 -m "ss v0.7.1-patch.1"
