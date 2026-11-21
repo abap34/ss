@@ -36,21 +36,21 @@ The command writes only to standard output; it does not generate or publish
 anything on GitHub.
 
 ```sh
-mkdir -p .agent-artifacts/release-notes
+release_notes_dir=$(mktemp -d)
 python3 release/tools/release_notes.py \
   --previous-tag v0.8.2 --base v0.8.3 --collect \
-  > .agent-artifacts/release-notes/pull-requests.json
+  > "$release_notes_dir/pull-requests.json"
 ```
 
-Write the reviewed body to `.agent-artifacts/release-notes/body.md`, including the
+Write the reviewed body to `$release_notes_dir/body.md`, including the
 corresponding PR references, then generate the finished Markdown locally:
 
 ```sh
 python3 release/tools/release_notes.py \
   --previous-tag v0.8.2 --base v0.8.3 \
-  --pull-requests .agent-artifacts/release-notes/pull-requests.json \
-  --body .agent-artifacts/release-notes/body.md \
-  > .agent-artifacts/release-notes/preview.md
+  --pull-requests "$release_notes_dir/pull-requests.json" \
+  --body "$release_notes_dir/body.md" \
+  > "$release_notes_dir/preview.md"
 ```
 
 Omit `--body` to draft descriptions from commit subjects and PR titles.

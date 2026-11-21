@@ -115,8 +115,7 @@ function buildArgs(target, cache = shared, extra = []) {
 function checkout(name) {
   const target = path.join(temporary, name);
   mkdirSync(target);
-  for (const entry of readdirSync(root)) {
-    if (entry.startsWith(".") || ["zig-out", "_workspace", "dev.sh"].includes(entry)) continue;
+  for (const entry of ["build.zig", "build", "src", "stdlib", "third_party", "editor", "tests", "release"]) {
     symlinkSync(path.join(root, entry), path.join(target, entry));
   }
   return target;

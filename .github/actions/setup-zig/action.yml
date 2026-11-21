@@ -1,0 +1,40 @@
+name: Set up Zig
+description: Install the supported Zig compiler on Linux or macOS
+
+inputs:
+  version:
+    description: Zig release version
+    default: "0.17.0"
+
+runs:
+  using: composite
+  steps:
+    - name: Restore Zig installation
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.tool_cache }}/ss-zig/${{ inputs.version }}
+        key: ${{ runner.os }}-${{ runner.arch }}-zig-${{ inputs.version }}
+
+    - name: Install Zig
+      shell: bash
+      env:
+        ZIG_VERSION: ${{ inputs.version }}
+        ZIG_DIRECTORY: ${{ runner.tool_cache }}/ss-zig/${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        case "$(uname -s)-$(uname -m)" in
+          Linux-x86_64) zig_platform="x86_64-linux" ;;
+          Linux-aarch64|Linux-arm64) zig_platform="aarch64-linux" ;;
+          Darwin-x86_64) zig_platform="x86_64-macos" ;;
+          Darwin-arm64) zig_platform="aarch64-macos" ;;
+          *) echo "unsupported runner platform" >&2; exit 1 ;;
+        esac
+        if [ ! -x "$ZIG_DIRECTORY/zig" ]; then
+          archive="$RUNNER_TEMP/zig-$ZIG_VERSION.tar.xz"
+          curl --retry 5 --retry-delay 2 --connect-timeout 20 --max-time 300 -fsSL \
+            "https://ziglang.org/download/$ZIG_VERSION/zig-$zig_platform-$ZIG_VERSION.tar.xz" \
+            -o "$archive"
+          mkdir -p "$ZIG_DIRECTORY"
+          tar -xJf "$archive" -C "$ZIG_DIRECTORY" --strip-components=1
+        fi
+        echo "$ZIG_DIRECTORY" >> "$GITHUB_PATH"

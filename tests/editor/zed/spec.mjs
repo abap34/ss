@@ -13,8 +13,18 @@ const cli = path.join(sourceGrammar, "node_modules/.bin/tree-sitter");
 const directory = await mkdtemp(path.join(tmpdir(), "ss-zed-grammar-test-"));
 const options = { cwd: root, timeout: 30000, killSignal: "SIGKILL", maxBuffer: 8 * 1024 * 1024 };
 try {
+  let extension;
+  const checkArguments = [];
+  if (process.argv[2]) {
+    extension = path.resolve(process.argv[2]);
+  } else {
+    const prepared = await exec("python3", [path.join(root, "editor/zed/tools/prepare.py"), "dev", "--output", path.join(directory, "dev")], options);
+    extension = JSON.parse(prepared.stdout).extension;
+    checkArguments.push("--allow-local");
+  }
   const archive = path.join(directory, "grammar.tar");
-  const { stdout } = await exec("python3", [path.join(root, "editor/zed/tools/check-grammar.py"), "--archive", archive], {
+  const { stdout } = await exec("python3", [path.join(root, "editor/zed/tools/check-grammar.py"),
+    "--manifest", path.join(extension, "extension.toml"), "--archive", archive, ...checkArguments], {
     ...options, timeout: 90000,
   });
   const reference = JSON.parse(stdout);
@@ -31,14 +41,14 @@ try {
   });
   const fixture = path.join(sourceGrammar, "test/highlight.ss");
   const parsed = await exec(cli, ["parse", fixture], { ...options, cwd: grammar });
-  assert.doesNotMatch(parsed.stdout, /\((?:ERROR|MISSING)\b/, "Zed's pinned grammar must parse the current fixture");
+  assert.doesNotMatch(parsed.stdout, /\((?:ERROR|MISSING)\b/, "Zed's generated grammar must parse the current fixture");
   const queries = ["highlights", "outline", "indents", "brackets"];
   for (const query of queries) {
-    await exec(cli, ["query", path.join(root, `editor/zed/languages/ss/${query}.scm`), fixture, "--quiet"], {
+    await exec(cli, ["query", path.join(extension, `languages/ss/${query}.scm`), fixture, "--quiet"], {
       ...options, cwd: grammar,
     });
   }
-  console.log(`Zed pinned grammar ${reference.revision.slice(0, 8)}: current corpus, syntax cases, and ${queries.length} queries passed`);
+  console.log(`Zed generated grammar ${reference.revision.slice(0, 8)}: current corpus, syntax cases, and ${queries.length} queries passed`);
 } finally {
   await rm(directory, { recursive: true, force: true });
 }

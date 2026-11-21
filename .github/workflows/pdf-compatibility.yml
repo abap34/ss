@@ -1,0 +1,128 @@
+name: PDF compatibility
+
+on:
+  schedule:
+    - cron: "43 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Revision to test; defaults to the selected branch
+        type: string
+  workflow_call:
+    inputs:
+      ref:
+        description: Revision to test
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  qpdf-compatibility:
+    name: Native PDF ${{ matrix.environment }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - environment: Ubuntu 22.04, Cairo 1.16, qpdf 11.2
+            runner: ubuntu-22.04
+            qpdf-version: "11.2.0"
+          - environment: Ubuntu 24.04, Cairo 1.18, qpdf 12.4
+            runner: ubuntu-24.04
+            qpdf-version: "12.4.0"
+          - environment: Ubuntu 26.04 system packages
+            runner: ubuntu-26.04
+            qpdf-version: system
+
+    env:
+      QPDF_PREFIX: ${{ github.workspace }}/.qpdf/${{ matrix.qpdf-version }}
+
+    steps:
+      - name: Check out build setup
+        uses: actions/checkout@v6
+
+      - name: Set up Zig
+        uses: ./.github/actions/setup-zig
+
+      - name: Check out test sources
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ca-certificates \
+            cmake \
+            curl \
+            g++ \
+            libcairo2-dev \
+            libgdk-pixbuf-2.0-dev \
+            libjpeg-dev \
+            libpango1.0-dev \
+            libqpdf-dev \
+            librsvg2-dev \
+            libssl-dev \
+            ninja-build \
+            pkg-config \
+            qpdf \
+            zlib1g-dev
+
+      - name: Restore qpdf installation
+        if: matrix.qpdf-version != 'system'
+        id: qpdf-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.QPDF_PREFIX }}
+          key: ${{ matrix.runner }}-${{ runner.arch }}-qpdf-${{ matrix.qpdf-version }}-v1
+
+      - name: Build qpdf
+        if: matrix.qpdf-version != 'system' && steps.qpdf-cache.outputs.cache-hit != 'true'
+        env:
+          QPDF_VERSION: ${{ matrix.qpdf-version }}
+        run: |
+          set -euo pipefail
+          source_root="$RUNNER_TEMP/qpdf-source-$QPDF_VERSION"
+          build_root="$RUNNER_TEMP/qpdf-build-$QPDF_VERSION"
+          archive="$RUNNER_TEMP/qpdf-$QPDF_VERSION.tar.gz"
+
+          curl --retry 5 --retry-delay 2 --connect-timeout 20 --max-time 300 -fsSL \
+            "https://github.com/qpdf/qpdf/releases/download/v$QPDF_VERSION/qpdf-$QPDF_VERSION.tar.gz" \
+            -o "$archive"
+          mkdir -p "$source_root"
+          tar -xzf "$archive" -C "$source_root" --strip-components=1
+          cmake -S "$source_root" -B "$build_root" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$QPDF_PREFIX" \
+            -DBUILD_STATIC_LIBS=OFF
+          cmake --build "$build_root" --parallel --target libqpdf qpdf fix-qdf zlib-flate
+          cmake --install "$build_root" --component lib
+          cmake --install "$build_root" --component dev
+          cmake --install "$build_root" --component cli
+
+      - name: Select qpdf installation
+        if: matrix.qpdf-version != 'system'
+        run: |
+          set -euo pipefail
+          qpdf_pc_dir="$(find "$QPDF_PREFIX" -path '*/pkgconfig/libqpdf.pc' -printf '%h\n' -quit)"
+          if [ -z "$qpdf_pc_dir" ]; then
+            echo "libqpdf.pc was not installed under $QPDF_PREFIX" >&2
+            exit 1
+          fi
+          export PKG_CONFIG_PATH="$qpdf_pc_dir${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+          qpdf_lib_dir="$(pkg-config --variable=libdir libqpdf)"
+          echo "$QPDF_PREFIX/bin" >> "$GITHUB_PATH"
+          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$qpdf_lib_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+
+      - name: Test PDF backend
+        run: |
+          qpdf --version
+          pkg-config --modversion cairo
+          pkg-config --modversion libqpdf
+          zig build test-render-pdf --summary all

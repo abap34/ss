@@ -1,8 +1,15 @@
 name: Publish VS Code extension
 
 on:
-  push:
-    tags: ["v*.*.*"]
+  workflow_call:
+    inputs:
+      tag:
+        description: Existing release tag to publish
+        required: true
+        type: string
+    secrets:
+      VSCE_PAT:
+        required: false
   workflow_dispatch:
     inputs:
       tag:
@@ -13,101 +20,54 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: vscode-publication-${{ inputs.tag }}
+  cancel-in-progress: false
+
 env:
-  ZIG_VERSION: 0.17.0
-  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+  RELEASE_TAG: ${{ inputs.tag }}
 
 jobs:
   publish-vscode:
     name: Validate, package, and publish VSIX
-    if: ${{ !contains(inputs.tag || github.ref_name, '-patch.') }}
+    if: ${{ !contains(inputs.tag, '-patch.') }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 15
 
     steps:
-      - name: Check out repository
+      - name: Check out publication tools
         uses: actions/checkout@v6
         with:
-          fetch-depth: 0
+          sparse-checkout: release/tools
 
-      - name: Select tagged release sources and current completion validation
-        run: |
-          cp release/tools/check-vscode-package.py "$RUNNER_TEMP/check-vscode-package.py"
-          python3 release/tools/prepare-vscode-publication.py "$RELEASE_TAG"
+      - name: Keep the current package verifier
+        run: cp release/tools/check-vscode-package.py "$RUNNER_TEMP/check-vscode-package.py"
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            ca-certificates \
-            curl \
-            git \
-            libcairo2-dev \
-            libgdk-pixbuf-2.0-dev \
-            librsvg2-dev \
-            libpango1.0-dev \
-            libqpdf-dev \
-            pkg-config \
-            qpdf \
-            xz-utils
-
-      - name: Restore Zig compiler cache
-        uses: actions/cache@v4
+      - name: Check out tagged release sources
+        uses: actions/checkout@v6
         with:
-          path: ~/.local/zig
-          key: ${{ runner.os }}-${{ runner.arch }}-zig-${{ env.ZIG_VERSION }}
-
-      - name: Install Zig
-        run: |
-          set -euo pipefail
-          case "$(uname -m)" in
-            x86_64) zig_arch="x86_64-linux" ;;
-            aarch64|arm64) zig_arch="aarch64-linux" ;;
-            *) echo "unsupported runner architecture: $(uname -m)" >&2; exit 1 ;;
-          esac
-
-          mkdir -p "$HOME/.local/zig"
-          if [ ! -x "$HOME/.local/zig/zig" ]; then
-            curl --retry 5 --retry-delay 2 --connect-timeout 20 --max-time 300 -fsSL \
-              "https://ziglang.org/download/${ZIG_VERSION}/zig-${zig_arch}-${ZIG_VERSION}.tar.xz" \
-              -o /tmp/zig.tar.xz
-            tar -xJf /tmp/zig.tar.xz -C "$HOME/.local/zig" --strip-components=1
-          fi
-          echo "$HOME/.local/zig" >> "$GITHUB_PATH"
+          ref: refs/tags/${{ inputs.tag }}
 
       - name: Check release metadata
-        run: release/tools/preflight.py "$RELEASE_TAG"
+        run: |
+          release/tools/release_versions.py validate-tag "$RELEASE_TAG"
+          release/tools/preflight.py "$RELEASE_TAG"
+
+      - name: Check that the GitHub Release exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release view "$RELEASE_TAG" > /dev/null
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: |
-            editor/vscode/package-lock.json
-            editor/tree-sitter-ss/package-lock.json
+          cache-dependency-path: editor/vscode/package-lock.json
 
       - name: Install VS Code extension packages
         working-directory: editor/vscode
         run: npm ci
-
-      - name: Validate Zig and LSP
-        run: |
-          set -euo pipefail
-          release_version="${RELEASE_TAG#v}"
-          zig build test
-          git restore -- tests/runtime/harness.mjs tests/runtime/lsp_completion_runtime_spec.mjs
-          git diff --exit-code
-          zig build -Doptimize=ReleaseFast -Dversion="$release_version" -Dcommit="$RELEASE_COMMIT"
-          zig-out/bin/ss --version
-          tests/smoke/project.sh
-          node tests/smoke/lsp.mjs
-
-      - name: Test tree-sitter grammar
-        working-directory: editor/tree-sitter-ss
-        run: |
-          npm ci
-          npm test
 
       - name: Package VS Code extension
         working-directory: editor/vscode
@@ -137,16 +97,4 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ env.RELEASE_TAG }}
           VSIX: editor/vscode/ss-language-support-${{ env.RELEASE_TAG }}.vsix
-        run: |
-          set -euo pipefail
-          for attempt in {1..60}; do
-            if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-              break
-            fi
-            if [ "$attempt" -eq 60 ]; then
-              echo "release $TAG_NAME was not created by the source archive workflow" >&2
-              exit 1
-            fi
-            sleep 10
-          done
-          gh release upload "$TAG_NAME" "$VSIX" --clobber
+        run: gh release upload "$TAG_NAME" "$VSIX" --clobber
