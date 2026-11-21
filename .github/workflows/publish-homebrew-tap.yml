@@ -1,4 +1,4 @@
-name: Publish Homebrew tap
+name: Publish release
 
 on:
   push:
@@ -11,23 +11,40 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 env:
   HOMEBREW_TAP_REPO: abap34/homebrew-ss
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
-  publish-homebrew:
-    name: Build source archive and update tap
-    runs-on: ubuntu-latest
+  compatibility:
+    uses: ./.github/workflows/pdf-compatibility.yml
+    with:
+      ref: refs/tags/${{ inputs.tag || github.ref_name }}
+
+  source:
+    name: Create release and source archive
+    needs: compatibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+      version: ${{ steps.source.outputs.version }}
+      source_url: ${{ steps.source.outputs.source_url }}
+      source_sha256: ${{ steps.source.outputs.source_sha256 }}
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
         with:
-          fetch-depth: 0
-          ref: ${{ inputs.tag || github.ref }}
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
 
       - name: Check release metadata
         run: release/tools/preflight.py "$RELEASE_TAG"
@@ -53,22 +70,33 @@ jobs:
           fi
           gh release upload "$release_tag" "$archive" --clobber
 
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "archive=$archive" >> "$GITHUB_OUTPUT"
           echo "source_url=$source_url" >> "$GITHUB_OUTPUT"
           echo "source_sha256=$sha256" >> "$GITHUB_OUTPUT"
+
+  homebrew:
+    name: Update Homebrew tap
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out released sources
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.source.outputs.commit }}
 
       - name: Render Homebrew formula
         id: formula
         run: |
           set -euo pipefail
-          version="${{ steps.source.outputs.version }}"
+          version="${{ needs.source.outputs.version }}"
           formula_name="$(release/tools/release_versions.py homebrew-formula-name "$version")"
-          formula_path=".ss-cache/homebrew/${formula_name}.rb"
+          formula_path="$RUNNER_TEMP/homebrew/${formula_name}.rb"
           release/tools/render-homebrew-formula.py \
             --version "$version" \
-            --source-url "${{ steps.source.outputs.source_url }}" \
-            --source-sha256 "${{ steps.source.outputs.source_sha256 }}" \
+            --source-url "${{ needs.source.outputs.source_url }}" \
+            --source-sha256 "${{ needs.source.outputs.source_sha256 }}" \
             --formula-name "$formula_name" \
             --output "$formula_path"
           ruby -c "$formula_path"
@@ -79,7 +107,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: homebrew-formula
-          path: .ss-cache/homebrew/*.rb
+          path: ${{ steps.formula.outputs.formula_path }}
+          if-no-files-found: error
 
       - name: Update tap repository
         env:
@@ -106,3 +135,15 @@ jobs:
           fi
           git commit -m "ss ${RELEASE_TAG}"
           git push origin HEAD:main
+
+  vscode:
+    name: Publish VS Code extension
+    needs: source
+    if: ${{ !contains(needs.source.outputs.version, '-patch.') }}
+    uses: ./.github/workflows/publish-vscode-extension.yml
+    permissions:
+      contents: write
+    with:
+      tag: ${{ inputs.tag || github.ref_name }}
+    secrets:
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
