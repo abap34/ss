@@ -126,6 +126,54 @@ end`);
     assert.equal(placed.find(n => n.content === "Outside second").render.text.font_size, fallback ? 9 : 17);
   }
 
+  // Cached constant closures retain captures, but resolve page settings when called.
+  for (const [module, enabled, type, payload] of [
+    ["alpha", "true", "Number", "1"], ["beta", "false", "String", '"B"'],
+  ]) {
+    await writeFile(path.join(cwd, `${module}.ss`), `
+      type Flags<T> { enabled: Bool item: T }
+      fn capture<T>(value: T) -> () -> T = () |-> value
+      const choice: () -> Flags<${type}> = capture(Flags<${type}> { enabled = ${enabled} item = ${payload} })
+      const current: () -> Theme = () |-> theme_for(pagectx())
+      fn/! label(content: String) -> Text
+        let options = choice()
+        if options.enabled
+          return text(content ++ " enabled", current().text)
+        end
+        return text(content ++ " disabled", current().text)
+      end
+    `);
+  }
+  const constantClosures = await source(`
+    import "./alpha" as alpha
+    import "./beta" as beta
+    page first
+      alpha::label!("Alpha")
+      beta::label!("Beta")
+      theme!(Theme {} with { text.size = 18 })
+    end
+    page second
+      alpha::label!("Alpha")
+      beta::label!("Beta")
+      theme!(Theme {} with { text.size = 29 })
+    end
+  `);
+  const constantOutput = await json(["dump", "--quiet", constantClosures]);
+  for (const [index, size] of [18, 29].entries()) {
+    const pageText = text(constantOutput).filter(n => n.placement.page === constantOutput.page_order[index]);
+    assert.deepEqual(pageText.map(n => [n.content, n.render.text.font_size]),
+      [["Alpha enabled", size], ["Beta disabled", size]]);
+  }
+  const constantGraph = await json(["debug", "schedule", constantClosures]);
+  for (const index of [0, 1]) {
+    const writer = parent(constantGraph, "theme!(", index);
+    for (const module of ["alpha", "beta"]) {
+      const reader = parent(constantGraph, `${module}::label!`, index);
+      assert(edge(constantGraph, writer, reader));
+      assert(!edge(constantGraph, parent(constantGraph, "theme!(", 1 - index), reader));
+    }
+  }
+
   const documentRead = await source(`fn apply!(t: Theme) -> Void
   theme!(t)
   docctx().layout_h_center_offset = document_theme().text.size

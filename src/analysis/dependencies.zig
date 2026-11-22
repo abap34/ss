@@ -526,13 +526,34 @@ const TypeValueContext = struct {
     }
 };
 
+const ConstantValueKey = struct {
+    declaration: core.FunctionKey,
+    value_depth: usize,
+    effect_depth: usize,
+};
+
+const ConstantValueContext = struct {
+    pub fn hash(_: @This(), key: ConstantValueKey) u64 {
+        var hasher = std.hash.Wyhash.init(core.FunctionKeyContext.hash(.{}, key.declaration));
+        std.hash.autoHash(&hasher, key.value_depth);
+        std.hash.autoHash(&hasher, key.effect_depth);
+        return hasher.final();
+    }
+
+    pub fn eql(_: @This(), left: ConstantValueKey, right: ConstantValueKey) bool {
+        return left.declaration.eql(right.declaration) and left.value_depth == right.value_depth and left.effect_depth == right.effect_depth;
+    }
+};
+
 pub const RunCache = struct {
     allocator: std.mem.Allocator,
     name_resolution: analysis_cache.NameResolutionCache,
     summaries: SummaryCache,
     return_properties: std.StringHashMap(ReturnProperty),
     type_values: std.HashMap(TypeValueKey, AbstractValue, TypeValueContext, std.hash_map.default_max_load_percentage),
-    type_storage: std.heap.ArenaAllocator,
+    constant_values: std.HashMap(ConstantValueKey, AbstractValue, ConstantValueContext, std.hash_map.default_max_load_percentage),
+    value_storage: std.heap.ArenaAllocator,
+    constant_body_analyses: usize = 0,
     page_ids: std.AutoHashMapUnmanaged(core.placement_inputs.PageKey, ?core.NodeId) = .{},
     // Borrowed from the graph; cached and returned summaries share these bytes.
     string_allocator: std.mem.Allocator,
@@ -548,7 +569,8 @@ pub const RunCache = struct {
             .summaries = SummaryCache.init(allocator),
             .return_properties = .init(allocator),
             .type_values = .init(allocator),
-            .type_storage = .init(allocator),
+            .value_storage = .init(allocator),
+            .constant_values = .init(allocator),
             .string_allocator = string_allocator,
         };
     }
@@ -556,7 +578,8 @@ pub const RunCache = struct {
     pub fn deinit(self: *RunCache) void {
         self.page_ids.deinit(self.allocator);
         self.type_values.deinit();
-        self.type_storage.deinit();
+        self.constant_values.deinit();
+        self.value_storage.deinit();
         var iter = self.summaries.iterator();
         while (iter.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
@@ -652,6 +675,39 @@ const AbstractValue = struct {
         named: semantic_env.ResolvedFunction,
         closure: struct { module_id: core.SourceModuleId, lambda: ast.LambdaExpr, bindings: []const CapturedBinding },
     };
+    // Syntax and interned resource names outlive the run cache. Own all value
+    // trees, reference sets and captured environments allocated by an analyzer.
+    // The destination is an arena, which also owns partially built copies.
+    fn clone(self: AbstractValue, allocator: std.mem.Allocator) std.mem.Allocator.Error!AbstractValue {
+        var copy = self;
+        copy.targets.ids = try allocator.dupe(u32, self.targets.ids);
+        copy.placement.path = try allocator.dupe(usize, self.placement.path);
+        const fields = try allocator.alloc(Field, self.fields.len);
+        for (self.fields, fields) |field_value, *target| {
+            target.* = .{ .name = field_value.name, .value = try field_value.value.clone(allocator) };
+        }
+        copy.fields = fields;
+        const candidates = try allocator.dupe(Callable, self.candidates);
+        for (candidates) |*candidate| switch (candidate.*) {
+            .named => {},
+            .closure => |*closure| {
+                const bindings = try allocator.dupe(CapturedBinding, closure.bindings);
+                for (bindings) |*binding| {
+                    binding.binding = try binding.binding.clone(allocator);
+                    binding.binding.values = try binding.binding.values.clone(allocator);
+                }
+                closure.bindings = bindings;
+            },
+        };
+        copy.candidates = candidates;
+        if (self.children) |children| {
+            const owned = try allocator.alloc(AbstractValue, children.len);
+            for (children, owned) |child, *target| target.* = try child.clone(allocator);
+            copy.children = owned;
+        }
+        return copy;
+    }
+
     fn field(self: AbstractValue, name: []const u8) AbstractValue {
         for (self.fields) |entry| if (std.mem.eql(u8, entry.name, name)) return entry.value;
         return if (self.path.unknown_target) .{ .id = self.id, .path = .{ .unknown_target = true, .items = .either }, .present = .either, .truth = .either } else .{};
@@ -810,7 +866,7 @@ pub const Analyzer = struct {
     capture_index: captures.Index,
     value_depth: usize = 0,
     effect_analysis_depth: usize = 0,
-    return_recursions: usize = 0,
+    recursive_fallbacks: usize = 0,
     next_value_id: usize = 1,
     next_local_object_id: usize = 1,
 
@@ -1400,7 +1456,7 @@ pub const Analyzer = struct {
                 try self.addBoundSelectionReads(summary, name);
             },
             .constant => |resolved| {
-                var nested = try self.constValue(resolved);
+                var nested = try self.constantSummary(resolved);
                 defer nested.deinit();
                 try summary.merge(nested);
             },
@@ -1533,22 +1589,46 @@ pub const Analyzer = struct {
         return switch (try self.valueBinding(name)) {
             .local => (self.environment.get(name.name) orelse Binding{}).values,
             .function => |resolved| try self.newValue(&.{.{ .named = resolved }}, &.{}),
-            .constant => |resolved| blk: {
-                if (self.visiting.contains(resolved.key)) break :blk .{};
-                try self.visiting.put(resolved.key, {});
-                defer _ = self.visiting.remove(resolved.key);
-                var facts = self.environment.pushFresh();
-                defer facts.restore();
-                const previous = self.sema;
-                self.sema = self.sema.forModule(resolved.module_id);
-                defer self.sema = previous;
-                const caller = self.variable_scope;
-                self.variable_scope = .{ .document = resolved.module_id };
-                defer self.variable_scope = caller;
-                break :blk try self.expressionValue(resolved.decl.value);
-            },
+            .constant => |resolved| try self.constantValue(resolved),
             else => .{},
         };
+    }
+
+    fn constantValue(self: *Analyzer, resolved: semantic_env.ResolvedConst) anyerror!AbstractValue {
+        if (self.visiting.contains(resolved.key)) {
+            self.recursive_fallbacks += 1;
+            return .{};
+        }
+        // Initializers have a fresh lexical environment and document scope.
+        // Include both budgets so reuse cannot bypass an analysis depth limit.
+        const key = ConstantValueKey{
+            .declaration = resolved.key,
+            .value_depth = self.value_depth,
+            .effect_depth = self.effect_analysis_depth,
+        };
+        if (self.run_cache) |cache| if (cache.constant_values.get(key)) |value| return value;
+        try self.visiting.put(resolved.key, {});
+        defer _ = self.visiting.remove(resolved.key);
+        const before = self.recursive_fallbacks;
+        var facts = self.environment.pushFresh();
+        defer facts.restore();
+        const previous = self.sema;
+        self.sema = self.sema.forModule(resolved.module_id);
+        defer self.sema = previous;
+        const caller = self.variable_scope;
+        self.variable_scope = .{ .document = resolved.module_id };
+        defer self.variable_scope = caller;
+        const value = try self.expressionValue(resolved.decl.value);
+        if (self.run_cache) |cache| {
+            cache.constant_body_analyses += 1;
+            // A recursive fallback depends on the active call chain.
+            if (self.recursive_fallbacks == before) {
+                const stored = try value.clone(cache.value_storage.allocator());
+                try cache.constant_values.put(key, stored);
+                return stored;
+            }
+        }
+        return value;
     }
 
     fn withAlternatives(self: *Analyzer, value: AbstractValue, truth: Alternatives, present: Alternatives) AbstractValue {
@@ -1892,7 +1972,7 @@ pub const Analyzer = struct {
         // depth so a cached subtree cannot bypass the analysis depth limit.
         const key = TypeValueKey{ .module_id = self.sema.module_id, .ty = ty, .depth = depth };
         if (cache.type_values.get(key)) |value| return value;
-        const allocator = cache.type_storage.allocator();
+        const allocator = cache.value_storage.allocator();
         const value = try self.buildTypeValue(ty, depth, allocator);
         try cache.type_values.put(.{ .module_id = key.module_id, .ty = try ty.clone(allocator), .depth = depth }, value);
         cache.type_body_analyses += 1;
@@ -2044,7 +2124,7 @@ pub const Analyzer = struct {
                 errdefer summary.deinit();
                 switch (try self.valueBinding(call.callee)) {
                     .constant => |resolved| {
-                        var initialization = try self.constValue(resolved);
+                        var initialization = try self.constantSummary(resolved);
                         defer initialization.deinit();
                         try summary.merge(initialization);
                     },
@@ -2313,10 +2393,13 @@ pub const Analyzer = struct {
         return body;
     }
 
-    fn constValue(self: *Analyzer, resolved: semantic_env.ResolvedConst) anyerror!AccessSummary {
+    fn constantSummary(self: *Analyzer, resolved: semantic_env.ResolvedConst) anyerror!AccessSummary {
         var summary = AccessSummary.init(self.allocator);
         errdefer summary.deinit();
-        if (self.visiting.contains(resolved.key)) return summary;
+        if (self.visiting.contains(resolved.key)) {
+            self.recursive_fallbacks += 1;
+            return summary;
+        }
 
         const cache_key = if (self.run_cache != null)
             try buildConstSummaryKey(self.allocator, resolved.key)
@@ -2838,7 +2921,10 @@ pub const Analyzer = struct {
     }
 
     fn propertyTargetConst(self: *Analyzer, resolved: semantic_env.ResolvedConst) anyerror!?PropertyTarget {
-        if (self.visiting.contains(resolved.key)) return null;
+        if (self.visiting.contains(resolved.key)) {
+            self.recursive_fallbacks += 1;
+            return null;
+        }
         try self.visiting.put(resolved.key, {});
         defer _ = self.visiting.remove(resolved.key);
 
@@ -2975,12 +3061,12 @@ pub const Analyzer = struct {
         if (!mayReturnProperty(kind, resolved.decl.result_type)) return null;
         const fallback = if (kind == .property_target) self.propertyTargetForType(resolved.decl.result_type) else null;
         if (self.visiting.contains(resolved.key)) {
-            self.return_recursions += 1;
+            self.recursive_fallbacks += 1;
             return fallback;
         }
         try self.visiting.put(resolved.key, {});
         defer _ = self.visiting.remove(resolved.key);
-        const recursions_before = self.return_recursions;
+        const recursions_before = self.recursive_fallbacks;
         var arg_facts = switch (kind) {
             .property_target => try self.staticArguments(call),
             .string_literal => try self.stringArguments(call),
@@ -3001,7 +3087,7 @@ pub const Analyzer = struct {
         _ = try self.scanReturns(if (kind == .property_target) .property_target else .string_literal, resolved.decl.statements.items, &result);
         const value = if (result) |fact| fact.value orelse fallback else fallback;
         // Recursive fallbacks depend on the active call chain, not just arguments.
-        if (key) |cache_key| if (self.return_recursions == recursions_before) {
+        if (key) |cache_key| if (self.recursive_fallbacks == recursions_before) {
             const cache = self.run_cache.?;
             const owned_key = try cache.allocator.dupe(u8, cache_key);
             errdefer cache.allocator.free(owned_key);
@@ -3301,7 +3387,10 @@ fn literalStringExpr(self: *Analyzer, expr: ast.Expr) anyerror!?[]const u8 {
             if ((self.environment.get(ident.name) orelse Binding{}).string_literal) |value| break :blk value;
             switch (try self.valueBinding(ident.reference())) {
                 .constant => |resolved| {
-                    if (self.visiting.contains(resolved.key)) break :blk null;
+                    if (self.visiting.contains(resolved.key)) {
+                        self.recursive_fallbacks += 1;
+                        break :blk null;
+                    }
                     try self.visiting.put(resolved.key, {});
                     defer _ = self.visiting.remove(resolved.key);
                     var facts = self.environment.pushFresh();

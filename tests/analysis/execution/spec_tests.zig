@@ -629,3 +629,139 @@ test "combined dependency and return facts restore captured bindings after cance
     try testing.expectEqualDeep(expected.reads.items, recovered.reads.items);
     try testing.expectEqualDeep(expected.writes.items, recovered.writes.items);
 }
+
+fn analyzeConstantValues(allocator: std.mem.Allocator, state: *core.DocumentState) !void {
+    const dependencies = compiler.analysis.dependencies;
+    const sema = compiler.semantic_env.SemanticEnv.init(state, state.declaration_index, &state.functions);
+    var strings = std.heap.ArenaAllocator.init(allocator);
+    defer strings.deinit();
+    var cache = dependencies.RunCache.init(allocator, strings.allocator());
+    defer cache.deinit();
+    const statements = state.projectSyntax().document_statements.items;
+    var analyzed: usize = 0;
+    // Destroy the first analyzer before reusing the cached closure and its captures.
+    for (0..2) |iteration| {
+        var analyzer = dependencies.Analyzer.initWithScopeAndCache(allocator, &sema, .{ .document = 0 }, &cache);
+        defer analyzer.deinit();
+        var actual = try analyzer.documentStatements(statements);
+        defer actual.deinit();
+        var uncached = dependencies.Analyzer.init(allocator, &sema);
+        defer uncached.deinit();
+        var expected = try uncached.documentStatements(statements);
+        defer expected.deinit();
+        try testing.expectEqualDeep(expected.reads.items, actual.reads.items);
+        try testing.expectEqualDeep(expected.writes.items, actual.writes.items);
+        try testing.expect(actual.writes.items.len != 0);
+        if (iteration == 0) {
+            analyzed = cache.constant_body_analyses;
+            try testing.expect(analyzed > 0);
+        } else try testing.expectEqual(analyzed, cache.constant_body_analyses);
+    }
+}
+
+test "constant value cache owns nested closures and their captured records" {
+    var state = try document(
+        \\type Choice { enabled: Bool = true }
+        \\type Captured { choice: Choice = Choice {} }
+        \\fn make(value: Captured) -> () -> Bool = () |-> value.choice.enabled
+        \\const choose: () -> Bool = make(Captured {})
+        \\fn apply!() -> Void
+        \\  if choose()
+        \\    docctx().layout_h_center_offset = 12
+        \\  end
+        \\end
+        \\document
+        \\  apply!()
+        \\end
+    );
+    defer state.deinit();
+    try analyzeConstantValues(testing.allocator, &state);
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, analyzeConstantValues, .{&state});
+}
+
+test "recursive constant values never publish partial cache entries" {
+    var state = try document(
+        \\type Choice { enabled: Bool }
+        \\const choice: Choice = choice
+        \\document
+        \\  let a = choice.enabled
+        \\end
+    );
+    defer state.deinit();
+    const dependencies = compiler.analysis.dependencies;
+    const sema = compiler.semantic_env.SemanticEnv.init(&state, state.declaration_index, &state.functions);
+    var strings = std.heap.ArenaAllocator.init(testing.allocator);
+    defer strings.deinit();
+    var cache = dependencies.RunCache.init(testing.allocator, strings.allocator());
+    defer cache.deinit();
+    var analyzer = dependencies.Analyzer.initWithScopeAndCache(testing.allocator, &sema, .{ .document = 0 }, &cache);
+    defer analyzer.deinit();
+    for (0..2) |_| {
+        var summary = try analyzer.documentStatements(state.projectSyntax().document_statements.items);
+        defer summary.deinit();
+        try testing.expectEqual(@as(u32, 0), cache.constant_values.count());
+    }
+}
+
+test "constant cache reuse preserves the value analysis depth limit" {
+    var state = try document(
+        \\type Choice { enabled: Bool = true }
+        \\const choice: Choice = Choice {}
+        \\document
+        \\  let a = choice.enabled
+        \\end
+    );
+    defer state.deinit();
+    const dependencies = compiler.analysis.dependencies;
+    const sema = compiler.semantic_env.SemanticEnv.init(&state, state.declaration_index, &state.functions);
+    var strings = std.heap.ArenaAllocator.init(testing.allocator);
+    defer strings.deinit();
+    var cache = dependencies.RunCache.init(testing.allocator, strings.allocator());
+    defer cache.deinit();
+    var analyzer = dependencies.Analyzer.initWithScopeAndCache(testing.allocator, &sema, .{ .document = 0 }, &cache);
+    defer analyzer.deinit();
+    const statements = state.projectSyntax().document_statements.items;
+    var warm = try analyzer.documentStatements(statements);
+    defer warm.deinit();
+    analyzer.value_depth = 126;
+    try testing.expectError(error.FunctionAnalysisLimitExceeded, analyzer.documentStatements(statements));
+    var uncached = dependencies.Analyzer.init(testing.allocator, &sema);
+    defer uncached.deinit();
+    uncached.value_depth = 126;
+    try testing.expectError(error.FunctionAnalysisLimitExceeded, uncached.documentStatements(statements));
+}
+
+test "canceled constant analysis can recover with the same run cache" {
+    var state = try document(
+        \\type Choice { enabled: Bool }
+        \\fn make(argument: Bool) -> Choice = Choice { enabled = argument }
+        \\const choice: Choice = make(true)
+        \\document
+        \\  let a = choice.enabled
+        \\end
+    );
+    defer state.deinit();
+    const dependencies = compiler.analysis.dependencies;
+    const sema = compiler.semantic_env.SemanticEnv.init(&state, state.declaration_index, &state.functions);
+    var strings = std.heap.ArenaAllocator.init(testing.allocator);
+    defer strings.deinit();
+    var cache = dependencies.RunCache.init(testing.allocator, strings.allocator());
+    defer cache.deinit();
+    var analyzer = dependencies.Analyzer.initWithScopeAndCache(testing.allocator, &sema, .{ .document = 0 }, &cache);
+    defer analyzer.deinit();
+    var cancellation = CancelFunctionAnalysis{ .analyzer = &analyzer };
+    state.runtime.analysis_cancellation = .{ .context = &cancellation, .is_canceled = CancelFunctionAnalysis.canceled };
+    defer state.runtime.analysis_cancellation = null;
+    const statements = state.projectSyntax().document_statements.items;
+    try testing.expectError(error.Canceled, analyzer.documentStatements(statements));
+    try testing.expectEqual(@as(u32, 0), cache.constant_values.count());
+    state.runtime.analysis_cancellation = null;
+    var recovered = try analyzer.documentStatements(statements);
+    defer recovered.deinit();
+    var uncached = dependencies.Analyzer.init(testing.allocator, &sema);
+    defer uncached.deinit();
+    var expected = try uncached.documentStatements(statements);
+    defer expected.deinit();
+    try testing.expectEqualDeep(expected.reads.items, recovered.reads.items);
+    try testing.expectEqualDeep(expected.writes.items, recovered.writes.items);
+}
