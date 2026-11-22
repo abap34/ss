@@ -708,8 +708,8 @@ const AbstractValue = struct {
         return copy;
     }
 
-    fn field(self: AbstractValue, name: []const u8) AbstractValue {
-        for (self.fields) |entry| if (std.mem.eql(u8, entry.name, name)) return entry.value;
+    fn field(self: *const AbstractValue, name: []const u8) AbstractValue {
+        for (self.fields) |*entry| if (std.mem.eql(u8, entry.name, name)) return entry.value;
         return if (self.path.unknown_target) .{ .id = self.id, .path = .{ .unknown_target = true, .items = .either }, .present = .either, .truth = .either } else .{};
     }
 

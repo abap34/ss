@@ -324,12 +324,12 @@ const AbstractValue = struct {
         return true;
     }
 
-    fn collectFunctions(self: AbstractValue, out: *LabelMap) anyerror!void {
+    fn collectFunctions(self: *const AbstractValue, out: *LabelMap) anyerror!void {
         var labels = self.labels.keyIterator();
         while (labels.next()) |label| try out.put(label.*, {});
         var fields = self.fields.valueIterator();
         while (fields.next()) |field| try field.collectFunctions(out);
-        for (self.children) |child| try child.collectFunctions(out);
+        for (self.children) |*child| try child.collectFunctions(out);
     }
 
     fn forgetFunctions(self: *AbstractValue) anyerror!void {
