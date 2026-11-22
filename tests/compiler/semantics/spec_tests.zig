@@ -4374,6 +4374,42 @@ test "compiler semantics: joined display inputs preserve distinct callback depen
     , "12/34/");
 }
 
+test "compiler semantics: unchanged record updates preserve shared branches and changed scalar facts" {
+    try expectObjectContent(
+        \\type Choice { enabled: Bool label: String read: Number -> Number }
+        \\type Settings { size: Number choice: Choice }
+        \\fn inc(x: Number) -> Number = x + 1
+        \\fn twice(x: Number) -> Number = x * 2
+        \\const original: Settings = Settings { size = 10 choice = Choice { enabled = false label = "off" read = twice } }
+        \\fn describe(settings: Settings) -> String
+        \\  if settings.choice.enabled
+        \\    return settings.choice.label ++ ":" ++ str(settings.choice.read(3))
+        \\  end
+        \\  return "disabled:" ++ settings.choice.label ++ ":" ++ str(settings.choice.read(3))
+        \\end
+        \\page main
+        \\  let resized = original with { size = 20 }
+        \\  let changed = resized with { choice.enabled = true choice.label = "on" choice.read = inc }
+        \\  text!(describe(original) ++ "/" ++ describe(resized) ++ "/" ++ describe(changed))
+        \\end
+    , "disabled:off:6/disabled:off:6/on:4");
+}
+
+test "compiler semantics: unchanged record updates retain recursive callback candidates" {
+    try expectDiagnostic(
+        \\type Handler { size: Number run: Number -> Number }
+        \\fn invoke(handler: Handler, x: Number) -> Number = handler.run(x)
+        \\fn bad(x: Number) -> Number
+        \\  let handler = Handler { size = 10 run = bad }
+        \\  let resized = handler with { size = 20 }
+        \\  return invoke(resized, x)
+        \\end
+        \\page main
+        \\  text!(str(bad(1)))
+        \\end
+    , "case.ss:bytes:", "RecursiveFunction");
+}
+
 test "compiler semantics: nested call keys retain sibling callbacks after scratch growth" {
     var source = std.ArrayList(u8).empty;
     defer source.deinit(testing.allocator);

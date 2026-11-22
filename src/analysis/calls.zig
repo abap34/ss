@@ -367,7 +367,9 @@ const AbstractValue = struct {
         // Closed scalar fields carry no call or object facts. An explicit
         // empty field must still refine an unknown record.
         const omit = !self.unknown and value.isEmpty();
-        if (omit and !self.fields.contains(name)) return;
+        if (self.fields.get(name)) |previous| {
+            if (!omit and previous.sameSnapshot(value)) return;
+        } else if (omit) return;
         var fields = try self.fields.clone(self.allocator);
         if (omit) {
             _ = fields.remove(name);
