@@ -488,12 +488,14 @@ const BindingPropagation = struct {
     }
 };
 
-// Type identities live for the analysis pass. Encoded keys and sorting buffers
-// use the caller's allocator and are released after each lookup.
+// Types and immutable field tables are interned for the analysis pass. Encoded
+// lookup keys and sorting buffers use the caller's allocator and are temporary.
 const CallKeys = struct {
     allocator: std.mem.Allocator,
     key_allocator: std.mem.Allocator,
     input_type_keys: std.ArrayList(ast.Type) = .empty,
+    field_ids: std.AutoHashMapUnmanaged(*const AbstractValue.Fields, usize) = .empty,
+    field_encodings: std.StringHashMapUnmanaged(usize) = .empty,
 
     fn free(self: *CallKeys, key: []const u8) void {
         self.key_allocator.free(key);
@@ -565,6 +567,25 @@ const CallKeys = struct {
         }
     }
 
+    fn appendFields(self: *CallKeys, out: *std.ArrayList(u8), scratch: *KeyScratch, fields: *const AbstractValue.Fields) anyerror!void {
+        if (fields.count() == 0) return self.appendInteger(out, 0);
+        if (self.field_ids.get(fields)) |id| return self.appendInteger(out, id);
+
+        var encoding = std.ArrayList(u8).empty;
+        defer encoding.deinit(self.key_allocator);
+        try self.appendBindings(&encoding, scratch, fields);
+        const id = self.field_encodings.get(encoding.items) orelse blk: {
+            const id = self.field_encodings.count() + 1;
+            const owned = try self.allocator.dupe(u8, encoding.items);
+            try self.field_encodings.put(self.allocator, owned, id);
+            break :blk id;
+        };
+        // Published value fields are immutable. Mutable lexical environments
+        // still use appendBindings and are never cached by their address.
+        try self.field_ids.put(self.allocator, fields, id);
+        try self.appendInteger(out, id);
+    }
+
     // Keys are exact, length-delimited binary encodings, local to this analysis.
     // Formatting every scalar into an arena retained large temporary strings.
     fn appendInteger(self: *CallKeys, out: *std.ArrayList(u8), value: usize) !void {
@@ -621,7 +642,7 @@ const CallKeys = struct {
         if (scratch.labels.items.len > 1) std.mem.sortUnstable(Label, scratch.labels.items, {}, Label.lessThan);
         try self.appendInteger(out, scratch.labels.items.len);
         for (scratch.labels.items) |label| try self.appendLabel(out, label);
-        try self.appendBindings(out, scratch, value.fields);
+        try self.appendFields(out, scratch, value.fields);
         try self.appendInteger(out, value.children.len);
         for (value.children) |*child| try self.appendValue(out, scratch, child);
         scratch.integers.clearRetainingCapacity();

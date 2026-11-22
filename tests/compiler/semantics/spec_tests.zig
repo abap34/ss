@@ -4410,6 +4410,39 @@ test "compiler semantics: unchanged record updates retain recursive callback can
     , "case.ss:bytes:", "RecursiveFunction");
 }
 
+test "compiler semantics: record call keys retain boolean changes across shared updates" {
+    const source =
+        \\type Handler { enabled: Bool label: String run: Number -> Number }
+        \\fn invoke(handler: Handler, value: Number) -> Number
+        \\  if handler.enabled
+        \\    return handler.run(value)
+        \\  end
+        \\  return value
+        \\end
+        \\fn again(value: Number) -> Number = read(value)
+        \\fn read(value: Number) -> Number
+        \\  let disabled = Handler { enabled = false label = "call" run = again }
+        \\  let muted = disabled with { label = "skip" }
+        \\  let first = invoke(disabled, value)
+        \\  let second = invoke(muted, value)
+        \\
+    ;
+    try expectObjectContent(source ++
+        \\  return first + second
+        \\end
+        \\page main
+        \\  text!(str(read(3)))
+        \\end
+    , "6");
+    try expectDiagnostic(source ++
+        \\  return invoke(muted with { enabled = true }, value)
+        \\end
+        \\page main
+        \\  text!(str(read(3)))
+        \\end
+    , "case.ss:bytes:", "RecursiveFunction");
+}
+
 test "compiler semantics: nested call keys retain sibling callbacks after scratch growth" {
     var source = std.ArrayList(u8).empty;
     defer source.deinit(testing.allocator);
