@@ -90,3 +90,32 @@ test "LSP source positions: colors use UTF-16 offsets after non-BMP strings" {
     try testing.expectEqual(@as(i64, 22), range.get("start").?.object.get("character").?.integer);
     try testing.expectEqual(@as(i64, 32), range.get("end").?.object.get("character").?.integer);
 }
+
+test "LSP source positions: incomplete literals retain unaffected page anchors" {
+    try editPageAnchors(testing.allocator);
+}
+
+test "LSP source positions: page anchor updates preserve ownership on allocation failure" {
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, editPageAnchors, .{});
+}
+
+fn editPageAnchors(allocator: std.mem.Allocator) !void {
+    var documents = state.DocumentStore.init(allocator);
+    defer documents.deinit();
+    const uri = "file:///tmp/ss-page-anchors.ss";
+    const initial = "page First\n  text!(\"Body\")\nend\npage Second\nend\n";
+    const broken = ";; \u{1f680}\npage First\n  text!(\"\nend\npage Second\nend\n";
+    const path = try documents.replaceUri(uri, initial, 1);
+    defer allocator.free(path);
+    const second = try documents.replaceUri(uri, broken, 2);
+    defer allocator.free(second);
+    const document = documents.items.get(path).?;
+    try testing.expectEqualStrings(broken, document.text);
+    try testing.expectEqual(@as(usize, 2), document.page_starts.len);
+    try testing.expectEqual(std.mem.indexOf(u8, broken, "page First").?, document.page_starts[0]);
+    try testing.expectEqual(std.mem.indexOf(u8, broken, "page Second").?, document.page_starts[1]);
+    const commented = ";; \u{1f680}\npage First\n  text!(\"\nend\n;; page Second\nend\n";
+    const third = try documents.replaceUri(uri, commented, 3);
+    defer allocator.free(third);
+    try testing.expectEqual(@as(usize, 1), documents.items.get(path).?.page_starts.len);
+}

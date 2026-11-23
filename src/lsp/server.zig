@@ -1317,6 +1317,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         var provider = analysisProvider(server);
         var ctx = feature_symbols.Context{
             .allocator = server.allocator,
+            .io = server.io,
             .provider = &provider,
             .documents = &server.documents,
         };

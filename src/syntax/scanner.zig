@@ -180,6 +180,30 @@ pub fn tokens(text: []const u8) TokenIterator {
     };
 }
 
+pub const PageHeaderIterator = struct {
+    iter: TokenIterator,
+
+    pub fn next(self: *PageHeaderIterator) ?Token {
+        const text = self.iter.text;
+        while (self.iter.next()) |token| {
+            if (token.kind != .identifier or !std.mem.eql(u8, text[token.span.start..token.span.end], "page")) continue;
+            if (source.skipInlineSpacesUntil(text, token.line_start, token.span.start) != token.span.start) continue;
+            if (token.span.end < token.line_end and !source.isInlineSpace(text[token.span.end]) and text[token.span.end] != '"') continue;
+            const next_word = source.skipInlineSpacesUntil(text, token.span.end, token.line_end);
+            if (next_word == token.line_end or source.lineCommentMarkerLength(text, next_word) != null) continue;
+            if (std.mem.indexOfScalar(u8, ".:=", text[next_word]) != null) continue;
+            return token;
+        }
+        return null;
+    }
+};
+
+/// Page navigation depends on physical declarations, including unfinished ones,
+/// rather than on successful parsing, imports, stage expansion or type checking.
+pub fn pageHeaders(text: []const u8) PageHeaderIterator {
+    return .{ .iter = tokens(text) };
+}
+
 pub fn isKeyword(text: []const u8) bool {
     return utils.syntax_keywords.contains(text);
 }

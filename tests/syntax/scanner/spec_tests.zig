@@ -298,3 +298,55 @@ test "syntax scanner: comparison does not consume a callable suffix" {
         .{ .kind = .number, .text = "1", .line = 0 },
     });
 }
+
+test "syntax scanner: page headers survive incomplete bodies and exclude literal content" {
+    const text =
+        \\;; page Comment
+        \\const example = "page Inline"
+        \\const multiline = "example
+        \\page Multiline
+        \\"
+        \\code <<
+        \\page Block
+        \\>>
+        \\page First
+        \\  let item =
+        \\  page.left
+        \\  page: String
+        \\  page : String
+        \\  page = PageAppearance {}
+        \\  page .left
+        \\  object.page
+        \\  text!("Inline") page Inline
+        \\page "Second"
+        \\  if true
+        \\    let item = text!(
+        \\page "Unfinished
+    ;
+    var headers = scanner.pageHeaders(text);
+    for ([_][]const u8{ "page First", "page \"Second\"", "page \"Unfinished" }) |declaration| {
+        const header = headers.next() orelse return error.MissingPageHeader;
+        try testing.expect(std.mem.startsWith(u8, text[header.span.start..], declaration));
+        try testing.expectEqualStrings("page", text[header.span.start..header.span.end]);
+    }
+    try testing.expect(headers.next() == null);
+}
+
+test "syntax scanner: page header positions preserve Unicode CRLF and incomplete names" {
+    const text = ";; \u{1f680}\r\n\tpage\"\u{1f680} First\"\r\n  text!(\"unterminated";
+    var headers = scanner.pageHeaders(text);
+    const header = headers.next().?;
+    try testing.expectEqual(@as(usize, 10), header.span.start);
+    try testing.expectEqualStrings("page", text[header.span.start..header.span.end]);
+    try testing.expect(headers.next() == null);
+    var unfinished = scanner.pageHeaders("page \"Unfinished");
+    const partial = unfinished.next().?;
+    try testing.expectEqualStrings("page", unfinished.iter.text[partial.span.start..partial.span.end]);
+}
+
+test "syntax scanner: editing a page receiver or field does not create navigation" {
+    for ([_][]const u8{ "p", "pa", "pag", "page", "page ", "page ;; comment", "page.", "page .left", "page:", "page : String", "page =", "page = PageAppearance {}" }) |text| {
+        var headers = scanner.pageHeaders(text);
+        try testing.expect(headers.next() == null);
+    }
+}

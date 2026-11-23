@@ -7,6 +7,7 @@ const utils = @import("utils");
 const editor_snapshot = @import("../editor/snapshot.zig");
 
 const protocol = @import("protocol.zig");
+const source_pages = @import("source_pages.zig");
 
 const source = utils.source;
 
@@ -16,13 +17,18 @@ pub const AnalysisSnapshot = analysis_snapshot.AnalysisSnapshot;
 const OpenDocument = struct {
     text: []u8,
     line_index: source.LineIndex,
+    page_starts: []usize,
 
-    fn init(allocator: std.mem.Allocator, text: []u8) !OpenDocument {
-        return .{ .text = text, .line_index = try source.LineIndex.init(allocator, text) };
+    fn init(allocator: std.mem.Allocator, text: []u8, previous: ?OpenDocument) !OpenDocument {
+        const index = try source.LineIndex.init(allocator, text);
+        errdefer index.deinit(allocator);
+        const starts = try source_pages.collect(allocator, text, if (previous) |value| value.text else "", if (previous) |value| value.page_starts else &.{});
+        return .{ .text = text, .line_index = index, .page_starts = starts };
     }
 
     fn deinit(self: OpenDocument, allocator: std.mem.Allocator) void {
         self.line_index.deinit(allocator);
+        allocator.free(self.page_starts);
         allocator.free(self.text);
     }
 };
@@ -71,7 +77,7 @@ pub const DocumentStore = struct {
             if (change.* != .object) return error.InvalidParams;
             const old_index = if (current) |document| document.line_index else if (original) |document| document.line_index else source.LineIndex.empty;
             const next_text = try applyChange(self.allocator, old_index, &change.object);
-            const next = OpenDocument.init(self.allocator, next_text) catch |err| {
+            const next = OpenDocument.init(self.allocator, next_text, current orelse original) catch |err| {
                 self.allocator.free(next_text);
                 return err;
             };
@@ -103,10 +109,14 @@ pub const DocumentStore = struct {
     }
 
     pub fn indexForPath(self: *DocumentStore, path: []const u8) ?source.LineIndex {
+        const document = self.documentForPath(path) orelse return null;
+        return document.line_index;
+    }
+
+    fn documentForPath(self: *DocumentStore, path: []const u8) ?OpenDocument {
         const absolute = project.absolutePath(self.allocator, path) catch return null;
         defer self.allocator.free(absolute);
-        const document = self.items.get(absolute) orelse return null;
-        return document.line_index;
+        return self.items.get(absolute);
     }
 
     pub fn fillOverlay(self: *DocumentStore, overlay: *module_loader.SourceOverlay) !void {
@@ -154,8 +164,11 @@ pub const DocumentStore = struct {
         }
         const document_text = try self.allocator.dupe(u8, text);
         errdefer self.allocator.free(document_text);
-        const document = try OpenDocument.init(self.allocator, document_text);
-        errdefer document.line_index.deinit(self.allocator);
+        const document = try OpenDocument.init(self.allocator, document_text, self.items.get(path));
+        errdefer {
+            document.line_index.deinit(self.allocator);
+            self.allocator.free(document.page_starts);
+        }
         try self.putOwned(path, document);
         self.generation += 1;
     }
@@ -188,6 +201,7 @@ pub const DocumentText = struct {
     path: []u8,
     source: []const u8,
     line_index: source.LineIndex,
+    page_starts: ?[]const usize = null,
     owned_source: ?[]u8 = null,
 
     pub fn deinit(self: *DocumentText, allocator: std.mem.Allocator) void {
@@ -251,8 +265,8 @@ pub fn documentTextFromParams(
 ) !?DocumentText {
     const doc_path = try protocol.docPathFromParams(allocator, params) orelse return null;
     errdefer allocator.free(doc_path);
-    if (documents.indexForPath(doc_path)) |index| {
-        return .{ .path = doc_path, .source = index.text, .line_index = index };
+    if (documents.documentForPath(doc_path)) |document| {
+        return .{ .path = doc_path, .source = document.text, .line_index = document.line_index, .page_starts = document.page_starts };
     }
     const owned = utils.fs.readFileAlloc(io, allocator, doc_path) catch {
         allocator.free(doc_path);
