@@ -124,3 +124,7 @@ fn lineSpan(text: []const u8, number: usize) ?source.ByteSpan {
     const line = source.lineByNumber(text, number) orelse return null;
     return source.trimInlineSpaceSpan(text, line.span);
 }
+
+pub fn isTable(value: Value) bool {
+    return value.type == c.TOML_TABLE;
+}

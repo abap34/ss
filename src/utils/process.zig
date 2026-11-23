@@ -81,6 +81,16 @@ pub fn run(
     argv: []const []const u8,
     cwd: std.process.Child.Cwd,
 ) !std.process.RunResult {
+    return runWithEnvironment(allocator, io, argv, cwd, null);
+}
+
+pub fn runWithEnvironment(
+    allocator: Allocator,
+    io: std.Io,
+    argv: []const []const u8,
+    cwd: std.process.Child.Cwd,
+    environ_map: ?*const std.process.Environ.Map,
+) !std.process.RunResult {
     const deadline = std.Io.Clock.Timestamp.fromNow(io, timeout);
     var windows_job: ?std.os.windows.HANDLE = null;
     defer if (builtin.os.tag == .windows) {
@@ -102,6 +112,7 @@ pub fn run(
 
     var spawn_options = std.process.SpawnOptions{
         .argv = argv,
+        .environ_map = environ_map,
         .cwd = cwd,
         .stdin = .ignore,
         .stdout = .pipe,
