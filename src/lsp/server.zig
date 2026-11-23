@@ -1313,7 +1313,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         _ = try server.respondResult(id, result);
         return;
     }
-    if (std.mem.eql(u8, method, "textDocument/documentSymbol") or std.mem.eql(u8, method, "textDocument/codeLens")) {
+    if (std.mem.eql(u8, method, "textDocument/documentSymbol") or std.mem.eql(u8, method, "textDocument/codeLens") or std.mem.eql(u8, method, "ss/pageRanges")) {
         var provider = analysisProvider(server);
         var ctx = feature_symbols.Context{
             .allocator = server.allocator,
@@ -1323,6 +1323,8 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         };
         const result = if (std.mem.eql(u8, method, "textDocument/codeLens"))
             try feature_symbols.codeLenses(&ctx, params)
+        else if (std.mem.eql(u8, method, "ss/pageRanges"))
+            try feature_symbols.pageRanges(&ctx, params)
         else
             try feature_symbols.result(&ctx, params);
         defer server.allocator.free(result);

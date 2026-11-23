@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { LanguageClient, LanguageClientOptions, Middleware, ServerOptions, Trace } from "vscode-languageclient/node";
-import { PageGuideDecorations } from "./pageGuide";
+import { PageGuideDecorations, PageRangesResponse } from "./pageGuide";
 import { initializeProjectSettings, onDidChangeProjectSettings, projectSettings, ProjectSettingsResponse, setProjectSettingsProvider } from "./projectConfig";
 import { EditorController } from "./editor/controller";
 import { PageSourceTarget } from "./editor/protocol";
@@ -24,7 +24,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       changes: files.map((file) => ({ uri: vscode.Uri.file(file).toString(), type: 2 })),
     }).catch((error) => output.appendLine(`Project settings notification failed: ${String(error)}`));
   }));
-  pageGuide = new PageGuideDecorations();
+  pageGuide = new PageGuideDecorations(async (document, token) => {
+    const active = client;
+    if (!active?.isRunning()) return undefined;
+    return active.sendRequest<PageRangesResponse | null>("ss/pageRanges", {
+      textDocument: { uri: document.uri.toString(), version: document.version },
+    }, token);
+  }, (message) => output.appendLine(message));
   const restart = () => restartLanguageClient();
   editorController = new EditorController(context, output, () => client, restart);
 

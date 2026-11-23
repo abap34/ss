@@ -21,7 +21,7 @@ pub fn received(message: *const std.json.Value, revision: u64) utils.profile.Tas
 
 fn profileMethod(method: ?[]const u8) []const u8 {
     const name = method orelse return "lsp.other";
-    for ([_][]const u8{ "exit", "initialize", "shutdown", "ss/deleteComponent", "ss/editLineGeometry", "ss/editShapeBounds", "ss/editorClose", "ss/editorResources", "ss/editorSnapshot", "ss/iconCatalog", "ss/insertIcon", "ss/insertShape", "ss/layoutConflicts", "ss/layoutEdit", "ss/projectInfo", "ss/projectSettings", "ss/shapeStyleEdit", "textDocument/colorPresentation", "textDocument/completion", "textDocument/definition", "textDocument/didChange", "textDocument/didClose", "textDocument/didOpen", "textDocument/didSave", "textDocument/documentColor", "textDocument/documentSymbol", "textDocument/foldingRange", "textDocument/hover", "textDocument/semanticTokens/full", "workspace/didChangeWatchedFiles", "ss/profile" }) |known| {
+    for ([_][]const u8{ "exit", "initialize", "shutdown", "ss/deleteComponent", "ss/editLineGeometry", "ss/editShapeBounds", "ss/editorClose", "ss/editorResources", "ss/editorSnapshot", "ss/iconCatalog", "ss/insertIcon", "ss/insertShape", "ss/layoutConflicts", "ss/layoutEdit", "ss/pageRanges", "ss/projectInfo", "ss/projectSettings", "ss/shapeStyleEdit", "textDocument/colorPresentation", "textDocument/completion", "textDocument/definition", "textDocument/didChange", "textDocument/didClose", "textDocument/didOpen", "textDocument/didSave", "textDocument/documentColor", "textDocument/documentSymbol", "textDocument/foldingRange", "textDocument/hover", "textDocument/semanticTokens/full", "workspace/didChangeWatchedFiles", "ss/profile" }) |known| {
         if (std.mem.eql(u8, name, known)) return known;
     }
     return "lsp.other";

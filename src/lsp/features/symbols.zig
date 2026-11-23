@@ -3,6 +3,7 @@ const LineIndex = @import("utils").source.LineIndex;
 const json = @import("utils").json;
 
 const analysis_snapshot = @import("../../analysis/snapshot.zig");
+const syntax = @import("../../syntax.zig");
 const source_pages = @import("../source_pages.zig");
 const query_symbols = @import("../../analysis/query/symbols.zig");
 const protocol = @import("../protocol.zig");
@@ -66,6 +67,39 @@ pub fn codeLenses(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     }
     try lenses.end();
     return try out.toOwnedSlice(ctx.allocator);
+}
+
+/// Physical page boundaries come from the compiler's surface AST, before
+/// includes and stages expand. Null pages mean syntax is still being edited;
+/// clients should retain their existing decorations until a complete parse.
+pub fn pageRanges(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
+    var doc = try lsp_state.documentTextFromParams(ctx.io, ctx.allocator, ctx.documents, params) orelse return try ctx.allocator.dupe(u8, "null");
+    defer doc.deinit(ctx.allocator);
+    var arena = std.heap.ArenaAllocator.init(ctx.allocator);
+    defer arena.deinit();
+    const parsed: ?syntax.Surface.Module = syntax.parseSurface(arena.allocator(), doc.source) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => null,
+    };
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(ctx.allocator);
+    var result_object = try json.Object.beginBuffer(ctx.allocator, &out);
+    try result_object.optionalIntField("version", ctx.documents.versionForPath(doc.path));
+    if (parsed) |module| {
+        var pages = try result_object.arrayField("pages");
+        for (module.pages.items) |page| {
+            const range = protocol.rangeFromIndex(doc.line_index, .{ .start = page.span.start, .end = page.span.end - 1 });
+            var item = try pages.objectItem();
+            try item.intField("startLine", range.start_line);
+            try item.intField("endLine", range.end_line);
+            try item.end();
+        }
+        try pages.end();
+    } else {
+        try result_object.nullField("pages");
+    }
+    try result_object.end();
+    return out.toOwnedSlice(ctx.allocator);
 }
 
 const DocumentSymbol = struct {

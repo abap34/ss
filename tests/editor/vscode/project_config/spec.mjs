@@ -60,6 +60,12 @@ const workspace = {
 };
 globalThis.__ssProjectConfigTest = {
   workspace, window, Uri, RelativePattern,
+  CancellationTokenSource: class {
+    changes = event();
+    token = { isCancellationRequested: false, onCancellationRequested: this.changes.subscribe };
+    cancel() { this.token.isCancellationRequested = true; this.changes.fire(); }
+    dispose() { this.changes.listeners.clear(); }
+  },
   DecorationRangeBehavior: { ClosedClosed: 1 }, OverviewRulerLane: { Left: 1 },
   existsSync(file) { searches++; return files.has(file); },
   readFileSync(file) {
@@ -83,7 +89,7 @@ const output = await esbuild.build({
       build.onResolve({ filter: /^(vscode|fs)$/ }, ({ path }) => ({ path, namespace: "ss-test" }));
       build.onLoad({ filter: /.*/, namespace: "ss-test" }, ({ path }) => ({
         contents: path === "vscode"
-          ? "export const { workspace, window, Uri, RelativePattern, DecorationRangeBehavior, OverviewRulerLane } = globalThis.__ssProjectConfigTest;"
+          ? "export const { workspace, window, Uri, RelativePattern, CancellationTokenSource, DecorationRangeBehavior, OverviewRulerLane } = globalThis.__ssProjectConfigTest;"
           : "export const { existsSync, readFileSync } = globalThis.__ssProjectConfigTest;",
       }));
     },
@@ -223,7 +229,7 @@ try {
   const paints = [];
   const editor = {
     document: {
-      uri: Uri.file("/guide/slide.ss"), languageId: "ss-slide", lineCount: 2,
+      uri: Uri.file("/guide/slide.ss"), languageId: "ss-slide", version: 1, lineCount: 2,
       lineAt(index) { return { text: index === 0 ? "page demo" : "end", range: { line: index } }; },
     },
     setDecorations(decoration, ranges) {
@@ -235,7 +241,8 @@ try {
   window.visibleTextEditors = [editor];
   let releaseGuide;
   config.setProjectSettingsProvider(() => new Promise((resolve) => { releaseGuide = resolve; }));
-  const disposedGuide = new config.PageGuideDecorations();
+  const pageRanges = async () => ({ version: 1, pages: [{ startLine: 0, endLine: 1 }] });
+  const disposedGuide = new config.PageGuideDecorations(pageRanges);
   const delayedPaint = disposedGuide.refreshEditor(editor);
   disposedGuide.dispose();
   releaseGuide(source("/guide/slide.ss", 140));
@@ -244,7 +251,7 @@ try {
   assert.equal(paints.length, 0);
 
   config.setProjectSettingsProvider(async () => source("/guide/slide.ss", 140));
-  const guide = new config.PageGuideDecorations();
+  const guide = new config.PageGuideDecorations(pageRanges);
   await guide.refreshEditor(editor);
   assert.ok(paints.some((ranges) => ranges.length > 0), "loaded settings did not paint page guides");
   paints.length = 0;
