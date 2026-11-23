@@ -97,6 +97,10 @@ pub fn register(suite: Suite, modules: project.ProjectModules, build_options: *S
     const progress_test_step = b.step("test-progress", "Run focused progress display tests");
     progress_test_step.dependOn(&run_progress_spec_tests.step);
     progress_test_step.dependOn(&progress_runtime_spec.step);
+    const package_spec_mod = createModule(ctx, "tests/project/packages/spec_tests.zig", &.{
+        import("project", modules.project),
+    }, null);
+    _ = suite.add(package_spec_mod, .{ .name = "test-package-manifest", .description = "Check package manifests, lock validation and allocation ownership" });
     const project_spec_mod = createModule(ctx, "tests/project/config/spec_tests.zig", &.{
         import("project", modules.project),
         import("utils", modules.utils),

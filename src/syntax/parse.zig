@@ -1105,7 +1105,7 @@ const Parser = struct {
 
     fn defaultImportAlias(self: *Parser, spec: []const u8) ![]const u8 {
         const base = names.defaultImportAlias(spec);
-        if (!isValidIdentifier(base) or isReservedKeyword(base)) return self.fail(error.InvalidImportAlias);
+        if (!source.isValidIdentifier(base)) return self.fail(error.InvalidImportAlias);
         return self.allocator.dupe(u8, base);
     }
 
@@ -2674,40 +2674,11 @@ const Parser = struct {
         }
         const base = self.source[start..ident_end];
         const ident = self.source[start..self.pos];
-        if (isReservedKeyword(base)) return self.fail(error.ReservedIdentifier);
+        if (source.isReservedIdentifier(base)) return self.fail(error.ReservedIdentifier);
         return .{
             .text = try self.allocator.dupe(u8, ident),
             .span = .{ .start = start, .end = self.pos },
         };
-    }
-
-    fn isValidIdentifier(ident: []const u8) bool {
-        if (ident.len == 0 or !source.isIdentifierStart(ident[0])) return false;
-        for (ident[1..]) |ch| {
-            if (!source.isIdentifierContinue(ch)) return false;
-        }
-        return true;
-    }
-
-    fn isReservedKeyword(ident: []const u8) bool {
-        const reserved = [_][]const u8{
-            "import",
-            "fn",
-            "const",
-            "type",
-            "enum",
-            "if",
-            "else",
-            "end",
-            "return",
-            "let",
-            "as",
-            "with",
-        };
-        inline for (reserved) |keyword| {
-            if (std.mem.eql(u8, ident, keyword)) return true;
-        }
-        return false;
     }
 
     fn expectKeyword(self: *Parser, keyword: []const u8) !void {

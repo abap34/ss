@@ -7,17 +7,18 @@ pub const Input = struct {
     observation: ?u64 = null,
 };
 
-// Evaluation and page preparation record inputs before parallel rendering starts.
+// Readers retain the first observation of each file used by an operation.
 pub const FileInputs = struct {
     pub const Observer = struct {
         context: *anyopaque,
         capture: *const fn (*anyopaque, []const u8, Kind) anyerror!u64,
+        contents: ?*const fn (*anyopaque, []const u8) u64 = null,
     };
 
     observer: ?Observer = null,
     observations_complete: bool = true,
     allocator: std.mem.Allocator,
-    paths: std.StringHashMap(Kind),
+    paths: std.StringHashMap(usize),
     ordered: std.ArrayList(Input) = .empty,
     sorted: bool = true,
 
@@ -50,9 +51,23 @@ pub const FileInputs = struct {
         }
         const observation = if (self.observer) |observer| try observer.capture(observer.context, resolved, kind) else null;
         try self.ordered.ensureUnusedCapacity(self.allocator, 1);
-        try self.paths.put(resolved, kind);
+        try self.paths.put(resolved, self.ordered.items.len);
         self.ordered.appendAssumeCapacity(.{ .path = resolved, .kind = kind, .observation = observation });
         self.sorted = false;
+    }
+
+    /// Validate the observation against the bytes actually consumed by a reader.
+    pub fn recordContents(self: *FileInputs, path: []const u8, bytes: []const u8) !void {
+        try self.record(".", path, .file);
+        const observer = self.observer orelse return;
+        const contents = observer.contents orelse return;
+        const index = self.paths.get(path) orelse blk: {
+            const resolved = try std.fs.path.resolve(self.allocator, &.{ ".", path });
+            defer self.allocator.free(resolved);
+            break :blk self.paths.get(resolved).?;
+        };
+        const expected = contents(observer.context, bytes);
+        if (self.ordered.items[index].observation != expected) self.observations_complete = false;
     }
 
     /// Discard inputs appended since `length`, before the next call to items().
@@ -68,6 +83,7 @@ pub const FileInputs = struct {
     pub fn items(self: *FileInputs) []const Input {
         if (!self.sorted) {
             std.sort.heap(Input, self.ordered.items, {}, lessThan);
+            for (self.ordered.items, 0..) |input, i| self.paths.getPtr(input.path).?.* = i;
             self.sorted = true;
         }
         return self.ordered.items;

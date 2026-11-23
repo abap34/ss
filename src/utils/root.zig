@@ -4,6 +4,7 @@ pub const json = @import("json.zig");
 pub const err = @import("error.zig");
 pub const source = @import("source.zig");
 pub const fs = @import("fs.zig");
+pub const process = @import("process.zig");
 pub const file_inputs = @import("file_inputs.zig");
 pub const FileInputs = file_inputs.FileInputs;
 pub const color = @import("color.zig");
