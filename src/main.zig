@@ -8,6 +8,7 @@ const lsp = @import("lsp.zig");
 const pdf = @import("render/pdf.zig");
 const render_compiler = @import("render/compile.zig");
 const cli_help = @import("cli/help.zig");
+const cli_packages = @import("cli/packages.zig");
 const cli_present = @import("cli/present.zig");
 const cli_completion = @import("cli/completion.zig");
 const cli_expand = @import("cli/expand.zig");
@@ -1411,6 +1412,18 @@ fn runCommand(io: std.Io, allocator: std.mem.Allocator, environ: std.process.Env
             return;
         }
         version();
+        return;
+    }
+
+    if (std.mem.eql(u8, cmd, "add") or std.mem.eql(u8, cmd, "fetch") or std.mem.eql(u8, cmd, "update")) {
+        if (wantsCommandHelp(args[2..])) {
+            _ = cli_help.command(.stdout, cmd);
+            return;
+        }
+        cli_packages.run(allocator, io, environ, cmd, args[2..]) catch |err| {
+            if (cli_packages.errorMessage(err)) |message| return failCli("{s}", .{message});
+            return err;
+        };
         return;
     }
 

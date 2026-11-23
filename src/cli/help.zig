@@ -24,6 +24,9 @@ pub fn general(output: Output) void {
         \\{s}Project:{s}
         \\  {s}ss init [dir]{s}           Create a project
         \\  {s}ss doctor{s}               Check local setup
+        \\  {s}ss add --git URL{s}        Add a Git package
+        \\  {s}ss fetch{s}                Fetch locked packages
+        \\  {s}ss update [NAME]{s}        Update Git packages
         \\
     , .{
         s.heading, s.reset,
@@ -31,8 +34,10 @@ pub fn general(output: Output) void {
         s.heading, s.reset,
         s.command, s.reset,
         s.command, s.reset,
+        s.command, s.reset,
+        s.command, s.reset,
+        s.command, s.reset,
     });
-    writeAll(output, "\n");
     outputPrint(output,
         \\{s}Build:{s}
         \\  {s}ss render [input.ss]{s}    Write PDF or HTML
@@ -79,6 +84,27 @@ pub fn general(output: Output) void {
 }
 
 pub fn command(output: Output, name: []const u8) bool {
+    if (std.mem.eql(u8, name, "add") or std.mem.eql(u8, name, "fetch") or std.mem.eql(u8, name, "update")) {
+        writeAll(output,
+            \\Usage:
+            \\  ss add --git URL [--tag TAG | --branch BRANCH | --rev COMMIT]
+            \\  ss fetch [--locked]
+            \\  ss update [NAME]
+            \\  All three commands accept --project FILE_OR_DIR.
+            \\
+            \\Add records a dependency in ss.toml, downloads it and writes ss.lock.
+            \\Fetch restores locked commits, resolving new or changed declarations.
+            \\Fetch --locked restores only and requires an up-to-date ss.lock.
+            \\Update refreshes a source specification everywhere it is used, or all sources.
+            \\Imports use pkg:NAME or pkg:NAME/module (without a file extension).
+            \\Rendering and the language server use fetched packages without networking.
+            \\Package repositories require [package] name = "NAME"; entry defaults to "lib.ss".
+            \\Add uses that name as the dependency key. Import aliases use `as` in source.
+            \\Use asset_path("assets/logo.svg") for paths relative to a library module.
+            \\
+        );
+        return true;
+    }
     if (std.mem.eql(u8, name, "expand")) {
         writeAll(output,
             \\Usage:
@@ -627,21 +653,26 @@ const bash_completion =
     \\# ss bash completion
     \\_ss()
     \\{
-    \\  local cur prev command
+    \\  local cur prev command candidate
     \\  COMPREPLY=()
     \\  cur="${COMP_WORDS[COMP_CWORD]}"
     \\  prev="${COMP_WORDS[COMP_CWORD-1]}"
     \\  command="${COMP_WORDS[1]}"
     \\
-    \\  local commands="init doctor render present dump expand watch debug cache lsp version completion help"
+    \\  local commands="init add fetch update doctor render present dump expand watch debug cache lsp version completion help"
     \\  local common_opts="help --help -h"
     \\  local diagnostic_opts="--diagnostic-level --warnings --quiet --measure-profile --profile --profile-buffer-kb"
     \\  local project_opts="--project --asset-base-dir --jobs --color $diagnostic_opts"
     \\  local render_opts="$project_opts --output --format --diagnostics-json"
     \\
     \\  case "$prev" in
-    \\    --project|--asset-base-dir|--output|--diagnostics-json|--entry|--profile)
-    \\      COMPREPLY=( $(compgen -f -- "$cur") )
+    \\    --project|--asset-base-dir|--output|--diagnostics-json|--entry|--profile|--git)
+    \\      while IFS= read -r candidate; do
+    \\        COMPREPLY+=("$candidate")
+    \\      done < <(compgen -f -- "$cur")
+    \\      return 0
+    \\      ;;
+    \\    --tag|--branch|--rev)
     \\      return 0
     \\      ;;
     \\    --jobs|--interval-ms|--profile-buffer-kb)
@@ -672,6 +703,21 @@ const bash_completion =
     \\  fi
     \\
     \\  case "$command" in
+    \\    add)
+    \\      local package_opts="--git --tag --branch --rev --project $common_opts"
+    \\      for candidate in "${COMP_WORDS[@]}"; do
+    \\        case "$candidate" in
+    \\          --tag|--branch|--rev) package_opts="--git --project $common_opts"; break ;;
+    \\        esac
+    \\      done
+    \\      COMPREPLY=( $(compgen -W "$package_opts" -- "$cur") )
+    \\      ;;
+    \\    fetch)
+    \\      COMPREPLY=( $(compgen -W "--locked --project $common_opts" -- "$cur") )
+    \\      ;;
+    \\    update)
+    \\      COMPREPLY=( $(compgen -W "--project $common_opts" -- "$cur") )
+    \\      ;;
     \\    init)
     \\      COMPREPLY=( $(compgen -W "$common_opts --entry --force" -- "$cur") )
     \\      ;;
@@ -737,6 +783,9 @@ const zsh_completion =
     \\_ss() {
     \\  local -a commands
     \\  commands=(
+    \\    'add:Add a Git package'
+    \\    'fetch:Fetch locked packages'
+    \\    'update:Update Git packages'
     \\    'init:Create a project'
     \\    'doctor:Check local setup'
     \\    'render:Write PDF or HTML'
@@ -763,6 +812,15 @@ const zsh_completion =
     \\  fi
     \\
     \\  case $words[2] in
+    \\    add)
+    \\      _arguments "--git[Git repository]:URL:_files" "(--branch --rev)--tag[tag]:tag:" "(--tag --rev)--branch[branch]:branch:" "(--tag --branch)--rev[commit]:commit:" "--project[project file or directory]:path:_files" $common_opts
+    \\      ;;
+    \\    fetch)
+    \\      _arguments "--locked[require an up-to-date lockfile]" "--project[project file or directory]:path:_files" $common_opts
+    \\      ;;
+    \\    update)
+    \\      _arguments "2::package name:" "--project[project file or directory]:path:_files" $common_opts
+    \\      ;;
     \\    init)
     \\      _arguments '*::arg:->args' '--entry[entry file]:file:_files' '--force[overwrite generated files]' $common_opts
     \\      ;;
@@ -810,6 +868,13 @@ const zsh_completion =
 const fish_completion =
     \\# ss fish completion
     \\complete -c ss -f
+    \\complete -c ss -n '__fish_use_subcommand' -a 'add fetch update' -d 'Manage Git packages'
+    \\complete -c ss -n '__fish_seen_subcommand_from add' -l git -r -F -d 'Git repository URL'
+    \\complete -c ss -n '__fish_seen_subcommand_from add; and not __fish_seen_argument -l tag -l branch -l rev' -l tag -x -d 'Git tag'
+    \\complete -c ss -n '__fish_seen_subcommand_from add; and not __fish_seen_argument -l tag -l branch -l rev' -l branch -x -d 'Git branch'
+    \\complete -c ss -n '__fish_seen_subcommand_from add; and not __fish_seen_argument -l tag -l branch -l rev' -l rev -x -d 'Git commit'
+    \\complete -c ss -n '__fish_seen_subcommand_from fetch' -l locked -d 'Require an up-to-date lockfile'
+    \\complete -c ss -n '__fish_seen_subcommand_from add fetch update' -l project -r -F -d 'Project file or directory'
     \\complete -c ss -n '__fish_use_subcommand' -a init -d 'Create a project'
     \\complete -c ss -n '__fish_use_subcommand' -a doctor -d 'Check local setup'
     \\complete -c ss -n '__fish_use_subcommand' -a render -d 'Write PDF or HTML'
@@ -854,6 +919,6 @@ const fish_completion =
     \\complete -c ss -n '__fish_seen_subcommand_from cache' -a 'project tree-sitter help' -d 'Cache target'
     \\complete -c ss -n '__fish_seen_subcommand_from cache; and __fish_seen_subcommand_from project; and __fish_seen_subcommand_from clear' -l force -d 'Clear resources held by WYSIWYG after rendering finishes'
     \\complete -c ss -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish help' -d 'Shell'
-    \\complete -c ss -n '__fish_seen_subcommand_from help' -a 'init doctor render present dump expand watch debug cache lsp version completion' -d 'Command'
+    \\complete -c ss -n '__fish_seen_subcommand_from help' -a 'init add fetch update doctor render present dump expand watch debug cache lsp version completion' -d 'Command'
     \\
 ;
