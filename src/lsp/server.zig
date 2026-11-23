@@ -530,6 +530,19 @@ const Server = struct {
         return false;
     }
 
+    /// Physical source queries read documents in protocol order. Subsequent
+    /// edits may cancel the client's request, but do not invalidate this result
+    /// through the analysis revision shared by all open documents.
+    fn respondSourceResult(self: *Server, id: ?JsonValue, result_json: []const u8) !void {
+        if (self.active_request) |request| {
+            if (request.canceled.load(.acquire)) {
+                try respondError(self.allocator, id, -32800, "request cancelled");
+                return;
+            }
+        }
+        try respond(self.allocator, id, result_json);
+    }
+
     fn respondCanceled(self: *Server, id_json: []const u8) !void {
         switch (self.workStatus()) {
             .current, .canceled => try protocol.respondErrorId(self.allocator, id_json, -32800, "request cancelled"),
@@ -1274,6 +1287,23 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         return;
     }
 
+    if (std.mem.eql(u8, method, "textDocument/codeLens") or std.mem.eql(u8, method, "ss/pageRanges")) {
+        var provider = analysisProvider(server);
+        var ctx = feature_symbols.Context{
+            .allocator = server.allocator,
+            .io = server.io,
+            .provider = &provider,
+            .documents = &server.documents,
+        };
+        const result = if (std.mem.eql(u8, method, "textDocument/codeLens"))
+            try feature_symbols.codeLenses(&ctx, params)
+        else
+            try feature_symbols.pageRanges(&ctx, params);
+        defer server.allocator.free(result);
+        try server.respondSourceResult(id, result);
+        return;
+    }
+
     if (id != null) try server.checkCanceled();
 
     if (std.mem.eql(u8, method, "textDocument/completion")) {
@@ -1313,7 +1343,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         _ = try server.respondResult(id, result);
         return;
     }
-    if (std.mem.eql(u8, method, "textDocument/documentSymbol") or std.mem.eql(u8, method, "textDocument/codeLens") or std.mem.eql(u8, method, "ss/pageRanges")) {
+    if (std.mem.eql(u8, method, "textDocument/documentSymbol")) {
         var provider = analysisProvider(server);
         var ctx = feature_symbols.Context{
             .allocator = server.allocator,
@@ -1321,12 +1351,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
             .provider = &provider,
             .documents = &server.documents,
         };
-        const result = if (std.mem.eql(u8, method, "textDocument/codeLens"))
-            try feature_symbols.codeLenses(&ctx, params)
-        else if (std.mem.eql(u8, method, "ss/pageRanges"))
-            try feature_symbols.pageRanges(&ctx, params)
-        else
-            try feature_symbols.result(&ctx, params);
+        const result = try feature_symbols.result(&ctx, params);
         defer server.allocator.free(result);
         _ = try server.respondResult(id, result);
         return;

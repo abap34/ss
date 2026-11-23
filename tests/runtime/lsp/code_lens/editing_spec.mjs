@@ -91,6 +91,16 @@ try {
     await assertLenses(client, removed, version, "deleted page", ["Before"]);
     client.changeDocument({ uri, text: source, version: ++version });
     await assertLenses(client, source, version, "restored page");
+    // Pipeline edits and requests instead of waiting after each edit. A newer
+    // ingress revision must not turn a physical page list into ContentModified.
+    const pending = [];
+    for (let i = 0; i < 40; i++) {
+      const text = source.replace('text!("Before")', i % 2 ? 'text!("Changed")' : "let item =");
+      client.changeDocument({ uri, text, version: ++version });
+      pending.push(assertLenses(client, text, version, `overlapping edit ${i}`));
+      client.notify("workspace/didChangeWatchedFiles", { changes: [{ uri, type: 2 }] });
+    }
+    await Promise.all(pending);
     await client.close();
     const semanticBuilds = Number(client.stderr.match(/analysis static semantics: (\d+) calls/)?.[1] ?? 0);
     assert.equal(semanticBuilds, 1, `CodeLens requests triggered semantic analysis\n${client.stderr}`);

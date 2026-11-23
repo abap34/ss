@@ -23,10 +23,11 @@ try {
     assert.deepEqual((await ready).params.diagnostics, []);
     let version = 1;
     async function check(source, expected, label) {
-      client.changeDocument({ uri, text: source, version: ++version });
+      const revision = ++version;
+      client.changeDocument({ uri, text: source, version: revision });
       const result = await client.request("ss/pageRanges", query);
       assert.deepEqual(result, {
-        version, pages: expected?.map(([startLine, endLine]) => ({ startLine, endLine })) ?? null,
+        version: revision, pages: expected?.map(([startLine, endLine]) => ({ startLine, endLine })) ?? null,
       }, label);
       cases++;
     }
@@ -69,6 +70,12 @@ try {
     await check(initial, [[1, 3]], "repairing syntax restores authoritative boundaries");
     await check('const example: String = <<\npage Fake\nend\n>>\n', [], "valid source without pages clears decorations");
     await check('', [], "an empty document has no pages");
+    const pending = [];
+    for (let i = 0; i < 20; i++) {
+      pending.push(check(initial, [[1, 3]], `overlapping edit ${i}`));
+      client.notify("workspace/didChangeWatchedFiles", { changes: [{ uri, type: 2 }] });
+    }
+    await Promise.all(pending);
     await client.close();
     const builds = Number(client.stderr.match(/analysis static semantics: (\d+) calls/)?.[1] ?? 0);
     assert.equal(builds, 1, `page boundary requests triggered semantic analysis\n${client.stderr}`);

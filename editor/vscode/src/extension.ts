@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { LanguageClient, LanguageClientOptions, Middleware, ServerOptions, Trace } from "vscode-languageclient/node";
 import { PageGuideDecorations, PageRangesResponse } from "./pageGuide";
+import { provideCurrentCodeLenses } from "./codeLens";
 import { initializeProjectSettings, onDidChangeProjectSettings, projectSettings, ProjectSettingsResponse, setProjectSettingsProvider } from "./projectConfig";
 import { EditorController } from "./editor/controller";
 import { PageSourceTarget } from "./editor/protocol";
@@ -172,6 +173,7 @@ function applyTraceSetting(active: LanguageClient): void {
 
 function createMiddleware(): Middleware {
   return {
+    provideCodeLenses: provideCurrentCodeLenses,
     provideCompletionItem: async (document, position, context, token, next) =>
       (await featureEnabled(document, "completion", token)) ? next(document, position, context, token) : undefined,
     provideHover: async (document, position, token, next) =>

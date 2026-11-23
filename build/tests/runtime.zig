@@ -106,6 +106,10 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
     test_step.dependOn(&vscode_tests.step);
     addFocusedTestStep(b, "test-vscode", "Run VS Code extension tests", &vscode_tests.step);
 
+    const code_lens_tests = steps.node(b, &suite.checks.node.step, "tests/editor/vscode/code_lens/spec.mjs", null);
+    code_lens_tests.step.dependOn(&suite.checks.vscode_packages.step);
+    addFocusedTestStep(b, "test-editor-code-lens", "Check CodeLens request versions and cancellation", &code_lens_tests.step);
+
     const project_settings_tests = steps.node(b, &suite.checks.node.step, "tests/editor/vscode/project_config/spec.mjs", null);
     project_settings_tests.step.dependOn(&suite.checks.vscode_packages.step);
     addFocusedTestStep(b, "test-editor-project-settings", "Run focused editor project settings cache tests", &project_settings_tests.step);
