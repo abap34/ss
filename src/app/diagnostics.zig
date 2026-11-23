@@ -47,8 +47,9 @@ pub fn printImportFailureDiagnostic(
     module: *const ast.Module,
     overlay: ?*const module_loader.SourceOverlay,
     diagnostics: *const module_loader.LoadDiagnostics,
+    project_file: ?[]const u8,
 ) !void {
-    const span = (try module_loader.importFailureSpan(allocator, io, import_base_dir, module, overlay, diagnostics)) orelse return;
+    const span = (try module_loader.importFailureSpan(allocator, io, import_base_dir, module, overlay, diagnostics, project_file)) orelse return;
     const location = ast.SourceFile.locate(module.source_files.items, path, source, span);
     error_report.print(.{
         .path = location.path,

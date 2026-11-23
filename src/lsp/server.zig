@@ -678,6 +678,7 @@ const Server = struct {
         var analysis_snapshot = try analysis.snapshot.build(self.allocator, &sources, entry_path, asset_base_dir, .{
             .generation = self.documents.generation,
             .project = .{
+                .project_file = if (config) |cfg| cfg.path else null,
                 .highlight = highlight,
                 .lsp = if (config) |cfg| cfg.lsp else .{},
                 .wysiwyg = if (config) |cfg| cfg.wysiwyg else .{},
@@ -1244,6 +1245,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
                 defer server.allocator.free(path);
                 if (server.documents.sourceForPath(path) != null) continue;
                 if (std.mem.eql(u8, std.fs.path.basename(path), "ss.toml") or
+                    std.mem.eql(u8, std.fs.path.basename(path), "ss.lock") or
                     std.ascii.eqlIgnoreCase(std.fs.path.extension(path), ".ss"))
                 {
                     relevant = true;

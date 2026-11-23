@@ -345,6 +345,7 @@ fn runOnce(io: std.Io, backing_allocator: std.mem.Allocator, options: Options, e
         .highlight_languages = options.highlight_languages,
     };
     const source = app.SourceRequest{
+        .project_file = options.project_file,
         .input_path = options.input_path,
         .asset_base_dir = options.asset_base_dir,
         .layout_jobs = options.jobs,
@@ -522,7 +523,7 @@ fn mixModuleDependencyStats(
         while (key_it.next()) |key| allocator.free(key.*);
         visited.deinit();
     }
-    try mixModuleImportGraph(io, allocator, hash, options.input_path, .input_file, &visited, context, imports);
+    try mixModuleImportGraph(io, allocator, hash, options.input_path, options.project_file, .input_file, &visited, context, imports);
 }
 
 fn mixModuleImportGraph(
@@ -530,6 +531,7 @@ fn mixModuleImportGraph(
     allocator: std.mem.Allocator,
     hash: *u64,
     module_path: []const u8,
+    project_file: ?[]const u8,
     target: FingerprintTarget,
     visited: *std.StringHashMap(void),
     context: *FingerprintContext,
@@ -546,13 +548,13 @@ fn mixModuleImportGraph(
 
     mixBytes(hash, resolved_module_path);
     const stat = try mixStatFile(io, hash, resolved_module_path, target, context) orelse return;
-    const dependencies = imports.read(io, allocator, resolved_module_path, stat) catch |err| {
+    const dependencies = imports.read(io, allocator, resolved_module_path, stat, project_file) catch |err| {
         if (err == error.FileNotFound) return;
         try context.record(target, resolved_module_path, err);
         return err;
     };
     for (dependencies) |import_path| {
-        try mixModuleImportGraph(io, allocator, hash, import_path, .imported_source, visited, context, imports);
+        try mixModuleImportGraph(io, allocator, hash, import_path, project_file, .imported_source, visited, context, imports);
     }
 }
 

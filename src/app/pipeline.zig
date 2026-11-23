@@ -102,6 +102,7 @@ pub fn analyzeFile(
     var index = analysis.loadModuleIndex(allocator, io, import_base_dir, parsed.module, .{
         .overlay = request.overlay,
         .file_inputs = request.file_inputs,
+        .project_file = request.project_file,
         .diagnostics = &load_diagnostics,
         .print_diagnostics = false,
         .embedded_cache = request.embedded_cache,
@@ -111,7 +112,7 @@ pub fn analyzeFile(
         app_diagnostics.printLoadDiagnostics(&load_diagnostics);
         if (err == error.DiagnosticsFailed) {
             if (load_diagnostics.items.items.len != 0) {
-                try app_diagnostics.printImportFailureDiagnostic(allocator, io, request.input_path, source, import_base_dir, &parsed.module, request.overlay, &load_diagnostics);
+                try app_diagnostics.printImportFailureDiagnostic(allocator, io, request.input_path, source, import_base_dir, &parsed.module, request.overlay, &load_diagnostics, request.project_file);
             }
             return error.DiagnosticsFailed;
         } else if (err == error.UnknownImport) {
@@ -334,7 +335,7 @@ fn printUnknownImportDiagnostic(
     program: ast.Module,
 ) !void {
     const import_base_dir = std.fs.path.dirname(request.input_path) orelse ".";
-    var report = try module_loader.findUnknownImportReport(allocator, io, import_base_dir, program, request.overlay) orelse return error.UnknownImport;
+    var report = try module_loader.findUnknownImportReport(allocator, io, import_base_dir, program, request.overlay, request.project_file) orelse return error.UnknownImport;
     defer report.deinit(allocator);
     const location = ast.SourceFile.locate(program.source_files.items, request.input_path, source, report.span);
     error_report.print(.{
@@ -355,7 +356,7 @@ fn printImportReadFailureDiagnostic(
     err: anyerror,
 ) !void {
     const import_base_dir = std.fs.path.dirname(request.input_path) orelse ".";
-    var report = try module_loader.findImportReadFailureReport(allocator, io, import_base_dir, program, request.overlay, err) orelse return err;
+    var report = try module_loader.findImportReadFailureReport(allocator, io, import_base_dir, program, request.overlay, err, request.project_file) orelse return err;
     defer report.deinit(allocator);
     const location = ast.SourceFile.locate(program.source_files.items, request.input_path, source, report.span);
     error_report.print(.{
