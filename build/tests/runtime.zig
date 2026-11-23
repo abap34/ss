@@ -15,6 +15,8 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
     const b = suite.ctx.b;
     const test_step = suite.all;
     const specs = [_]Spec{
+        .{ .path = "tests/runtime/packages/graph_spec.mjs", .name = "test-package-graph", .description = "Check graph-wide Git selections, package identity, names and locked restoration" },
+        .{ .path = "tests/runtime/packages/spec.mjs", .name = "test-git-packages", .description = "Check Git dependency commands, offline package imports and packaged assets" },
         .{ .path = "tests/runtime/stdlib/spec.mjs", .name = "test-stdlib", .description = "Check public standard-library construction and placement contracts" },
         .{ .path = "tests/runtime/assets/constructors_spec.mjs", .name = "test-asset-constructors", .description = "Check immutable asset constructors, reuse, styles, and placement validation" },
         .{ .path = "tests/runtime/assets/typed_icon_spec.mjs", .name = "test-typed-icon", .description = "Check immutable icon inputs, catalog validation, composition, and rendering" },
@@ -34,7 +36,7 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
         .{ .path = "tests/runtime/document/typed_page_numbers_spec.mjs", .name = "test-typed-document", .description = "Check typed page numbers, contents, and references in a multi-page document" },
         .{ .path = "tests/runtime/cli_diagnostics_runtime_spec.mjs" },
         .{ .path = "tests/runtime/cli/init/spec.mjs", .name = "test-init", .description = "Check generated project content, imports, customization, and overwrite protection" },
-        .{ .path = "tests/runtime/completion_runtime_spec.mjs" },
+        .{ .path = "tests/runtime/completion_runtime_spec.mjs", .name = "test-shell-completion", .description = "Check shell completion commands, options, argument values and installation" },
         .{ .path = "tests/runtime/debug_runtime_spec.mjs" },
         .{ .path = "tests/runtime/doctor_runtime_spec.mjs" },
         .{ .path = "tests/runtime/editor/diagnostics/spec.mjs" },
