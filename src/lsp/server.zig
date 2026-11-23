@@ -210,8 +210,13 @@ const Server = struct {
         try self.acceptAnalysisDiagnostics(&diagnostics);
     }
 
-    fn analysisReusable(self: *Server, snapshot: *AnalysisSnapshot, watched_revision: u64) bool {
-        if (watched_revision != self.watched_files_revision) return false;
+    fn sourceInputsMatch(self: *Server, snapshot: *const AnalysisSnapshot) !bool {
+        const inputs = if (snapshot.source_inputs) |*value| value else return true;
+        return editor_reuse.inputs.matches(inputs, &self.render_resource_cache);
+    }
+
+    fn analysisReusable(self: *Server, snapshot: *AnalysisSnapshot, watched_revision: u64) !bool {
+        if (watched_revision != self.watched_files_revision or !try self.sourceInputsMatch(snapshot)) return false;
         if (snapshot.generation == self.documents.generation) return true;
         // Failed imports may become available through a newly opened overlay.
         if (snapshot.diagnostics.hasErrors()) return false;
@@ -232,7 +237,7 @@ const Server = struct {
             if (self.analysis.?.coversPath(path)) continue;
             var covered = false;
             for (self.other_analyses.entries.items) |*entry| {
-                if (entry.snapshot.coversPath(path) and self.analysisReusable(&entry.snapshot, entry.watched_revision)) {
+                if (entry.snapshot.coversPath(path) and try self.analysisReusable(&entry.snapshot, entry.watched_revision)) {
                     covered = true;
                     break;
                 }
@@ -468,7 +473,9 @@ const Server = struct {
             self.documents.generation == generated.base_generation + 1;
     }
 
-    fn generatedEditRequiresFullRebuild(self: *const Server) bool {
+    fn generatedEditRequiresFullRebuild(self: *Server) !bool {
+        const snapshot = if (self.analysis) |*value| value else return true;
+        if (!try self.sourceInputsMatch(snapshot)) return true;
         const generated = if (self.generated_edit) |*value| value else return true;
         return generated.watched_files_revision != self.watched_files_revision or
             self.pending_rebuild_path != null;
@@ -578,14 +585,18 @@ const Server = struct {
         defer self.allocator.free(changed_abs);
         const changed_dir = std.fs.path.dirname(changed_abs) orelse ".";
 
-        const project_path = try project.discoverPath(self.allocator, changed_dir);
+        var source_inputs = utils.FileInputs.init(self.allocator);
+        var owns_source_inputs = true;
+        defer if (owns_source_inputs) source_inputs.deinit();
+        source_inputs.observer = editor_reuse.inputs.observer(&self.render_resource_cache);
+        const project_path = try project.discoverPathWithInputs(self.allocator, changed_dir, &source_inputs);
         defer if (project_path) |path| self.allocator.free(path);
         try self.checkCanceled();
 
         var config: ?project.Config = null;
         var config_error: ?anyerror = null;
         if (project_path) |path| {
-            config = project.loadFile(self.allocator, self.io, path) catch |err| blk: {
+            config = project.loadFileWithInputs(self.allocator, self.io, path, &source_inputs) catch |err| blk: {
                 config_error = err;
                 break :blk null;
             };
@@ -624,11 +635,11 @@ const Server = struct {
         if (layout_build == .semantic) {
             if (self.analysis) |*current| {
                 if (std.mem.eql(u8, current.project.entry_path, selected_entry) and
-                    self.analysisReusable(current, self.analysis_watched_revision) and !current.coversPath(changed_abs)) selected_entry = changed_abs;
+                    try self.analysisReusable(current, self.analysis_watched_revision) and !current.coversPath(changed_abs)) selected_entry = changed_abs;
             }
             for (self.other_analyses.entries.items) |*entry| {
                 if (std.mem.eql(u8, entry.snapshot.project.entry_path, selected_entry) and
-                    self.analysisReusable(&entry.snapshot, entry.watched_revision) and !entry.snapshot.coversPath(changed_abs))
+                    try self.analysisReusable(&entry.snapshot, entry.watched_revision) and !entry.snapshot.coversPath(changed_abs))
                 {
                     selected_entry = changed_abs;
                     break;
@@ -642,6 +653,7 @@ const Server = struct {
 
         var sources = analysis.snapshot.SourceSet.init(self.allocator, self.io);
         defer sources.deinit();
+        sources.file_inputs = &source_inputs;
         try self.documents.fillOverlay(&sources.overlay);
         if (source_override) |override| try sources.put(override.path, override.source);
         try self.checkCanceled();
@@ -656,7 +668,7 @@ const Server = struct {
         if (source_override == null) {
             for (self.other_analyses.entries.items, 0..) |*entry, index| {
                 if (!std.mem.eql(u8, entry.snapshot.project.entry_path, entry_path) or
-                    !self.analysisReusable(&entry.snapshot, entry.watched_revision)) continue;
+                    !try self.analysisReusable(&entry.snapshot, entry.watched_revision)) continue;
                 var retained = self.other_analyses.entries.swapRemove(index);
                 defer retained.diagnostics.deinit();
                 errdefer retained.snapshot.deinit();
@@ -699,6 +711,9 @@ const Server = struct {
             .retain_evaluated_layout_state = include_layout and self.wysiwyg_paths.count() != 0,
         });
         errdefer analysis_snapshot.deinit();
+        source_inputs.observer = null;
+        analysis_snapshot.source_inputs = source_inputs;
+        owns_source_inputs = false;
         if (config_error) |err| try self.addProjectConfigDiagnostic(&analysis_snapshot.diagnostics, project_path.?, err);
         try diagnostics.addAnalysisBag(&analysis_snapshot.diagnostics);
         return analysis_snapshot;
@@ -826,10 +841,10 @@ fn resolveAnalysisForFeature(context: *anyopaque, path: []const u8, options: ?an
     const server: *Server = @ptrCast(@alignCast(context));
     try server.checkCanceled();
     if (server.analysis) |*snapshot| {
-        if (snapshot.coversPath(path) and server.analysisReusable(snapshot, server.analysis_watched_revision)) return snapshot;
+        if (snapshot.coversPath(path) and try server.analysisReusable(snapshot, server.analysis_watched_revision)) return snapshot;
     }
     for (server.other_analyses.entries.items) |*entry| {
-        if (entry.snapshot.coversPath(path) and server.analysisReusable(&entry.snapshot, entry.watched_revision)) return &entry.snapshot;
+        if (entry.snapshot.coversPath(path) and try server.analysisReusable(&entry.snapshot, entry.watched_revision)) return &entry.snapshot;
     }
     const previous_budget = server.query_budget;
     defer server.query_budget = previous_budget;
@@ -1201,7 +1216,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         try server.clearChangedDocumentDiagnostics(uri);
         if (server.generatedEditMatches(path)) {
             defer server.clearGeneratedEdit();
-            if (server.generatedEditRequiresFullRebuild()) {
+            if (try server.generatedEditRequiresFullRebuild()) {
                 try server.scheduleRebuild(path);
             } else {
                 if (try server.tryApplyGeneratedEdit(path)) return;
@@ -1451,6 +1466,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
             if (flushed_pending) try server.flushPendingRebuild(.required);
             if (server.analysis == null or
                 !server.analysis.?.coversPath(path) or
+                !try server.analysisReusable(&server.analysis.?, server.analysis_watched_revision) or
                 server.analysis_revision != server.active_revision or
                 (!flushed_pending and (server.analysis.?.layout_output == null or
                     server.analysis.?.layout_output.?.editor == null)) or
@@ -1462,6 +1478,12 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
             }
         } else if (server.pending_rebuild_path != null) {
             try server.flushPendingRebuild(server.pendingLayoutBuildMode());
+        } else if (server.analysis) |*snapshot| {
+            if (!try server.sourceInputsMatch(snapshot)) {
+                const entry = try server.allocator.dupe(u8, snapshot.project.entry_path);
+                defer server.allocator.free(entry);
+                try server.rebuildEditorImmediately(entry);
+            }
         }
         var provider = analysisProvider(server);
         var ctx = feature_editor.Context{

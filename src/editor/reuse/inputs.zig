@@ -3,7 +3,7 @@ const utils = @import("utils");
 const resources = @import("render_resources");
 
 pub fn observer(cache: *resources.SourceCache) utils.FileInputs.Observer {
-    return .{ .context = cache, .capture = capture };
+    return .{ .context = cache, .capture = capture, .contents = contents };
 }
 
 fn capture(context: *anyopaque, path: []const u8, kind: utils.file_inputs.Kind) !u64 {
@@ -16,6 +16,10 @@ fn capture(context: *anyopaque, path: []const u8, kind: utils.file_inputs.Kind) 
     return observation(fingerprint);
 }
 
+fn contents(_: *anyopaque, bytes: []const u8) u64 {
+    return observation(.{ .present = true, .digest = std.hash.Wyhash.hash(0, bytes) });
+}
+
 fn observation(fingerprint: resources.FileFingerprint) u64 {
     var hash = std.hash.Wyhash.init(0);
     hash.update(&.{@intFromBool(fingerprint.present)});
@@ -26,15 +30,7 @@ fn observation(fingerprint: resources.FileFingerprint) u64 {
 /// Modules were read before evaluation installed the observer. Compare their
 /// captured disk contents with the source actually parsed for this generation.
 pub fn recordSource(inputs: *utils.FileInputs, path: []const u8, source: []const u8) !void {
-    try inputs.record(".", path, .file);
-    const expected = observation(.{ .present = true, .digest = std.hash.Wyhash.hash(0, source) });
-    for (inputs.ordered.items) |input| {
-        if (std.mem.eql(u8, input.path, path)) {
-            if (input.observation != expected) inputs.observations_complete = false;
-            return;
-        }
-    }
-    inputs.observations_complete = false;
+    try inputs.recordContents(path, source);
 }
 
 pub fn matches(inputs: *const utils.FileInputs, cache: *resources.SourceCache) !bool {

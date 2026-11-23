@@ -15,6 +15,7 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
     const b = suite.ctx.b;
     const test_step = suite.all;
     const specs = [_]Spec{
+        .{ .path = "tests/runtime/packages/cache_spec.mjs", .name = "test-package-cache", .description = "Check analysis invalidation without file notifications after dependency changes" },
         .{ .path = "tests/runtime/packages/graph_spec.mjs", .name = "test-package-graph", .description = "Check graph-wide Git selections, package identity, names and locked restoration" },
         .{ .path = "tests/runtime/packages/spec.mjs", .name = "test-git-packages", .description = "Check Git dependency commands, offline package imports and packaged assets" },
         .{ .path = "tests/runtime/stdlib/spec.mjs", .name = "test-stdlib", .description = "Check public standard-library construction and placement contracts" },
@@ -68,7 +69,7 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
         .{ .path = "tests/runtime/lsp/diagnostics/multiple_spec.mjs", .name = "test-lsp-multiple-documents", .description = "Check diagnostics across independent entries and shared imports" },
         .{ .path = "tests/runtime/lsp/diagnostics/layout_spec.mjs" },
         .{ .path = "tests/runtime/lsp/generated_edit/spec.mjs" },
-        .{ .path = "tests/runtime/lsp/generated_edit/reuse_spec.mjs" },
+        .{ .path = "tests/runtime/lsp/generated_edit/reuse_spec.mjs", .name = "test-generated-edit-reuse", .description = "Check retained layout reuse and invalidation after generated edits" },
         .{ .path = "tests/runtime/lsp/completion/modules_spec.mjs", .name = "test-module-completion", .description = "Check incomplete qualified names and import path completion" },
         .{ .path = "tests/runtime/lsp/protocol/spec.mjs", .name = "test-lsp-protocol", .description = "Check malformed input and failed output shutdown" },
         .{ .path = "tests/runtime/lsp/render_cancellation/spec.mjs", .name = "test-lsp-render-cancellation", .description = "Check in-flight rendering cancellation and tool cleanup" },
