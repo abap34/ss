@@ -87,16 +87,18 @@ end
         snapshot = moved;
       }
       if (kind === "svg" || kind === "module") {
-        // Atomic replacement with equal length and restored mtime must invalidate.
+        const target = editingTarget(snapshot, "item");
+        const from = previewBounds(snapshot, target.node_id);
+        const edit = await requestEdit(client, uri, snapshot, target, from, { ...from, x: 60 }, "absolute", target.page_id);
+        assert(edit.status === "ok", `${kind}: edit preparation failed ${JSON.stringify(edit)}`);
+        // Replace an input after preparing the edit, before applying its source.
+        // Equal length and restored mtime must not permit retained-state reuse.
         const asset = path.join(project, kind === "svg" ? "asset.svg" : "parts.ss");
         const previous = await stat(asset);
         const replacement = `${asset}.replacement`;
         await writeFile(replacement, kind === "svg" ? svg.replace("#ff0000", "#0000ff") : moduleSource.replace("Module input", "Module other"));
         await utimes(replacement, previous.atime, previous.mtime);
         await rename(replacement, asset);
-        const target = editingTarget(snapshot, "item");
-        const from = previewBounds(snapshot, target.node_id);
-        const edit = await requestEdit(client, uri, snapshot, target, from, { ...from, x: 60 }, "absolute", target.page_id);
         source = applyProtocolEdits(source, edit.workspaceEdit.changes[uri]);
         client.changeDocument({ uri, version: ++version, text: source });
         const moved = await client.request("ss/editorSnapshot", { textDocument: { uri }, baseSnapshotId: snapshot.snapshot_id });

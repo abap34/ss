@@ -79,6 +79,7 @@ pub fn apply(ctx: Context, snapshot: *analysis.snapshot.AnalysisSnapshot, path: 
     const external_inputs = if (reuse_inputs.external_inputs) |*value| value else return false;
     const cache = ctx.resource_cache orelse return false;
     const inputs_start = utils.profile.start();
+    if (snapshot.source_inputs) |*observed| if (!try inputs.matches(observed, cache)) return false;
     if (!try inputs.matches(external_inputs, cache)) return false;
     utils.profile.recordGeneratedEdit(.inputs, inputs_start);
     utils.profile.recordGeneratedEdit(.prepare, prepare_start);
@@ -108,6 +109,7 @@ pub fn apply(ctx: Context, snapshot: *analysis.snapshot.AnalysisSnapshot, path: 
     for (results.pages) |page| if (page.diagnostics.len != 0) return false;
     try reuse_inputs.layouts.replacePages(state.allocator, &results);
     const verify_inputs_start = utils.profile.start();
+    if (snapshot.source_inputs) |*observed| if (!try inputs.matches(observed, cache)) return false;
     if (!try inputs.matches(external_inputs, cache)) return false;
     utils.profile.recordGeneratedEdit(.inputs, verify_inputs_start);
 
