@@ -124,6 +124,7 @@ test "module loader spec: import failure spans preserve allocation failures" {
         &program,
         &overlay,
         &diagnostics,
+        null,
     ));
 }
 
@@ -176,6 +177,7 @@ test "module loader spec: stdlib resolution frees partial allocations" {
             ".",
             program,
             null,
+            null,
         ) catch |err| {
             try testing.expectEqual(error.OutOfMemory, err);
             continue;
@@ -205,6 +207,7 @@ test "module loader spec: explicit resolution frees partial allocations" {
             ".",
             program,
             &overlay,
+            null,
         ) catch |err| {
             try testing.expectEqual(error.OutOfMemory, err);
             continue;

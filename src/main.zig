@@ -1098,6 +1098,7 @@ fn runDebugCommand(
         try app.writeScheduleTraceJson(io, allocator, .{
             .input_path = resolved.entry_path,
             .asset_base_dir = resolved.asset_base_dir,
+            .project_file = resolved.project_file,
             .layout_jobs = effectiveJobs(options, &resolved),
         }, output_path, &progress);
         return;
@@ -1120,6 +1121,7 @@ fn runDebugCommand(
             try app.writeLayoutTraceJson(io, allocator, .{
                 .input_path = resolved.entry_path,
                 .asset_base_dir = resolved.asset_base_dir,
+                .project_file = resolved.project_file,
                 .layout_jobs = effectiveJobs(options, &resolved),
             }, output_path, &progress);
             return;
@@ -1129,6 +1131,7 @@ fn runDebugCommand(
             try app.writeLayoutConflictReportFile(io, allocator, .{
                 .input_path = resolved.entry_path,
                 .asset_base_dir = resolved.asset_base_dir,
+                .project_file = resolved.project_file,
                 .layout_jobs = effectiveJobs(options, &resolved),
             }, output_path, &progress);
             return;
@@ -1446,6 +1449,7 @@ fn runCommand(io: std.Io, allocator: std.mem.Allocator, environ: std.process.Env
             try app.writeContextJson(io, allocator, .{
                 .input_path = resolved.entry_path,
                 .asset_base_dir = resolved.asset_base_dir,
+                .project_file = resolved.project_file,
                 .layout_jobs = effectiveJobs(options, &resolved),
                 .highlight_languages = resolved.highlight.languages,
             }, output_path, &progress);
@@ -1454,6 +1458,7 @@ fn runCommand(io: std.Io, allocator: std.mem.Allocator, environ: std.process.Env
             try app.printContextJson(io, allocator, .{
                 .input_path = resolved.entry_path,
                 .asset_base_dir = resolved.asset_base_dir,
+                .project_file = resolved.project_file,
                 .layout_jobs = effectiveJobs(options, &resolved),
                 .highlight_languages = resolved.highlight.languages,
             }, &progress);
@@ -1498,6 +1503,7 @@ fn runCommand(io: std.Io, allocator: std.mem.Allocator, environ: std.process.Env
         const source = app.SourceRequest{
             .input_path = resolved.entry_path,
             .asset_base_dir = resolved.asset_base_dir,
+            .project_file = resolved.project_file,
             .layout_jobs = jobs,
             .highlight_languages = resolved.highlight.languages,
         };

@@ -1371,6 +1371,13 @@ const BuiltinContext = struct {
         return try self.state.ownString(bytes);
     }
 
+    pub fn assetPath(self: *BuiltinContext, requested: []const u8) ![]const u8 {
+        const module = self.state.moduleById(self.evaluation.module_id).?;
+        const base = if (module.kind == .project) self.state.asset_base_dir else if (module.path) |path| std.fs.path.dirname(path) orelse "." else self.state.asset_base_dir;
+        const resolved = try resolveAssetPath(self.state.allocator, base, requested);
+        return self.ownString(resolved);
+    }
+
     pub fn anchorValueForObject(self: *BuiltinContext, node_id: core.NodeId, anchor_name: []const u8) !core.Value {
         const anchor = names.parseAnchorName(anchor_name) orelse {
             try reportNamedResolutionError(self.state, error.UnknownAnchor, "anchor", anchor_name, self.current_origin);

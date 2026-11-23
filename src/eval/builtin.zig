@@ -137,6 +137,10 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             const path = try ctx.evalStringArg(call, 0);
             break :blk .{ .string = try ctx.readlines(path) };
         },
+        .asset_path => blk: {
+            const path = try ctx.evalStringArg(call, 0);
+            break :blk .{ .string = try ctx.assetPath(path) };
+        },
         .foreach => blk: {
             var target = try ctx.evalExprValue(call.args.items[0]);
             errdefer target.deinit(ctx.state.allocator);
