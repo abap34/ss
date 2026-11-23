@@ -2843,7 +2843,7 @@ const Parser = struct {
         if (end < self.source.len and source.isIdentifierContinue(self.source[end])) return false;
         probe = end;
         while (probe < self.source.len and source.isInlineSpace(self.source[probe])) probe += 1;
-        return probe == self.source.len or self.source[probe] == '\n';
+        return probe == self.source.len or self.source[probe] == '\n' or source.lineCommentMarkerLength(self.source, probe) != null;
     }
 
     fn consumeStandaloneKeyword(self: *Parser, keyword: []const u8) !void {

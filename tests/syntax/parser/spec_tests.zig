@@ -2693,6 +2693,42 @@ test "syntax spec: surface functions retain expression bodies and paired declara
     try testing.expect(parsed.functions.items[2].paired);
 }
 
+test "syntax spec: block terminators accept trailing comments" {
+    const lines = [_][]const u8{
+        "fn identity(value: String) -> String",
+        "  return value",
+        "end ;; function",
+        "document",
+        "  let outside = 1",
+        "end ;; document",
+        "page First",
+        "  show true",
+        "    if true",
+        "      text!(\"First\")",
+        "    else ;; alternative",
+        "      text!(\"Other\")",
+        "    end ;; conditional",
+        "  end ;; drawing",
+        "end ;; first page",
+        "page Second",
+        "end ;; final page at EOF",
+    };
+    for ([_][]const u8{ "\n", "\r\n" }) |newline| {
+        const text = try std.mem.join(testing.allocator, newline, &lines);
+        defer testing.allocator.free(text);
+        var parsed = try syntax.parseSurface(testing.allocator, text);
+        defer parsed.deinit(testing.allocator);
+        try testing.expectEqual(@as(usize, 1), parsed.functions.items.len);
+        try testing.expectEqual(@as(usize, 1), parsed.document_blocks.items.len);
+        try testing.expectEqual(@as(usize, 2), parsed.pages.items.len);
+        try testing.expectEqual(std.mem.indexOf(u8, text, "page Second").?, parsed.pages.items[0].span.end);
+        try testing.expectEqual(text.len, parsed.pages.items[1].span.end);
+        const conditional = parsed.pages.items[0].statements.items[0].kind.show.statements.items[0].kind.if_stmt;
+        try testing.expectEqual(@as(usize, 1), conditional.then_statements.items.len);
+        try testing.expectEqual(@as(usize, 1), conditional.else_statements.items.len);
+    }
+}
+
 test "syntax spec: surface operators retain precedence and left associativity" {
     var parsed = try syntax.parseSurface(testing.allocator,
         \\page Demo
