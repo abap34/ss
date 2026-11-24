@@ -220,9 +220,13 @@ fn resolveCodeStyle(state: anytype, node: *const Node) paint.CodeStyle {
     const metrics = codeMetrics(state, node);
     const plain = codePlainColor(state, node);
     var colors: paint.CodeColors = undefined;
+    var backgrounds: paint.CodeBackgrounds = .initFill(null);
     inline for (comptime std.meta.tags(paint.CodeRole)) |role| {
         const name = if (role == .type) "type_name" else @tagName(role);
         colors.set(role, if (role == .plain) plain else parseRecordColorProperty(state, node, "code", &.{ "colors", name }) orelse plain);
+    }
+    inline for (.{ .addition, .deletion, .change }) |role| {
+        backgrounds.set(role, parseRecordColorProperty(state, node, "code", &.{ "colors", @tagName(role) ++ "_fill" }));
     }
     return .{
         .font = font_model.codeFont(node),
@@ -230,6 +234,7 @@ fn resolveCodeStyle(state: anytype, node: *const Node) paint.CodeStyle {
         .line_height = metrics.line_height,
         .line_highlight_fill = parseRecordColorProperty(state, node, "code", &.{"line_highlight_fill"}),
         .colors = colors,
+        .backgrounds = backgrounds,
     };
 }
 

@@ -71,7 +71,7 @@ test "highlight spans: generated overlapping captures match the full-scan refere
             span.* = .{
                 .start = start,
                 .end = start + 1 + (index * 13 + seed) % (96 - start),
-                .role = @enumFromInt(index % 10),
+                .role = @fromBackingInt(@intCast(index % 10)),
             };
         }
         for ([_]usize{ 5, 13, 96 }) |width| try expectReference(&spans, 96, width);
@@ -108,9 +108,33 @@ fn compileWithAllocationFailures(allocator: std.mem.Allocator) !void {
         .{ .start = 3, .end = 8, .role = .number },
         .{ .start = 4, .end = 9, .role = .string },
         .{ .start = 4, .end = 5, .role = .keyword },
+        .{ .start = 0, .end = 12, .role = .addition },
     };
     const segments = try highlight.compile(allocator, &spans, 16);
     defer allocator.free(segments);
+}
+
+test "highlight spans: line backgrounds survive nested and equal-range foreground captures" {
+    const spans = [_]highlight.Span{
+        .{ .start = 0, .end = 9, .role = .addition },
+        .{ .start = 0, .end = 1, .role = .operator },
+        .{ .start = 1, .end = 9, .role = .string },
+        .{ .start = 10, .end = 11, .role = .deletion },
+        .{ .start = 10, .end = 11, .role = .operator },
+    };
+    const segments = try highlight.compile(testing.allocator, &spans, 12);
+    defer testing.allocator.free(segments);
+    var cursor = highlight.Cursor{ .segments = segments };
+    const marker = cursor.next(0, 9).?;
+    try testing.expectEqual(CaptureRole.operator, marker.role.?);
+    try testing.expectEqual(CaptureRole.addition, marker.background_role.?);
+    const name = cursor.next(1, 9).?;
+    try testing.expectEqual(CaptureRole.string, name.role.?);
+    try testing.expectEqual(CaptureRole.addition, name.background_role.?);
+    const empty_deletion = cursor.next(10, 11).?;
+    try testing.expectEqual(CaptureRole.operator, empty_deletion.role.?);
+    try testing.expectEqual(CaptureRole.deletion, empty_deletion.background_role.?);
+    try testing.expectEqual(null, cursor.next(11, 12).?.background_role);
 }
 
 test "highlight spans: allocation failures release partially compiled segments" {

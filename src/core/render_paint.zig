@@ -185,6 +185,7 @@ pub const MathPaint = struct {
 };
 
 pub const CodeColors = std.EnumArray(CodeRole, Color);
+pub const CodeBackgrounds = std.EnumArray(CodeRole, ?Color);
 
 pub const CodeStyle = struct {
     font: FontFace,
@@ -192,6 +193,7 @@ pub const CodeStyle = struct {
     line_height: f32,
     line_highlight_fill: ?Color,
     colors: CodeColors,
+    backgrounds: CodeBackgrounds = .initFill(null),
 };
 
 pub const FencedCodePaint = struct {

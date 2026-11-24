@@ -34,7 +34,7 @@ da6fe9beb4f7f67beb75914ca8e0d48ae48d6406. Parser source ABI compatibility is che
 that runtime during `zig build`.
 
 Default highlighting is enabled for these code block language names:
-`ss`, `bash`, `sh`, `shell`, `c`, `cpp`, `c++`, `cc`, `css`, `go`, `golang`, `html`, `java`, `javascript`, `js`, `json`, `julia`, `jl`, `python`, `py`, `rust`, `rs`, `scheme`, `scm`, `toml`, `typescript`, `ts`, `tsx`, `yaml`, `yml`, `zig`.
+`ss`, `bash`, `sh`, `shell`, `c`, `cpp`, `c++`, `cc`, `css`, `diff`, `go`, `golang`, `html`, `java`, `javascript`, `js`, `json`, `julia`, `jl`, `python`, `py`, `rust`, `rs`, `scheme`, `scm`, `toml`, `typescript`, `ts`, `tsx`, `yaml`, `yml`, `zig`.
 
 | Language | Upstream | Commit |
 | --- | --- | --- |
@@ -42,6 +42,7 @@ Default highlighting is enabled for these code block language names:
 | C | https://github.com/tree-sitter/tree-sitter-c | b780e47fc780ddc8da13afa35a3f4ed5c157823d |
 | C++ | https://github.com/tree-sitter/tree-sitter-cpp | c009222808634c1014f82438d4883753516a2c24 |
 | CSS | https://github.com/tree-sitter/tree-sitter-css | dda5cfc5722c429eaba1c910ca32c2c0c5bb1a3f |
+| Diff | https://github.com/tree-sitter-grammars/tree-sitter-diff | ada384ac7bfc1307f32de474620120add29998fb |
 | Go | https://github.com/tree-sitter/tree-sitter-go | 2346a3ab1bb3857b48b29d779a1ef9799a248cd7 |
 | HTML | https://github.com/tree-sitter/tree-sitter-html | 73a3947324f6efddf9e17c0ea58d454843590cc0 |
 | Java | https://github.com/tree-sitter/tree-sitter-java | e10607b45ff745f5f876bfa3e94fbcc6b44bdc11 |

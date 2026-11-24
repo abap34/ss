@@ -55,6 +55,9 @@ pub const CaptureRole = enum {
     operator,
     comment,
     string,
+    addition,
+    deletion,
+    change,
 };
 
 const CaptureRuleKind = enum {
@@ -70,6 +73,9 @@ const CaptureRule = struct {
 };
 
 const capture_rules = [_]CaptureRule{
+    .{ .kind = .exact, .name = "diff.plus", .role = .addition },
+    .{ .kind = .exact, .name = "diff.minus", .role = .deletion },
+    .{ .kind = .exact, .name = "diff.delta", .role = .change },
     .{ .name = "comment", .role = .comment },
     .{ .name = "escape", .role = .string },
     .{ .name = "string", .role = .string },
@@ -116,6 +122,7 @@ pub const builtin_languages = [_]BuiltinLanguage{
     .{ .name = "c++", .parser = "cpp", .query = "builtin:cpp" },
     .{ .name = "cc", .parser = "cpp", .query = "builtin:cpp" },
     .{ .name = "css", .parser = "css", .query = "builtin:css" },
+    .{ .name = "diff", .parser = "diff", .query = "builtin:diff" },
     .{ .name = "go", .parser = "go", .query = "builtin:go" },
     .{ .name = "golang", .parser = "go", .query = "builtin:go" },
     .{ .name = "html", .parser = "html", .query = "builtin:html" },

@@ -23,6 +23,7 @@
         "tree-sitter-c": "tree-sitter-c",
         "tree-sitter-cpp": "tree-sitter-cpp",
         "tree-sitter-css": "tree-sitter-css",
+        "tree-sitter-diff": "tree-sitter-diff",
         "tree-sitter-go": "tree-sitter-go",
         "tree-sitter-html": "tree-sitter-html",
         "tree-sitter-java": "tree-sitter-java",
@@ -104,6 +105,23 @@
         "owner": "tree-sitter",
         "repo": "tree-sitter-css",
         "rev": "dda5cfc5722c429eaba1c910ca32c2c0c5bb1a3f",
+        "type": "github"
+      }
+    },
+    "tree-sitter-diff": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1786724334,
+        "narHash": "sha256-5HCBFE/99DJ9AYWSk18WRF3RGQpgpYAYA37bT54F0DI=",
+        "owner": "tree-sitter-grammars",
+        "repo": "tree-sitter-diff",
+        "rev": "ada384ac7bfc1307f32de474620120add29998fb",
+        "type": "github"
+      },
+      "original": {
+        "owner": "tree-sitter-grammars",
+        "repo": "tree-sitter-diff",
+        "rev": "ada384ac7bfc1307f32de474620120add29998fb",
         "type": "github"
       }
     },

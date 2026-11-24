@@ -263,6 +263,7 @@ fn writeOptionalTextPaint(object: *json.Object, maybe_text: ?*const core.render_
     try text.floatField("markdown_code_line_width", text_spec.code.chrome.line_width, "{d:.1}");
     try text.floatField("markdown_code_radius", text_spec.code.chrome.radius, "{d:.1}");
     inline for (comptime std.meta.tags(core.render_paint.CodeRole)) |role| try writeColor(&text, "markdown_code_" ++ @tagName(role) ++ "_color", text_spec.code.style.colors.get(role));
+    inline for (.{ .addition, .deletion, .change }) |role| try writeOptionalColor(&text, "markdown_code_" ++ @tagName(role) ++ "_fill", text_spec.code.style.backgrounds.get(role));
     try text.floatField("markdown_table_cell_pad_x", text_spec.markdown.table.cell_pad_x, "{d:.1}");
     try text.floatField("markdown_table_cell_pad_y", text_spec.markdown.table.cell_pad_y, "{d:.1}");
     try writeOptionalColor(&text, "markdown_table_border", text_spec.markdown.table.border);
@@ -380,6 +381,7 @@ fn writeOptionalCodePaint(object: *json.Object, maybe_code: ?*const core.render_
     try code.floatField("line_height", spec.style.line_height, "{d:.1}");
     try code.boolField("wrap", spec.wrap);
     inline for (comptime std.meta.tags(core.render_paint.CodeRole)) |role| try writeColor(&code, @tagName(role) ++ "_color", spec.style.colors.get(role));
+    inline for (.{ .addition, .deletion, .change }) |role| try writeOptionalColor(&code, @tagName(role) ++ "_fill", spec.style.backgrounds.get(role));
     try code.end();
 }
 

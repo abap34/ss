@@ -41,7 +41,11 @@ const FontFace = core.font.Face;
 const ResolvedRender = core.render_paint.ResolvedRender;
 const TextPaint = core.render_paint.TextPaint;
 const CodeBlockPaint = core.render_paint.CodeBlockPaint;
-const CodePaint = struct { language: ?[]const u8, colors: core.render_paint.CodeColors };
+const CodePaint = struct {
+    language: ?[]const u8,
+    colors: core.render_paint.CodeColors,
+    backgrounds: core.render_paint.CodeBackgrounds = .initFill(null),
+};
 const LatexPaint = core.render_paint.LatexPaint;
 const VectorPathPaint = core.render_paint.VectorPathPaint;
 const MarkerPaint = core.render_paint.MarkerPaint;
@@ -2770,21 +2774,47 @@ fn drawMarkdownCodeBlock(ctx: *DrawContext, x: f32, top_bl: f32, width: f32, blo
     try drawRoundedRect(ctx, frame, text.code.chrome.radius, text.code.chrome.fill, text.code.chrome.stroke, text.code.chrome.line_width);
 
     try drawBottomRule(ctx, frame, text.code.chrome.bottom_rule);
-    if (text.code.style.line_highlight_fill) |color| {
-        const baseline_from_top = try lineBaselineFromTop(ctx, text.code.style.font, text.code.style.font_size, text.code.style.line_height);
-        const first_top = Defaults.height - placement.first_baseline_bl - baseline_from_top;
-        for (0..physicalCodeLineCount(source)) |index| {
-            if (!block.highlightsCodeLine(index + 1)) continue;
-            try drawParagraphBackground(ctx, .{
-                .x = frame.x + text.code.chrome.pad_x,
-                .y = first_top + @as(f32, @floatFromInt(index)) * text.code.style.line_height,
-                .width = @max(frame.width - text.code.chrome.pad_x * 2, 1),
-                .height = text.code.style.line_height,
-            }, color);
-        }
-    }
+    try drawMarkdownCodeBackgrounds(ctx, placement, source, block, text);
     try drawMarkdownCodeBlockContent(ctx, placement.content_x, placement.first_baseline_bl, placement.content_width, source, text, code_paint);
     return placement.frame.y;
+}
+
+fn drawMarkdownCodeBackgrounds(ctx: *DrawContext, placement: MarkdownCodeBlockPlacement, source: []const u8, block: *const Block, text: TextPaint) !void {
+    const style = text.code.style;
+    const has_syntax_backgrounds = style.backgrounds.get(.addition) != null or style.backgrounds.get(.deletion) != null or style.backgrounds.get(.change) != null;
+    if (!has_syntax_backgrounds and (style.line_highlight_fill == null or block.code_line_highlights.len == 0)) return;
+    var highlighted_content: ?syntax_highlight.Result = if (has_syntax_backgrounds and block.language != null)
+        try highlightCodeContent(ctx, block.language.?, source)
+    else
+        null;
+    defer if (highlighted_content) |*result| result.deinit();
+    var highlighted = highlight_spans.Cursor{ .segments = if (highlighted_content) |result| result.segments() else &.{} };
+    const baseline_from_top = try lineBaselineFromTop(ctx, style.font, style.font_size, style.line_height);
+    const first_top = Defaults.height - placement.first_baseline_bl - baseline_from_top;
+    const line_count = physicalCodeLineCount(source);
+    var lines = utils.source.lineIterator(source);
+    while (lines.next()) |line| {
+        if (line.number > line_count) break;
+        const explicit = if (block.highlightsCodeLine(line.number)) style.line_highlight_fill else null;
+        const color = explicit orelse codeLineBackground(&highlighted, line.span.start, line.span.end, style.backgrounds) orelse continue;
+        try drawParagraphBackground(ctx, .{
+            .x = placement.frame.x + text.code.chrome.pad_x,
+            .y = first_top + @as(f32, @floatFromInt(line.number - 1)) * style.line_height,
+            .width = @max(placement.frame.width - text.code.chrome.pad_x * 2, 1),
+            .height = style.line_height,
+        }, color);
+    }
+}
+
+fn codeLineBackground(highlighted: *highlight_spans.Cursor, start: usize, end: usize, backgrounds: core.render_paint.CodeBackgrounds) ?Color {
+    var position = start;
+    while (highlighted.next(position, end)) |segment| {
+        if (segment.background_role) |role| {
+            if (backgrounds.get(role)) |color| return color;
+        }
+        position = segment.end;
+    }
+    return null;
 }
 
 fn drawMarkdownCodeBlockContent(ctx: *DrawContext, x: f32, first_baseline_bl: f32, width: f32, source: []const u8, text: TextPaint, code_paint: CodePaint) !void {
@@ -3363,14 +3393,7 @@ fn drawHighlightedCodeLines(
         return first_baseline_bl - cursor_bl;
     };
 
-    var local_cache = syntax_highlight.Cache.init(std.heap.smp_allocator, ctx.io);
-    defer local_cache.deinit();
-    const cache = ctx.highlight_cache orelse &local_cache;
-    var failure: syntax_highlight.Failure = .none;
-    var highlighted_content = cache.highlight(ctx.highlight_languages, language, content, &failure) catch |err| {
-        try recordSyntaxHighlightFailure(ctx, failure);
-        return err;
-    };
+    var highlighted_content = try highlightCodeContent(ctx, language, content);
     defer highlighted_content.deinit();
     var highlighted = highlight_spans.Cursor{ .segments = highlighted_content.segments() };
 
@@ -3384,6 +3407,17 @@ fn drawHighlightedCodeLines(
         cursor_bl -= try drawHighlightedCodeLine(ctx, x, baselineTop(cursor_bl, font_size), width, content, line_start, line_end, &highlighted, font, font_size, line_height, code, emoji_spacing, wrap, rows.background(line_view.number));
     }
     return first_baseline_bl - cursor_bl;
+}
+
+fn highlightCodeContent(ctx: *DrawContext, language: []const u8, content: []const u8) !syntax_highlight.Result {
+    var local_cache = syntax_highlight.Cache.init(std.heap.smp_allocator, ctx.io);
+    defer local_cache.deinit();
+    const cache = ctx.highlight_cache orelse &local_cache;
+    var failure: syntax_highlight.Failure = .none;
+    return cache.highlight(ctx.highlight_languages, language, content, &failure) catch |err| {
+        try recordSyntaxHighlightFailure(ctx, failure);
+        return err;
+    };
 }
 
 fn drawHighlightedCodeLine(
@@ -3407,12 +3441,16 @@ fn drawHighlightedCodeLine(
     defer spans.deinit(ctx.allocator);
     defer deinitInlineSpans(ctx.allocator, spans.items);
     var pos = line_start;
+    var line_background = background;
     while (highlighted.next(pos, line_end)) |segment| {
+        if (line_background == null) {
+            if (segment.background_role) |role| line_background = code.backgrounds.get(role);
+        }
         const color = if (segment.role) |role| code.colors.get(role) else code.colors.get(.plain);
         try inline_layout.appendTextSpan(inlineContext(ctx), &spans, content[segment.start..segment.end], font, color, null, false, false, .{}, .{ .start = segment.start, .end = segment.end });
         pos = segment.end;
     }
-    return drawCodeSpans(ctx, x, y_top, width, spans.items, font, font_size, line_height, emoji_spacing, wrap, background);
+    return drawCodeSpans(ctx, x, y_top, width, spans.items, font, font_size, line_height, emoji_spacing, wrap, line_background);
 }
 
 fn recordSyntaxHighlightFailure(ctx: *DrawContext, failure: syntax_highlight.Failure) !void {
@@ -3431,7 +3469,7 @@ fn layoutCodeBlock(ctx: *DrawContext, frame: Frame, content: []const u8, code: C
     defer if (ranges.len != 0) ctx.allocator.free(ranges);
     const first_baseline = try baselineBlForBox(ctx, frame, style.font, style.font_size, style.line_height);
     const language = if (code.language) |lang| (if (utils.highlight.findLanguage(ctx.highlight_languages, lang) != null) lang else null) else null;
-    const height = try drawHighlightedCodeLines(ctx, frame.x, first_baseline, frame.width, content, style.font, style.font_size, style.line_height, .{ .language = language, .colors = style.colors }, code.emoji_spacing, false, code.wrap, .{ .ranges = ranges, .fill = style.line_highlight_fill });
+    const height = try drawHighlightedCodeLines(ctx, frame.x, first_baseline, frame.width, content, style.font, style.font_size, style.line_height, .{ .language = language, .colors = style.colors, .backgrounds = style.backgrounds }, code.emoji_spacing, false, code.wrap, .{ .ranges = ranges, .fill = style.line_highlight_fill });
     return @max(height, style.line_height);
 }
 

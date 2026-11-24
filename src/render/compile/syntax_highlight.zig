@@ -44,6 +44,7 @@ extern fn tree_sitter_bash() *const TSLanguage;
 extern fn tree_sitter_c() *const TSLanguage;
 extern fn tree_sitter_cpp() *const TSLanguage;
 extern fn tree_sitter_css() *const TSLanguage;
+extern fn tree_sitter_diff() *const TSLanguage;
 extern fn tree_sitter_go() *const TSLanguage;
 extern fn tree_sitter_html() *const TSLanguage;
 extern fn tree_sitter_java() *const TSLanguage;
@@ -118,6 +119,13 @@ const language_definitions = [_]LanguageDefinition{
         .query_name = "builtin:css",
         .query_source = build_options.css_highlight_query,
         .health_sample = "body { color: red; }\n",
+    },
+    .{
+        .parser_name = "diff",
+        .load = tree_sitter_diff,
+        .query_name = "builtin:diff",
+        .query_source = build_options.diff_highlight_query,
+        .health_sample = "--- a/sample.txt\n+++ b/sample.txt\n@@ -1 +1 @@\n-before\n+after\n",
     },
     .{
         .parser_name = "go",
@@ -292,6 +300,7 @@ pub const TreeSitterHealthReport = struct {
 };
 
 pub const Cache = @import("syntax_highlight/cache.zig").Cache;
+pub const Result = @import("syntax_highlight/cache.zig").Result;
 pub fn languageForConfiguration(configured: *const utils.highlight.Language) !*const TSLanguage {
     return builtinTreeSitterLanguage(configured.parser) orelse error.UnknownTreeSitterLanguage;
 }

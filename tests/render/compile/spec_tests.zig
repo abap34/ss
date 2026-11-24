@@ -2543,6 +2543,109 @@ test "Markdown code line backgrounds cover source rows without changing glyphs o
     }
 }
 
+test "diff backgrounds cover full rows and wrapped lines without changing text geometry" {
+    const content = "-removed text\n+added text that wraps across several visual lines in a narrow code block\n+\n context\n!changed text\n";
+    const green = core.render_paint.Color{ .r = 0.8, .g = 1, .b = 0.8 };
+    const red = core.render_paint.Color{ .r = 1, .g = 0.8, .b = 0.8 };
+    const yellow = core.render_paint.Color{ .r = 1, .g = 1, .b = 0.8 };
+    const blue = core.render_paint.Color{ .r = 0.8, .g = 0.8, .b = 1 };
+    const options: render_compile.Options = .{
+        .cache_dir = test_cache_dir,
+        .jobs = 1,
+        .font_environment = try render_compile.acquireFontEnvironment(),
+        .highlight_languages = &.{.{ .name = @constCast("diff"), .parser = @constCast("diff"), .query = @constCast("builtin:diff") }},
+    };
+    for ([_]struct { markdown: bool, wrap: bool }{
+        .{ .markdown = true, .wrap = false },
+        .{ .markdown = false, .wrap = false },
+        .{ .markdown = false, .wrap = true },
+    }) |scenario| {
+        for ([_]bool{ false, true }) |selected| {
+            var state = try initEmptyDocumentState();
+            defer state.deinit();
+            var fixture = LayoutFixture.init(&state);
+            defer fixture.deinit();
+            const page_id = try state.addPage("diff-backgrounds");
+            const source = try std.fmt.allocPrint(testing.allocator, "```diff{s}\n{s}```", .{ if (selected) " {2}" else "", content });
+            defer testing.allocator.free(source);
+            const id = try document_testing.native(&state, page_id, "diff", if (scenario.markdown) .text else .code, if (scenario.markdown) source else content);
+            if (scenario.markdown) {
+                try document_testing.setPath(&state, id, "content", &.{"parse"}, .{ .enum_case = .{ .enum_name = "TextParseMode", .case_name = "block" } });
+            } else {
+                try document_testing.setPath(&state, id, "content", &.{"language"}, .{ .string = "diff" });
+                if (selected) try document_testing.setPath(&state, id, "content", &.{"highlight_lines"}, .{ .string = "2" });
+            }
+            (try fixture.frame(id)).* = .{ .width = 180, .height = 720 };
+            var prepared = try core.prepared.prepare(testing.allocator, &state);
+            defer prepared.deinit(testing.allocator);
+            const paint = &prepared.pages[0].objects[0].render.content;
+            const style = if (scenario.markdown) &paint.text.code.style else &paint.code.style;
+            if (!scenario.markdown) paint.code.wrap = scenario.wrap;
+            style.font.family = "DejaVu Sans Mono";
+            style.font_size = 18;
+            style.line_height = 26;
+            style.backgrounds.set(.addition, green);
+            style.backgrounds.set(.deletion, red);
+            style.backgrounds.set(.change, yellow);
+            style.line_highlight_fill = blue;
+            var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .cache_dir = options.cache_dir, .highlight_languages = options.highlight_languages, .font_environment = options.font_environment.? });
+            defer scope.deinit();
+            const provider = scope.provider();
+            const measured = (try provider.measure(provider.context, try fixture.work(), state.getNode(id).?, 180, .width_constrained)).?;
+            var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try fixture.document(), options);
+            defer ir.deinit(testing.allocator);
+            try ir.validate();
+            var rectangles = std.ArrayList(render.Rect).empty;
+            defer rectangles.deinit(testing.allocator);
+            const expected_colors = [_]core.render_paint.Color{ red, if (selected) blue else green, green, yellow };
+            for (ir.pages[0].items.items, 0..) |item, index| {
+                if (item.header().node_id != id or item != .fill_rect) continue;
+                try testing.expect(rectangles.items.len < expected_colors.len);
+                try testing.expectEqualDeep(expected_colors[rectangles.items.len], item.fill_rect.color);
+                const rect = item.fill_rect.rect;
+                try testing.expect(rect.width >= 156);
+                try testing.expect(rect.height >= 26);
+                for (ir.pages[0].items.items[0..index]) |previous| {
+                    if (previous.header().node_id != id or previous != .text) continue;
+                    const baseline = textBaseline(&previous.text);
+                    try testing.expect(baseline < rect.y or baseline >= rect.y + rect.height);
+                }
+                try rectangles.append(testing.allocator, rect);
+            }
+            try testing.expectEqual(@as(usize, 4), rectangles.items.len);
+            try testing.expectApproxEqAbs(rectangles.items[0].y + 26, rectangles.items[1].y, 0.001);
+            if (scenario.wrap) try testing.expect(rectangles.items[1].height > 26);
+            try testing.expectApproxEqAbs(rectangles.items[1].y + rectangles.items[1].height, rectangles.items[2].y, 0.001);
+            try testing.expectApproxEqAbs(rectangles.items[2].y + 52, rectangles.items[3].y, 0.001);
+            for (rectangles.items[1..]) |rect| try testing.expectApproxEqAbs(rectangles.items[0].width, rect.width, 0.001);
+
+            style.backgrounds = .initFill(null);
+            style.line_highlight_fill = null;
+            const disabled_measurement = (try provider.measure(provider.context, try fixture.work(), state.getNode(id).?, 180, .width_constrained)).?;
+            try testing.expect(measured.cache_key != disabled_measurement.cache_key);
+            try testing.expectEqual(measured.logicalBounds(), disabled_measurement.logicalBounds());
+            var disabled = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try fixture.document(), options);
+            defer disabled.deinit(testing.allocator);
+            var enabled_index: usize = 0;
+            var text_count: usize = 0;
+            for (disabled.pages[0].items.items) |item| {
+                if (item.header().node_id != id) continue;
+                try testing.expect(item != .fill_rect);
+                if (item != .text) continue;
+                while (ir.pages[0].items.items[enabled_index] != .text) enabled_index += 1;
+                const enabled = ir.pages[0].items.items[enabled_index].text;
+                try testing.expectEqual(enabled.x, item.text.x);
+                try testing.expectEqual(enabled.y, item.text.y);
+                try testing.expectEqualDeep(enabled.color, item.text.color);
+                try testing.expectEqualDeep(enabled.layout.glyphs, item.text.layout.glyphs);
+                enabled_index += 1;
+                text_count += 1;
+            }
+            try testing.expect(text_count > 0);
+        }
+    }
+}
+
 test "inline math shares measured paragraph baselines with bidirectional text" {
     if (!try latexEngineAvailable(.pdflatex)) return error.SkipZigTest;
     var state = try initEmptyDocumentState();

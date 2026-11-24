@@ -9,6 +9,12 @@ type CodeColors {
   operator: Color? = none
   comment: Color? = none
   string: Color? = none
+  addition: Color? = none
+  deletion: Color? = none
+  change: Color? = none
+  addition_fill: Color? = none
+  deletion_fill: Color? = none
+  change_fill: Color? = none
 }
 
 type CodeHighlightTheme {

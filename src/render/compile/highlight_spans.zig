@@ -11,6 +11,7 @@ pub const Segment = struct {
     start: usize,
     end: usize,
     role: ?CaptureRole,
+    background_role: ?CaptureRole = null,
 };
 
 const Boundary = struct {
@@ -45,6 +46,8 @@ pub fn compile(allocator: std.mem.Allocator, spans: []const Span, content_end: u
     std.mem.sort(Boundary, boundaries.items, {}, Boundary.lessThan);
     var active = std.PriorityQueue(usize, []const Span, precedence).initContext(spans);
     defer active.deinit(allocator);
+    var backgrounds = std.PriorityQueue(usize, []const Span, precedence).initContext(spans);
+    defer backgrounds.deinit(allocator);
     var result = std.ArrayList(Segment).empty;
     errdefer result.deinit(allocator);
     var position: usize = 0;
@@ -52,17 +55,28 @@ pub fn compile(allocator: std.mem.Allocator, spans: []const Span, content_end: u
     while (position < content_end) {
         while (boundary < boundaries.items.len and boundaries.items[boundary].position == position) : (boundary += 1) {
             const event = boundaries.items[boundary];
-            if (event.begins) try active.push(allocator, event.span);
+            if (event.begins) {
+                try active.push(allocator, event.span);
+                switch (spans[event.span].role) {
+                    .addition, .deletion, .change => try backgrounds.push(allocator, event.span),
+                    else => {},
+                }
+            }
         }
         while (active.peek()) |index| {
             if (spans[index].end > position) break;
             _ = active.pop();
+        }
+        while (backgrounds.peek()) |index| {
+            if (spans[index].end > position) break;
+            _ = backgrounds.pop();
         }
         const next = if (boundary < boundaries.items.len) boundaries.items[boundary].position else content_end;
         try result.append(allocator, .{
             .start = position,
             .end = next,
             .role = if (active.peek()) |index| spans[index].role else null,
+            .background_role = if (backgrounds.peek()) |index| spans[index].role else null,
         });
         position = next;
     }
@@ -82,6 +96,6 @@ pub const Cursor = struct {
         const segment = self.segments[self.index];
         const end = @min(segment.end, line_end);
         if (end == segment.end) self.index += 1;
-        return .{ .start = @max(segment.start, start), .end = end, .role = segment.role };
+        return .{ .start = @max(segment.start, start), .end = end, .role = segment.role, .background_role = segment.background_role };
     }
 };

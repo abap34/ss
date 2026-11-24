@@ -114,6 +114,29 @@
       ]
     },
     {
+      "name": "diff",
+      "display_name": "Diff",
+      "repo": "https://github.com/tree-sitter-grammars/tree-sitter-diff",
+      "commit": "ada384ac7bfc1307f32de474620120add29998fb",
+      "aliases": [
+        "diff"
+      ],
+      "files": [
+        {
+          "from": "LICENSE",
+          "to": "LICENSE"
+        },
+        {
+          "from": "queries/highlights.scm",
+          "to": "queries/highlights.scm"
+        },
+        {
+          "from": "src/parser.c",
+          "to": "src/parser.c"
+        }
+      ]
+    },
+    {
       "name": "go",
       "display_name": "Go",
       "repo": "https://github.com/tree-sitter/tree-sitter-go",

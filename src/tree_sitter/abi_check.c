@@ -9,6 +9,7 @@ const TSLanguage *tree_sitter_bash(void);
 const TSLanguage *tree_sitter_c(void);
 const TSLanguage *tree_sitter_cpp(void);
 const TSLanguage *tree_sitter_css(void);
+const TSLanguage *tree_sitter_diff(void);
 const TSLanguage *tree_sitter_go(void);
 const TSLanguage *tree_sitter_html(void);
 const TSLanguage *tree_sitter_java(void);
@@ -92,6 +93,7 @@ int main(int argc, char **argv) {
   status |= check_language(parser, "c", tree_sitter_c(), "#include <stdio.h>\nint main(void) { return 0; }\n");
   status |= check_language(parser, "cpp", tree_sitter_cpp(), "class Sample { public: auto method() { return nullptr; } };\n");
   status |= check_language(parser, "css", tree_sitter_css(), "body { color: red; }\n");
+  status |= check_language(parser, "diff", tree_sitter_diff(), "--- a/sample.txt\n+++ b/sample.txt\n@@ -1 +1 @@\n-before\n+after\n");
   status |= check_language(parser, "go", tree_sitter_go(), "package main\nfunc main() { println(\"hello\") }\n");
   status |= check_language(parser, "html", tree_sitter_html(), "<!doctype html><p class=\"sample\">hello</p>\n");
   status |= check_language(parser, "java", tree_sitter_java(), "class Main { public static void main(String[] args) { System.out.println(\"hello\"); } }\n");

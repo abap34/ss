@@ -67,6 +67,58 @@ test "highlight cache: bundled Scheme aliases highlight literals and comments" {
     }
 }
 
+test "highlight cache: bundled diff distinguishes changes headers and context" {
+    var cache = Cache.init(testing.allocator, testing.io);
+    defer cache.deinit();
+    var config = try utils.highlight.defaultConfig(testing.allocator);
+    defer config.deinit(testing.allocator);
+    const content =
+        \\diff --git a/sample.txt b/sample.txt
+        \\index 1234567..abcdef0 100644
+        \\--- a/sample.txt
+        \\+++ b/sample.txt
+        \\@@ -1,2 +1,2 @@
+        \\-removed text
+        \\+added text
+        \\ unchanged context
+        \\!changed text
+        \\# Diff comment
+    ;
+    const cases = .{
+        .{ "removed text", .deletion },
+        .{ "added text", .addition },
+        .{ "changed text", .change },
+        .{ "@@ -1,2 +1,2 @@", .constant },
+        .{ "a/sample.txt", .string },
+        .{ "1234567", .constant },
+        .{ "100644", .number },
+        .{ "# Diff comment", .comment },
+        .{ "unchanged context", null },
+    };
+    const crlf = try std.mem.replaceOwned(u8, testing.allocator, content, "\n", "\r\n");
+    defer testing.allocator.free(crlf);
+    var failure: Failure = .none;
+    for ([_][]const u8{ content, crlf }) |source| {
+        for ([_][]const u8{ "diff", "DIFF" }) |name| {
+            var result = try cache.highlight(config.languages, name, source, &failure);
+            defer result.deinit();
+            inline for (cases) |case| {
+                const start = std.mem.indexOf(u8, source, case[0]).?;
+                for (start..start + case[0].len) |offset| {
+                    var role: ?utils.highlight.CaptureRole = null;
+                    for (result.segments()) |segment| {
+                        if (segment.start <= offset and offset < segment.end) {
+                            role = segment.role;
+                            break;
+                        }
+                    }
+                    try testing.expectEqual(@as(?utils.highlight.CaptureRole, case[1]), role);
+                }
+            }
+        }
+    }
+}
+
 test "highlight cache: paired function declaration is one complete keyword" {
     var cache = Cache.init(testing.allocator, testing.io);
     defer cache.deinit();

@@ -24,6 +24,10 @@
       url = "github:tree-sitter/tree-sitter-css/dda5cfc5722c429eaba1c910ca32c2c0c5bb1a3f";
       flake = false;
     };
+    tree-sitter-diff = {
+      url = "github:tree-sitter-grammars/tree-sitter-diff/ada384ac7bfc1307f32de474620120add29998fb";
+      flake = false;
+    };
     tree-sitter-go = {
       url = "github:tree-sitter/tree-sitter-go/2346a3ab1bb3857b48b29d779a1ef9799a248cd7";
       flake = false;

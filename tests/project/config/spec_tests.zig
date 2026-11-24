@@ -310,6 +310,9 @@ test "project spec: highlight languages parse from ss.toml" {
     const ss = utils.highlight.findLanguage(cfg.highlight.languages, "ss").?;
     try testing.expectEqualStrings("ss", ss.parser);
     try testing.expectEqualStrings("builtin:ss", ss.query);
+    const diff = utils.highlight.findLanguage(cfg.highlight.languages, "diff").?;
+    try testing.expectEqualStrings("diff", diff.parser);
+    try testing.expectEqualStrings("builtin:diff", diff.query);
     const python_snippet = utils.highlight.findLanguage(cfg.highlight.languages, "python-snippet").?;
     try testing.expectEqualStrings("python", python_snippet.parser);
     try testing.expectEqualStrings("/tmp/ss-project-spec/deck/queries/python/highlights.scm", python_snippet.query);
@@ -417,6 +420,9 @@ test "project spec: tree-sitter capture names map to code paint roles" {
         .{ .capture = "string.escape", .role = .string },
         .{ .capture = "escape", .role = .string },
         .{ .capture = "character", .role = .string },
+        .{ .capture = "diff.plus", .role = .addition },
+        .{ .capture = "diff.minus", .role = .deletion },
+        .{ .capture = "diff.delta", .role = .change },
     };
     for (cases) |case| {
         try testing.expectEqual(case.role, utils.highlight.roleForCapture(case.capture).?);
@@ -430,6 +436,7 @@ test "project spec: bundled highlight queries use mapped capture names" {
         "third_party/tree-sitter-languages/c/queries/highlights.scm",
         "third_party/tree-sitter-languages/cpp/queries/highlights.scm",
         "third_party/tree-sitter-languages/css/queries/highlights.scm",
+        "third_party/tree-sitter-languages/diff/queries/highlights.scm",
         "third_party/tree-sitter-languages/go/queries/highlights.scm",
         "third_party/tree-sitter-languages/html/queries/highlights.scm",
         "third_party/tree-sitter-languages/java/queries/highlights.scm",
