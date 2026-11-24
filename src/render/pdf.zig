@@ -950,7 +950,7 @@ fn pageContentCacheDigest(page: *const render.Page, environment_digest: render.F
 
 fn backendEnvironmentDigest() render.Fingerprint {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update("ss-pdf-native-environment-v1");
+    hasher.update("ss-pdf-native-environment-v2");
     hashVersionString(&hasher, c.ss_pdf_cairo_version_string());
     hashVersionString(&hasher, c.ss_pdf_pango_version_string());
     hashVersionString(&hasher, c.ss_pdf_librsvg_version_string());

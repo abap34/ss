@@ -797,6 +797,32 @@ test "render PDF spec: native primitive parameters cross the C boundary intact" 
     try expectContains(qdf, "0.7 0.8 0.9 RG 5 w");
 }
 
+test "render PDF spec: invisible rounded rectangles do not join the next fill path" {
+    const allocator = testing.allocator;
+    const directory = ".test-tmp/render-pdf/invisible-rounded-rect";
+    try std.Io.Dir.cwd().createDirPath(testing.io, directory);
+    const output = directory ++ "/page.pdf";
+    var pages = [_]render.Page{.{ .page_id = 1, .index = 0, .width = 320, .height = 180 }};
+    defer pages[0].deinit(allocator);
+    try pages[0].appendRoundedRect(allocator, null, .{ .x = 20, .y = 30, .width = 240, .height = 120 }, 10, null, null, 1);
+    try pages[0].appendFillRect(allocator, null, .{ .x = 50, .y = 60, .width = 80, .height = 20 }, .{ .r = 1, .g = 0, .b = 0 });
+    var semantics = try documentSemantics(allocator, pages.len);
+    defer semantics.deinit(allocator);
+    const ir = render.Ir{ .semantics = semantics, .pages = &pages };
+    try renderPage(&ir, 0, output);
+    const qdf = try qpdfQdf(allocator, testing.io, output, directory ++ "/page.qdf.pdf");
+    defer allocator.free(qdf);
+    try expectContains(qdf, "50 60 80 20 re f");
+    const start = (std.mem.indexOf(u8, qdf, "\nstream\n") orelse return error.MissingPdfStream) + "\nstream\n".len;
+    const end = std.mem.indexOfPos(u8, qdf, start, "\nendstream") orelse return error.MissingPdfStream;
+    var tokens = std.mem.tokenizeAny(u8, qdf[start..end], " \t\r\n");
+    while (tokens.next()) |token| {
+        try testing.expect(!std.mem.eql(u8, token, "m"));
+        try testing.expect(!std.mem.eql(u8, token, "l"));
+        try testing.expect(!std.mem.eql(u8, token, "c"));
+    }
+}
+
 test "render PDF spec: page renderer replays and composes ordered resources" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();

@@ -1012,6 +1012,7 @@ void ss_pdf_stroke_line(SsPdf *pdf, const SsPdfStrokeLine *line) {
 
 void ss_pdf_fill_stroke_rounded_rect(SsPdf *pdf, const SsPdfRoundedRect *rect) {
     if (pdf == NULL || pdf->cr == NULL || rect == NULL) return;
+    if (!rect->has_fill && !rect->has_stroke) return;
     ss_pdf_rounded_rect_path(pdf->cr, rect->x, rect->y, rect->width, rect->height, rect->radius);
     if (rect->has_fill) {
         ss_pdf_set_rgb(rect->fill_r, rect->fill_g, rect->fill_b, pdf->cr);
