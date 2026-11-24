@@ -2438,6 +2438,90 @@ test "Markdown highlight backgrounds wrap behind glyphs and inline icons without
     }
 }
 
+test "inline code colors preserve wrapping and explicit highlights override its background" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    var fixture = LayoutFixture.init(&state);
+    defer fixture.deinit();
+    const page_id = try state.addPage("inline-code");
+    const content = "Before `left + right + value` after ==`marked`==.";
+    for (0..2) |_| {
+        const id = try document_testing.native(&state, page_id, "body", .text, content);
+        (try fixture.frame(id)).* = .{ .width = 180, .height = 720 };
+    }
+    var prepared = try core.prepared.prepare(testing.allocator, &state);
+    defer prepared.deinit(testing.allocator);
+    const red = core.render_paint.Color{ .r = 0.7, .g = 0.2, .b = 0.3 };
+    const gray = core.render_paint.Color{ .r = 0.95, .g = 0.95, .b = 0.95 };
+    const yellow = core.render_paint.Color{ .r = 1, .g = 0.9, .b = 0.4 };
+    for (prepared.pages[0].objects) |*object| {
+        const paint = &object.render.content.text;
+        paint.typography.font.family = "DejaVu Sans";
+        paint.code.style.font.family = "DejaVu Sans Mono";
+        paint.typography.font_size = 24;
+        paint.typography.line_height = 32;
+        paint.markdown.emphasis.highlight_fill = null;
+        paint.wrap = true;
+    }
+    const styled = &prepared.pages[0].objects[1].render.content.text;
+    styled.markdown.emphasis.code_color = red;
+    styled.markdown.emphasis.code_fill = gray;
+    const plain_id = prepared.pages[0].objects[0].node_id;
+    const styled_id = prepared.pages[0].objects[1].node_id;
+    var cache = render_compile.PageCache.init(testing.allocator, testing.io);
+    defer cache.deinit();
+    for ([_]?core.render_paint.Color{ null, yellow }) |highlight| {
+        styled.markdown.emphasis.highlight_fill = highlight;
+        var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try fixture.document(), .{ .cache_dir = test_cache_dir, .jobs = 1, .page_cache = &cache });
+        defer ir.deinit(testing.allocator);
+        try ir.validate();
+        const Glyph = struct { id: u32, x: f64, y: f64, advance: f64 };
+        var plain_glyphs = std.ArrayList(Glyph).empty;
+        defer plain_glyphs.deinit(testing.allocator);
+        var styled_glyphs = std.ArrayList(Glyph).empty;
+        defer styled_glyphs.deinit(testing.allocator);
+        var gray_count: usize = 0;
+        var yellow_count: usize = 0;
+        var red_count: usize = 0;
+        var body_count: usize = 0;
+        for (ir.pages[0].items.items) |item| {
+            if (item.header().node_id != plain_id and item.header().node_id != styled_id) continue;
+            const is_styled = item.header().node_id == styled_id;
+            if (item == .fill_rect) {
+                try testing.expect(is_styled);
+                if (std.meta.eql(item.fill_rect.color, gray)) gray_count += 1 else {
+                    try testing.expectEqualDeep(yellow, item.fill_rect.color);
+                    yellow_count += 1;
+                }
+            }
+            if (item != .text) continue;
+            if (is_styled) {
+                if (std.meta.eql(item.text.color, red)) red_count += 1 else {
+                    try testing.expectEqualDeep(styled.typography.color, item.text.color);
+                    body_count += 1;
+                }
+            } else {
+                try testing.expectEqual(plain_id, item.header().node_id);
+                try testing.expectEqualDeep(styled.typography.color, item.text.color);
+            }
+            const target = if (is_styled) &styled_glyphs else &plain_glyphs;
+            for (item.text.layout.runs) |run| {
+                var x = item.text.x + run.x;
+                for (item.text.layout.glyphs[run.glyph_range.start..run.glyph_range.end]) |glyph| {
+                    try target.append(testing.allocator, .{ .id = glyph.id, .x = x + glyph.offset_x, .y = textBaseline(&item.text) + glyph.offset_y, .advance = glyph.advance_x });
+                    x += glyph.advance_x;
+                }
+            }
+        }
+        try testing.expect(gray_count >= 2);
+        try testing.expectEqual(@as(usize, if (highlight == null) 0 else 1), yellow_count);
+        try testing.expect(red_count > 0 and body_count > 0);
+        try testing.expect(plain_glyphs.items.len > 0);
+        try testing.expectEqualDeep(plain_glyphs.items, styled_glyphs.items);
+    }
+    try testing.expectEqual(@as(usize, 2), cache.entries.count());
+}
+
 test "Markdown code line backgrounds cover source rows without changing glyphs or syntax colors" {
     for ([_][]const u8{ "zig", "unknown", "" }) |language| {
         const body = "\nconst message = \"A long source line keeps its original line number and extends beyond the narrow frame\";\n\nreturn message;\n\n";

@@ -305,6 +305,8 @@ fn writeInlineTextPaint(object: *json.Object, spec: core.render_paint.TextPaint)
     try writeColor(object, "color", spec.typography.color);
     try writeColor(object, "link_color", spec.markdown.emphasis.link_color);
     try writeOptionalColor(object, "markdown_bold_color", spec.markdown.emphasis.bold_color);
+    try writeOptionalColor(object, "markdown_inline_code_color", spec.markdown.emphasis.code_color);
+    try writeOptionalColor(object, "markdown_inline_code_fill", spec.markdown.emphasis.code_fill);
     try writeMarkdownUnderlinePaint(object, spec.markdown.emphasis.underline);
     try object.floatField("math_scale", spec.math.scale, "{d:.4}");
     try object.floatField("inline_math_spacing", spec.math.inline_spacing, "{d:.4}");

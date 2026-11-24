@@ -57,6 +57,11 @@ type LinkAppearance {
   color: Color? = c"0.1,0.25,0.75"
 }
 
+type InlineCodeAppearance {
+  color: Color? = none
+  fill: Color? = none
+}
+
 type MarkdownUnderlineStyle {
   color: Color? = none
   opacity: Number = 1
@@ -99,6 +104,7 @@ type MarkdownAppearance {
   bold: BoldAppearance = BoldAppearance {}
   italic: ItalicAppearance = ItalicAppearance {}
   link: LinkAppearance = LinkAppearance {}
+  code: InlineCodeAppearance = InlineCodeAppearance {}
   highlight_fill: Color? = c"#fff2a8"
   underline: MarkdownUnderlineStyle = MarkdownUnderlineStyle {}
   block_gap: Number = 8

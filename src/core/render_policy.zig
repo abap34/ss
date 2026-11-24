@@ -190,6 +190,8 @@ fn resolveMarkdown(state: anytype, node: *const Node, font_size: f32) paint.Mark
         .emphasis = .{
             .bold_color = parseRecordColorProperty(state, node, "markdown", &.{ "bold", "color" }),
             .link_color = parseRecordColorProperty(state, node, "markdown", &.{ "link", "color" }) orelse FALLBACK_LINK_COLOR,
+            .code_color = parseRecordColorProperty(state, node, "markdown", &.{ "code", "color" }),
+            .code_fill = parseRecordColorProperty(state, node, "markdown", &.{ "code", "fill" }),
             .highlight_fill = parseRecordColorProperty(state, node, "markdown", &.{"highlight_fill"}),
             .underline = resolveMarkdownUnderline(state, node),
             .bold_weight = font_model.boldWeight(state, node),

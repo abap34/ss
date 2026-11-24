@@ -101,12 +101,15 @@ pub fn prepareRunSpans(ctx: Context, runs: []const Run, text: TextPaint, spans: 
             .icon => if (run.icon) |source| try appendIconSpan(ctx, spans, source, text),
             .bold => try appendTextSpan(ctx, spans, run.text, text.boldFont(), text.markdown.emphasis.bold_color orelse text.typography.color, null, run.strikethrough, run.underline, text.markdown.emphasis.underline, .{ .start = run.source_start, .end = run.source_end }),
             .italic => try appendTextSpan(ctx, spans, run.text, text.italicFont(), text.typography.color, null, run.strikethrough, run.underline, text.markdown.emphasis.underline, .{ .start = run.source_start, .end = run.source_end }),
-            .code => try appendTextSpan(ctx, spans, run.text, text.code.style.font, text.typography.color, null, run.strikethrough, run.underline, text.markdown.emphasis.underline, .{ .start = run.source_start, .end = run.source_end }),
+            .code => {
+                try appendTextSpan(ctx, spans, run.text, text.code.style.font, text.markdown.emphasis.code_color orelse text.typography.color, null, run.strikethrough, run.underline, text.markdown.emphasis.underline, .{ .start = run.source_start, .end = run.source_end });
+                for (spans.items[start..]) |*span| span.background = text.markdown.emphasis.code_fill;
+            },
             .link => try appendTextSpan(ctx, spans, run.text, text.typography.font, text.markdown.emphasis.link_color, run.url, run.strikethrough, true, .{}, .{ .start = run.source_start, .end = run.source_end }),
             .text => try appendTextSpan(ctx, spans, run.text, text.typography.font, text.typography.color, null, run.strikethrough, run.underline, text.markdown.emphasis.underline, .{ .start = run.source_start, .end = run.source_end }),
         }
-        if (run.highlighted) for (spans.items[start..]) |*span| {
-            span.background = text.markdown.emphasis.highlight_fill;
+        if (run.highlighted) if (text.markdown.emphasis.highlight_fill) |fill| {
+            for (spans.items[start..]) |*span| span.background = fill;
         };
     }
 }

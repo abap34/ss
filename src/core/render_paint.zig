@@ -155,6 +155,8 @@ pub const InlineMarkdown = struct {
     italic_style: font.Style,
     bold_color: ?Color,
     link_color: Color,
+    code_color: ?Color = null,
+    code_fill: ?Color = null,
     highlight_fill: ?Color,
     underline: MarkdownUnderlinePaint,
 };
