@@ -938,30 +938,16 @@ pub const DocumentState = struct {
         for (children) |child_id| try self.discardObjectSubtreeInner(child_id, visited);
     }
 
-    pub fn markReturnedObjectOrigins(self: *DocumentState, return_id: NodeId, start_index: usize, origin: ?model.SourceOrigin) !void {
-        const value = origin orelse return;
-        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
-        defer seen.deinit();
-        var queue = std.ArrayList(NodeId).empty;
-        defer queue.deinit(self.allocator);
-        try queue.append(self.allocator, return_id);
-        var index: usize = 0;
-        while (index < queue.items.len) : (index += 1) {
-            const id = queue.items[index];
-            const entry = try seen.getOrPut(id);
-            if (entry.found_existing) continue;
-            try self.setGeneratedNodeOrigin(id, start_index, value);
-            if (self.childrenOf(id)) |children| try queue.appendSlice(self.allocator, children);
+    /// Attribute every placement created by an invocation to its call site,
+    /// including side effects that are not reachable from its return value.
+    /// Earlier placements passed as arguments retain their own source.
+    pub fn markCreatedObjectOrigins(self: *DocumentState, start_index: usize, origin: model.SourceOrigin) !void {
+        const nodes = self.graph.nodes.items[start_index..];
+        if (nodes.len == 0) return;
+        const owned_origin = try self.copyOrigin(origin);
+        for (nodes) |*node| {
+            if (node.kind == .object) node.origin = owned_origin;
         }
-    }
-
-    fn setGeneratedNodeOrigin(self: *DocumentState, node_id: NodeId, start_index: usize, origin: model.SourceOrigin) !void {
-        if (node_id == 0) return;
-        const node_index: usize = @intCast(node_id - 1);
-        if (node_index < start_index or node_index >= self.graph.nodes.items.len) return;
-        const node = &self.graph.nodes.items[node_index];
-        if (node.id != node_id) return;
-        node.origin = try self.copyOrigin(origin);
     }
 
     pub fn setNodeFieldValue(self: *DocumentState, node_id: NodeId, key: []const u8, value: Value) !void {
