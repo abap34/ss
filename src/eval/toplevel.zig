@@ -815,7 +815,7 @@ fn borrowConstValue(
     var value_moved = false;
     errdefer if (!value_moved) value.deinit(state.allocator);
     try value_contracts.ensureValueConformsToType(state, document, value, resolved.decl.value_type, current_origin, .UnmatchedReturnType);
-    try markReturnedValueOrigins(state, value, start_node_count, current_origin);
+    try state.markCreatedObjectOrigins(start_node_count, current_origin);
     try state.constants.values.put(resolved.key, value);
     value_moved = true;
     try state.constants.eval_states.put(resolved.key, 2);
@@ -2049,16 +2049,6 @@ fn addValueObjectSources(
     }
 }
 
-fn markReturnedValueOrigins(state: *core.DocumentState, value: core.Value, start_node_count: usize, origin: core.SourceOrigin) !void {
-    switch (value) {
-        .object => |id| try state.markReturnedObjectOrigins(id, start_node_count, origin),
-        .record => |record| {
-            for (record.fields.items) |field| try markReturnedValueOrigins(state, field.value, start_node_count, origin);
-        },
-        else => {},
-    }
-}
-
 fn discardStatementValue(state: *core.DocumentState, value: core.Value) !void {
     switch (value) {
         .object => |id| try state.discardObjectSubtree(id),
@@ -2119,7 +2109,7 @@ fn invokeClosureValues(
     const start_node_count = state.nodeCount();
     var value = try evalExpr(evaluation, page_id, scope, local_env, current_origin, closure.lambda.body.*);
     errdefer value.deinit(state.allocator);
-    try markReturnedValueOrigins(state, value, start_node_count, current_origin);
+    try state.markCreatedObjectOrigins(start_node_count, current_origin);
     return value;
 }
 
@@ -2136,9 +2126,8 @@ fn invokeUserFunctionValues(
     const frame = try enterCall(evaluation, module_id, current_origin, null);
     defer leaveCall(evaluation, frame);
     const local_env = &frame.environment;
-    try bindUserFunctionValueArgs(evaluation, page_id, scope, local_env, module_id, func, current_origin, args);
-
     const start_node_count = state.nodeCount();
+    try bindUserFunctionValueArgs(evaluation, page_id, scope, local_env, module_id, func, current_origin, args);
     for (func.statements.items) |inner| {
         const flow = try executeStatement(evaluation, page_id, scope, local_env, inner);
         switch (flow) {
@@ -2147,13 +2136,16 @@ fn invokeUserFunctionValues(
                 var value = result;
                 errdefer value.deinit(state.allocator);
                 try value_contracts.ensureValueConformsToType(state, page_id, value, func.result_type, current_origin, .UnmatchedReturnType);
-                try markReturnedValueOrigins(state, value, start_node_count, current_origin);
+                try state.markCreatedObjectOrigins(start_node_count, current_origin);
                 return value;
             },
         }
     }
 
-    if (func.result_type.kind == .void) return .{ .void = {} };
+    if (func.result_type.kind == .void) {
+        try state.markCreatedObjectOrigins(start_node_count, current_origin);
+        return .{ .void = {} };
+    }
     return error.FunctionDidNotReturnValue;
 }
 
