@@ -41,7 +41,8 @@ pub const AccessSummary = struct {
     depends_on_caller_scope: bool = false,
     writes_layout_input: bool = false,
     places_objects: bool = false,
-    invalid_selection_mutation: ?InvalidSelectionMutation = null,
+    // Diagnostics identify the execution unit; no offending resource is retained.
+    invalid_selection_mutation: bool = false,
     invalid_drawing_condition: ?core.SourceOrigin = null,
 
     pub const DrawingDefinition = struct {
@@ -54,11 +55,6 @@ pub const AccessSummary = struct {
         call_id: u64,
         steps: std.ArrayList(AccessSummary),
         page_scope: ResourceScope,
-    };
-
-    pub const InvalidSelectionMutation = struct {
-        resource: Resource,
-        origin: ast.Span,
     };
 
     pub fn init(allocator: std.mem.Allocator) AccessSummary {
@@ -204,7 +200,7 @@ pub const AccessSummary = struct {
         self.depends_on_caller_scope = self.depends_on_caller_scope or other.depends_on_caller_scope;
         self.writes_layout_input = self.writes_layout_input or other.writes_layout_input;
         self.places_objects = self.places_objects or other.places_objects;
-        if (self.invalid_selection_mutation == null) self.invalid_selection_mutation = other.invalid_selection_mutation;
+        self.invalid_selection_mutation = self.invalid_selection_mutation or other.invalid_selection_mutation;
         if (self.invalid_drawing_condition == null) self.invalid_drawing_condition = other.invalid_drawing_condition;
     }
 
@@ -306,7 +302,7 @@ pub fn formatAccessSummaryWithOptions(
         try appendFlagLine(allocator, &out, "places_objects");
         wrote_item = true;
     }
-    if (summary.invalid_selection_mutation != null) {
+    if (summary.invalid_selection_mutation) {
         try appendFlagLine(allocator, &out, "invalid_selection_mutation");
         wrote_item = true;
     }
@@ -1034,6 +1030,10 @@ pub const Analyzer = struct {
         try pass.fallthrough.include(self.allocator, entry);
         const exits = try control.block(&pass, items);
         if (returned) |result| result.exits = exits;
+        return self.summarizeBlock(&parts, &pass, exits, first_local, exits_out);
+    }
+
+    fn summarizeBlock(self: *Analyzer, parts: *std.ArrayList(AccessSummary), pass: *AccessBlock, exits: control.Exits, first_local: usize, exits_out: ?*SettingExits) !AccessSummary {
         const end_local = self.localObjectCounter().*;
         // A fresh local object's defaults are closed only while the object stays
         // inside this execution unit. Escaping objects may receive definitions
@@ -2117,39 +2117,43 @@ pub const Analyzer = struct {
     fn analyzeCallWithReturns(self: *Analyzer, call: ast.CallExpr, returned: ?*AbstractValue) anyerror!AccessSummary {
         if (call.callee.name_hole != null) return try self.callArgs(call);
         return switch (try self.valueBinding(call.callee)) {
-            .local, .constant => blk: {
-                var args = try self.callArguments(call);
-                defer self.deinitArguments(&args);
-                var summary = AccessSummary.init(self.allocator);
-                errdefer summary.deinit();
-                switch (try self.valueBinding(call.callee)) {
-                    .constant => |resolved| {
-                        var initialization = try self.constantSummary(resolved);
-                        defer initialization.deinit();
-                        try summary.merge(initialization);
-                    },
-                    else => try self.addVariableRead(&summary, call.callee.name),
-                }
-                for (args.items) |arg| try summary.appendSequential(arg.summary);
-                const value = try self.callableValue(call.callee);
-                var invoked = try self.invokeValueWithReturns(value, args.items, returned);
-                defer invoked.deinit();
-                try summary.appendSequential(invoked);
-                break :blk summary;
-            },
-            .function => |resolved| blk: {
-                var arg_facts = try self.callArguments(call);
-                defer self.deinitArguments(&arg_facts);
-                var summary = try self.argumentSummary(arg_facts.items);
-                errdefer summary.deinit();
-                var invoked = try self.functionCallWithReturns(resolved.key, resolved.module_id, resolved.decl, arg_facts.items, returned);
-                defer invoked.deinit();
-                try summary.appendSequential(invoked);
-                break :blk summary;
-            },
+            .local, .constant => try self.analyzeCallableCall(call, returned),
+            .function => |resolved| try self.analyzeFunctionCall(call, resolved, returned),
             .primitive => |primitive| try self.primitiveCall(call, primitive, returned),
             .unknown => try self.callArgs(call),
         };
+    }
+
+    fn analyzeCallableCall(self: *Analyzer, call: ast.CallExpr, returned: ?*AbstractValue) anyerror!AccessSummary {
+        var args = try self.callArguments(call);
+        defer self.deinitArguments(&args);
+        var summary = AccessSummary.init(self.allocator);
+        errdefer summary.deinit();
+        switch (try self.valueBinding(call.callee)) {
+            .constant => |resolved| {
+                var initialization = try self.constantSummary(resolved);
+                defer initialization.deinit();
+                try summary.merge(initialization);
+            },
+            else => try self.addVariableRead(&summary, call.callee.name),
+        }
+        for (args.items) |arg| try summary.appendSequential(arg.summary);
+        const value = try self.callableValue(call.callee);
+        var invoked = try self.invokeValueWithReturns(value, args.items, returned);
+        defer invoked.deinit();
+        try summary.appendSequential(invoked);
+        return summary;
+    }
+
+    fn analyzeFunctionCall(self: *Analyzer, call: ast.CallExpr, resolved: semantic_env.ResolvedFunction, returned: ?*AbstractValue) anyerror!AccessSummary {
+        var args = try self.callArguments(call);
+        defer self.deinitArguments(&args);
+        var summary = try self.argumentSummary(args.items);
+        errdefer summary.deinit();
+        var invoked = try self.functionCallWithReturns(resolved.key, resolved.module_id, resolved.decl, args.items, returned);
+        defer invoked.deinit();
+        try summary.appendSequential(invoked);
+        return summary;
     }
 
     fn callArgs(self: *Analyzer, call: ast.CallExpr) anyerror!AccessSummary {
@@ -2185,77 +2189,18 @@ pub const Analyzer = struct {
         property_target: ?PropertyTarget = null,
     };
 
+    // Keep variant-local temporaries in separate frames: Debug builds retain
+    // stack slots for every switch arm across recursive calls.
     fn analyzeArgument(self: *Analyzer, arg: ast.Expr) anyerror!CallArgument {
         if (self.sema.state) |state| try state.checkAnalysisCanceled();
         var facts = CallArgument{ .summary = AccessSummary.init(self.allocator) };
         errdefer facts.deinit();
         switch (arg) {
             .call => |call| facts.summary = try self.analyzeCallWithReturns(call, &facts.values),
-            .apply => |apply| {
-                var callee = try self.analyzeArgument(apply.callee.*);
-                defer callee.deinit();
-                try facts.summary.merge(callee.summary);
-                var args = try self.analyzeArguments(apply.args.items);
-                defer self.deinitArguments(&args);
-                for (args.items) |argument| try facts.summary.appendSequential(argument.summary);
-                var invoked = try self.invokeValueWithReturns(callee.values, args.items, &facts.values);
-                defer invoked.deinit();
-                try facts.summary.appendSequential(invoked);
-            },
-            .record => |record| {
-                var fields = std.ArrayList(AbstractValue.Field).empty;
-                const allocator = self.value_storage.allocator();
-                if (self.sema.recordConstruction(record)) |decl| {
-                    for (decl.decl.fields.items) |field| {
-                        if (record.hasField(field.name)) continue;
-                        const default = field.default_value orelse continue;
-                        var snapshot = self.environment.pushFresh();
-                        defer snapshot.restore();
-                        const previous = self.sema;
-                        self.sema = self.sema.forModule(decl.module_id);
-                        defer self.sema = previous;
-                        var nested = try self.analyzeArgument(default.*);
-                        defer nested.deinit();
-                        try facts.summary.appendSequential(nested.summary);
-                        if (nested.values.id != 0) try fields.append(allocator, .{ .name = field.name, .value = nested.values });
-                    }
-                }
-                for (record.fields.items) |field| {
-                    var nested = try self.analyzeArgument(field.value);
-                    defer nested.deinit();
-                    try facts.summary.appendSequential(nested.summary);
-                    if (nested.values.id != 0) try fields.append(allocator, .{ .name = field.name, .value = nested.values });
-                }
-                facts.values = self.withAlternatives(try self.newValue(&.{}, fields.items), .bottom, .yes);
-            },
-            .record_update => |update| {
-                var original = try self.analyzeArgument(update.target.*);
-                defer original.deinit();
-                try facts.summary.merge(original.summary);
-                facts.values = original.values;
-                for (update.fields.items) |field| {
-                    var nested = try self.analyzeArgument(field.value);
-                    defer nested.deinit();
-                    try facts.summary.appendSequential(nested.summary);
-                    facts.values = try self.updateValueField(facts.values, field.path.items, nested.values);
-                }
-            },
-            .coalesce => |coalesce| {
-                var target = try self.analyzeArgument(coalesce.target.*);
-                defer target.deinit();
-                try facts.summary.merge(target.summary);
-                const route = control.coalesce(target.values.present.orUnknown());
-                if (route == .left) {
-                    facts.values = target.values;
-                } else {
-                    var fallback = try self.analyzeArgument(coalesce.fallback.*);
-                    defer fallback.deinit();
-                    try self.guardFallback(coalesce.target.*, &fallback.summary);
-                    if (route == .both) fallback.summary.defined_settings.clear();
-                    try facts.summary.appendSequential(fallback.summary);
-                    facts.values = if (route == .right) fallback.values else try self.joinValues(self.withAlternatives(target.values, target.values.truth, .yes), fallback.values);
-                }
-            },
+            .apply => |apply| try self.analyzeApplyArgument(apply, &facts),
+            .record => |record| try self.analyzeRecordArgument(record, &facts),
+            .record_update => |update| try self.analyzeRecordUpdateArgument(update, &facts),
+            .coalesce => |coalesce| try self.analyzeCoalesceArgument(coalesce, &facts),
             else => {
                 facts.summary = try self.analyzeExpr(arg);
                 facts.values = try self.expressionValue(arg);
@@ -2264,6 +2209,75 @@ pub const Analyzer = struct {
         facts.string_literal = try literalStringExpr(self, arg);
         facts.property_target = try self.propertyTargetExpr(arg);
         return facts;
+    }
+
+    fn analyzeApplyArgument(self: *Analyzer, apply: ast.ApplyExpr, facts: *CallArgument) anyerror!void {
+        var callee = try self.analyzeArgument(apply.callee.*);
+        defer callee.deinit();
+        try facts.summary.merge(callee.summary);
+        var args = try self.analyzeArguments(apply.args.items);
+        defer self.deinitArguments(&args);
+        for (args.items) |argument| try facts.summary.appendSequential(argument.summary);
+        var invoked = try self.invokeValueWithReturns(callee.values, args.items, &facts.values);
+        defer invoked.deinit();
+        try facts.summary.appendSequential(invoked);
+    }
+
+    fn analyzeRecordArgument(self: *Analyzer, record: ast.RecordExpr, facts: *CallArgument) anyerror!void {
+        var fields = std.ArrayList(AbstractValue.Field).empty;
+        const allocator = self.value_storage.allocator();
+        if (self.sema.recordConstruction(record)) |decl| {
+            for (decl.decl.fields.items) |field| {
+                if (record.hasField(field.name)) continue;
+                const default = field.default_value orelse continue;
+                var snapshot = self.environment.pushFresh();
+                defer snapshot.restore();
+                const previous = self.sema;
+                self.sema = self.sema.forModule(decl.module_id);
+                defer self.sema = previous;
+                var nested = try self.analyzeArgument(default.*);
+                defer nested.deinit();
+                try facts.summary.appendSequential(nested.summary);
+                if (nested.values.id != 0) try fields.append(allocator, .{ .name = field.name, .value = nested.values });
+            }
+        }
+        for (record.fields.items) |field| {
+            var nested = try self.analyzeArgument(field.value);
+            defer nested.deinit();
+            try facts.summary.appendSequential(nested.summary);
+            if (nested.values.id != 0) try fields.append(allocator, .{ .name = field.name, .value = nested.values });
+        }
+        facts.values = self.withAlternatives(try self.newValue(&.{}, fields.items), .bottom, .yes);
+    }
+
+    fn analyzeRecordUpdateArgument(self: *Analyzer, update: ast.RecordUpdateExpr, facts: *CallArgument) anyerror!void {
+        var original = try self.analyzeArgument(update.target.*);
+        defer original.deinit();
+        try facts.summary.merge(original.summary);
+        facts.values = original.values;
+        for (update.fields.items) |field| {
+            var nested = try self.analyzeArgument(field.value);
+            defer nested.deinit();
+            try facts.summary.appendSequential(nested.summary);
+            facts.values = try self.updateValueField(facts.values, field.path.items, nested.values);
+        }
+    }
+
+    fn analyzeCoalesceArgument(self: *Analyzer, coalesce: ast.CoalesceExpr, facts: *CallArgument) anyerror!void {
+        var target = try self.analyzeArgument(coalesce.target.*);
+        defer target.deinit();
+        try facts.summary.merge(target.summary);
+        const route = control.coalesce(target.values.present.orUnknown());
+        if (route == .left) {
+            facts.values = target.values;
+        } else {
+            var fallback = try self.analyzeArgument(coalesce.fallback.*);
+            defer fallback.deinit();
+            try self.guardFallback(coalesce.target.*, &fallback.summary);
+            if (route == .both) fallback.summary.defined_settings.clear();
+            try facts.summary.appendSequential(fallback.summary);
+            facts.values = if (route == .right) fallback.values else try self.joinValues(self.withAlternatives(target.values, target.values.truth, .yes), fallback.values);
+        }
     }
 
     fn stringArgument(self: *Analyzer, arg: ast.Expr) anyerror!StringArgument {
@@ -2804,14 +2818,11 @@ pub const Analyzer = struct {
         for (summary.selection_reads.items) |selection_resource| {
             for (callback_summary.writes.items) |write_resource| {
                 if (selection_resource.intersects(write_resource)) {
-                    summary.invalid_selection_mutation = .{
-                        .resource = selection_resource,
-                        .origin = .{ .start = 0, .end = 0 },
-                    };
+                    summary.invalid_selection_mutation = true;
                     break;
                 }
             }
-            if (summary.invalid_selection_mutation != null) break;
+            if (summary.invalid_selection_mutation) break;
         }
         // A selection may be empty, or it may invoke the callback repeatedly.
         // Reads in one invocation can precede writes in a later invocation.
