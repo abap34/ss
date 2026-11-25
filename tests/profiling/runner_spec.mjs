@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -107,7 +107,12 @@ export async function run(p) {
   p.result.custom = {editor: true, caption};
 }
 `);
-  const { result, output } = await execute(context, directory, { SS_PROFILE_SCRIPT: script });
+  // Exercise canonical module URLs even on systems without macOS's /var link.
+  const links = path.join(directory, "links");
+  await mkdir(links);
+  await symlink(scriptDirectory, path.join(links, "experiment"), "dir");
+  const linkedScript = path.join(links, "experiment/run.mjs");
+  const { result, output } = await execute(context, directory, { SS_PROFILE_SCRIPT: linkedScript });
   assert.equal(result.status, "success");
   assert.equal(result.script.protocol_version, 17);
   assert.equal(Object.keys(result.script.inputs).length, 3);
