@@ -100,19 +100,26 @@ async function assertPackageCompletion(script, shell, home) {
     expect_candidate() { [[ " \${COMPREPLY[*]} " == *" $1 "* ]] || { printf 'missing completion: %s\\n' "$1" >&2; exit 1; }; }
     for prefix in '' help; do
       if [[ -z "$prefix" ]]; then complete_line ss ''; else complete_line ss "$prefix" ''; fi
-      for command in add fetch update; do expect_candidate "$command"; done
+      for command in add fetch update status; do expect_candidate "$command"; done
     done
     complete_line ss add --
     for option in --git --tag --branch --rev --project; do expect_candidate "$option"; done
     complete_line ss add --git 'repository --tag backup' --
     for option in --tag --branch --rev; do expect_candidate "$option"; done
-    for command in fetch update; do
+    for command in fetch update status; do
       complete_line ss "$command" --
       expect_candidate --project
       [[ " \${COMPREPLY[*]} " != *' --git '* ]] || exit 1
       complete_line ss "$command" --project project
       [[ \${#COMPREPLY[@]} -eq 1 && "\${COMPREPLY[0]}" == 'project manifest.toml' ]] || exit 1
     done
+    complete_line ss status --
+    expect_candidate --color
+    for option in --git --locked --asset-base-dir; do
+      [[ " \${COMPREPLY[*]} " != *" $option "* ]] || exit 1
+    done
+    complete_line ss status --color ''
+    for mode in auto always never; do expect_candidate "$mode"; done
     complete_line ss fetch --
     expect_candidate --locked
     complete_line ss update --
@@ -136,7 +143,7 @@ async function assertPackageCompletion(script, shell, home) {
     end
     for prefix in 'ss ' 'ss help '
       set -l results (candidates $prefix)
-      for command in add fetch update
+      for command in add fetch update status
         contains -- $command $results; or exit 1
       end
     end
@@ -144,11 +151,18 @@ async function assertPackageCompletion(script, shell, home) {
     for option in --git --tag --branch --rev --project
       contains -- $option $results; or exit 1
     end
-    for command in fetch update
+    for command in fetch update status
       set results (candidates "ss $command --")
       contains -- --project $results; or exit 1
       contains -- --git $results; and exit 1
       string match -q '*project*manifest.toml*' (candidates "ss $command --project project"); or exit 1
+    end
+    contains -- --color (candidates "ss status --"); or exit 1
+    for option in --git --locked --asset-base-dir
+      contains -- $option (candidates "ss status --"); and exit 1
+    end
+    for mode in auto always never
+      contains -- $mode (candidates "ss status --color "); or exit 1
     end
     contains -- --locked (candidates "ss fetch --"); or exit 1
     contains -- --locked (candidates "ss update --"); and exit 1
@@ -171,7 +185,7 @@ async function testPackageCommandHelp() {
   try {
     const general = await runCompletion(["--help"], home);
     assert(general.code === 0, `general help failed:\n${combined(general)}`);
-    for (const command of ["init", "add", "fetch", "update"]) {
+    for (const command of ["init", "add", "fetch", "update", "status"]) {
       assert(general.stdout.includes(`ss ${command}`), `general help omitted ${command}`);
       for (const args of [[command, "--help"], [command, "-h"], [command, "help"], ["help", command]]) {
         const result = await runCompletion(args, home);
@@ -181,7 +195,8 @@ async function testPackageCommandHelp() {
           ? ["--package", "--entry", "--force", "--user", "--host", "--no-git"]
           : command === "add"
             ? ["--git", "--tag", "--branch", "--rev", "--project"]
-            : command === "fetch" ? ["--locked", "--project"] : ["--project"];
+            : command === "fetch" ? ["--locked", "--project"]
+              : command === "status" ? ["--project", "--color"] : ["--project"];
         for (const option of options) {
           assert(result.stdout.includes(option), `command help omitted ${option}`);
         }

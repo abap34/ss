@@ -18,7 +18,12 @@ fn parse(command: []const u8, args: []const []const u8) !Options {
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         const arg = args[i];
-        if (std.mem.eql(u8, arg, "--locked")) {
+        if (std.mem.eql(u8, command, "status") and std.mem.eql(u8, arg, "--color")) {
+            if (i + 1 == args.len) return error.InvalidUsage;
+            const mode = std.meta.stringToEnum(utils.err.ColorMode, args[i + 1]) orelse return error.InvalidUsage;
+            utils.err.setColorMode(mode);
+            i += 1;
+        } else if (std.mem.eql(u8, arg, "--locked")) {
             if (!std.mem.eql(u8, command, "fetch") or options.locked) return error.InvalidUsage;
             options.locked = true;
         } else if (std.mem.startsWith(u8, arg, "-")) {
@@ -54,6 +59,9 @@ pub fn run(a: std.mem.Allocator, io: std.Io, environ: std.process.Environ, comma
         break :blk try std.fs.path.join(temporary, &.{ directory, "ss.toml" });
     };
     const root = std.fs.path.dirname(config_path).?;
+    if (std.mem.eql(u8, command, "status")) {
+        return @import("package_status.zig").run(temporary, io, root, config_path);
+    }
     var environment = try environ.createMap(temporary);
     defer environment.deinit();
     try environment.put("GIT_TERMINAL_PROMPT", "0");
@@ -156,7 +164,7 @@ fn quoted(a: std.mem.Allocator, value: []const u8) ![]const u8 {
 pub fn errorMessage(err: anyerror) ?[]const u8 {
     if (packages.resolve.errorMessage(err)) |message| return message;
     return switch (err) {
-        error.InvalidUsage => "usage: ss add --git URL [--tag TAG | --branch BRANCH | --rev COMMIT] [--project FILE_OR_DIR]; ss fetch [--locked] [--project FILE_OR_DIR]; ss update [NAME] [--project FILE_OR_DIR]",
+        error.InvalidUsage => "usage: ss add --git URL [--tag TAG | --branch BRANCH | --rev COMMIT] [--project FILE_OR_DIR]; ss fetch [--locked] [--project FILE_OR_DIR]; ss update [NAME] [--project FILE_OR_DIR]; ss status [--project FILE_OR_DIR] [--color auto|always|never]",
         error.InvalidDependencyName => "InvalidDependencyName: use an identifier containing letters, digits and underscores",
         error.InvalidDependencySource => "InvalidDependencySource: specify a Git URL and at most one tag, branch or revision",
         error.DependencyAlreadyExists => "DependencyAlreadyExists: edit its source in ss.toml or use 'ss update NAME'",
