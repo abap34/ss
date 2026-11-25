@@ -336,6 +336,7 @@ fn resolveAnchorPathInfo(
         try addUserReport(state, origin, "UnknownIdentifier", "unknown constraint object '{s}'", .{first});
         return error.UnknownIdentifier;
     };
+    try info.requireValid();
     while (iter.next()) |field_name| {
         if (info.hole != null) return info;
         if (info.ty.kind == .placed) {
