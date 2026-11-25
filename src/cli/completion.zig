@@ -2,6 +2,7 @@ const std = @import("std");
 const utils = @import("utils");
 
 const help = @import("help.zig");
+const input = @import("input.zig");
 
 pub const Shell = enum {
     bash,
@@ -122,29 +123,12 @@ fn install(io: std.Io, allocator: std.mem.Allocator, plan: *const InstallPlan, s
 fn confirm() !bool {
     std.debug.print("Proceed? [y/N] ", .{});
     var buffer: [32]u8 = undefined;
-    const line = readStdinLine(&buffer) catch |err| switch (err) {
-        error.EndOfStream => return false,
+    const line = input.readLine(&buffer) catch |err| switch (err) {
+        error.EndOfStream, error.InputTooLong => return false,
         else => return err,
     };
     const trimmed = std.mem.trim(u8, line, " \t\r\n");
     return std.ascii.eqlIgnoreCase(trimmed, "y") or std.ascii.eqlIgnoreCase(trimmed, "yes");
-}
-
-fn readStdinLine(buffer: []u8) ![]const u8 {
-    var len: usize = 0;
-    while (len < buffer.len) {
-        var byte: [1]u8 = undefined;
-        const n = std.c.read(0, &byte, 1);
-        if (n < 0) return error.ReadFailed;
-        if (n == 0) {
-            if (len == 0) return error.EndOfStream;
-            break;
-        }
-        buffer[len] = byte[0];
-        len += 1;
-        if (byte[0] == '\n') break;
-    }
-    return buffer[0..len];
 }
 
 const ExistingState = enum {
