@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -103,9 +103,9 @@ end
       `out-of-range nodeId did not return Invalid params: ${invalidNode}`,
     );
 
-    // A disk edit without a change notification can invalidate source spans
-    // while a cached snapshot remains current. The failed edit must respond and
-    // unwind its generated state, leaving subsequent requests usable.
+    // Disk edits invalidate cached snapshots even without change notifications.
+    // Reject an edit from the old preview without overwriting the external edit,
+    // then allow editing again after valid source is restored and reloaded.
     const externalSlide = path.join(project, "external.ss");
     const externalUri = pathToFileURL(externalSlide).toString();
     const externalSource = `import std:themes/default as *
@@ -120,14 +120,18 @@ end
     const target = editingTarget(external, "item");
     const from = previewBounds(external, target.node_id);
     const to = { ...from, x: from.x + 20, y: from.y + 10 };
-    await writeFile(externalSlide, externalSource.replace("+ 40", "% 40"));
-    const failedEdit = await requestEdit(client, externalUri, external, target, from, to, "relative", target.page_id)
-      .then(() => null, (error) => error);
-    assert(failedEdit instanceof Error && failedEdit.message.includes("-32603: InvalidConstraintOrigin"),
-      `failed request did not return an internal error: ${failedEdit}`);
+    const changedSource = externalSource.replace("+ 40", "% 40");
+    await writeFile(externalSlide, changedSource);
+    const rejectedEdit = await requestEdit(client, externalUri, external, target, from, to, "relative", target.page_id);
+    assert(rejectedEdit.status === "stale", `external edit did not invalidate the snapshot: ${JSON.stringify(rejectedEdit)}`);
+    assert(await readFile(externalSlide, "utf8") === changedSource, "stale request overwrote the external edit");
     await writeFile(externalSlide, externalSource);
-    const nextEdit = await requestEdit(client, externalUri, external, target, from, to, "relative", target.page_id);
-    assert(nextEdit.status === "ok", `failed request broke later edits: ${JSON.stringify(nextEdit)}`);
+    const refreshed = await client.request("ss/editorSnapshot", { textDocument: { uri: externalUri } });
+    const refreshedTarget = editingTarget(refreshed, "item");
+    const refreshedFrom = previewBounds(refreshed, refreshedTarget.node_id);
+    const refreshedTo = { ...refreshedFrom, x: refreshedFrom.x + 20, y: refreshedFrom.y + 10 };
+    const nextEdit = await requestEdit(client, externalUri, refreshed, refreshedTarget, refreshedFrom, refreshedTo, "relative", refreshedTarget.page_id);
+    assert(nextEdit.status === "ok", `stale request broke later edits: ${JSON.stringify(nextEdit)}`);
 
     const recoveredDiagnostics = client.waitForDiagnostics(
       uri,
