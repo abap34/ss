@@ -22,12 +22,12 @@ delete env.NO_COLOR;
 delete env.CLICOLOR;
 const python = command("sh", ["-c", "command -v python3"], work).stdout.trim();
 const terminalOutput = `
-import errno, os, pty, subprocess, sys
+import errno, os, pty, select, subprocess, sys
 master, slave = pty.openpty()
 try:
     result = subprocess.run(sys.argv[1:], stdout=slave, stderr=subprocess.PIPE, timeout=10)
-    os.close(slave)
-    while True:
+    # macOS discards unread output when the last slave descriptor closes.
+    while select.select([master], [], [], 0)[0]:
         try:
             data = os.read(master, 4096)
         except OSError as error:
@@ -38,6 +38,7 @@ try:
     sys.stderr.buffer.write(result.stderr)
     sys.exit(result.returncode)
 finally:
+    os.close(slave)
     os.close(master)
 `;
 const stripColor = value => value.replace(/\x1b\[[0-9;]*m/g, "").replace(/\r\n/g, "\n");
