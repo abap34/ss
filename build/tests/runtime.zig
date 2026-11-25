@@ -36,7 +36,7 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
         .{ .path = "tests/runtime/document/references/practical_spec.mjs", .name = "test-placement-reference-practical", .description = "Check themed reference decks, declaration permutations, and editor recovery" },
         .{ .path = "tests/runtime/document/typed_page_numbers_spec.mjs", .name = "test-typed-document", .description = "Check typed page numbers, contents, and references in a multi-page document" },
         .{ .path = "tests/runtime/cli_diagnostics_runtime_spec.mjs" },
-        .{ .path = "tests/runtime/cli/init/spec.mjs", .name = "test-init", .description = "Check generated project content, imports, customization, and overwrite protection" },
+        .{ .path = "tests/runtime/cli/init/spec.mjs", .name = "test-init", .description = "Check generated decks and packages, imports, customization, and overwrite protection" },
         .{ .path = "tests/runtime/completion_runtime_spec.mjs", .name = "test-shell-completion", .description = "Check shell completion commands, options, argument values and installation" },
         .{ .path = "tests/runtime/debug_runtime_spec.mjs" },
         .{ .path = "tests/runtime/doctor_runtime_spec.mjs" },

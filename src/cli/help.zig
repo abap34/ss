@@ -22,7 +22,7 @@ pub fn general(output: Output) void {
         \\  {s}ss <command>{s} [options]
         \\
         \\{s}Project:{s}
-        \\  {s}ss init [dir]{s}           Create a project
+        \\  {s}ss init [dir]{s}           Create a deck or package
         \\  {s}ss doctor{s}               Check local setup
         \\  {s}ss add --git URL{s}        Add a Git package
         \\  {s}ss fetch{s}                Fetch locked packages
@@ -218,15 +218,25 @@ fn init(output: Output) void {
         \\{s}Usage:{s}
         \\  {s}ss init [dir]{s}
         \\
-        \\Create a sample deck with components.ss and theme.ss beside the entry file.
+        \\Create a sample deck, or a reusable package with --package.
+        \\Package names come from the directory name, without a trailing .ss.
+        \\
+        \\Initialize Git and set origin to https://HOST/USER/NAME.ss.
+        \\Read github.user for GitHub, or ask for the owner when it is not configured.
+        \\No commits, pushes, or remote repositories are created.
         \\
         \\{s}Options:{s}
-        \\  {s}--entry FILE{s}            Entry file to create
+        \\  {s}--package{s}               Create a package with a README and example
+        \\  {s}--entry FILE{s}            Entry file (deck: slide.ss; package: lib.ss)
         \\  {s}--force{s}                 Overwrite generated files
+        \\  {s}--user NAME{s}             Repository owner (overrides configuration or prompt)
+        \\  {s}--host HOST{s}             Git host (default: github.com)
+        \\  {s}--no-git{s}                Skip Git initialization and origin setup
         \\
         \\{s}Examples:{s}
         \\  {s}ss init .{s}
         \\  {s}ss init slides --entry talk.ss{s}
+        \\  {s}ss init --package arrows{s}
         \\
     , .{
         s.heading, s.reset,
@@ -234,7 +244,12 @@ fn init(output: Output) void {
         s.heading, s.reset,
         s.option,  s.reset,
         s.option,  s.reset,
+        s.option,  s.reset,
+        s.option,  s.reset,
+        s.option,  s.reset,
+        s.option,  s.reset,
         s.heading, s.reset,
+        s.command, s.reset,
         s.command, s.reset,
         s.command, s.reset,
     });
@@ -672,7 +687,7 @@ const bash_completion =
     \\      done < <(compgen -f -- "$cur")
     \\      return 0
     \\      ;;
-    \\    --tag|--branch|--rev)
+    \\    --tag|--branch|--rev|--user|--host)
     \\      return 0
     \\      ;;
     \\    --jobs|--interval-ms|--profile-buffer-kb)
@@ -719,7 +734,7 @@ const bash_completion =
     \\      COMPREPLY=( $(compgen -W "--project $common_opts" -- "$cur") )
     \\      ;;
     \\    init)
-    \\      COMPREPLY=( $(compgen -W "$common_opts --entry --force" -- "$cur") )
+    \\      COMPREPLY=( $(compgen -W "$common_opts --package --entry --force --user --host --no-git" -- "$cur") )
     \\      ;;
     \\    doctor)
     \\      COMPREPLY=( $(compgen -W "$common_opts --project --asset-base-dir --strict" -- "$cur") )
@@ -786,7 +801,7 @@ const zsh_completion =
     \\    'add:Add a Git package'
     \\    'fetch:Fetch locked packages'
     \\    'update:Update Git packages'
-    \\    'init:Create a project'
+    \\    'init:Create a deck or package'
     \\    'doctor:Check local setup'
     \\    'render:Write PDF or HTML'
     \\    'present:Open the browser presenter'
@@ -822,7 +837,7 @@ const zsh_completion =
     \\      _arguments "2::package name:" "--project[project file or directory]:path:_files" $common_opts
     \\      ;;
     \\    init)
-    \\      _arguments '*::arg:->args' '--entry[entry file]:file:_files' '--force[overwrite generated files]' $common_opts
+    \\      _arguments '*::arg:->args' '--package[create a package]' '(--no-git)--user[repository owner]:owner:' '(--no-git)--host[Git host]:host:' '(--user --host)--no-git[skip Git setup]' '--entry[entry file]:file:_files' '--force[overwrite generated files]' $common_opts
     \\      ;;
     \\    doctor)
     \\      _arguments '*::arg:->args' '--project[load ss.toml]:file or dir:_files' '--asset-base-dir[resolve assets from dir]:dir:_files -/' '--strict[fail on issues]' $common_opts
@@ -875,7 +890,7 @@ const fish_completion =
     \\complete -c ss -n '__fish_seen_subcommand_from add; and not __fish_seen_argument -l tag -l branch -l rev' -l rev -x -d 'Git commit'
     \\complete -c ss -n '__fish_seen_subcommand_from fetch' -l locked -d 'Require an up-to-date lockfile'
     \\complete -c ss -n '__fish_seen_subcommand_from add fetch update' -l project -r -F -d 'Project file or directory'
-    \\complete -c ss -n '__fish_use_subcommand' -a init -d 'Create a project'
+    \\complete -c ss -n '__fish_use_subcommand' -a init -d 'Create a deck or package'
     \\complete -c ss -n '__fish_use_subcommand' -a doctor -d 'Check local setup'
     \\complete -c ss -n '__fish_use_subcommand' -a render -d 'Write PDF or HTML'
     \\complete -c ss -n '__fish_use_subcommand' -a present -d 'Open the browser presenter'
@@ -893,6 +908,10 @@ const fish_completion =
     \\complete -c ss -s h -l help -d 'Show help'
     \\complete -c ss -s V -l version -d 'Show version details'
     \\
+    \\complete -c ss -n '__fish_seen_subcommand_from init' -l user -x -d 'Repository owner'
+    \\complete -c ss -n '__fish_seen_subcommand_from init' -l host -x -d 'Git host'
+    \\complete -c ss -n '__fish_seen_subcommand_from init' -l no-git -d 'Skip Git setup'
+    \\complete -c ss -n '__fish_seen_subcommand_from init' -l package -d 'Create a package'
     \\complete -c ss -n '__fish_seen_subcommand_from init' -l entry -r -d 'Entry file to create'
     \\complete -c ss -n '__fish_seen_subcommand_from init' -l force -d 'Overwrite generated files'
     \\

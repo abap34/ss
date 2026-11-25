@@ -7,6 +7,7 @@ const project = @import("project");
 const lsp = @import("lsp.zig");
 const pdf = @import("render/pdf.zig");
 const render_compiler = @import("render/compile.zig");
+const cli_init = @import("cli/init.zig");
 const cli_help = @import("cli/help.zig");
 const cli_packages = @import("cli/packages.zig");
 const cli_present = @import("cli/present.zig");
@@ -119,11 +120,7 @@ const CommandOptions = struct {
 
 const RenderFormat = app.RenderFormat;
 
-const InitOptions = struct {
-    dir: []const u8 = ".",
-    entry: []const u8 = "slide.ss",
-    force: bool = false,
-};
+const InitOptions = cli_init.Options;
 
 const DoctorOptions = struct {
     input_path: ?[]const u8 = null,
@@ -371,6 +368,22 @@ fn parseInitOptions(args: []const []const u8) !InitOptions {
             i += 1;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--user") or std.mem.eql(u8, arg, "--host")) {
+            if (i + 1 >= args.len or std.mem.startsWith(u8, args[i + 1], "--")) return failUsage("missing value for {s}", .{arg});
+            const field = if (std.mem.eql(u8, arg, "--user")) &options.git.user else &options.git.host;
+            if (field.* != null) return failUsage("duplicate option: {s}", .{arg});
+            field.* = args[i + 1];
+            i += 1;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--no-git")) {
+            options.git.disabled = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--package")) {
+            options.package = true;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--force")) {
             options.force = true;
             continue;
@@ -380,6 +393,10 @@ fn parseInitOptions(args: []const []const u8) !InitOptions {
         options.dir = arg;
         saw_dir = true;
     }
+    if (!options.package and (options.git.user != null or options.git.host != null or options.git.disabled))
+        return failUsage("--user, --host and --no-git require --package", .{});
+    if (options.git.disabled and (options.git.user != null or options.git.host != null))
+        return failUsage("--no-git cannot be combined with --user or --host", .{});
     return options;
 }
 
@@ -413,90 +430,6 @@ fn parseDoctorOptions(args: []const []const u8) !DoctorOptions {
         positional_index += 1;
     }
     return options;
-}
-
-fn projectTemplate(allocator: std.mem.Allocator, entry: []const u8) ![]u8 {
-    return std.fmt.allocPrint(allocator, @embedFile("cli/templates/ss.toml"), .{entry});
-}
-
-fn initProject(io: std.Io, allocator: std.mem.Allocator, options: InitOptions) !void {
-    if (std.fs.path.isAbsolute(options.entry) or relativePathEscapesRoot(options.entry)) {
-        std.debug.print("init: --entry must stay inside the project directory\n", .{});
-        return error.InitEntryMustBeRelative;
-    }
-
-    try std.Io.Dir.cwd().createDirPath(io, options.dir);
-
-    const project_path = try std.fs.path.join(allocator, &.{ options.dir, "ss.toml" });
-    defer allocator.free(project_path);
-    const entry_path = try std.fs.path.join(allocator, &.{ options.dir, options.entry });
-    defer allocator.free(entry_path);
-    const entry_dir = std.fs.path.dirname(entry_path) orelse options.dir;
-    const components_path = try std.fs.path.join(allocator, &.{ entry_dir, "components.ss" });
-    defer allocator.free(components_path);
-    const theme_path = try std.fs.path.join(allocator, &.{ entry_dir, "theme.ss" });
-    defer allocator.free(theme_path);
-
-    const normalized_entry = try std.fs.path.resolve(allocator, &.{entry_path});
-    defer allocator.free(normalized_entry);
-    for ([_][]const u8{ project_path, components_path, theme_path }) |reserved_path| {
-        const normalized_reserved = try std.fs.path.resolve(allocator, &.{reserved_path});
-        defer allocator.free(normalized_reserved);
-        if (std.mem.eql(u8, normalized_entry, normalized_reserved)) {
-            std.debug.print("init: --entry conflicts with generated file: {s}\n", .{reserved_path});
-            return error.InitEntryConflictsWithTemplate;
-        }
-    }
-
-    const files = [_]struct { path: []const u8, source: []const u8 }{
-        .{ .path = entry_path, .source = @embedFile("cli/templates/slide.ss") },
-        .{ .path = components_path, .source = @embedFile("cli/templates/components.ss") },
-        .{ .path = theme_path, .source = @embedFile("cli/templates/theme.ss") },
-    };
-
-    if (!options.force) {
-        var failed = false;
-        if (try utils.fs.fileExists(allocator, project_path)) {
-            std.debug.print("init: {s} already exists; pass --force to overwrite it\n", .{project_path});
-            failed = true;
-        }
-        for (files) |file| {
-            if (try utils.fs.fileExists(allocator, file.path)) {
-                std.debug.print("init: {s} already exists; pass --force to overwrite it\n", .{file.path});
-                failed = true;
-            }
-        }
-        if (failed) return error.InitTargetExists;
-    }
-
-    try std.Io.Dir.cwd().createDirPath(io, entry_dir);
-
-    const project_source = try projectTemplate(allocator, options.entry);
-    defer allocator.free(project_source);
-    try utils.fs.writeFile(io, project_path, project_source);
-    for (files) |file| try utils.fs.writeFile(io, file.path, file.source);
-
-    std.debug.print("created ss project: {s}\n", .{options.dir});
-    std.debug.print("  {s} (project settings)\n", .{project_path});
-    std.debug.print("  {s} (deck content)\n", .{entry_path});
-    std.debug.print("  {s} (reusable components)\n", .{components_path});
-    std.debug.print("  {s} (colors and typography)\n", .{theme_path});
-    std.debug.print("\nnext:\n  ss render --project {s} --output deck.pdf\n", .{options.dir});
-}
-
-fn relativePathEscapesRoot(path: []const u8) bool {
-    var depth: usize = 0;
-    var parts = std.mem.tokenizeAny(u8, path, "/\\");
-    while (parts.next()) |part| {
-        if (part.len == 0 or std.mem.eql(u8, part, ".")) continue;
-        if (std.mem.eql(u8, part, "..")) {
-            if (depth == 0) return true;
-            depth -= 1;
-            continue;
-        }
-        depth += 1;
-    }
-    return false;
 }
 
 const DoctorTool = struct {
@@ -1556,7 +1489,7 @@ fn runCommand(io: std.Io, allocator: std.mem.Allocator, environ: std.process.Env
             return;
         }
         const options = try parseInitOptions(args[2..]);
-        try initProject(io, allocator, options);
+        try cli_init.run(io, allocator, environ, options);
         return;
     }
 
