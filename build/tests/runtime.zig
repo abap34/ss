@@ -102,6 +102,9 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
         test_step.dependOn(&run.step);
         if (spec.name) |name| steps.focused(b, name, spec.description, &run.step);
     }
+    // Public-repository coverage is opt-in so ordinary tests work offline.
+    const remote_packages = steps.node(b, &suite.checks.node.step, "tests/runtime/packages/remote_spec.mjs", exe);
+    steps.focused(b, "test-git-packages-remote", "Check public Git package installation, rendering and locked restoration (requires network)", &remote_packages.step);
     addWebviewSpecs(suite);
     addManualWysiwygSpec(suite, exe);
 
