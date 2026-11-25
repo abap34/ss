@@ -152,7 +152,7 @@ fn exprInfoWithOptions(
             const name = ident.name;
             switch (try options.context.name_resolution.resolveValue(sema, TypeInfo, ident.reference(), try lexicalValue(env, ident.reference(), options))) {
                 .local => |info| {
-                    if (info.failed) return error.AlreadyDiagnosed;
+                    try info.requireValid();
                     break :blk info;
                 },
                 .constant => |resolved| {
@@ -701,7 +701,7 @@ fn inferCallInfo(
     }
     return switch (binding) {
         .local => |callee_info| blk: {
-            if (callee_info.failed) return error.AlreadyDiagnosed;
+            try callee_info.requireValid();
             if (callee_info.hole != null) break :blk callee_info;
             if (callee_info.ty.kind == .function and callee_info.ty.fn_result != null) {
                 break :blk try inferFunctionValueCallInfo(allocator, state, sema, env, callee_info, call.args.items, origin, options);
