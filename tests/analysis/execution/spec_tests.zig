@@ -418,21 +418,54 @@ test "execution graph owns computed resource names after analyzers and cached su
 }
 
 test "execution graph bounds effect analysis even when called without termination checking" {
-    var state = try document(
-        \\fn recurse() -> Number = recurse()
-        \\page main
-        \\  let value = recurse()
-        \\end
-    );
+    const cases = [_][]const u8{
+        "fn recurse() -> Number = recurse()",
+        "fn recurse() -> Number = indirect()\nfn indirect() -> Number = recurse()",
+        "fn recurse() -> Number\n  let callback = () |-> recurse()\n  return callback()\nend",
+        "fn recurse() -> Number = (() |-> recurse())()",
+        "type Box { value: Number }\nfn recurse() -> Number\n  let box = Box { value = recurse() }\n  return box.value\nend",
+        "fn empty() -> Number? = none\nfn recurse() -> Number = empty() ?? recurse()",
+        "type Box { value: Number }\nfn recurse() -> Number\n  let box = Box { value = 0 } with { value = recurse() }\n  return box.value\nend",
+    };
+    for (cases) |functions| {
+        const source = try std.fmt.allocPrint(testing.allocator, "{s}\npage main\n  let value = recurse()\nend", .{functions});
+        defer testing.allocator.free(source);
+        var state = try document(source);
+        defer state.deinit();
+        var declarations = try compiler.declarations.build(testing.allocator, &state);
+        defer declarations.deinit();
+        try testing.expectError(error.FunctionAnalysisLimitExceeded, compiler.analysis.ExecutionGraph.build(testing.allocator, &state, &declarations, .{}));
+        const diagnostic = state.diagnostics.entries.items[state.diagnostics.entries.items.len - 1];
+        try testing.expectEqualStrings("FunctionAnalysisLimitExceeded", diagnostic.code());
+        const location = diagnostic.origin.?.location().?;
+        try testing.expectEqualStrings("execution.ss", location.path.?);
+        try testing.expect(location.span.end > location.span.start);
+    }
+}
+
+test "effect analysis preserves dependencies through a long finite call chain" {
+    var source: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer source.deinit();
+    for (0..100) |index| {
+        try source.writer.print("fn helper{d}() -> Number = helper{d}()\n", .{ index, index + 1 });
+    }
+    try source.writer.writeAll("fn helper100() -> Number = docctx().width\npage main\n  let value = helper0()\nend");
+    var state = try document(source.written());
     defer state.deinit();
     var declarations = try compiler.declarations.build(testing.allocator, &state);
     defer declarations.deinit();
-    try testing.expectError(error.FunctionAnalysisLimitExceeded, compiler.analysis.ExecutionGraph.build(testing.allocator, &state, &declarations, .{}));
-    const diagnostic = state.diagnostics.entries.items[state.diagnostics.entries.items.len - 1];
-    try testing.expectEqualStrings("FunctionAnalysisLimitExceeded", diagnostic.code());
-    const location = diagnostic.origin.?.location().?;
-    try testing.expectEqualStrings("execution.ss", location.path.?);
-    try testing.expect(location.span.end > location.span.start);
+    var graph = try compiler.analysis.ExecutionGraph.build(testing.allocator, &state, &declarations, .{});
+    defer graph.deinit();
+    for (graph.units.items) |unit| {
+        for (unit.summary.reads.items) |read| {
+            if (read == .property and read.property.owner == .document) {
+                if (read.property.key.displayName()) |name| {
+                    if (std.mem.eql(u8, name, "width")) return;
+                }
+            }
+        }
+    }
+    return error.MissingDependency;
 }
 
 fn expectOwnedDiagnostic(source: []const u8, expected_code: []const u8, expected_message: []const u8) !void {
