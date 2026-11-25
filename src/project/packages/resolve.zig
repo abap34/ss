@@ -14,6 +14,7 @@ pub const Resolver = struct {
     config_path: ?[]const u8 = null,
     data: lock.Data = .{},
     lock_file: ?lock.File = null,
+    config: ?manifest.Manifest = null,
 
     pub fn init(a: std.mem.Allocator, io: std.Io, start_dir: []const u8, inputs: ?*utils.FileInputs) Resolver {
         return .{ .arena = std.heap.ArenaAllocator.init(a), .io = io, .start_dir = start_dir, .inputs = inputs };
@@ -21,6 +22,7 @@ pub const Resolver = struct {
 
     pub fn deinit(self: *Resolver) void {
         if (self.lock_file) |*file| file.deinit();
+        if (self.config) |*config| config.deinit();
         self.arena.deinit();
     }
 
@@ -34,42 +36,72 @@ pub const Resolver = struct {
         if (subpath) |value| {
             if (!manifest.validRelativePath(value) or std.fs.path.extension(value).len != 0) return error.InvalidPackageImport;
         }
-        try self.load();
+        const source = try self.packageSource(importer_dir, name);
         const a = self.arena.allocator();
-        var edges = self.data.dependencies;
-        for (self.data.packages) |package| {
-            const directory = try lock.sourcePath(a, self.root.?, package.id);
-            if (within(directory, importer_dir)) {
-                edges = package.dependencies;
-                break;
-            }
+        const entry = if (subpath) |value| try std.fmt.allocPrint(a, "{s}.ss", .{value}) else source.entry;
+        return std.fs.path.join(a, &.{ source.directory, entry });
+    }
+
+    // Borrowed results live until deinit. Names remain available before fetch;
+    // managed sources use the consuming project's locked dependency scope.
+    pub fn dependencyNames(self: *Resolver, importer_dir: []const u8) ![]const []const u8 {
+        try self.loadConfig();
+        const a = self.arena.allocator();
+        const snapshot_root = try sourceProjectRoot(a, importer_dir);
+        if (snapshot_root != null) {
+            const edges = try self.dependencies(importer_dir);
+            const names = try a.alloc([]const u8, edges.len);
+            for (edges, names) |edge, *name| name.* = edge.name;
+            return names;
         }
+        const declared = self.config.?.data.dependencies;
+        const names = try a.alloc([]const u8, declared.len);
+        for (declared, names) |dependency, *name| name.* = dependency.name;
+        return names;
+    }
+
+    pub const PackageSource = struct { directory: []const u8, entry: []const u8 };
+
+    pub fn packageSource(self: *Resolver, importer_dir: []const u8, name: []const u8) !PackageSource {
+        if (!manifest.validName(name)) return error.InvalidPackageImport;
+        const edges = try self.dependencies(importer_dir);
         const edge = lock.findEdge(edges, name) orelse return error.UnknownPackage;
         const package = lock.findPackage(self.data, edge.package) orelse return error.InvalidPackageLock;
+        const a = self.arena.allocator();
         const directory = try lock.sourcePath(a, self.root.?, package.id);
         if (!try git.ready(a, self.io, directory, package.commit, self.inputs)) return error.PackageNotFetched;
-        const entry = if (subpath) |value| try std.fmt.allocPrint(a, "{s}.ss", .{value}) else package.entry;
-        return std.fs.path.join(a, &.{ directory, entry });
+        return .{ .directory = directory, .entry = package.entry };
+    }
+
+    fn dependencies(self: *Resolver, importer_dir: []const u8) ![]const lock.Edge {
+        try self.load();
+        for (self.data.packages) |package| {
+            const directory = try lock.sourcePath(self.arena.allocator(), self.root.?, package.id);
+            if (within(directory, importer_dir)) return package.dependencies;
+        }
+        return self.data.dependencies;
     }
 
     fn load(self: *Resolver) !void {
-        if (self.root != null) return;
+        if (self.lock_file != null) return;
+        try self.loadConfig();
+        var parsed = try lock.readWithInputs(self.arena.allocator(), self.io, self.root.?, self.inputs);
+        errdefer parsed.deinit();
+        if (!lock.matches(parsed.value.dependencies, self.config.?.data.dependencies)) return error.StalePackageLock;
+        self.data = parsed.value;
+        self.lock_file = parsed;
+    }
+
+    fn loadConfig(self: *Resolver) !void {
+        if (self.config != null) return;
         const a = self.arena.allocator();
         const snapshot_root = if (self.config_path) |path| try sourceProjectRoot(a, path) else null;
         const root = snapshot_root orelse if (self.config_path) |path| std.fs.path.dirname(path).? else try findRoot(a, self.io, self.start_dir, self.inputs);
         const config_path = if (snapshot_root != null) try std.fs.path.join(a, &.{ root, "ss.toml" }) else self.config_path orelse try std.fs.path.join(a, &.{ root, "ss.toml" });
         if (self.inputs) |inputs| try inputs.record(".", config_path, .file);
-        const lock_path = try std.fs.path.join(a, &.{ root, "ss.lock" });
-        if (self.inputs) |inputs| try inputs.record(".", lock_path, .file);
         const text = try utils.fs.readFileAlloc(self.io, a, config_path);
         if (self.inputs) |inputs| try inputs.recordContents(config_path, text);
-        var config = try manifest.Manifest.parse(a, text);
-        defer config.deinit();
-        var parsed = try lock.readWithInputs(a, self.io, root, self.inputs);
-        errdefer parsed.deinit();
-        if (!lock.matches(parsed.value.dependencies, config.data.dependencies)) return error.StalePackageLock;
-        self.data = parsed.value;
-        self.lock_file = parsed;
+        self.config = try manifest.Manifest.parse(a, text);
         self.root = root;
     }
 };

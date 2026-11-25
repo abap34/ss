@@ -1,5 +1,6 @@
 const std = @import("std");
 const utils = @import("utils");
+const packages = @import("project").packages;
 const loader = @import("../../modules/loader.zig");
 const types = @import("types.zig");
 const Import = @import("completion_position.zig").Import;
@@ -64,10 +65,9 @@ const Builder = struct {
         });
     }
 
-    fn files(self: *Builder, io: std.Io) !void {
-        const slash = std.mem.lastIndexOfScalar(u8, self.path.prefix, '/');
-        const prefix = if (slash) |index| self.path.prefix[0 .. index + 1] else "";
-        const base = std.fs.path.dirname(self.req.path) orelse ".";
+    fn files(self: *Builder, io: std.Io, base: []const u8, relative: []const u8, spec_base: []const u8) !void {
+        const slash = std.mem.lastIndexOfScalar(u8, relative, '/');
+        const prefix = if (slash) |index| relative[0 .. index + 1] else "";
         const directory = try std.fs.path.resolve(self.allocator, &.{ base, prefix });
         defer self.allocator.free(directory);
         var dir = utils.fs.openDir(io, directory, .{ .iterate = true }) catch return;
@@ -84,24 +84,57 @@ const Builder = struct {
             if (entry.name.len == 0 or entry.name[0] == '.') continue;
             const is_dir = entry.kind == .directory;
             if (!is_dir and !std.mem.endsWith(u8, entry.name, ".ss")) continue;
-            if (!is_dir and prefix.len == 0 and std.mem.eql(u8, entry.name, std.fs.path.basename(self.req.path))) continue;
+            if (!is_dir and std.mem.eql(u8, directory, std.fs.path.dirname(self.req.path) orelse ".") and std.mem.eql(u8, entry.name, std.fs.path.basename(self.req.path))) continue;
             const stem = if (is_dir) entry.name else entry.name[0 .. entry.name.len - 3];
-            const name = try std.fmt.allocPrint(self.allocator, "{s}{s}{s}", .{ prefix, stem, if (is_dir) "/" else "" });
+            // Package submodule syntax excludes a file extension.
+            if (spec_base.len != 0) {
+                if (!packages.manifest.validRelativePath(stem)) continue;
+                if (!is_dir and std.fs.path.extension(stem).len != 0) continue;
+            }
+            const name = try std.fmt.allocPrint(self.allocator, "{s}{s}{s}{s}", .{ spec_base, prefix, stem, if (is_dir) "/" else "" });
             defer self.allocator.free(name);
             try self.add(name, if (is_dir) .folder else .module);
         }
     }
+
+    fn packageImports(self: *Builder, io: std.Io, project_file: ?[]const u8) !void {
+        if (!std.mem.startsWith(u8, "pkg:", self.path.prefix) and !std.mem.startsWith(u8, self.path.prefix, "pkg:")) return;
+        const base = std.fs.path.dirname(self.req.path) orelse ".";
+        var resolver = packages.resolve.Resolver.init(self.allocator, io, base, null);
+        defer resolver.deinit();
+        resolver.config_path = project_file;
+        if (std.mem.indexOfScalar(u8, self.path.prefix, '/')) |slash| {
+            const name = self.path.prefix[4..slash];
+            const relative = self.path.prefix[slash + 1 ..];
+            const trimmed = std.mem.trimEnd(u8, relative, "/");
+            if (relative.len != 0 and !packages.manifest.validRelativePath(trimmed)) return;
+            if (std.mem.indexOfScalar(u8, relative, '\\') != null or std.mem.indexOf(u8, relative, "//") != null) return;
+            const source = resolver.packageSource(base, name) catch |err| return ignoreUnavailable(err);
+            if (!self.exhausted()) try self.files(io, source.directory, relative, self.path.prefix[0 .. slash + 1]);
+        } else {
+            const names = resolver.dependencyNames(base) catch |err| return ignoreUnavailable(err);
+            for (names) |name| {
+                if (self.exhausted()) break;
+                const spec = try std.fmt.allocPrint(self.allocator, "pkg:{s}/", .{name});
+                defer self.allocator.free(spec);
+                try self.add(spec[0 .. spec.len - 1], .module);
+                try self.add(spec, .folder);
+            }
+        }
+    }
 };
 
-pub fn complete(allocator: std.mem.Allocator, req: types.SourceRequest, path: Import, opts: types.QueryOptions) !types.CompletionResult {
+pub fn complete(allocator: std.mem.Allocator, req: types.SourceRequest, path: Import, project_file: ?[]const u8, opts: types.QueryOptions) !types.CompletionResult {
     var builder = Builder{ .allocator = allocator, .req = req, .path = path, .edit_start = utils.source.utf16PositionAt(req.source, path.span.start), .edit_end = utils.source.utf16PositionAt(req.source, path.span.end), .budget = types.QueryBudget.start(opts) };
     defer builder.deinit();
     for (loader.standard_module_specs) |spec| {
         if (builder.exhausted()) break;
         try builder.add(spec, .module);
     }
-    if (std.mem.indexOfScalar(u8, path.prefix, ':') == null and !builder.exhausted()) {
-        if (opts.io) |io| try builder.files(io);
+    if (opts.io) |io| {
+        if (!builder.exhausted()) try builder.packageImports(io, project_file);
+        if (std.mem.indexOfScalar(u8, path.prefix, ':') == null and !builder.exhausted())
+            try builder.files(io, std.fs.path.dirname(req.path) orelse ".", path.prefix, "");
     }
     if (builder.budget.canceled()) return .{ .items = try allocator.alloc(types.CompletionCandidate, 0) };
     std.mem.sort(types.CompletionCandidate, builder.items.items, {}, struct {
@@ -112,4 +145,10 @@ pub fn complete(allocator: std.mem.Allocator, req: types.SourceRequest, path: Im
     const items = try builder.items.toOwnedSlice(allocator);
     errdefer allocator.free(items);
     return .{ .items = items, .owned_strings = try builder.strings.toOwnedSlice(allocator), .is_incomplete = builder.incomplete };
+}
+
+// Invalid or unavailable project/package data gives no package candidates. Other
+// providers still contribute; allocation failures retain their normal contract.
+fn ignoreUnavailable(err: anyerror) error{OutOfMemory}!void {
+    if (err == error.OutOfMemory) return error.OutOfMemory;
 }

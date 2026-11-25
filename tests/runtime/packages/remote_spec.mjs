@@ -90,6 +90,18 @@ end
       for (const name of ["straight!", "curve!", "ZigZagStyle", "StrokeStyle"]) assert(labels.includes(name), JSON.stringify(result));
       for (const name of ["page", "text!", "rectangle!"]) assert(!labels.includes(name), JSON.stringify(result));
     }
+
+    for (const [prefix, expected] of [['import "pkg:', "pkg:arrows"], ['import "pkg:arrows/', "pkg:arrows/style"]]) {
+      const diagnostics = client.waitForDiagnostics(uri);
+      client.changeDocument({ uri, text: prefix + "\npage main\nend\n", version: ++version });
+      await diagnostics;
+      const result = await client.request("textDocument/completion", {
+        textDocument: { uri }, position: { line: 0, character: prefix.length },
+      });
+      const item = result.items.find(item => item.label === expected);
+      assert(item, JSON.stringify(result));
+      assert.equal(item.textEdit.newText, expected + '"');
+    }
   });
 
   // A fresh consumer restores exactly the locked commit from GitHub.

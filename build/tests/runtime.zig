@@ -15,6 +15,7 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
     const b = suite.ctx.b;
     const test_step = suite.all;
     const specs = [_]Spec{
+        .{ .path = "tests/runtime/packages/completion_spec.mjs", .name = "test-package-completion", .description = "Check package import completion, dependency scope and offline module discovery" },
         .{ .path = "tests/runtime/packages/cache_spec.mjs", .name = "test-package-cache", .description = "Check analysis invalidation without file notifications after dependency changes" },
         .{ .path = "tests/runtime/packages/graph_spec.mjs", .name = "test-package-graph", .description = "Check graph-wide Git selections, package identity, names and locked restoration" },
         .{ .path = "tests/runtime/packages/status_spec.mjs", .name = "test-package-status", .description = "Check read-only package status, missing sources and stale lockfiles" },

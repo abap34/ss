@@ -1593,3 +1593,41 @@ test "completion does not interpret import text in comments or multiline strings
         for (result.items) |item| try testing.expect(item.kind != .module and item.kind != .folder);
     }
 }
+
+fn completePackageWithAllocationFailures(allocator: std.mem.Allocator, snapshot: *const snapshot_api.AnalysisSnapshot, path: []const u8) !void {
+    const source = "import \"pkg:ar";
+    var clock = DeadlineClock{};
+    var options = clock.options();
+    options.io = testing.io;
+    var result = try snapshot_api.completeAt(allocator, snapshot, .{ .path = path, .source = source, .offset = source.len }, options);
+    defer result.deinit(allocator);
+    try expectHas(result, "pkg:arrows");
+    try expectMissing(result, "pkg:other");
+}
+
+test "package completion retains explicit project configuration and releases every allocation" {
+    var case = try CompletionCase.init("page main\nend\n");
+    defer case.deinit();
+    const root = std.fs.path.dirname(case.path).?;
+    try std.Io.Dir.cwd().createDirPath(testing.io, root);
+    defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    const config_path = try std.fs.path.join(case.allocator, &.{ root, "custom.toml" });
+    try std.Io.Dir.cwd().writeFile(testing.io, .{
+        .sub_path = config_path,
+        .data = "[dependencies.arrows]\ngit = \"https://example.invalid/arrows\"\n",
+    });
+    const default_path = try std.fs.path.join(case.allocator, &.{ root, "ss.toml" });
+    try std.Io.Dir.cwd().writeFile(testing.io, .{
+        .sub_path = default_path,
+        .data = "[dependencies.other]\ngit = \"https://example.invalid/other\"\n",
+    });
+    var sources = snapshot_api.SourceSet.init(case.allocator, testing.io);
+    defer sources.deinit();
+    try sources.put(case.path, case.source);
+    var snapshot = try snapshot_api.build(case.allocator, &sources, case.path, root, .{
+        .project = .{ .project_file = config_path },
+    });
+    defer snapshot.deinit();
+    try testing.expectEqualStrings(config_path, snapshot.project.project_file.?);
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, completePackageWithAllocationFailures, .{ &snapshot, case.path });
+}

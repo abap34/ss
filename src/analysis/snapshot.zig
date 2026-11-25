@@ -125,6 +125,7 @@ pub const RetainedLayoutState = struct {
 };
 
 pub const ProjectFacts = struct {
+    project_file: ?[]u8 = null,
     entry_path: []u8 = &.{},
     asset_base_dir: []u8 = &.{},
     module_paths: [][]u8 = &.{},
@@ -142,6 +143,7 @@ pub const ProjectFacts = struct {
             .cache = options.cache,
         };
         errdefer facts.deinit(allocator);
+        if (options.project_file) |file| facts.project_file = try allocator.dupe(u8, file);
         facts.highlight = try options.highlight.clone(allocator);
         facts.entry_path = try allocator.dupe(u8, entry_path);
         facts.asset_base_dir = try allocator.dupe(u8, asset_base_dir);
@@ -157,6 +159,7 @@ pub const ProjectFacts = struct {
     }
 
     pub fn deinit(self: *ProjectFacts, allocator: std.mem.Allocator) void {
+        if (self.project_file) |file| allocator.free(file);
         allocator.free(self.entry_path);
         allocator.free(self.asset_base_dir);
         for (self.module_paths) |path| allocator.free(path);

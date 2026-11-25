@@ -35,7 +35,7 @@ pub fn at(
     if (budget.expired()) return fallback.complete(allocator, snapshot, req, opts);
     const position = completion_position.at(req, budget) catch return fallback.complete(allocator, snapshot, req, opts);
     switch (position) {
-        .import_path => |path| return import_completion.complete(allocator, req, path, opts),
+        .import_path => |path| return import_completion.complete(allocator, req, path, snapshot.project.project_file, opts),
         .module => |access| {
             if (snapshot.moduleForPath(req.path)) |module| {
                 if (resolve_query.aliasTarget(budget, snapshot, module.id, access.alias)) |module_id| {
