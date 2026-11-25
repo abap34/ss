@@ -71,6 +71,25 @@ try {
     assert(!snapshot.stale);
     assert.equal(snapshot.layout.pages.length, 2);
     for (const object of snapshot.layout.objects) assert.equal(object.location?.path, path.join(deck, "slide.ss"));
+
+    // Incomplete qualified names still resolve the package's exported declarations.
+    let version = 1;
+    for (const suffix of ["", " ", "st"]) {
+      const text = `import pkg:arrows as a
+page main
+  a::${suffix}
+end
+`;
+      const diagnostics = client.waitForDiagnostics(uri);
+      client.changeDocument({ uri, text, version: ++version });
+      await diagnostics;
+      const result = await client.request("textDocument/completion", {
+        textDocument: { uri }, position: { line: 2, character: 5 + suffix.length },
+      });
+      const labels = result.items.map(item => item.label);
+      for (const name of ["straight!", "curve!", "ZigZagStyle", "StrokeStyle"]) assert(labels.includes(name), JSON.stringify(result));
+      for (const name of ["page", "text!", "rectangle!"]) assert(!labels.includes(name), JSON.stringify(result));
+    }
   });
 
   // A fresh consumer restores exactly the locked commit from GitHub.
