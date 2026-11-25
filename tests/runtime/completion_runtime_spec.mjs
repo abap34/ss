@@ -173,12 +173,22 @@ async function testPackageCommandHelp() {
     assert(general.code === 0, `general help failed:\n${combined(general)}`);
     for (const command of ["init", "add", "fetch", "update"]) {
       assert(general.stdout.includes(`ss ${command}`), `general help omitted ${command}`);
-      for (const args of [[command, "--help"], [command, "help"], ["help", command]]) {
+      for (const args of [[command, "--help"], [command, "-h"], [command, "help"], ["help", command]]) {
         const result = await runCompletion(args, home);
         assert(result.code === 0, `ss ${args.join(" ")} failed:\n${combined(result)}`);
         assert(result.stdout.includes(`ss ${command}`), `command help omitted ${command}`);
-        const option = command === "init" ? "--package" : "--project";
-        assert(result.stdout.includes(option), `command help omitted ${option}`);
+        const options = command === "init"
+          ? ["--package", "--entry", "--force", "--user", "--host", "--no-git"]
+          : command === "add"
+            ? ["--git", "--tag", "--branch", "--rev", "--project"]
+            : command === "fetch" ? ["--locked", "--project"] : ["--project"];
+        for (const option of options) {
+          assert(result.stdout.includes(option), `command help omitted ${option}`);
+        }
+        if (command === "init") {
+          assert(result.stdout.includes("With --package, initialize Git"), "Git setup must be described as package-only");
+        }
+        assert(!/ss (?:watch )?check\b/.test(result.stdout), "help advertises the removed check command");
       }
     }
   } finally {
