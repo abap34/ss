@@ -1348,7 +1348,7 @@ fn runCommand(io: std.Io, allocator: std.mem.Allocator, environ: std.process.Env
         return;
     }
 
-    if (std.mem.eql(u8, cmd, "add") or std.mem.eql(u8, cmd, "fetch") or std.mem.eql(u8, cmd, "update")) {
+    if (std.mem.eql(u8, cmd, "add") or std.mem.eql(u8, cmd, "fetch") or std.mem.eql(u8, cmd, "update") or std.mem.eql(u8, cmd, "status")) {
         if (wantsCommandHelp(args[2..])) {
             _ = cli_help.command(.stdout, cmd);
             return;

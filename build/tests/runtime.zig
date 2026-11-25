@@ -17,6 +17,7 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
     const specs = [_]Spec{
         .{ .path = "tests/runtime/packages/cache_spec.mjs", .name = "test-package-cache", .description = "Check analysis invalidation without file notifications after dependency changes" },
         .{ .path = "tests/runtime/packages/graph_spec.mjs", .name = "test-package-graph", .description = "Check graph-wide Git selections, package identity, names and locked restoration" },
+        .{ .path = "tests/runtime/packages/status_spec.mjs", .name = "test-package-status", .description = "Check read-only package status, missing sources and stale lockfiles" },
         .{ .path = "tests/runtime/packages/spec.mjs", .name = "test-git-packages", .description = "Check Git dependency commands, offline package imports and packaged assets" },
         .{ .path = "tests/runtime/stdlib/spec.mjs", .name = "test-stdlib", .description = "Check public standard-library construction and placement contracts" },
         .{ .path = "tests/runtime/assets/constructors_spec.mjs", .name = "test-asset-constructors", .description = "Check immutable asset constructors, reuse, styles, and placement validation" },

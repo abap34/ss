@@ -1,12 +1,8 @@
 const std = @import("std");
-const utils = @import("utils");
 
-const error_report = utils.err;
+const terminal = @import("terminal.zig");
 
-pub const Output = enum {
-    stdout,
-    stderr,
-};
+pub const Output = terminal.Output;
 
 const Style = struct {
     heading: []const u8 = "",
@@ -27,11 +23,13 @@ pub fn general(output: Output) void {
         \\  {s}ss add --git URL{s}        Add a Git package
         \\  {s}ss fetch{s}                Resolve and fetch packages
         \\  {s}ss update [NAME]{s}        Update Git packages
+        \\  {s}ss status{s}               Show local package status
         \\
     , .{
         s.heading, s.reset,
         s.command, s.reset,
         s.heading, s.reset,
+        s.command, s.reset,
         s.command, s.reset,
         s.command, s.reset,
         s.command, s.reset,
@@ -101,6 +99,20 @@ pub fn command(output: Output, name: []const u8) bool {
             \\Package repositories require [package] name = "NAME"; entry defaults to "lib.ss".
             \\Add uses that name as the dependency key. Import aliases use `as` in source.
             \\Use asset_path("assets/logo.svg") for paths relative to a library module.
+            \\
+        );
+        return true;
+    }
+    if (std.mem.eql(u8, name, "status")) {
+        writeAll(output,
+            \\Usage:
+            \\  ss status [--project FILE_OR_DIR] [--color auto|always|never]
+            \\
+            \\Show declared dependencies, locked commits and local fetch status.
+            \\Direct and transitive packages are listed from ss.lock.
+            \\Report a missing or outdated lockfile and packages that need fetching.
+            \\No network access or file changes. Does not check remote updates.
+            \\Exit successfully when status can be read, even if fetching is needed.
             \\
         );
         return true;
@@ -615,34 +627,13 @@ fn completionHelp(output: Output) void {
 }
 
 fn style(output: Output) Style {
-    if (!useColor(output)) return .{};
+    if (!terminal.useColor(output)) return .{};
     return .{
         .heading = "\x1b[1m",
         .command = "\x1b[36m",
         .option = "\x1b[33m",
         .reset = "\x1b[0m",
     };
-}
-
-fn useColor(output: Output) bool {
-    return switch (error_report.colorMode()) {
-        .auto => std.c.getenv("NO_COLOR") == null and !envEquals("CLICOLOR", "0") and outputIsTty(output),
-        .always => true,
-        .never => false,
-    };
-}
-
-fn outputIsTty(output: Output) bool {
-    const fd: c_int = switch (output) {
-        .stdout => 1,
-        .stderr => 2,
-    };
-    return std.c.isatty(fd) == 1;
-}
-
-fn envEquals(name: [:0]const u8, expected: []const u8) bool {
-    const value = std.c.getenv(name) orelse return false;
-    return std.mem.eql(u8, std.mem.span(value), expected);
 }
 
 fn outputPrint(output: Output, comptime fmt: []const u8, args: anytype) void {
@@ -674,7 +665,7 @@ const bash_completion =
     \\  prev="${COMP_WORDS[COMP_CWORD-1]}"
     \\  command="${COMP_WORDS[1]}"
     \\
-    \\  local commands="init add fetch update doctor render present dump expand watch debug cache lsp version completion help"
+    \\  local commands="init add fetch update status doctor render present dump expand watch debug cache lsp version completion help"
     \\  local common_opts="help --help -h"
     \\  local diagnostic_opts="--diagnostic-level --warnings --quiet --measure-profile --profile --profile-buffer-kb"
     \\  local project_opts="--project --asset-base-dir --jobs --color $diagnostic_opts"
@@ -729,6 +720,9 @@ const bash_completion =
     \\      ;;
     \\    fetch)
     \\      COMPREPLY=( $(compgen -W "--locked --project $common_opts" -- "$cur") )
+    \\      ;;
+    \\    status)
+    \\      COMPREPLY=( $(compgen -W "--project --color $common_opts" -- "$cur") )
     \\      ;;
     \\    update)
     \\      COMPREPLY=( $(compgen -W "--project $common_opts" -- "$cur") )
@@ -801,6 +795,7 @@ const zsh_completion =
     \\    'add:Add a Git package'
     \\    'fetch:Resolve and fetch packages'
     \\    'update:Update Git packages'
+    \\    'status:Show local package status'
     \\    'init:Create a deck or package'
     \\    'doctor:Check local setup'
     \\    'render:Write PDF or HTML'
@@ -832,6 +827,9 @@ const zsh_completion =
     \\      ;;
     \\    fetch)
     \\      _arguments "--locked[require an up-to-date lockfile]" "--project[project file or directory]:path:_files" $common_opts
+    \\      ;;
+    \\    status)
+    \\      _arguments "--project[project file or directory]:path:_files" "--color[color mode]:(auto always never)" $common_opts
     \\      ;;
     \\    update)
     \\      _arguments "2::package name:" "--project[project file or directory]:path:_files" $common_opts
@@ -883,13 +881,13 @@ const zsh_completion =
 const fish_completion =
     \\# ss fish completion
     \\complete -c ss -f
-    \\complete -c ss -n '__fish_use_subcommand' -a 'add fetch update' -d 'Manage Git packages'
+    \\complete -c ss -n '__fish_use_subcommand' -a 'add fetch update status' -d 'Manage Git packages'
     \\complete -c ss -n '__fish_seen_subcommand_from add' -l git -r -F -d 'Git repository URL'
     \\complete -c ss -n '__fish_seen_subcommand_from add; and not __fish_seen_argument -l tag -l branch -l rev' -l tag -x -d 'Git tag'
     \\complete -c ss -n '__fish_seen_subcommand_from add; and not __fish_seen_argument -l tag -l branch -l rev' -l branch -x -d 'Git branch'
     \\complete -c ss -n '__fish_seen_subcommand_from add; and not __fish_seen_argument -l tag -l branch -l rev' -l rev -x -d 'Git commit'
     \\complete -c ss -n '__fish_seen_subcommand_from fetch' -l locked -d 'Require an up-to-date lockfile'
-    \\complete -c ss -n '__fish_seen_subcommand_from add fetch update' -l project -r -F -d 'Project file or directory'
+    \\complete -c ss -n '__fish_seen_subcommand_from add fetch update status' -l project -r -F -d 'Project file or directory'
     \\complete -c ss -n '__fish_use_subcommand' -a init -d 'Create a deck or package'
     \\complete -c ss -n '__fish_use_subcommand' -a doctor -d 'Check local setup'
     \\complete -c ss -n '__fish_use_subcommand' -a render -d 'Write PDF or HTML'
@@ -917,7 +915,7 @@ const fish_completion =
     \\
     \\complete -c ss -n '__fish_seen_subcommand_from dump expand render present doctor watch debug' -l project -r -d 'Load entry and asset base from ss.toml'
     \\complete -c ss -n '__fish_seen_subcommand_from dump expand render present doctor watch debug' -l asset-base-dir -r -d 'Resolve relative assets from DIR'
-    \\complete -c ss -n '__fish_seen_subcommand_from dump expand render present doctor watch debug' -l color -r -a 'auto always never' -d 'Color mode'
+    \\complete -c ss -n '__fish_seen_subcommand_from dump expand render present doctor watch debug status' -l color -r -a 'auto always never' -d 'Color mode'
     \\complete -c ss -n '__fish_seen_subcommand_from dump expand render present watch debug' -l diagnostic-level -r -a 'note warning error off' -d 'Diagnostic display level'
     \\complete -c ss -n '__fish_seen_subcommand_from dump expand render present watch debug' -l warnings -r -a 'off' -d 'Warning display'
     \\complete -c ss -n '__fish_seen_subcommand_from dump expand render present watch debug' -l quiet -d 'Hide progress and warning diagnostics'
@@ -938,6 +936,6 @@ const fish_completion =
     \\complete -c ss -n '__fish_seen_subcommand_from cache' -a 'project tree-sitter help' -d 'Cache target'
     \\complete -c ss -n '__fish_seen_subcommand_from cache; and __fish_seen_subcommand_from project; and __fish_seen_subcommand_from clear' -l force -d 'Clear resources held by WYSIWYG after rendering finishes'
     \\complete -c ss -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish help' -d 'Shell'
-    \\complete -c ss -n '__fish_seen_subcommand_from help' -a 'init add fetch update doctor render present dump expand watch debug cache lsp version completion' -d 'Command'
+    \\complete -c ss -n '__fish_seen_subcommand_from help' -a 'init add fetch update status doctor render present dump expand watch debug cache lsp version completion' -d 'Command'
     \\
 ;
