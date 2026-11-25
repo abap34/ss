@@ -25,7 +25,7 @@ pub fn general(output: Output) void {
         \\  {s}ss init [dir]{s}           Create a deck or package
         \\  {s}ss doctor{s}               Check local setup
         \\  {s}ss add --git URL{s}        Add a Git package
-        \\  {s}ss fetch{s}                Fetch locked packages
+        \\  {s}ss fetch{s}                Resolve and fetch packages
         \\  {s}ss update [NAME]{s}        Update Git packages
         \\
     , .{
@@ -221,7 +221,7 @@ fn init(output: Output) void {
         \\Create a sample deck, or a reusable package with --package.
         \\Package names come from the directory name, without a trailing .ss.
         \\
-        \\Initialize Git and set origin to https://HOST/USER/NAME.ss.
+        \\With --package, initialize Git and set origin to https://HOST/USER/NAME.ss.
         \\Read github.user for GitHub, or ask for the owner when it is not configured.
         \\No commits, pushes, or remote repositories are created.
         \\
@@ -799,7 +799,7 @@ const zsh_completion =
     \\  local -a commands
     \\  commands=(
     \\    'add:Add a Git package'
-    \\    'fetch:Fetch locked packages'
+    \\    'fetch:Resolve and fetch packages'
     \\    'update:Update Git packages'
     \\    'init:Create a deck or package'
     \\    'doctor:Check local setup'
