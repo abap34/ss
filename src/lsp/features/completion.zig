@@ -7,12 +7,14 @@ const lsp_state = @import("../state.zig");
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
+    io: std.Io,
     provider: *lsp_state.AnalysisProvider,
     documents: *lsp_state.DocumentStore,
 };
 
 pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     ctx.provider.beginQuery(query_budget.completion_ms);
+    ctx.provider.query_options.?.io = ctx.io;
     var position = try lsp_state.requestPosition(ctx.allocator, ctx.documents, params);
     defer if (position) |*pos| pos.deinit(ctx.allocator);
     if (position) |*pos| {
@@ -63,26 +65,35 @@ pub const Builder = struct {
     }
 
     pub fn addCandidate(self: *Builder, candidate: analysis_snapshot.CompletionCandidate) !void {
-        try self.add(candidate.label, kind(candidate.kind), candidate.detail, candidate.documentation);
-    }
-
-    fn add(self: *Builder, label: []const u8, item_kind: usize, detail: ?[]const u8, documentation: ?[]const u8) !void {
-        if (label.len == 0 or self.seen.contains(label)) return;
-        try self.seen.put(label, {});
+        if (candidate.label.len == 0 or self.seen.contains(candidate.label)) return;
+        try self.seen.put(candidate.label, {});
         if (!self.first) try self.out.append(self.allocator, ',');
         self.first = false;
         try self.out.appendSlice(self.allocator, "{\"label\":");
-        try protocol.appendJsonString(self.allocator, self.out, label);
+        try protocol.appendJsonString(self.allocator, self.out, candidate.label);
         try self.out.appendSlice(self.allocator, ",\"kind\":");
-        try protocol.appendInt(self.allocator, self.out, item_kind);
-        if (detail) |text| {
+        try protocol.appendInt(self.allocator, self.out, kind(candidate.kind));
+        if (candidate.detail) |text| {
             try self.out.appendSlice(self.allocator, ",\"detail\":");
             try protocol.appendJsonString(self.allocator, self.out, text);
         }
-        if (documentation) |text| if (text.len != 0) {
+        if (candidate.documentation) |text| if (text.len != 0) {
             try self.out.appendSlice(self.allocator, ",\"documentation\":");
             try protocol.appendJsonString(self.allocator, self.out, text);
         };
+        if (candidate.text_edit) |edit| {
+            try self.out.appendSlice(self.allocator, ",\"textEdit\":{\"range\":{\"start\":{\"line\":");
+            try protocol.appendInt(self.allocator, self.out, edit.start.line);
+            try self.out.appendSlice(self.allocator, ",\"character\":");
+            try protocol.appendInt(self.allocator, self.out, edit.start.character);
+            try self.out.appendSlice(self.allocator, "},\"end\":{\"line\":");
+            try protocol.appendInt(self.allocator, self.out, edit.end.line);
+            try self.out.appendSlice(self.allocator, ",\"character\":");
+            try protocol.appendInt(self.allocator, self.out, edit.end.character);
+            try self.out.appendSlice(self.allocator, "}},\"newText\":");
+            try protocol.appendJsonString(self.allocator, self.out, edit.text);
+            try self.out.append(self.allocator, '}');
+        }
         try self.out.append(self.allocator, '}');
     }
 };
@@ -93,6 +104,8 @@ pub fn emptyJson(allocator: std.mem.Allocator) ![]const u8 {
 
 fn kind(completion_kind: analysis_snapshot.CompletionKind) usize {
     return switch (completion_kind) {
+        .module => 9,
+        .folder => 19,
         .keyword => 14,
         .function => 3,
         .variable => 6,

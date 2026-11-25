@@ -1310,6 +1310,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         var provider = analysisProvider(server);
         var ctx = feature_completion.Context{
             .allocator = server.allocator,
+            .io = server.io,
             .provider = &provider,
             .documents = &server.documents,
         };
@@ -1615,7 +1616,7 @@ fn editorDisplayMatches(model: editor_snapshot.Model, base_snapshot_id: []const 
 }
 
 const initializeResultPrefix =
-    \\{"capabilities":{"textDocumentSync":2,"completionProvider":{"triggerCharacters":[".","\"","@",":"]},"hoverProvider":true,"definitionProvider":true,"documentSymbolProvider":true,"codeLensProvider":{"resolveProvider":false},"foldingRangeProvider":true,"semanticTokensProvider":{"legend":{"tokenTypes":["keyword","function","variable","string","number","type","property","operator"],"tokenModifiers":[]},"full":true},"colorProvider":true},"serverInfo":{"name":"ss-lsp","version":
+    \\{"capabilities":{"textDocumentSync":2,"completionProvider":{"triggerCharacters":[".","\"","@",":","/"]},"hoverProvider":true,"definitionProvider":true,"documentSymbolProvider":true,"codeLensProvider":{"resolveProvider":false},"foldingRangeProvider":true,"semanticTokensProvider":{"legend":{"tokenTypes":["keyword","function","variable","string","number","type","property","operator"],"tokenModifiers":[]},"full":true},"colorProvider":true},"serverInfo":{"name":"ss-lsp","version":
 ;
 
 fn initializeResult(allocator: std.mem.Allocator) ![]const u8 {

@@ -269,6 +269,11 @@ const Candidates = struct {
 pub fn complete(allocator: std.mem.Allocator, snapshot: *const snapshot_api.AnalysisSnapshot, req: types.SourceRequest, opts: types.QueryOptions) !types.CompletionResult {
     var work = Work.init(opts);
     if (work.budget.canceled()) return .{ .items = try allocator.alloc(types.CompletionCandidate, 0) };
+    const completion_position = @import("completion_position.zig");
+    if (completion_position.mayBeImport(req)) {
+        const position = completion_position.at(req, work.budget) catch null;
+        if (position) |value| if (value == .import_path) return .{ .items = try allocator.alloc(types.CompletionCandidate, 0), .is_incomplete = true };
+    }
     var out = Candidates{};
     const context = Context.init(req, &work);
     // An update needs the receiver's fields. Leave the incomplete list empty

@@ -87,6 +87,11 @@ pub const SourceOverlay = struct {
 };
 
 const embedded_modules = stdlib_assets.modules;
+pub const standard_module_specs = blk: {
+    var specs: [embedded_modules.len][]const u8 = undefined;
+    for (embedded_modules, 0..) |module, index| specs[index] = module.spec;
+    break :blk specs;
+};
 
 pub const EmbeddedSyntaxCache = struct {
     arena: std.heap.ArenaAllocator,

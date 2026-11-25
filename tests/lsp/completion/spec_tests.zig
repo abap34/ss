@@ -1473,3 +1473,123 @@ test "analysis queries: constant record receivers precede enum names" {
     try testing.expectEqual(@as(usize, 1), targets.len);
     try testing.expectEqual(@as(usize, 2), targets[0].line);
 }
+
+test "module completion handles missing and partial names without unrelated candidates" {
+    for ([_][]const u8{ "arrows::", "arrows:: ", "arrows::te", "arrows::text!" }) |input| {
+        var case = try CompletionCase.init("import std:text as arrows\npage main\nend\n");
+        defer case.deinit();
+        const source = try std.fmt.allocPrint(case.allocator, "import std:text as arrows\npage main\n  {s}\nend\n", .{input});
+        var result = try case.completeSourceAfter(source, input);
+        defer result.deinit(case.allocator);
+        try expectHas(result, "text!");
+        try expectMissing(result, "page");
+        try expectMissing(result, "rectangle!");
+        try expectUnique(result);
+        for (result.items) |item| {
+            const edit = item.text_edit orelse return error.MissingCompletionEdit;
+            try testing.expectEqual(@as(usize, 2), edit.start.line);
+            try testing.expectEqual(@as(usize, if (std.mem.endsWith(u8, input, " ")) 11 else 10), edit.start.character);
+            try testing.expectEqual(@as(usize, 2 + input.len), edit.end.character);
+        }
+    }
+    var case = try CompletionCase.init("page main\n  missing::\nend\n");
+    defer case.deinit();
+    var result = try case.completeAfter("missing::");
+    defer result.deinit(case.allocator);
+    try testing.expectEqual(@as(usize, 0), result.items.len);
+}
+
+test "import completion lists modules and directories and replaces the full spec" {
+    var case = try CompletionCase.init("page main\nend\n");
+    defer case.deinit();
+    const root = std.fs.path.dirname(case.path).?;
+    try std.Io.Dir.cwd().createDirPath(testing.io, root);
+    defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    const library = try std.fs.path.join(case.allocator, &.{ root, "arrows.ss" });
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = library, .data = "fn straight() -> Number = 1\n" });
+    const subdir = try std.fs.path.join(case.allocator, &.{ root, "components" });
+    try std.Io.Dir.cwd().createDirPath(testing.io, subdir);
+    const cover = try std.fs.path.join(case.allocator, &.{ subdir, "cover.ss" });
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = cover, .data = "fn cover() -> Number = 1\n" });
+    const cases = [_]struct { source: []const u8, needle: []const u8, label: []const u8, text: []const u8 }{
+        .{ .source = "import \"", .needle = "import \"", .label = "arrows", .text = "arrows\"" },
+        .{ .source = "import ", .needle = "import ", .label = "arrows", .text = "arrows" },
+        .{ .source = "import \"ar\"", .needle = "import \"ar", .label = "arrows", .text = "arrows" },
+        .{ .source = "import \"arrows\" as a", .needle = "import \"ar", .label = "arrows", .text = "arrows" },
+        .{ .source = "import \"std:te", .needle = "import \"std:te", .label = "std:text", .text = "std:text\"" },
+        .{ .source = "import std:te", .needle = "import std:te", .label = "std:text", .text = "std:text" },
+        .{ .source = "import \"components/", .needle = "import \"components/", .label = "components/cover", .text = "components/cover\"" },
+        .{ .source = "import \"./ar", .needle = "import \"./ar", .label = "./arrows", .text = "./arrows\"" },
+    };
+    for (cases) |input| {
+        const snapshot = try case.snapshotFor(input.source);
+        var clock = DeadlineClock{};
+        var options = clock.options();
+        options.io = testing.io;
+        var result = try snapshot_api.completeAt(testing.allocator, snapshot, .{
+            .path = case.path,
+            .source = input.source,
+            .offset = offsetAfter(input.source, input.needle),
+        }, options);
+        defer result.deinit(testing.allocator);
+        try testing.expect(!result.is_incomplete);
+        try expectHas(result, input.label);
+        try expectMissing(result, "text!");
+        try expectMissing(result, "page");
+        try expectMissing(result, "case");
+        for (result.items) |item| {
+            try testing.expect(item.kind == .module or item.kind == .folder);
+            try testing.expect(!std.mem.endsWith(u8, item.label, ".ss"));
+            if (std.mem.eql(u8, item.label, input.label)) {
+                const edit = item.text_edit orelse return error.MissingCompletionEdit;
+                try testing.expectEqualStrings(input.text, edit.text);
+                try testing.expectEqual(@as(usize, if (input.source.len > 7 and input.source[7] == '"') 8 else 7), edit.start.character);
+            }
+        }
+    }
+}
+
+test "import completion deadlines never return expression candidates" {
+    var case = try CompletionCase.init("import std:\n");
+    defer case.deinit();
+    const snapshot = try case.snapshotFor(case.source);
+    var result = try snapshot_api.completeAt(testing.allocator, snapshot, .{
+        .path = case.path,
+        .source = case.source,
+        .offset = "import std:".len,
+    }, .{ .budget_ms = 0 });
+    defer result.deinit(testing.allocator);
+    try testing.expect(result.is_incomplete);
+    try testing.expectEqual(@as(usize, 0), result.items.len);
+}
+
+fn completeImportWithAllocationFailures(allocator: std.mem.Allocator, snapshot: *const snapshot_api.AnalysisSnapshot, path: []const u8) !void {
+    const source = "import \"std:te";
+    var clock = DeadlineClock{};
+    var result = try snapshot_api.completeAt(allocator, snapshot, .{ .path = path, .source = source, .offset = source.len }, clock.options());
+    defer result.deinit(allocator);
+    try expectHas(result, "std:text");
+    for (result.items) |item| try testing.expect(item.text_edit != null);
+}
+
+test "import completion owns inserted text at every allocation failure" {
+    var case = try CompletionCase.init("import \"std:te");
+    defer case.deinit();
+    const snapshot = try case.snapshotFor(case.source);
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, completeImportWithAllocationFailures, .{ snapshot, case.path });
+}
+
+test "completion does not interpret import text in comments or multiline strings" {
+    for ([_][]const u8{
+        ";; import \"std:te",
+        "const sample: String = <<\nimport \"std:te\n>>\n",
+        "const sample: String = \"import std:te\"\n",
+    }) |source| {
+        var case = try CompletionCase.init(source);
+        defer case.deinit();
+        var result = try case.completeAfter("std:te");
+        defer result.deinit(case.allocator);
+        try expectMissing(result, "std:text");
+        for (result.items) |item| try testing.expect(item.kind != .module and item.kind != .folder);
+    }
+}

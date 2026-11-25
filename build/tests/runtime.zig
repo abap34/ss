@@ -67,6 +67,7 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
         .{ .path = "tests/runtime/lsp/diagnostics/layout_spec.mjs" },
         .{ .path = "tests/runtime/lsp/generated_edit/spec.mjs" },
         .{ .path = "tests/runtime/lsp/generated_edit/reuse_spec.mjs" },
+        .{ .path = "tests/runtime/lsp/completion/modules_spec.mjs", .name = "test-module-completion", .description = "Check incomplete qualified names and import path completion" },
         .{ .path = "tests/runtime/lsp/protocol/spec.mjs", .name = "test-lsp-protocol", .description = "Check malformed input and failed output shutdown" },
         .{ .path = "tests/runtime/lsp/render_cancellation/spec.mjs", .name = "test-lsp-render-cancellation", .description = "Check in-flight rendering cancellation and tool cleanup" },
         .{ .path = "tests/runtime/lsp_completion_runtime_spec.mjs" },

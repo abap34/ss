@@ -10,6 +10,8 @@ const source_query = @import("source.zig");
 const fallback = @import("fallback.zig");
 const types = @import("types.zig");
 const utils = @import("utils");
+const completion_position = @import("completion_position.zig");
+const import_completion = @import("import_completion.zig");
 const QueryBudget = types.QueryBudget;
 
 const Candidate = types.CompletionCandidate;
@@ -31,6 +33,34 @@ pub fn at(
     var builder = CandidateBuilder.init(allocator, budget);
     defer builder.deinit();
     if (budget.expired()) return fallback.complete(allocator, snapshot, req, opts);
+    const position = completion_position.at(req, budget) catch return fallback.complete(allocator, snapshot, req, opts);
+    switch (position) {
+        .import_path => |path| return import_completion.complete(allocator, req, path, opts),
+        .module => |access| {
+            if (snapshot.moduleForPath(req.path)) |module| {
+                if (resolve_query.aliasTarget(budget, snapshot, module.id, access.alias)) |module_id| {
+                    appendModuleDeclarations(&builder, snapshot, module_id, .value) catch |err| switch (err) {
+                        error.QueryExpired => return fallback.complete(allocator, snapshot, req, opts),
+                        else => return err,
+                    };
+                    appendModuleDeclarations(&builder, snapshot, module_id, .type) catch |err| switch (err) {
+                        error.QueryExpired => return fallback.complete(allocator, snapshot, req, opts),
+                        else => return err,
+                    };
+                }
+            }
+            if (budget.expired()) return fallback.complete(allocator, snapshot, req, opts);
+            const start = utils.source.utf16PositionAt(req.source, access.span.start);
+            const end = utils.source.utf16PositionAt(req.source, access.span.end);
+            for (builder.items.items) |*item| item.text_edit = .{
+                .start = start,
+                .end = end,
+                .text = item.label,
+            };
+            return builder.finish(false);
+        },
+        .ordinary => {},
+    }
     var parsed = try source_query.ParsedSource.init(allocator, snapshot, req, budget);
     defer parsed.deinit(allocator);
     if (budget.expired()) return fallback.complete(allocator, snapshot, req, opts);
@@ -76,7 +106,7 @@ const CandidateBuilder = struct {
     items: std.ArrayList(Candidate),
     seen: std.StringHashMap(void),
     scratch: std.heap.ArenaAllocator,
-    owned_details: std.ArrayList([]const u8) = .empty,
+    owned_strings: std.ArrayList([]const u8) = .empty,
 
     fn init(allocator: std.mem.Allocator, budget: QueryBudget) CandidateBuilder {
         return .{
@@ -92,8 +122,8 @@ const CandidateBuilder = struct {
         self.items.deinit(self.allocator);
         self.seen.deinit();
         self.scratch.deinit();
-        for (self.owned_details.items) |detail| self.allocator.free(detail);
-        self.owned_details.deinit(self.allocator);
+        for (self.owned_strings.items) |detail| self.allocator.free(detail);
+        self.owned_strings.deinit(self.allocator);
     }
 
     fn checkBudget(self: *const CandidateBuilder) !void {
@@ -110,7 +140,7 @@ const CandidateBuilder = struct {
     fn retainDetail(self: *CandidateBuilder, detail: []const u8) ![]const u8 {
         const owned = try self.allocator.dupe(u8, detail);
         errdefer self.allocator.free(owned);
-        try self.owned_details.append(self.allocator, owned);
+        try self.owned_strings.append(self.allocator, owned);
         return owned;
     }
 
@@ -120,7 +150,7 @@ const CandidateBuilder = struct {
         errdefer self.allocator.free(items);
         return .{
             .items = items,
-            .owned_details = try self.owned_details.toOwnedSlice(self.allocator),
+            .owned_strings = try self.owned_strings.toOwnedSlice(self.allocator),
             .is_incomplete = is_incomplete,
         };
     }

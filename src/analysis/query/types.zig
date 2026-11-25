@@ -10,6 +10,7 @@ pub const SourceRequest = struct {
 
 pub const QueryOptions = struct {
     budget_ms: u32,
+    io: ?std.Io = null,
     start_ns: ?i128 = null,
     cancellation: ?utils.Cancellation = null,
     clock: ?Clock = null,
@@ -52,6 +53,8 @@ pub const QueryBudget = struct {
 };
 
 pub const CompletionKind = enum {
+    module,
+    folder,
     keyword,
     function,
     variable,
@@ -65,16 +68,21 @@ pub const CompletionCandidate = struct {
     kind: CompletionKind,
     detail: ?[]const u8 = null,
     documentation: ?[]const u8 = null,
+    text_edit: ?struct {
+        start: utils.source.Utf16Position,
+        end: utils.source.Utf16Position,
+        text: []const u8,
+    } = null,
 };
 
 pub const CompletionResult = struct {
     items: []CompletionCandidate,
     is_incomplete: bool = false,
-    owned_details: [][]const u8 = &.{},
+    owned_strings: [][]const u8 = &.{},
 
     pub fn deinit(self: *CompletionResult, allocator: std.mem.Allocator) void {
-        for (self.owned_details) |detail| allocator.free(detail);
-        allocator.free(self.owned_details);
+        for (self.owned_strings) |detail| allocator.free(detail);
+        allocator.free(self.owned_strings);
         allocator.free(self.items);
     }
 };
