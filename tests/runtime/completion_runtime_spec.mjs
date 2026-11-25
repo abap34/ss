@@ -25,10 +25,12 @@ async function testCompletionPrintsScriptWithoutInstalling() {
     assertRenderFormatCompletion(result.stdout, "bash");
     await assertCacheForceCompletion(result.stdout, "bash", home);
     await assertPackageCompletion(result.stdout, "bash", home);
+    await assertInitCompletion(result.stdout, "bash", home);
     for (const shell of ["zsh", "fish"]) {
       const printed = await runCompletion(["completion", shell, "--print"], home, { XDG_DATA_HOME: xdgData });
       assert(printed.code === 0, `${shell} completion --print failed:\n${combined(printed)}`);
       assertRenderFormatCompletion(printed.stdout, shell);
+      await assertInitCompletion(printed.stdout, shell, home);
       await assertCacheForceCompletion(printed.stdout, shell, home);
       if (shell !== "zsh") await assertPackageCompletion(printed.stdout, shell, home);
     }
@@ -169,13 +171,14 @@ async function testPackageCommandHelp() {
   try {
     const general = await runCompletion(["--help"], home);
     assert(general.code === 0, `general help failed:\n${combined(general)}`);
-    for (const command of ["add", "fetch", "update"]) {
+    for (const command of ["init", "add", "fetch", "update"]) {
       assert(general.stdout.includes(`ss ${command}`), `general help omitted ${command}`);
       for (const args of [[command, "--help"], [command, "help"], ["help", command]]) {
         const result = await runCompletion(args, home);
         assert(result.code === 0, `ss ${args.join(" ")} failed:\n${combined(result)}`);
         assert(result.stdout.includes(`ss ${command}`), `command help omitted ${command}`);
-        assert(result.stdout.includes("--project"), `command help omitted --project`);
+        const option = command === "init" ? "--package" : "--project";
+        assert(result.stdout.includes(option), `command help omitted ${option}`);
       }
     }
   } finally {
@@ -308,4 +311,42 @@ function countOccurrences(text, needle) {
 
 function combined(result) {
   return `${result.stdout}\n${result.stderr}`;
+}
+
+async function assertInitCompletion(script, shell, home) {
+  const scriptPath = path.join(home, `init.${shell}`);
+  await writeFile(scriptPath, script);
+  const args = shell === "bash" ? ["-c", `
+    source "$1" || exit 1
+    COMP_WORDS=(ss init --p)
+    COMP_CWORD=2
+    _ss
+    [[ "\${COMPREPLY[*]}" == "--package" ]] || exit 1
+    for option in --user --host --no-git; do
+      COMP_WORDS=(ss init "$option")
+      COMP_CWORD=2
+      _ss
+      [[ "\${COMPREPLY[*]}" == "$option" ]] || exit 1
+    done
+    COMP_WORDS=(ss init --user '')
+    COMP_CWORD=3
+    _ss
+    [[ \${#COMPREPLY[@]} -eq 0 ]] || exit 1
+    COMP_WORDS=(ss init --host '')
+    _ss
+    [[ \${#COMPREPLY[@]} -eq 0 ]] || exit 1
+    COMP_WORDS=(ss init --package --e)
+    COMP_CWORD=3
+    _ss
+    [[ "\${COMPREPLY[*]}" == "--entry" ]] || exit 1
+  `, "--", scriptPath] : shell === "fish" ? ["--no-config", "-c", `
+    source $argv[1]; or exit 1
+    string match -q -- '--package*' (complete --do-complete 'ss init --p'); or exit 1
+    for option in user host no-git
+      string match -q -- --$option'*' (complete --do-complete "ss init --$option"); or exit 1
+    end
+    string match -q -- '--entry*' (complete --do-complete 'ss init --package --e'); or exit 1
+  `, "--", scriptPath] : ["-n", scriptPath];
+  assert(script.includes(shell === "fish" ? "-l package" : "--package"), `${shell} omitted --package`);
+  await runShellCheck(shell, args, home, "init package completion");
 }
