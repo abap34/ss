@@ -25,12 +25,16 @@ const PreparedEvaluation = struct {
 };
 
 fn prepare(allocator: std.mem.Allocator, text: []const u8) !PreparedEvaluation {
+    return prepareWithCache(allocator, text, null);
+}
+
+fn prepareWithCache(allocator: std.mem.Allocator, text: []const u8, cache: ?*compiler.module_loader.EmbeddedSyntaxCache) !PreparedEvaluation {
     const path = "evaluation-cancellation.ss";
     var source = try allocator.dupe(u8, text);
     defer allocator.free(source);
     var syntax = try compiler.syntax.parseWithSourceName(allocator, source, path);
     defer syntax.deinit(allocator);
-    var index = try compiler.analysis.loadModuleIndex(allocator, testing.io, ".", syntax, .{});
+    var index = try compiler.analysis.loadModuleIndex(allocator, testing.io, ".", syntax, .{ .embedded_cache = cache });
     defer index.deinit();
     var state = try compiler.analysis.buildDocumentStateWithOptions(allocator, path, ".", &source, &syntax, &index, .{});
     errdefer state.deinit();
@@ -94,24 +98,31 @@ test "evaluation cancellation releases nested calls closures records and placed 
         \\  end
         \\end
     ;
+    var cache = compiler.module_loader.EmbeddedSyntaxCache.init(testing.allocator);
+    defer cache.deinit();
     var counter = CancellationCounter{ .cancel_after = std.math.maxInt(usize) };
     const options = compiler.lowering.EvaluateOptions{
         .io = testing.io,
         .cancellation = .{ .context = &counter, .is_canceled = cancelAfterCheck },
     };
     {
-        var evaluation = try prepare(testing.allocator, source);
+        var evaluation = try prepareWithCache(testing.allocator, source, &cache);
         defer evaluation.deinit();
         try compiler.lowering.evaluateDocument(&evaluation.state, &evaluation.graph, options);
     }
     const total_checks = counter.checks;
     try testing.expect(total_checks > 20);
     for (1..total_checks + 1) |limit| {
-        var evaluation = try prepare(testing.allocator, source);
+        // Keep leak, double-free and write-after-free checks for each run without
+        // collecting an allocation stack trace for every copy of the fixture.
+        var allocator = std.heap.SafeAllocator.init(std.heap.page_allocator, .{ .stack_trace_frames = 0 });
+        defer testing.expectEqual(@as(usize, 0), allocator.deinit()) catch @panic("evaluation cancellation leaked");
+        var evaluation = try prepareWithCache(allocator.allocator(), source, &cache);
         defer evaluation.deinit();
         const diagnostic_count = evaluation.state.diagnostics.entries.items.len;
         counter = .{ .cancel_after = limit };
         try testing.expectError(error.Canceled, compiler.lowering.evaluateDocument(&evaluation.state, &evaluation.graph, options));
+        try testing.expectEqual(limit, counter.checks);
         try testing.expectEqual(diagnostic_count, evaluation.state.diagnostics.entries.items.len);
     }
 }
