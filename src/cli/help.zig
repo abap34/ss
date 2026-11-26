@@ -1,12 +1,8 @@
 const std = @import("std");
-const utils = @import("utils");
 
-const error_report = utils.err;
+const terminal = @import("terminal.zig");
 
-pub const Output = enum {
-    stdout,
-    stderr,
-};
+pub const Output = terminal.Output;
 
 const Style = struct {
     heading: []const u8 = "",
@@ -22,8 +18,12 @@ pub fn general(output: Output) void {
         \\  {s}ss <command>{s} [options]
         \\
         \\{s}Project:{s}
-        \\  {s}ss init [dir]{s}           Create a project
+        \\  {s}ss init [dir]{s}           Create a deck or package
         \\  {s}ss doctor{s}               Check local setup
+        \\  {s}ss add --git URL{s}        Add a Git package
+        \\  {s}ss fetch{s}                Resolve and fetch packages
+        \\  {s}ss update [NAME]{s}        Update Git packages
+        \\  {s}ss status{s}               Show local package status
         \\
     , .{
         s.heading, s.reset,
@@ -31,8 +31,11 @@ pub fn general(output: Output) void {
         s.heading, s.reset,
         s.command, s.reset,
         s.command, s.reset,
+        s.command, s.reset,
+        s.command, s.reset,
+        s.command, s.reset,
+        s.command, s.reset,
     });
-    writeAll(output, "\n");
     outputPrint(output,
         \\{s}Build:{s}
         \\  {s}ss render [input.ss]{s}    Write PDF or HTML
@@ -79,6 +82,41 @@ pub fn general(output: Output) void {
 }
 
 pub fn command(output: Output, name: []const u8) bool {
+    if (std.mem.eql(u8, name, "add") or std.mem.eql(u8, name, "fetch") or std.mem.eql(u8, name, "update")) {
+        writeAll(output,
+            \\Usage:
+            \\  ss add --git URL [--tag TAG | --branch BRANCH | --rev COMMIT]
+            \\  ss fetch [--locked]
+            \\  ss update [NAME]
+            \\  All three commands accept --project FILE_OR_DIR.
+            \\
+            \\Add records a dependency in ss.toml, downloads it and writes ss.lock.
+            \\Fetch restores locked commits, resolving new or changed declarations.
+            \\Fetch --locked restores only and requires an up-to-date ss.lock.
+            \\Update refreshes a source specification everywhere it is used, or all sources.
+            \\Imports use pkg:NAME or pkg:NAME/module (without a file extension).
+            \\Rendering and the language server use fetched packages without networking.
+            \\Package repositories require [package] name = "NAME"; entry defaults to "lib.ss".
+            \\Add uses that name as the dependency key. Import aliases use `as` in source.
+            \\Use asset_path("assets/logo.svg") for paths relative to a library module.
+            \\
+        );
+        return true;
+    }
+    if (std.mem.eql(u8, name, "status")) {
+        writeAll(output,
+            \\Usage:
+            \\  ss status [--project FILE_OR_DIR] [--color auto|always|never]
+            \\
+            \\Show declared dependencies, locked commits and local fetch status.
+            \\Direct and transitive packages are listed from ss.lock.
+            \\Report a missing or outdated lockfile and packages that need fetching.
+            \\No network access or file changes. Does not check remote updates.
+            \\Exit successfully when status can be read, even if fetching is needed.
+            \\
+        );
+        return true;
+    }
     if (std.mem.eql(u8, name, "expand")) {
         writeAll(output,
             \\Usage:
@@ -192,15 +230,25 @@ fn init(output: Output) void {
         \\{s}Usage:{s}
         \\  {s}ss init [dir]{s}
         \\
-        \\Create a sample deck with components.ss and theme.ss beside the entry file.
+        \\Create a sample deck, or a reusable package with --package.
+        \\Package names come from the directory name, without a trailing .ss.
+        \\
+        \\With --package, initialize Git and set origin to https://HOST/USER/NAME.ss.
+        \\Read github.user for GitHub, or ask for the owner when it is not configured.
+        \\No commits, pushes, or remote repositories are created.
         \\
         \\{s}Options:{s}
-        \\  {s}--entry FILE{s}            Entry file to create
+        \\  {s}--package{s}               Create a package with a README and example
+        \\  {s}--entry FILE{s}            Entry file (deck: slide.ss; package: lib.ss)
         \\  {s}--force{s}                 Overwrite generated files
+        \\  {s}--user NAME{s}             Repository owner (overrides configuration or prompt)
+        \\  {s}--host HOST{s}             Git host (default: github.com)
+        \\  {s}--no-git{s}                Skip Git initialization and origin setup
         \\
         \\{s}Examples:{s}
         \\  {s}ss init .{s}
         \\  {s}ss init slides --entry talk.ss{s}
+        \\  {s}ss init --package arrows{s}
         \\
     , .{
         s.heading, s.reset,
@@ -208,7 +256,12 @@ fn init(output: Output) void {
         s.heading, s.reset,
         s.option,  s.reset,
         s.option,  s.reset,
+        s.option,  s.reset,
+        s.option,  s.reset,
+        s.option,  s.reset,
+        s.option,  s.reset,
         s.heading, s.reset,
+        s.command, s.reset,
         s.command, s.reset,
         s.command, s.reset,
     });
@@ -574,34 +627,13 @@ fn completionHelp(output: Output) void {
 }
 
 fn style(output: Output) Style {
-    if (!useColor(output)) return .{};
+    if (!terminal.useColor(output)) return .{};
     return .{
         .heading = "\x1b[1m",
         .command = "\x1b[36m",
         .option = "\x1b[33m",
         .reset = "\x1b[0m",
     };
-}
-
-fn useColor(output: Output) bool {
-    return switch (error_report.colorMode()) {
-        .auto => std.c.getenv("NO_COLOR") == null and !envEquals("CLICOLOR", "0") and outputIsTty(output),
-        .always => true,
-        .never => false,
-    };
-}
-
-fn outputIsTty(output: Output) bool {
-    const fd: c_int = switch (output) {
-        .stdout => 1,
-        .stderr => 2,
-    };
-    return std.c.isatty(fd) == 1;
-}
-
-fn envEquals(name: [:0]const u8, expected: []const u8) bool {
-    const value = std.c.getenv(name) orelse return false;
-    return std.mem.eql(u8, std.mem.span(value), expected);
 }
 
 fn outputPrint(output: Output, comptime fmt: []const u8, args: anytype) void {
@@ -627,21 +659,26 @@ const bash_completion =
     \\# ss bash completion
     \\_ss()
     \\{
-    \\  local cur prev command
+    \\  local cur prev command candidate
     \\  COMPREPLY=()
     \\  cur="${COMP_WORDS[COMP_CWORD]}"
     \\  prev="${COMP_WORDS[COMP_CWORD-1]}"
     \\  command="${COMP_WORDS[1]}"
     \\
-    \\  local commands="init doctor render present dump expand watch debug cache lsp version completion help"
+    \\  local commands="init add fetch update status doctor render present dump expand watch debug cache lsp version completion help"
     \\  local common_opts="help --help -h"
     \\  local diagnostic_opts="--diagnostic-level --warnings --quiet --measure-profile --profile --profile-buffer-kb"
     \\  local project_opts="--project --asset-base-dir --jobs --color $diagnostic_opts"
     \\  local render_opts="$project_opts --output --format --diagnostics-json"
     \\
     \\  case "$prev" in
-    \\    --project|--asset-base-dir|--output|--diagnostics-json|--entry|--profile)
-    \\      COMPREPLY=( $(compgen -f -- "$cur") )
+    \\    --project|--asset-base-dir|--output|--diagnostics-json|--entry|--profile|--git)
+    \\      while IFS= read -r candidate; do
+    \\        COMPREPLY+=("$candidate")
+    \\      done < <(compgen -f -- "$cur")
+    \\      return 0
+    \\      ;;
+    \\    --tag|--branch|--rev|--user|--host)
     \\      return 0
     \\      ;;
     \\    --jobs|--interval-ms|--profile-buffer-kb)
@@ -672,8 +709,26 @@ const bash_completion =
     \\  fi
     \\
     \\  case "$command" in
+    \\    add)
+    \\      local package_opts="--git --tag --branch --rev --project $common_opts"
+    \\      for candidate in "${COMP_WORDS[@]}"; do
+    \\        case "$candidate" in
+    \\          --tag|--branch|--rev) package_opts="--git --project $common_opts"; break ;;
+    \\        esac
+    \\      done
+    \\      COMPREPLY=( $(compgen -W "$package_opts" -- "$cur") )
+    \\      ;;
+    \\    fetch)
+    \\      COMPREPLY=( $(compgen -W "--locked --project $common_opts" -- "$cur") )
+    \\      ;;
+    \\    status)
+    \\      COMPREPLY=( $(compgen -W "--project --color $common_opts" -- "$cur") )
+    \\      ;;
+    \\    update)
+    \\      COMPREPLY=( $(compgen -W "--project $common_opts" -- "$cur") )
+    \\      ;;
     \\    init)
-    \\      COMPREPLY=( $(compgen -W "$common_opts --entry --force" -- "$cur") )
+    \\      COMPREPLY=( $(compgen -W "$common_opts --package --entry --force --user --host --no-git" -- "$cur") )
     \\      ;;
     \\    doctor)
     \\      COMPREPLY=( $(compgen -W "$common_opts --project --asset-base-dir --strict" -- "$cur") )
@@ -737,7 +792,11 @@ const zsh_completion =
     \\_ss() {
     \\  local -a commands
     \\  commands=(
-    \\    'init:Create a project'
+    \\    'add:Add a Git package'
+    \\    'fetch:Resolve and fetch packages'
+    \\    'update:Update Git packages'
+    \\    'status:Show local package status'
+    \\    'init:Create a deck or package'
     \\    'doctor:Check local setup'
     \\    'render:Write PDF or HTML'
     \\    'present:Open the browser presenter'
@@ -763,8 +822,20 @@ const zsh_completion =
     \\  fi
     \\
     \\  case $words[2] in
+    \\    add)
+    \\      _arguments "--git[Git repository]:URL:_files" "(--branch --rev)--tag[tag]:tag:" "(--tag --rev)--branch[branch]:branch:" "(--tag --branch)--rev[commit]:commit:" "--project[project file or directory]:path:_files" $common_opts
+    \\      ;;
+    \\    fetch)
+    \\      _arguments "--locked[require an up-to-date lockfile]" "--project[project file or directory]:path:_files" $common_opts
+    \\      ;;
+    \\    status)
+    \\      _arguments "--project[project file or directory]:path:_files" "--color[color mode]:(auto always never)" $common_opts
+    \\      ;;
+    \\    update)
+    \\      _arguments "2::package name:" "--project[project file or directory]:path:_files" $common_opts
+    \\      ;;
     \\    init)
-    \\      _arguments '*::arg:->args' '--entry[entry file]:file:_files' '--force[overwrite generated files]' $common_opts
+    \\      _arguments '*::arg:->args' '--package[create a package]' '(--no-git)--user[repository owner]:owner:' '(--no-git)--host[Git host]:host:' '(--user --host)--no-git[skip Git setup]' '--entry[entry file]:file:_files' '--force[overwrite generated files]' $common_opts
     \\      ;;
     \\    doctor)
     \\      _arguments '*::arg:->args' '--project[load ss.toml]:file or dir:_files' '--asset-base-dir[resolve assets from dir]:dir:_files -/' '--strict[fail on issues]' $common_opts
@@ -810,7 +881,14 @@ const zsh_completion =
 const fish_completion =
     \\# ss fish completion
     \\complete -c ss -f
-    \\complete -c ss -n '__fish_use_subcommand' -a init -d 'Create a project'
+    \\complete -c ss -n '__fish_use_subcommand' -a 'add fetch update status' -d 'Manage Git packages'
+    \\complete -c ss -n '__fish_seen_subcommand_from add' -l git -r -F -d 'Git repository URL'
+    \\complete -c ss -n '__fish_seen_subcommand_from add; and not __fish_seen_argument -l tag -l branch -l rev' -l tag -x -d 'Git tag'
+    \\complete -c ss -n '__fish_seen_subcommand_from add; and not __fish_seen_argument -l tag -l branch -l rev' -l branch -x -d 'Git branch'
+    \\complete -c ss -n '__fish_seen_subcommand_from add; and not __fish_seen_argument -l tag -l branch -l rev' -l rev -x -d 'Git commit'
+    \\complete -c ss -n '__fish_seen_subcommand_from fetch' -l locked -d 'Require an up-to-date lockfile'
+    \\complete -c ss -n '__fish_seen_subcommand_from add fetch update status' -l project -r -F -d 'Project file or directory'
+    \\complete -c ss -n '__fish_use_subcommand' -a init -d 'Create a deck or package'
     \\complete -c ss -n '__fish_use_subcommand' -a doctor -d 'Check local setup'
     \\complete -c ss -n '__fish_use_subcommand' -a render -d 'Write PDF or HTML'
     \\complete -c ss -n '__fish_use_subcommand' -a present -d 'Open the browser presenter'
@@ -828,12 +906,16 @@ const fish_completion =
     \\complete -c ss -s h -l help -d 'Show help'
     \\complete -c ss -s V -l version -d 'Show version details'
     \\
+    \\complete -c ss -n '__fish_seen_subcommand_from init' -l user -x -d 'Repository owner'
+    \\complete -c ss -n '__fish_seen_subcommand_from init' -l host -x -d 'Git host'
+    \\complete -c ss -n '__fish_seen_subcommand_from init' -l no-git -d 'Skip Git setup'
+    \\complete -c ss -n '__fish_seen_subcommand_from init' -l package -d 'Create a package'
     \\complete -c ss -n '__fish_seen_subcommand_from init' -l entry -r -d 'Entry file to create'
     \\complete -c ss -n '__fish_seen_subcommand_from init' -l force -d 'Overwrite generated files'
     \\
     \\complete -c ss -n '__fish_seen_subcommand_from dump expand render present doctor watch debug' -l project -r -d 'Load entry and asset base from ss.toml'
     \\complete -c ss -n '__fish_seen_subcommand_from dump expand render present doctor watch debug' -l asset-base-dir -r -d 'Resolve relative assets from DIR'
-    \\complete -c ss -n '__fish_seen_subcommand_from dump expand render present doctor watch debug' -l color -r -a 'auto always never' -d 'Color mode'
+    \\complete -c ss -n '__fish_seen_subcommand_from dump expand render present doctor watch debug status' -l color -r -a 'auto always never' -d 'Color mode'
     \\complete -c ss -n '__fish_seen_subcommand_from dump expand render present watch debug' -l diagnostic-level -r -a 'note warning error off' -d 'Diagnostic display level'
     \\complete -c ss -n '__fish_seen_subcommand_from dump expand render present watch debug' -l warnings -r -a 'off' -d 'Warning display'
     \\complete -c ss -n '__fish_seen_subcommand_from dump expand render present watch debug' -l quiet -d 'Hide progress and warning diagnostics'
@@ -854,6 +936,6 @@ const fish_completion =
     \\complete -c ss -n '__fish_seen_subcommand_from cache' -a 'project tree-sitter help' -d 'Cache target'
     \\complete -c ss -n '__fish_seen_subcommand_from cache; and __fish_seen_subcommand_from project; and __fish_seen_subcommand_from clear' -l force -d 'Clear resources held by WYSIWYG after rendering finishes'
     \\complete -c ss -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish help' -d 'Shell'
-    \\complete -c ss -n '__fish_seen_subcommand_from help' -a 'init doctor render present dump expand watch debug cache lsp version completion' -d 'Command'
+    \\complete -c ss -n '__fish_seen_subcommand_from help' -a 'init add fetch update status doctor render present dump expand watch debug cache lsp version completion' -d 'Command'
     \\
 ;

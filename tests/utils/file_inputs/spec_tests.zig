@@ -116,3 +116,32 @@ test "file inputs: discarding appended paths preserves earlier inputs" {
     try testing.expectEqual(@as(usize, 0), inputs.paths.count());
     try testing.expectEqual(@as(usize, 0), inputs.items().len);
 }
+
+test "file inputs: consumed contents validate first observations after sorting and truncation" {
+    const Observer = struct {
+        fn capture(_: *anyopaque, path: []const u8, _: @import("utils").file_inputs.Kind) !u64 {
+            return std.hash.Wyhash.hash(0, std.fs.path.basename(path));
+        }
+        fn contents(_: *anyopaque, bytes: []const u8) u64 {
+            return std.hash.Wyhash.hash(0, bytes);
+        }
+    };
+    var context: u8 = 0;
+    var inputs = FileInputs.init(testing.allocator);
+    defer inputs.deinit();
+    inputs.observer = .{ .context = &context, .capture = Observer.capture, .contents = Observer.contents };
+    try inputs.recordContents("/project/z", "z");
+    try inputs.recordContents("/project/a", "a");
+    _ = inputs.items();
+    try inputs.recordContents("/project/nested/../z", "z");
+    try testing.expect(inputs.observations_complete);
+    inputs.truncate(1);
+    try inputs.recordContents("/project/z", "z");
+    try inputs.recordContents("/project/a", "changed during reading");
+    try testing.expect(!inputs.observations_complete);
+    try inputs.recordContents("/project/a", "a");
+    try testing.expect(!inputs.observations_complete);
+    inputs.clear();
+    try inputs.recordContents("/project/z", "z");
+    try testing.expect(inputs.observations_complete);
+}

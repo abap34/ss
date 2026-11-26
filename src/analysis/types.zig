@@ -15,6 +15,12 @@ pub const TypeInfo = struct {
     failed: bool = false,
     string_literal: ?[]const u8 = null,
     function_labels: []const []const u8 = &.{},
+
+    // Failed inference has already emitted its diagnostic; its fallback type
+    // must not participate in subsequent checks or user-facing type labels.
+    pub fn requireValid(self: TypeInfo) error{AlreadyDiagnosed}!void {
+        if (self.failed) return error.AlreadyDiagnosed;
+    }
 };
 
 pub const TypeEnv = analysis_env.ValueEnv(TypeInfo);
@@ -52,6 +58,7 @@ pub fn typeLabelAlloc(allocator: std.mem.Allocator, ty: Type) ![]const u8 {
 }
 
 pub fn typeInfoLabelAlloc(allocator: std.mem.Allocator, info: TypeInfo) ![]const u8 {
+    try info.requireValid();
     if (info.hole != null or info.ty.kind == .hole) return allocator.dupe(u8, "HoleType");
     return typeLabelAlloc(allocator, info.ty);
 }
@@ -174,6 +181,7 @@ pub fn ensureType(
     expected: Type,
     origin: core.SourceOrigin,
 ) !void {
+    try actual.requireValid();
     switch (assignability(actual, expected)) {
         .assignable, .blocked_by_hole => return,
         .mismatch => {},
@@ -197,6 +205,7 @@ pub fn ensurePlaced(
     actual: TypeInfo,
     origin: core.SourceOrigin,
 ) !void {
+    try actual.requireValid();
     if (actual.hole != null or holeIdFromType(actual.ty) != null or actual.ty.placedInput() != null) return;
     if (state) |sink| {
         const label = try typeInfoLabelAlloc(allocator, actual);

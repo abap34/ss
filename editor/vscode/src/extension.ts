@@ -155,6 +155,7 @@ function createLanguageClient(output: vscode.OutputChannel): LanguageClient {
       fileEvents: [
         vscode.workspace.createFileSystemWatcher("**/*.ss"),
         vscode.workspace.createFileSystemWatcher("**/ss.toml"),
+        vscode.workspace.createFileSystemWatcher("**/ss.lock"),
       ],
     },
   };

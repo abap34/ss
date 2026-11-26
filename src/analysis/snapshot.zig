@@ -38,6 +38,7 @@ pub const SourceSet = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     overlay: module_loader.SourceOverlay,
+    file_inputs: ?*utils.FileInputs = null,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io) SourceSet {
         return .{
@@ -57,7 +58,11 @@ pub const SourceSet = struct {
 
     pub fn readFileAlloc(self: *const SourceSet, path: []const u8) ![]u8 {
         if (try self.overlay.get(path)) |text| return self.allocator.dupe(u8, text);
-        return utils.fs.readFileAlloc(self.io, self.allocator, path);
+        if (self.file_inputs) |inputs| try inputs.record(".", path, .file);
+        const bytes = try utils.fs.readFileAlloc(self.io, self.allocator, path);
+        errdefer self.allocator.free(bytes);
+        if (self.file_inputs) |inputs| try inputs.recordContents(path, bytes);
+        return bytes;
     }
 };
 
@@ -120,6 +125,7 @@ pub const RetainedLayoutState = struct {
 };
 
 pub const ProjectFacts = struct {
+    project_file: ?[]u8 = null,
     entry_path: []u8 = &.{},
     asset_base_dir: []u8 = &.{},
     module_paths: [][]u8 = &.{},
@@ -137,6 +143,7 @@ pub const ProjectFacts = struct {
             .cache = options.cache,
         };
         errdefer facts.deinit(allocator);
+        if (options.project_file) |file| facts.project_file = try allocator.dupe(u8, file);
         facts.highlight = try options.highlight.clone(allocator);
         facts.entry_path = try allocator.dupe(u8, entry_path);
         facts.asset_base_dir = try allocator.dupe(u8, asset_base_dir);
@@ -152,6 +159,7 @@ pub const ProjectFacts = struct {
     }
 
     pub fn deinit(self: *ProjectFacts, allocator: std.mem.Allocator) void {
+        if (self.project_file) |file| allocator.free(file);
         allocator.free(self.entry_path);
         allocator.free(self.asset_base_dir);
         for (self.module_paths) |path| allocator.free(path);
@@ -162,6 +170,7 @@ pub const ProjectFacts = struct {
 };
 
 pub const ProjectOptions = struct {
+    project_file: ?[]const u8 = null,
     highlight: utils.highlight.Config = .{},
     lsp: project.LspConfig = .{},
     wysiwyg: project.WysiwygConfig = .{},
@@ -353,6 +362,7 @@ pub const AnalysisSnapshot = struct {
     type_storage: ?TypeStorage = null,
     allocator: std.mem.Allocator,
     generation: u64 = 0,
+    source_inputs: ?utils.FileInputs = null,
     project: ProjectFacts = .{},
     modules: []ModuleFact = &.{},
     module_order: []core.SourceModuleId = &.{},
@@ -497,6 +507,7 @@ pub const AnalysisSnapshot = struct {
         if (self.layout_output) |*layout| layout.deinit(self.allocator);
         if (self.retained_layout_inputs) |*inputs| inputs.deinit();
         if (self.retained_layout_state) |*retained| retained.deinit();
+        if (self.source_inputs) |*inputs| inputs.deinit();
         self.diagnostics.deinit();
         self.* = .{
             .allocator = self.allocator,
@@ -828,7 +839,7 @@ fn parseSnapshotSource(allocator: std.mem.Allocator, sources: *const SourceSet, 
     var parse_failure: syntax.ParseFailure = .{};
     var include_diagnostics = module_loader.LoadDiagnostics.init(allocator);
     defer include_diagnostics.deinit();
-    var includes = module_loader.IncludeLoader{ .io = sources.io, .overlay = &sources.overlay, .diagnostics = &include_diagnostics };
+    var includes = module_loader.IncludeLoader{ .io = sources.io, .overlay = &sources.overlay, .diagnostics = &include_diagnostics, .file_inputs = sources.file_inputs };
     return syntax.parseRecoveringWithOptions(allocator, entry_source, entry_path, .{ .failure = &parse_failure, .cancellation = options.cancellation, .include_resolver = includes.resolver() }) catch |err| {
         try addLoadDiagnostics(diagnostic_bag, &include_diagnostics);
         if (err == error.OutOfMemory or err == error.Canceled) return err;
@@ -853,6 +864,8 @@ fn loadSnapshotModules(allocator: std.mem.Allocator, sources: *const SourceSet, 
     defer load_diagnostics.deinit();
     const import_base_dir = std.fs.path.dirname(entry_path) orelse ".";
     var index = module_index.load(allocator, sources.io, import_base_dir, program, .{
+        .project_file = options.project.project_file,
+        .file_inputs = sources.file_inputs,
         .overlay = &sources.overlay,
         .diagnostics = &load_diagnostics,
         .print_diagnostics = false,
@@ -866,21 +879,21 @@ fn loadSnapshotModules(allocator: std.mem.Allocator, sources: *const SourceSet, 
         try addLoadDiagnostics(diagnostic_bag, &load_diagnostics);
         if (err == error.DiagnosticsFailed) {
             if (load_diagnostics.items.items.len != 0) {
-                const span = try module_loader.importFailureSpan(allocator, sources.io, import_base_dir, &program, &sources.overlay, &load_diagnostics);
+                const span = try module_loader.importFailureSpan(allocator, sources.io, import_base_dir, &program, &sources.overlay, &load_diagnostics, options.project.project_file);
                 const location = ast.SourceFile.locate(program.source_files.items, entry_path, entry_source, span orelse .{ .start = 0, .end = 0 });
                 try diagnostic_bag.add(location.path, location.source, .@"error", "ImportFailed", "ImportFailed: imported module failed to load", if (span != null) location.span else null, null);
             } else {
                 try addBuildFailureDiagnostic(diagnostic_bag, entry_path, entry_source, err, null);
             }
         } else if (err == error.UnknownImport) {
-            if (try module_loader.findUnknownImportReport(allocator, sources.io, import_base_dir, program, &sources.overlay)) |found| {
+            if (try module_loader.findUnknownImportReport(allocator, sources.io, import_base_dir, program, &sources.overlay, options.project.project_file)) |found| {
                 var report = found;
                 defer report.deinit(allocator);
                 const location = ast.SourceFile.locate(program.source_files.items, entry_path, entry_source, report.span);
                 try diagnostic_bag.add(location.path, location.source, .@"error", "UnknownImport", report.message, location.span, null);
             }
         } else {
-            if (try module_loader.findImportReadFailureReport(allocator, sources.io, import_base_dir, program, &sources.overlay, err)) |found| {
+            if (try module_loader.findImportReadFailureReport(allocator, sources.io, import_base_dir, program, &sources.overlay, err, options.project.project_file)) |found| {
                 var report = found;
                 defer report.deinit(allocator);
                 const location = ast.SourceFile.locate(program.source_files.items, entry_path, entry_source, report.span);
@@ -894,7 +907,7 @@ fn loadSnapshotModules(allocator: std.mem.Allocator, sources: *const SourceSet, 
     errdefer index.deinit();
     try addLoadDiagnostics(diagnostic_bag, &load_diagnostics);
     if (load_diagnostics.hasErrors()) {
-        const span = try module_loader.importFailureSpan(allocator, sources.io, import_base_dir, &program, &sources.overlay, &load_diagnostics);
+        const span = try module_loader.importFailureSpan(allocator, sources.io, import_base_dir, &program, &sources.overlay, &load_diagnostics, options.project.project_file);
         const location = ast.SourceFile.locate(program.source_files.items, entry_path, entry_source, span orelse .{ .start = 0, .end = 0 });
         try diagnostic_bag.add(location.path, location.source, .@"error", "ImportFailed", "ImportFailed: imported module contains syntax errors", if (span != null) location.span else null, null);
     }

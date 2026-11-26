@@ -36,3 +36,15 @@ assert.strictEqual(wysiwyg.max_wait.default, 700);
 assert.strictEqual(wysiwyg.refresh.properties.automatic.type, "boolean");
 assert.strictEqual(wysiwyg.refresh.properties.automatic.default, true);
 assert.strictEqual(wysiwyg.refresh.properties.dependency.type, "boolean");
+
+assert.deepStrictEqual(schema.anyOf, [{ required: ["project"] }, { required: ["package"] }]);
+assert.strictEqual(properties.package.properties.entry.default, "lib.ss");
+assert.deepStrictEqual(properties.package.required, ["name"]);
+const namePattern = new RegExp(properties.package.properties.name.pattern);
+assert(namePattern.test("seminar_2"));
+assert(!namePattern.test("seminar-tools"));
+assert(!namePattern.test("2seminar"));
+const dependency = properties.dependencies.patternProperties["^[A-Za-z_][A-Za-z0-9_]*$"];
+assert.deepStrictEqual(dependency.required, ["git"]);
+assert.strictEqual(dependency.additionalProperties, false);
+assert.strictEqual(dependency.not.anyOf.length, 3);

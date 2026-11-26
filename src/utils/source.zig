@@ -326,6 +326,18 @@ pub fn isIdentifierContinue(ch: u8) bool {
     return std.ascii.isAlphanumeric(ch) or ch == '_';
 }
 
+pub fn isValidIdentifier(ident: []const u8) bool {
+    if (ident.len == 0 or !isIdentifierStart(ident[0])) return false;
+    for (ident[1..]) |ch| if (!isIdentifierContinue(ch)) return false;
+    return !isReservedIdentifier(ident);
+}
+
+pub fn isReservedIdentifier(ident: []const u8) bool {
+    const reserved = [_][]const u8{ "import", "fn", "const", "type", "enum", "if", "else", "end", "return", "let", "as", "with" };
+    inline for (reserved) |keyword| if (std.mem.eql(u8, ident, keyword)) return true;
+    return false;
+}
+
 pub fn isInlineSpace(ch: u8) bool {
     return ch == ' ' or ch == '\t' or ch == '\r';
 }

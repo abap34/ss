@@ -1,0 +1,6 @@
+[package]
+name = "{s}"
+entry = {s}
+
+[project]
+entry = "examples/slide.ss"

@@ -15,6 +15,11 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
     const b = suite.ctx.b;
     const test_step = suite.all;
     const specs = [_]Spec{
+        .{ .path = "tests/runtime/packages/completion_spec.mjs", .name = "test-package-completion", .description = "Check package import completion, dependency scope and offline module discovery" },
+        .{ .path = "tests/runtime/packages/cache_spec.mjs", .name = "test-package-cache", .description = "Check analysis invalidation without file notifications after dependency changes" },
+        .{ .path = "tests/runtime/packages/graph_spec.mjs", .name = "test-package-graph", .description = "Check graph-wide Git selections, package identity, names and locked restoration" },
+        .{ .path = "tests/runtime/packages/status_spec.mjs", .name = "test-package-status", .description = "Check read-only package status, missing sources and stale lockfiles" },
+        .{ .path = "tests/runtime/packages/spec.mjs", .name = "test-git-packages", .description = "Check Git dependency commands, offline package imports and packaged assets" },
         .{ .path = "tests/runtime/stdlib/spec.mjs", .name = "test-stdlib", .description = "Check public standard-library construction and placement contracts" },
         .{ .path = "tests/runtime/assets/constructors_spec.mjs", .name = "test-asset-constructors", .description = "Check immutable asset constructors, reuse, styles, and placement validation" },
         .{ .path = "tests/runtime/assets/typed_icon_spec.mjs", .name = "test-typed-icon", .description = "Check immutable icon inputs, catalog validation, composition, and rendering" },
@@ -33,8 +38,8 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
         .{ .path = "tests/runtime/document/references/practical_spec.mjs", .name = "test-placement-reference-practical", .description = "Check themed reference decks, declaration permutations, and editor recovery" },
         .{ .path = "tests/runtime/document/typed_page_numbers_spec.mjs", .name = "test-typed-document", .description = "Check typed page numbers, contents, and references in a multi-page document" },
         .{ .path = "tests/runtime/cli_diagnostics_runtime_spec.mjs" },
-        .{ .path = "tests/runtime/cli/init/spec.mjs", .name = "test-init", .description = "Check generated project content, imports, customization, and overwrite protection" },
-        .{ .path = "tests/runtime/completion_runtime_spec.mjs" },
+        .{ .path = "tests/runtime/cli/init/spec.mjs", .name = "test-init", .description = "Check generated decks and packages, imports, customization, and overwrite protection" },
+        .{ .path = "tests/runtime/completion_runtime_spec.mjs", .name = "test-shell-completion", .description = "Check shell completion commands, options, argument values and installation" },
         .{ .path = "tests/runtime/debug_runtime_spec.mjs" },
         .{ .path = "tests/runtime/doctor_runtime_spec.mjs" },
         .{ .path = "tests/runtime/editor/diagnostics/spec.mjs" },
@@ -45,6 +50,7 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
         .{ .path = "tests/runtime/lsp/code_lens/editing_spec.mjs", .name = "test-code-lens-editing", .description = "Check stable slide navigation while editing incomplete source" },
         .{ .path = "tests/runtime/lsp/page_ranges/spec.mjs", .name = "test-page-ranges", .description = "Check compiler page boundaries for source decorations" },
         .{ .path = "tests/runtime/editor/navigation/spec.mjs", .name = "test-editor-page-navigation", .description = "Check page CodeLens declarations and expanded preview targets" },
+        .{ .path = "tests/runtime/editor/navigation/objects_spec.mjs", .name = "test-editor-object-navigation", .description = "Check object navigation to component call sites" },
         .{ .path = "tests/runtime/editor/outline/spec.mjs", .name = "test-editor-outline", .description = "Check source names, input types, and text excerpts in editor outlines" },
         .{ .path = "tests/runtime/editor/relations/spec.mjs" },
         .{ .path = "tests/runtime/editor/shapes/spec.mjs" },
@@ -66,7 +72,7 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
         .{ .path = "tests/runtime/lsp/diagnostics/multiple_spec.mjs", .name = "test-lsp-multiple-documents", .description = "Check diagnostics across independent entries and shared imports" },
         .{ .path = "tests/runtime/lsp/diagnostics/layout_spec.mjs" },
         .{ .path = "tests/runtime/lsp/generated_edit/spec.mjs" },
-        .{ .path = "tests/runtime/lsp/generated_edit/reuse_spec.mjs" },
+        .{ .path = "tests/runtime/lsp/generated_edit/reuse_spec.mjs", .name = "test-generated-edit-reuse", .description = "Check retained layout reuse and invalidation after generated edits" },
         .{ .path = "tests/runtime/lsp/completion/modules_spec.mjs", .name = "test-module-completion", .description = "Check incomplete qualified names and import path completion" },
         .{ .path = "tests/runtime/lsp/protocol/spec.mjs", .name = "test-lsp-protocol", .description = "Check malformed input and failed output shutdown" },
         .{ .path = "tests/runtime/lsp/render_cancellation/spec.mjs", .name = "test-lsp-render-cancellation", .description = "Check in-flight rendering cancellation and tool cleanup" },
@@ -98,6 +104,9 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
         test_step.dependOn(&run.step);
         if (spec.name) |name| steps.focused(b, name, spec.description, &run.step);
     }
+    // Public-repository coverage is opt-in so ordinary tests work offline.
+    const remote_packages = steps.node(b, &suite.checks.node.step, "tests/runtime/packages/remote_spec.mjs", exe);
+    steps.focused(b, "test-git-packages-remote", "Check public Git package installation, rendering and locked restoration (requires network)", &remote_packages.step);
     addWebviewSpecs(suite);
     addManualWysiwygSpec(suite, exe);
 

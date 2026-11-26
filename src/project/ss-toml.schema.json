@@ -5,13 +5,14 @@
   "description": "Configuration schema for ss.toml.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["project"],
   "properties": {
     "project": {
       "type": "object",
       "description": "Project entrypoint and asset root.",
       "additionalProperties": false,
-      "required": ["entry"],
+      "required": [
+        "entry"
+      ],
       "properties": {
         "entry": {
           "type": "string",
@@ -31,7 +32,12 @@
       "properties": {
         "diagnostic_level": {
           "type": "string",
-          "enum": ["note", "warning", "error", "off"],
+          "enum": [
+            "note",
+            "warning",
+            "error",
+            "off"
+          ],
           "description": "Minimum diagnostic level printed by default."
         },
         "jobs": {
@@ -222,7 +228,10 @@
           "additionalProperties": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["parser", "query"],
+            "required": [
+              "parser",
+              "query"
+            ],
             "properties": {
               "parser": {
                 "type": "string",
@@ -236,6 +245,114 @@
           }
         }
       }
+    },
+    "package": {
+      "type": "object",
+      "description": "Declare a library that can be imported as a Git dependency.",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Canonical library name used as its dependency key and in pkg: imports.",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "not": {
+            "enum": [
+              "import",
+              "fn",
+              "const",
+              "type",
+              "enum",
+              "if",
+              "else",
+              "end",
+              "return",
+              "let",
+              "as",
+              "with"
+            ]
+          }
+        },
+        "entry": {
+          "type": "string",
+          "minLength": 1,
+          "default": "lib.ss",
+          "description": "Library entry module, relative to the repository root."
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "dependencies": {
+      "type": "object",
+      "description": "Git libraries keyed by their package.name. Exact commits are recorded in ss.lock.",
+      "patternProperties": {
+        "^[A-Za-z_][A-Za-z0-9_]*$": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "git"
+          ],
+          "properties": {
+            "git": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Git repository URL. With no revision selector, use the remote default branch."
+            },
+            "tag": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Git tag to resolve. Specify at most one of tag, branch and rev."
+            },
+            "branch": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Git branch to resolve. Specify at most one of tag, branch and rev."
+            },
+            "rev": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Git commit or revision to resolve. Specify at most one of tag, branch and rev."
+            }
+          },
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "tag",
+                  "branch"
+                ]
+              },
+              {
+                "required": [
+                  "tag",
+                  "rev"
+                ]
+              },
+              {
+                "required": [
+                  "branch",
+                  "rev"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
     }
-  }
+  },
+  "anyOf": [
+    {
+      "required": [
+        "project"
+      ]
+    },
+    {
+      "required": [
+        "package"
+      ]
+    }
+  ]
 }

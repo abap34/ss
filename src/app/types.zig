@@ -19,6 +19,7 @@ pub const WriteOptions = struct {
 };
 
 pub const SourceRequest = struct {
+    project_file: ?[]const u8 = null,
     input_path: []const u8,
     asset_base_dir: []const u8,
     layout_jobs: ?usize = null,

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, writeFile } from "node:fs/promises";
 import { cpus, release, totalmem } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -13,7 +13,8 @@ import { ProfileSession } from "./session.mjs";
 const settings = runSettings(process.argv[3]);
 const loaded = await loadWorkload(path.resolve(root, process.env.SS_PROFILE_WORKLOAD ?? "tests/fixtures/profiling/mixed-deck/workload.json"));
 const workload = loaded.definition;
-const scriptPath = path.resolve(root, process.env.SS_PROFILE_SCRIPT ?? "tests/profiling/experiments/standard/run.mjs");
+// Match Node module URLs, which resolve symbolic links before loading.
+const scriptPath = await realpath(path.resolve(root, process.env.SS_PROFILE_SCRIPT ?? "tests/profiling/experiments/standard/run.mjs"));
 const scriptDirectory = path.dirname(scriptPath);
 const scriptInputs = await fingerprints(scriptDirectory);
 const runnerInputs = await fingerprints(path.join(root, "tests/profiling"), false);

@@ -5,6 +5,7 @@ const highlight = utils.highlight;
 const source = utils.source;
 const error_report = utils.err;
 pub const toml = @import("project/toml.zig");
+pub const packages = @import("project/packages.zig");
 pub const ConfigDiagnostic = toml.Diagnostic;
 pub const max_editor_delay_ms = std.math.maxInt(i32);
 
@@ -143,10 +144,15 @@ pub fn discover(allocator: std.mem.Allocator, io: std.Io, start_dir: []const u8)
 }
 
 pub fn discoverPath(allocator: std.mem.Allocator, start_dir: []const u8) !?[]u8 {
+    return discoverPathWithInputs(allocator, start_dir, null);
+}
+
+pub fn discoverPathWithInputs(allocator: std.mem.Allocator, start_dir: []const u8, inputs: ?*utils.FileInputs) !?[]u8 {
     var paths = try ConfigurationSearch.init(allocator, start_dir);
     defer paths.deinit(allocator);
     while (try paths.next(allocator)) |candidate| {
         errdefer allocator.free(candidate);
+        if (inputs) |observed| try observed.record(".", candidate, .file);
         if (try utils.fs.fileExists(allocator, candidate)) {
             return candidate;
         }
@@ -207,6 +213,11 @@ pub fn isConfigError(err: anyerror) bool {
         error.UnknownConfigKey,
         error.InvalidConfigTable,
         error.InvalidProjectPath,
+        error.MissingPackageName,
+        error.InvalidPackageName,
+        error.InvalidPackageEntry,
+        error.InvalidDependencySource,
+        error.InvalidDependencyName,
         error.InvalidEditorSetting,
         error.MissingProjectEntry,
         error.UnknownHighlightLanguageField,
@@ -230,6 +241,11 @@ pub fn configErrorMessage(err: anyerror) ?[]const u8 {
         error.InvalidToml => "InvalidToml: use valid TOML 1.1, including quoted strings and unique keys and tables",
         error.UnknownConfigKey => "UnknownConfigKey: remove or correct the unsupported configuration key",
         error.InvalidConfigTable => "InvalidConfigTable: this configuration section must be a TOML table",
+        error.MissingPackageName => "MissingPackageName: add name under [package]",
+        error.InvalidPackageName => "InvalidPackageName: package.name must be an identifier",
+        error.InvalidPackageEntry => "InvalidPackageEntry: package.entry must be a relative .ss path inside the package",
+        error.InvalidDependencySource => "InvalidDependencySource: declare a Git URL and at most one tag, branch or revision",
+        error.InvalidDependencyName => "InvalidDependencyName: dependency names must be identifiers",
         error.InvalidProjectPath => "InvalidProjectPath: use a string path without NUL characters and a non-empty project entry",
         error.InvalidEditorSetting => "InvalidEditorSetting: use booleans for switches and integers from 0 to 2147483647 for millisecond delays",
         error.MissingProjectEntry => "MissingProjectEntry: add or set 'entry = \"path/to/slides.ss\"' under [project] using a quoted path",
@@ -264,8 +280,14 @@ pub fn projectArgumentPath(allocator: std.mem.Allocator, arg: []const u8) ![]u8 
 }
 
 pub fn loadFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !Config {
+    return loadFileWithInputs(allocator, io, path, null);
+}
+
+pub fn loadFileWithInputs(allocator: std.mem.Allocator, io: std.Io, path: []const u8, inputs: ?*utils.FileInputs) !Config {
+    if (inputs) |observed| try observed.record(".", path, .file);
     const text = try utils.fs.readFileAlloc(io, allocator, path);
     defer allocator.free(text);
+    if (inputs) |observed| try observed.recordContents(path, text);
     return parseSource(allocator, path, text);
 }
 
@@ -277,11 +299,16 @@ pub fn parseSourceWithDiagnostic(allocator: std.mem.Allocator, path: []const u8,
     var document = try toml.Document.parse(text, diagnostic);
     defer document.deinit();
     const root = document.root();
-    try document.keys(root, &.{ "project", "cli", "cache", "editor", "highlight" }, error.UnknownConfigKey);
+    var package_manifest = try packages.manifest.Manifest.fromDocument(allocator, &document);
+    defer package_manifest.deinit();
     const project_table = try document.table(root, "project");
     try document.keys(project_table, &.{ "entry", "asset_base_dir" }, error.UnknownConfigKey);
-    const raw_entry = try document.string(project_table, "entry", error.InvalidProjectPath) orelse
+    const raw_entry = try document.string(project_table, "entry", error.InvalidProjectPath) orelse blk: {
+        if (!toml.isTable(project_table)) {
+            if (package_manifest.data.package) |package| break :blk package.entry;
+        }
         return document.fail(project_table, error.MissingProjectEntry);
+    };
     const raw_asset_base = try document.string(project_table, "asset_base_dir", error.InvalidProjectPath);
     if (raw_entry.len == 0 or std.mem.indexOfScalar(u8, raw_entry, 0) != null)
         return document.fail(toml.get(project_table, "entry"), error.InvalidProjectPath);

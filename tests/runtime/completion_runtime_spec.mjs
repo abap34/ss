@@ -9,6 +9,7 @@ import { assert, root, ssBin } from "./harness.mjs";
 const execFileAsync = promisify(execFile);
 
 await testCompletionPrintsScriptWithoutInstalling();
+await testPackageCommandHelp();
 await testBashCompletionInstallsWithYes();
 await testFishCompletionAsksBeforeWriting();
 await testDeniedCompletionInstallDoesNotWrite();
@@ -23,11 +24,15 @@ async function testCompletionPrintsScriptWithoutInstalling() {
     assert(result.stdout.includes("# ss bash completion"), `bash script was not printed:\n${combined(result)}`);
     assertRenderFormatCompletion(result.stdout, "bash");
     await assertCacheForceCompletion(result.stdout, "bash", home);
+    await assertPackageCompletion(result.stdout, "bash", home);
+    await assertInitCompletion(result.stdout, "bash", home);
     for (const shell of ["zsh", "fish"]) {
       const printed = await runCompletion(["completion", shell, "--print"], home, { XDG_DATA_HOME: xdgData });
       assert(printed.code === 0, `${shell} completion --print failed:\n${combined(printed)}`);
       assertRenderFormatCompletion(printed.stdout, shell);
+      await assertInitCompletion(printed.stdout, shell, home);
       await assertCacheForceCompletion(printed.stdout, shell, home);
+      if (shell !== "zsh") await assertPackageCompletion(printed.stdout, shell, home);
     }
     assert(!(await exists(path.join(xdgData, "bash-completion", "completions", "ss"))), "--print should not install completion files");
   } finally {
@@ -65,12 +70,144 @@ async function assertCacheForceCompletion(script, shell, home) {
       end
     end
   `, "--", scriptPath] : ["-n", scriptPath];
+  await runShellCheck(shell, args, home, "cache force completion");
+}
+
+async function runShellCheck(shell, args, cwd, label) {
   try {
-    await execFileAsync(shell, args, { timeout: 10_000 });
-    console.log(`${shell} cache force completion ${shell === "zsh" ? "syntax" : "behavior"} passed`);
+    const result = await execFileAsync(shell, args, { cwd, timeout: 10_000 });
+    console.log(`${shell} ${label} passed`);
+    return result.stdout;
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
     console.log(`${shell} completion execution skipped: shell unavailable`);
+    return null;
+  }
+}
+
+async function assertPackageCompletion(script, shell, home) {
+  const scriptPath = path.join(home, `packages.${shell}`);
+  await writeFile(scriptPath, script);
+  await writeFile(path.join(home, "project manifest.toml"), "");
+  await writeFile(path.join(home, "local repository"), "");
+  const args = shell === "bash" ? ["-c", `
+    source "$1" || exit 1
+    complete_line() {
+      COMP_WORDS=("$@")
+      COMP_CWORD=$((\${#COMP_WORDS[@]} - 1))
+      _ss
+    }
+    expect_candidate() { [[ " \${COMPREPLY[*]} " == *" $1 "* ]] || { printf 'missing completion: %s\\n' "$1" >&2; exit 1; }; }
+    for prefix in '' help; do
+      if [[ -z "$prefix" ]]; then complete_line ss ''; else complete_line ss "$prefix" ''; fi
+      for command in add fetch update status; do expect_candidate "$command"; done
+    done
+    complete_line ss add --
+    for option in --git --tag --branch --rev --project; do expect_candidate "$option"; done
+    complete_line ss add --git 'repository --tag backup' --
+    for option in --tag --branch --rev; do expect_candidate "$option"; done
+    for command in fetch update status; do
+      complete_line ss "$command" --
+      expect_candidate --project
+      [[ " \${COMPREPLY[*]} " != *' --git '* ]] || exit 1
+      complete_line ss "$command" --project project
+      [[ \${#COMPREPLY[@]} -eq 1 && "\${COMPREPLY[0]}" == 'project manifest.toml' ]] || exit 1
+    done
+    complete_line ss status --
+    expect_candidate --color
+    for option in --git --locked --asset-base-dir; do
+      [[ " \${COMPREPLY[*]} " != *" $option "* ]] || exit 1
+    done
+    complete_line ss status --color ''
+    for mode in auto always never; do expect_candidate "$mode"; done
+    complete_line ss fetch --
+    expect_candidate --locked
+    complete_line ss update --
+    [[ " \${COMPREPLY[*]} " != *' --locked '* ]] || exit 1
+    complete_line ss add --git local
+    [[ \${#COMPREPLY[@]} -eq 1 && "\${COMPREPLY[0]}" == 'local repository' ]] || exit 1
+    for selector in --tag --branch --rev; do
+      complete_line ss add "$selector" ''
+      [[ \${#COMPREPLY[@]} -eq 0 ]] || exit 1
+      complete_line ss add "$selector" v1 --
+      expect_candidate --project
+      for excluded in --tag --branch --rev; do
+        [[ " \${COMPREPLY[*]} " != *" $excluded "* ]] || exit 1
+      done
+    done
+  `, "--", scriptPath] : ["--no-config", "-c", `
+    complete -c ss -e
+    source $argv[1]; or exit 1
+    function candidates
+      complete --do-complete "$argv[1]" | string split -f1 \\t
+    end
+    for prefix in 'ss ' 'ss help '
+      set -l results (candidates $prefix)
+      for command in add fetch update status
+        contains -- $command $results; or exit 1
+      end
+    end
+    set -l results (candidates 'ss add --')
+    for option in --git --tag --branch --rev --project
+      contains -- $option $results; or exit 1
+    end
+    for command in fetch update status
+      set results (candidates "ss $command --")
+      contains -- --project $results; or exit 1
+      contains -- --git $results; and exit 1
+      string match -q '*project*manifest.toml*' (candidates "ss $command --project project"); or exit 1
+    end
+    contains -- --color (candidates "ss status --"); or exit 1
+    for option in --git --locked --asset-base-dir
+      contains -- $option (candidates "ss status --"); and exit 1
+    end
+    for mode in auto always never
+      contains -- $mode (candidates "ss status --color "); or exit 1
+    end
+    contains -- --locked (candidates "ss fetch --"); or exit 1
+    contains -- --locked (candidates "ss update --"); and exit 1
+    string match -q '*local*repository*' (candidates 'ss add --git local'); or exit 1
+    for selector in --tag --branch --rev
+      test (count (candidates "ss add $selector ")) -eq 0; or exit 1
+      set results (candidates "ss add $selector v1 --")
+      contains -- --project $results; or exit 1
+      for excluded in --tag --branch --rev
+        contains -- $excluded $results; and exit 1
+      end
+    end
+    exit 0
+  `, "--", scriptPath];
+  await runShellCheck(shell, args, home, "package completion behavior");
+}
+
+async function testPackageCommandHelp() {
+  const home = await mkdtempHome("ss-packages-help-");
+  try {
+    const general = await runCompletion(["--help"], home);
+    assert(general.code === 0, `general help failed:\n${combined(general)}`);
+    for (const command of ["init", "add", "fetch", "update", "status"]) {
+      assert(general.stdout.includes(`ss ${command}`), `general help omitted ${command}`);
+      for (const args of [[command, "--help"], [command, "-h"], [command, "help"], ["help", command]]) {
+        const result = await runCompletion(args, home);
+        assert(result.code === 0, `ss ${args.join(" ")} failed:\n${combined(result)}`);
+        assert(result.stdout.includes(`ss ${command}`), `command help omitted ${command}`);
+        const options = command === "init"
+          ? ["--package", "--entry", "--force", "--user", "--host", "--no-git"]
+          : command === "add"
+            ? ["--git", "--tag", "--branch", "--rev", "--project"]
+            : command === "fetch" ? ["--locked", "--project"]
+              : command === "status" ? ["--project", "--color"] : ["--project"];
+        for (const option of options) {
+          assert(result.stdout.includes(option), `command help omitted ${option}`);
+        }
+        if (command === "init") {
+          assert(result.stdout.includes("With --package, initialize Git"), "Git setup must be described as package-only");
+        }
+        assert(!/ss (?:watch )?check\b/.test(result.stdout), "help advertises the removed check command");
+      }
+    }
+  } finally {
+    await rm(home, { recursive: true, force: true });
   }
 }
 
@@ -199,4 +336,42 @@ function countOccurrences(text, needle) {
 
 function combined(result) {
   return `${result.stdout}\n${result.stderr}`;
+}
+
+async function assertInitCompletion(script, shell, home) {
+  const scriptPath = path.join(home, `init.${shell}`);
+  await writeFile(scriptPath, script);
+  const args = shell === "bash" ? ["-c", `
+    source "$1" || exit 1
+    COMP_WORDS=(ss init --p)
+    COMP_CWORD=2
+    _ss
+    [[ "\${COMPREPLY[*]}" == "--package" ]] || exit 1
+    for option in --user --host --no-git; do
+      COMP_WORDS=(ss init "$option")
+      COMP_CWORD=2
+      _ss
+      [[ "\${COMPREPLY[*]}" == "$option" ]] || exit 1
+    done
+    COMP_WORDS=(ss init --user '')
+    COMP_CWORD=3
+    _ss
+    [[ \${#COMPREPLY[@]} -eq 0 ]] || exit 1
+    COMP_WORDS=(ss init --host '')
+    _ss
+    [[ \${#COMPREPLY[@]} -eq 0 ]] || exit 1
+    COMP_WORDS=(ss init --package --e)
+    COMP_CWORD=3
+    _ss
+    [[ "\${COMPREPLY[*]}" == "--entry" ]] || exit 1
+  `, "--", scriptPath] : shell === "fish" ? ["--no-config", "-c", `
+    source $argv[1]; or exit 1
+    string match -q -- '--package*' (complete --do-complete 'ss init --p'); or exit 1
+    for option in user host no-git
+      string match -q -- --$option'*' (complete --do-complete "ss init --$option"); or exit 1
+    end
+    string match -q -- '--entry*' (complete --do-complete 'ss init --package --e'); or exit 1
+  `, "--", scriptPath] : ["-n", scriptPath];
+  assert(script.includes(shell === "fish" ? "-l package" : "--package"), `${shell} omitted --package`);
+  await runShellCheck(shell, args, home, "init package completion");
 }

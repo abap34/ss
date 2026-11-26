@@ -39,6 +39,7 @@ await testMissingHighlightQueryReportsPath();
 await testFontEnvironmentRefreshFailureIsActionable();
 await testContextDiagnosticsDoNotLeakInternalErrors();
 await testFunctionRecordFieldDiagnosticIsUniqueAndPrecise();
+await testFailedBindingsSuppressDependentDiagnostics();
 await testMultipleHoleParseDiagnostics();
 await testMixedHoleParseDiagnostics();
 await testHoleAndSemanticDiagnosticsTogether();
@@ -1027,6 +1028,47 @@ end
     assert(output.includes("theme.ss:5:5: UnknownField:"), `first unknown record field diagnostic did not point at the field token:\n${output}`);
     assert(output.includes("theme.ss:11:5: UnknownField:"), `second unknown record field diagnostic did not point at the field token:\n${output}`);
     assert(output.includes("|     cjk_bold_passes = 3"), `unknown record field diagnostic omitted its source excerpt:\n${output}`);
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testFailedBindingsSuppressDependentDiagnostics() {
+  const project = await mkdtempProject("ss-cli-failed-binding-diagnostics-");
+  try {
+    await writeFile(path.join(project, "theme.ss"), `const broken_theme: Theme = default_theme() with {
+  text.markdown.missing = 1
+}
+`, "utf8");
+    const statements = `let item = text!("Title", broken_theme.text)
+let alias = item
+let annotated: Placed<Text> = item
+~ item.left == page.left
+let holder = Holder { child = item }
+~ holder.child.left == page.left
+let valid = text!("Valid")
+~ valid.left == item.right
+~ alias.top == valid.bottom
+let independent: Number = "wrong"
+let scalar = 4
+~ scalar.left == 0
+`;
+    for (const scope of ["page main", "fn content!() -> Void"]) {
+      await writeFile(path.join(project, "slide.ss"), `import "./theme" as *
+type Holder { child: Placed<Text> }
+${scope}
+${statements}end
+${scope.startsWith("page") ? "" : "page main\nend\n"}`, "utf8");
+      const result = await runSs(["dump", "slide.ss"], project);
+      const output = combinedOutput(result);
+      const headers = output.match(/^ERROR: .*$/gm) ?? [];
+      assert(result.code !== 0, `${scope} should fail`);
+      assert(headers.length === 3, `${scope} should report only the cause and independent errors:\n${output}`);
+      assert(headers.some(line => line.includes("UnknownField:") && line.includes("theme.ss:2:")), output);
+      assert(headers.some(line => line.includes("TypeMismatch: expected Number, got String")), output);
+      assert(headers.some(line => line.includes("InvalidProperty:")), output);
+      assert(!headers.some(line => /\bAny\b|AlreadyDiagnosed|InvalidConstraintObject/.test(line)), output);
+    }
   } finally {
     await rm(project, { recursive: true, force: true });
   }

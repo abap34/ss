@@ -14,8 +14,9 @@ async function testSizing() {
   const scratch = path.join(root, '.test-tmp/math-sizing');
   await mkdir(scratch, { recursive: true });
   const project = await mkdtemp(path.join(scratch, 'project-'));
-  const aligned = String.raw`\begin{aligned}x&=\frac{a}{b}\end{aligned}`;
-  const rows = String.raw`\begin{aligned}x&=\frac{a}{b}\\x&=\frac{a}{b}\end{aligned}`;
+  // Specify one alignment pair so TeX's column spacing does not vary with row count.
+  const aligned = String.raw`\begin{alignedat}{1}x&=\frac{a}{b}\end{alignedat}`;
+  const rows = String.raw`\begin{alignedat}{1}x&=\frac{a}{b}\\x&=\frac{a}{b}\end{alignedat}`;
   const cases = [
     { name: 'inline', content: '$x$' },
     { name: 'display', content: '$$x$$' },

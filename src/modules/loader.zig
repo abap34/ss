@@ -1,4 +1,5 @@
 const std = @import("std");
+const packages = @import("project").packages;
 const ast = @import("ast");
 const core = @import("core");
 const syntax = @import("../syntax.zig");
@@ -28,11 +29,14 @@ pub const IncludeLoader = struct {
         if (spec.len == 0) return error.InvalidIncludePath;
         const path = try std.fs.path.resolve(allocator, &.{ std.fs.path.dirname(from) orelse ".", spec });
         errdefer allocator.free(path);
-        if (self.file_inputs) |inputs| try inputs.record(".", path, .file);
-        const text = if (self.overlay) |overlay|
-            if (try overlay.get(path)) |text| try allocator.dupe(u8, text) else try readModuleFile(allocator, self.io, path)
-        else
-            try readModuleFile(allocator, self.io, path);
+        const overlaid = if (self.overlay) |overlay| try overlay.get(path) else null;
+        const text = if (overlaid) |bytes| try allocator.dupe(u8, bytes) else blk: {
+            if (self.file_inputs) |inputs| try inputs.record(".", path, .file);
+            const bytes = try readModuleFile(allocator, self.io, path);
+            errdefer allocator.free(bytes);
+            if (self.file_inputs) |inputs| try inputs.recordContents(path, bytes);
+            break :blk bytes;
+        };
         return .{ .path = path, .source = text, .offset = 0 };
     }
 
@@ -168,6 +172,7 @@ pub const ModuleGraph = struct {
 pub const LoadDiagnostics = @import("diagnostic").Bag;
 
 pub const LoadOptions = struct {
+    project_file: ?[]const u8 = null,
     file_inputs: ?*utils.FileInputs = null,
     cancellation: ?utils.Cancellation = null,
     overlay: ?*const SourceOverlay = null,
@@ -219,8 +224,10 @@ pub fn loadGraphWithOptions(
         .by_key = std.StringHashMap(core.SourceModuleId).init(allocator),
         .state_by_id = std.AutoHashMap(core.SourceModuleId, VisitState).init(allocator),
         .next_id = 1,
+        .packages = packages.resolve.Resolver.init(allocator, io, project_dir, options.file_inputs),
     };
     defer builder.deinit();
+    builder.packages.config_path = options.project_file;
 
     var graph = ModuleGraph{
         .allocator = allocator,
@@ -261,6 +268,7 @@ pub fn formatUnknownImportMessage(
     base_dir: []const u8,
     import_spec: []const u8,
 ) ![]u8 {
+    if (std.mem.startsWith(u8, import_spec, "pkg:")) return std.fmt.allocPrint(allocator, "UnknownImport: package module was not found: {s}", .{import_spec});
     if (std.mem.startsWith(u8, import_spec, "std:")) {
         return std.fmt.allocPrint(
             allocator,
@@ -278,7 +286,7 @@ pub fn formatUnknownImportMessage(
 }
 
 pub fn isImportReadFailure(err: anyerror) bool {
-    return err != error.FileNotFound and error_report.isFileSystemError(err);
+    return packages.resolve.errorMessage(err) != null or (err != error.FileNotFound and error_report.isFileSystemError(err));
 }
 
 pub fn formatImportReadFailureMessage(
@@ -287,6 +295,7 @@ pub fn formatImportReadFailureMessage(
     import_spec: []const u8,
     err: anyerror,
 ) ![]u8 {
+    if (packages.resolve.errorMessage(err)) |message| return allocator.dupe(u8, message);
     const resolved = try resolveExplicitPathForMessage(allocator, base_dir, import_spec);
     defer allocator.free(resolved);
     return switch (err) {
@@ -337,9 +346,10 @@ pub fn findUnknownImportReport(
     base_dir: []const u8,
     program: ast.Module,
     overlay: ?*const SourceOverlay,
+    project_file: ?[]const u8,
 ) !?UnknownImportReport {
     for (program.imports.items) |import_decl| {
-        const resolved = resolveImport(allocator, io, import_decl.base_dir orelse base_dir, import_decl.spec, overlay) catch |err| switch (err) {
+        const resolved = resolveImport(allocator, io, import_decl.base_dir orelse base_dir, import_decl.spec, overlay, project_file, null) catch |err| switch (err) {
             error.UnknownImport => {
                 return .{
                     .message = try formatUnknownImportMessage(allocator, import_decl.base_dir orelse base_dir, import_decl.spec),
@@ -360,9 +370,10 @@ pub fn findImportReadFailureReport(
     program: ast.Module,
     overlay: ?*const SourceOverlay,
     expected_error: anyerror,
+    project_file: ?[]const u8,
 ) !?UnknownImportReport {
     for (program.imports.items) |import_decl| {
-        const resolved = resolveImport(allocator, io, import_decl.base_dir orelse base_dir, import_decl.spec, overlay) catch |err| {
+        const resolved = resolveImport(allocator, io, import_decl.base_dir orelse base_dir, import_decl.spec, overlay, project_file, null) catch |err| {
             if (err != expected_error) return err;
             return .{
                 .message = try formatImportReadFailureMessage(allocator, import_decl.base_dir orelse base_dir, import_decl.spec, err),
@@ -381,10 +392,11 @@ pub fn importFailureSpan(
     program: *const ast.Module,
     overlay: ?*const SourceOverlay,
     diagnostics: *const LoadDiagnostics,
+    project_file: ?[]const u8,
 ) !?source.ByteSpan {
     for (diagnostics.items.items) |diagnostic| {
         for (program.imports.items) |import_decl| {
-            if (try importMatchesDiagnosticPath(allocator, io, import_decl.base_dir orelse base_dir, import_decl.spec, diagnostic.path, overlay)) {
+            if (try importMatchesDiagnosticPath(allocator, io, import_decl.base_dir orelse base_dir, import_decl.spec, diagnostic.path, overlay, project_file)) {
                 return .{ .start = import_decl.span.start, .end = import_decl.span.end };
             }
         }
@@ -399,8 +411,9 @@ fn importMatchesDiagnosticPath(
     import_spec: []const u8,
     diagnostic_path: []const u8,
     overlay: ?*const SourceOverlay,
+    project_file: ?[]const u8,
 ) !bool {
-    const resolved = resolveImport(allocator, io, base_dir, import_spec, overlay) catch |err| switch (err) {
+    const resolved = resolveImport(allocator, io, base_dir, import_spec, overlay, project_file, null) catch |err| switch (err) {
         error.UnknownImport => return false,
         else => return err,
     };
@@ -438,8 +451,10 @@ const Builder = struct {
     by_key: std.StringHashMap(core.SourceModuleId),
     state_by_id: std.AutoHashMap(core.SourceModuleId, VisitState),
     next_id: core.SourceModuleId,
+    packages: packages.resolve.Resolver,
 
     fn deinit(self: *Builder) void {
+        self.packages.deinit();
         var key_iterator = self.by_key.keyIterator();
         while (key_iterator.next()) |key| self.allocator.free(key.*);
         self.by_key.deinit();
@@ -499,7 +514,10 @@ const Builder = struct {
 
     fn loadImport(self: *Builder, importer_dir: []const u8, import_spec: []const u8) anyerror!core.SourceModuleId {
         if (self.cancellation) |token| try token.check();
-        const resolved = try resolveImport(self.allocator, self.io, importer_dir, import_spec, self.overlay);
+        const resolved = if (std.mem.startsWith(u8, import_spec, "pkg:")) blk: {
+            const path = try self.packages.resolve(importer_dir, import_spec);
+            break :blk try resolveFileModule(self.allocator, self.io, path, import_spec, self.overlay, self.file_inputs);
+        } else try resolveImport(self.allocator, self.io, importer_dir, import_spec, self.overlay, self.packages.config_path, self.file_inputs);
         defer freeResolvedModule(self.allocator, resolved);
         return try self.loadResolved(.library, resolved);
     }
@@ -733,25 +751,38 @@ fn resolveImport(
     importer_dir: []const u8,
     import_spec: []const u8,
     overlay: ?*const SourceOverlay,
+    project_file: ?[]const u8,
+    inputs: ?*utils.FileInputs,
 ) !ResolvedModule {
     if (std.mem.startsWith(u8, import_spec, "std:")) {
         return (try resolveStdModule(allocator, import_spec)) orelse error.UnknownImport;
     }
+    if (std.mem.startsWith(u8, import_spec, "pkg:")) {
+        var resolver = packages.resolve.Resolver.init(allocator, io, importer_dir, inputs);
+        defer resolver.deinit();
+        resolver.config_path = project_file;
+        const path = try resolver.resolve(importer_dir, import_spec);
+        return resolveFileModule(allocator, io, path, import_spec, overlay, inputs);
+    }
     const path = try resolveExplicitPath(allocator, importer_dir, import_spec);
+    defer allocator.free(path);
+    return resolveFileModule(allocator, io, path, import_spec, overlay, inputs);
+}
+
+fn resolveFileModule(allocator: std.mem.Allocator, io: std.Io, module_path: []const u8, import_spec: []const u8, overlay: ?*const SourceOverlay, inputs: ?*utils.FileInputs) !ResolvedModule {
+    const path = try allocator.dupe(u8, module_path);
     errdefer allocator.free(path);
-    const module_text = if (overlay) |source_overlay|
-        if (try source_overlay.get(path)) |text|
-            try allocator.dupe(u8, text)
-        else
-            readModuleFile(allocator, io, path) catch |err| switch (err) {
-                error.FileNotFound => return error.UnknownImport,
-                else => return err,
-            }
-    else
-        readModuleFile(allocator, io, path) catch |err| switch (err) {
+    const overlaid = if (overlay) |sources| try sources.get(path) else null;
+    const module_text = if (overlaid) |bytes| try allocator.dupe(u8, bytes) else blk: {
+        if (inputs) |observed| try observed.record(".", path, .file);
+        const bytes = readModuleFile(allocator, io, path) catch |err| switch (err) {
             error.FileNotFound => return error.UnknownImport,
             else => return err,
         };
+        errdefer allocator.free(bytes);
+        if (inputs) |observed| try observed.recordContents(path, bytes);
+        break :blk bytes;
+    };
     errdefer allocator.free(module_text);
     const key = try allocator.dupe(u8, path);
     errdefer allocator.free(key);

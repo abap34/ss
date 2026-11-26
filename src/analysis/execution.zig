@@ -386,10 +386,9 @@ fn validateExecutionUnits(state: *core.DocumentState, units: []const ExecutionUn
             });
             return error.DrawingConditionHasEffects;
         }
-        if (unit.summary.invalid_selection_mutation) |invalid| {
+        if (unit.summary.invalid_selection_mutation) {
             const message = "primitive callbacks must not add objects or pages to the selection being iterated";
             try addUnitErrorDiagnostic(state, unit, "InvalidSelectionMutation", message);
-            _ = invalid;
             return error.InvalidSelectionMutation;
         }
     }
